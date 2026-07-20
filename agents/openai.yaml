@@ -1,4 +1,4 @@
 interface:
-  display_name: "Firecrawl Research"
-  short_description: "Search and audit web research workflows"
-  default_prompt: "Use $firecrawl to research a topic with auditable scratch artifacts."
+  display_name: "Firecrawl Research Corpus"
+  short_description: "Acquire and retrieve auditable web research"
+  default_prompt: "Use $firecrawl to search the retained corpus first, acquire missing web evidence, and return bounded passages with provenance."

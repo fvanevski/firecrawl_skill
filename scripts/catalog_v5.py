@@ -363,15 +363,31 @@ def validate_run_id(run_id, require_open=False):
 
 def begin(invocation_id, operation, input_data, research_run_id=None):
     if not enabled(): return
-    if research_run_id: validate_run_id(research_run_id, True)
-    record = {"schema_version": 5, "invocation_id": invocation_id, "research_run_id": research_run_id, "operation": operation, "input": sanitize(input_data), "started_at": now(), "finished_at": None, "execution": {"status": "running"}, "operational_status": "running", "data_completeness": "pending", "audit_status": "not_run", "events": [], "results": [], "artifacts": [], "assessment_refs": [], "evidence_revision": 1, "record_revision": 0}
-    _write_record(record, "invocation_started")
-    if research_run_id:
-        with catalog_lock(research_run_id):
-            run = read_run(research_run_id)
-            if invocation_id not in run["invocation_ids"]: run["invocation_ids"].append(invocation_id)
-            run["updated_at"] = now(); run["record_revision"] += 1
-            atomic_write(run_path(research_run_id), run)
+    with catalog_lock(invocation_id):
+        existing = read_record(invocation_id)
+        if existing and (
+            existing.get("operation") != operation
+            or existing.get("research_run_id") != research_run_id
+        ):
+            raise SystemExit(
+                "ERROR: invocation ID reuse requires the original operation and research run"
+            )
+        if existing and existing.get("execution", {}).get("status") == "running":
+            raise SystemExit(
+                "ERROR: invocation ID is already running; retry only after it is terminal"
+            )
+        record = {"schema_version": 5, "invocation_id": invocation_id, "research_run_id": research_run_id, "operation": operation, "input": sanitize(input_data), "started_at": now(), "finished_at": None, "execution": {"status": "running"}, "operational_status": "running", "data_completeness": "pending", "audit_status": "not_run", "events": [], "results": [], "artifacts": [], "assessment_refs": [], "evidence_revision": 1, "record_revision": 0}
+        if research_run_id:
+            with catalog_lock(research_run_id):
+                validate_run_id(research_run_id, True)
+                run = read_run(research_run_id)
+                _write_record(record, "invocation_started")
+                if not existing and invocation_id not in run["invocation_ids"]:
+                    run["invocation_ids"].append(invocation_id)
+                run["updated_at"] = now(); run["record_revision"] += 1
+                atomic_write(run_path(research_run_id), run)
+        else:
+            _write_record(record, "invocation_started")
 
 
 def add_event(invocation_id, event_type, payload):
@@ -473,9 +489,46 @@ def recompute_run(run_or_id):
     return run
 
 
+def _completion_inputs(used_urls, source_manifest=None, answer_file=None):
+    return {
+        "used_urls": sorted(canonical_url(url) for url in used_urls),
+        "source_manifest_sha256": (
+            hashlib.sha256(Path(source_manifest).read_bytes()).hexdigest()
+            if source_manifest
+            else None
+        ),
+        "answer_sha256": (
+            hashlib.sha256(Path(answer_file).read_bytes()).hexdigest()
+            if answer_file
+            else None
+        ),
+    }
+
+
 def finish_run(run_id, outcome, used_urls, source_manifest=None, answer_file=None):
     with catalog_lock(run_id):
-        run = read_run(validate_run_id(run_id, True))
+        run = read_run(validate_run_id(run_id))
+        if run.get("lifecycle", {}).get("state") != "running":
+            if (
+                run.get("lifecycle", {}).get("state") == "finished"
+                and run.get("declared_outcome") == outcome
+            ):
+                requested = _completion_inputs(
+                    used_urls, source_manifest, answer_file
+                )
+                stored = run.get("completion_inputs", {})
+                for key, supplied in requested.items():
+                    if supplied not in (None, []) and supplied != stored.get(key):
+                        raise SystemExit(
+                            f"ERROR: research run {run_id} is already finished "
+                            f"with different {key}"
+                        )
+                print(json.dumps(compact_run(run), indent=2, sort_keys=True))
+                return
+            raise SystemExit(
+                f"ERROR: research run {run_id} is already finished with "
+                f"outcome {run.get('declared_outcome')!r}"
+            )
         manifest = load_source_manifest(source_manifest, used_urls)
         ids = [claim.get("id") for claim in manifest["claims"]]
         if len(ids) != len(set(ids)): raise SystemExit("ERROR: claim IDs must be unique")
@@ -484,6 +537,9 @@ def finish_run(run_id, outcome, used_urls, source_manifest=None, answer_file=Non
         if answer_file:
             text = Path(answer_file).read_text(encoding="utf-8", errors="replace")
             run["final_answer"] = {"text": redact_text(text)[:120000], "sha256": hashlib.sha256(text.encode()).hexdigest(), "truncated": len(text) > 120000, "source_path": str(Path(answer_file))}
+        run["completion_inputs"] = _completion_inputs(
+            used_urls, source_manifest, answer_file
+        )
         run["declared_outcome"] = outcome; run["lifecycle"] = {"state": "finished", "revision": run["lifecycle"]["revision"] + 1}; run["finished_at"] = now(); run["evidence_revision"] += 1
         atomic_write(run_path(run_id), run)
     run = recompute_run(run_id)
@@ -496,7 +552,9 @@ def finish_run(run_id, outcome, used_urls, source_manifest=None, answer_file=Non
 def reopen_run(run_id, reason):
     with catalog_lock(run_id):
         run = read_run(validate_run_id(run_id))
-        run["lifecycle"] = {"state": "running", "revision": run["lifecycle"]["revision"] + 1}; run["finished_at"] = None; run["audit_status"] = "stale"; run["evidence_revision"] += 1
+        if run.get("lifecycle", {}).get("state") != "finished":
+            raise SystemExit(f"ERROR: research run {run_id} is already running")
+        run["lifecycle"] = {"state": "running", "revision": run["lifecycle"]["revision"] + 1}; run["finished_at"] = None; run["declared_outcome"] = None; run["claims"] = []; run["used_sources"] = []; run["final_answer"] = None; run["completion_inputs"] = {}; run["audit_status"] = "stale"; run["evidence_revision"] += 1
         run.setdefault("annotations", []).append({"type": "reopen", "reason": redact_text(reason), "at": now()}); run["record_revision"] += 1
         atomic_write(run_path(run_id), run)
     append_event({"event": "run_reopened", "research_run_id": run_id, "data": {"reason": redact_text(reason)}})

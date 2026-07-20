@@ -1,0 +1,28 @@
+[Unit]
+Description=Firecrawl authoritative research index worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.codex/skills/firecrawl
+ExecStart=%h/.codex/skills/firecrawl/scripts/research-db worker --batch-size 32 --poll-seconds 5 --lease-seconds 300 --max-attempts 5
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=FIRECRAWL_RESEARCH_PERSIST=on
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/containers/research-assets/blobs
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=default.target

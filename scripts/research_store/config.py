@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -18,6 +20,7 @@ class StoreConfig:
     qdrant_url: str
     qdrant_api_key: str
     qdrant_collection: str
+    qdrant_alias: str
     valkey_url: str
     blob_root: Path
     scratch_root: Path
@@ -32,6 +35,10 @@ class StoreConfig:
     reranker_candidate_limit: int
     chunker_version: str
     parser_version: str
+    normalization_version: str
+    max_index_attempts: int
+    job_lease_seconds: int
+    worker_poll_seconds: int
 
     @classmethod
     def from_env(cls) -> "StoreConfig":
@@ -41,6 +48,7 @@ class StoreConfig:
             qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
             qdrant_api_key=os.environ.get("QDRANT_API_KEY", ""),
             qdrant_collection=os.environ.get("QDRANT_COLLECTION", "research_chunks_v1"),
+            qdrant_alias=os.environ.get("QDRANT_ALIAS", "research_chunks_active"),
             valkey_url=os.environ.get("VALKEY_URL", "redis://localhost:6379/0"),
             blob_root=Path(
                 os.environ.get(
@@ -61,7 +69,31 @@ class StoreConfig:
             reranker_candidate_limit=_integer("RERANKER_CANDIDATE_LIMIT", 40),
             chunker_version=os.environ.get("CHUNKER_VERSION", "structural-v1"),
             parser_version=os.environ.get("PARSER_VERSION", "markdown-v1"),
+            normalization_version=os.environ.get(
+                "NORMALIZATION_VERSION", "cleanup-v1"
+            ),
+            max_index_attempts=_integer("MAX_INDEX_ATTEMPTS", 5),
+            job_lease_seconds=_integer("INDEX_JOB_LEASE_SECONDS", 300),
+            worker_poll_seconds=_integer("INDEX_WORKER_POLL_SECONDS", 5),
         )
+
+    @property
+    def embedding_fingerprint(self) -> str:
+        payload = {
+            "model": self.embedding_model,
+            "revision": self.embedding_revision,
+            "dimension": self.embedding_dimension,
+            "distance": "Cosine",
+            "normalization": "unit-length",
+            "instruction_template_hash": "",
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    @property
+    def physical_collection(self) -> str:
+        return f"research_chunks_{self.embedding_fingerprint[:12]}"
 
     def require_database(self) -> None:
         if not self.database_url:

@@ -9,6 +9,7 @@ import sys
 import os
 import json
 import argparse
+import atexit
 import subprocess
 import urllib.request
 import urllib.error
@@ -23,6 +24,27 @@ sys.path.insert(0, SCRIPT_DIR)
 from invocation_id import resolve_invocation_id
 import invocation_catalog as catalog
 import research_workflow as workflow
+
+
+def resolved_research_environment():
+    """Resolve the Bash adapter without printing credentials."""
+    environment = os.environ.copy()
+    if environment.get("FIRECRAWL_RESEARCH_AUTO_ENV", "1") != "1":
+        return environment
+    adapter = os.path.join(SCRIPT_DIR, "research-env")
+    if not os.path.isfile(adapter):
+        return environment
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; env -0', "research-env", adapter],
+        check=True,
+        capture_output=True,
+    )
+    return {
+        key.decode(errors="surrogateescape"): value.decode(errors="surrogateescape")
+        for entry in result.stdout.split(b"\0")
+        if entry
+        for key, value in [entry.split(b"=", 1)]
+    }
 
 # Colors
 CYAN = "\033[1;36m"
@@ -416,6 +438,28 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Generate and print the query plan without running Firecrawl")
     
     args = parser.parse_args()
+    research_env = resolved_research_environment()
+    persistence_mode = research_env.get("FIRECRAWL_RESEARCH_PERSIST", "auto")
+    if persistence_mode not in {"auto", "on", "off"}:
+        parser.error("FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off")
+    if persistence_mode == "on":
+        if not research_env.get("DATABASE_URL"):
+            parser.error("FIRECRAWL_RESEARCH_PERSIST=on requires DATABASE_URL")
+        ready = subprocess.run(
+            [os.path.join(SCRIPT_DIR, "research-db"), "ingest-ready"],
+            env=research_env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if ready.returncode:
+            parser.error(
+                "authoritative research store is not ingest-ready: "
+                + (ready.stderr.strip() or ready.stdout.strip())
+            )
+    research_active = persistence_mode == "on" or (
+        persistence_mode == "auto" and bool(research_env.get("DATABASE_URL"))
+    )
     if args.planner == "gemini":
         args.llm = "gemini"
         if not args.model:
@@ -443,6 +487,21 @@ def main():
         "llm_triage": not args.no_llm_triage,
         "dry_run": args.dry_run,
     }, args.research_run_id or None)
+    catalog_state = {"complete": False}
+
+    def complete_catalog(*complete_args, **complete_kwargs):
+        catalog.complete(*complete_args, **complete_kwargs)
+        catalog_state["complete"] = True
+
+    def fail_incomplete_catalog():
+        if not catalog_state["complete"]:
+            catalog.complete(
+                invocation_id,
+                "failed",
+                error="smart-search exited before explicit completion",
+            )
+
+    atexit.register(fail_incomplete_catalog)
     
     # 1. Extract keywords and make decision on complexity
     keywords = extract_keywords(args.topic)
@@ -538,7 +597,7 @@ def main():
             },
             "queries": query_plan,
         }, indent=2))
-        catalog.complete(invocation_id, "completed")
+        complete_catalog(invocation_id, "completed")
         return
     
     # Create unified base directory
@@ -582,6 +641,8 @@ def main():
             # Let stdout/stderr flow naturally to avoid OS pipe buffer deadlocks and show progress logs
             child_env = os.environ.copy()
             child_env["FIRECRAWL_CATALOG_CHILD"] = "1"
+            child_env["FIRECRAWL_RESEARCH_PERSIST"] = "off"
+            child_env["FIRECRAWL_CAPTURE_RAW"] = "1"
             if args.research_run_id:
                 child_env["FIRECRAWL_RESEARCH_RUN_ID"] = args.research_run_id
             branch_started = time.monotonic()
@@ -648,7 +709,7 @@ def main():
         idx += 1
         
     if not master_results:
-        catalog.complete(invocation_id, "failed", error="No queries returned valid results")
+        complete_catalog(invocation_id, "failed", error="No queries returned valid results")
         print(f"{RED}ERROR: No queries returned valid results.{RESET}")
         sys.exit(1)
 
@@ -687,6 +748,8 @@ def main():
             if args.tbs:
                 cmd += ["--tbs", args.tbs]
             child_env = os.environ.copy(); child_env["FIRECRAWL_CATALOG_CHILD"] = "1"
+            child_env["FIRECRAWL_RESEARCH_PERSIST"] = "off"
+            child_env["FIRECRAWL_CAPTURE_RAW"] = "1"
             if args.research_run_id:
                 child_env["FIRECRAWL_RESEARCH_RUN_ID"] = args.research_run_id
             started_recovery = time.monotonic(); recovery_result = subprocess.run(cmd, check=False, env=child_env)
@@ -739,6 +802,8 @@ def main():
                 cmd += ["--profile", args.profile]
             child_env = os.environ.copy()
             child_env["FIRECRAWL_CATALOG_CHILD"] = "1"
+            child_env["FIRECRAWL_RESEARCH_PERSIST"] = "off"
+            child_env["FIRECRAWL_CAPTURE_RAW"] = "1"
             if args.research_run_id:
                 child_env["FIRECRAWL_RESEARCH_RUN_ID"] = args.research_run_id
             scrape_started = time.monotonic()
@@ -757,6 +822,21 @@ def main():
                     prior_pages[key] = page
                     if page.get("status") == "ok": successful_urls.add(key); wave_successes += 1
                 result["metadata"]["results"] = list(prior_pages.values())
+                for branch_candidate in result["metadata"].get("candidates", []):
+                    scraped = scrape_results_by_url.get(
+                        canonical_url(branch_candidate.get("url", ""))
+                    )
+                    if scraped:
+                        branch_candidate.update(
+                            {
+                                key: value
+                                for key, value in scraped.items()
+                                if value not in (None, "")
+                            }
+                        )
+                        branch_candidate["scrape_status"] = scraped.get(
+                            "status", "error"
+                        )
                 result["metadata"]["total_scraped"] = sum(page.get("status") == "ok" for page in prior_pages.values())
                 result["metadata"]["estimated_total_words"] = sum(page.get("word_count", 0) for page in prior_pages.values() if page.get("status") == "ok")
         catalog.add_event(invocation_id, "scrape_wave_finished", {"wave": wave, "attempted": len(wave_candidates), "successful": wave_successes, "cumulative_successful": len(successful_urls)})
@@ -769,6 +849,7 @@ def main():
         scraped = scrape_results_by_url.get(canonical_url(candidate.get("url", "")))
         if scraped:
             candidate.update({key: value for key, value in scraped.items() if value not in (None, "")})
+            candidate["scrape_status"] = scraped.get("status", "error")
     print(f"{BOLD}Global selection:{RESET} attempted {len(selected_candidates)} of {len(all_candidates)} unique candidates; {len(successful_urls)} successful")
         
     # 4. Generate Master Index and Metadata
@@ -822,6 +903,12 @@ def main():
             candidate.update({k: v for k, v in scraped.items() if v not in (None, "")})
     master_meta["candidate_count"] = len(master_candidates)
     master_meta["candidates"] = master_candidates
+    retained_results = {}
+    for result in master_results:
+        for page in result["metadata"].get("results", []):
+            if page.get("status") == "ok" and page.get("scratch_file"):
+                retained_results[canonical_url(page.get("url", ""))] = page
+    master_meta["results"] = list(retained_results.values())
     
     with open(master_meta_path, "w") as mf:
         json.dump(master_meta, mf, indent=2)
@@ -926,7 +1013,27 @@ def main():
     print(f"  To scan all results for terms, run:  {CYAN}rtk proxy {SCRIPT_DIR}/fread {base_dir} --grep \"<your_term>\"{RESET}")
     print(f"  To inspect the index, run:           {CYAN}rtk proxy {SCRIPT_DIR}/fread {base_dir}{RESET}")
     print("")
-    catalog.complete(invocation_id, "completed", master_meta_path)
+    if research_active:
+        persist_command = [
+            research_env.get("FIRECRAWL_RESEARCH_PYTHON", sys.executable),
+            os.path.join(SCRIPT_DIR, "persist_results.py"),
+            master_meta_path,
+            "--output",
+            os.path.join(base_dir, "_corpus.json"),
+        ]
+        if args.research_run_id:
+            persist_command += ["--research-run-id", args.research_run_id]
+        persisted = subprocess.run(persist_command, env=research_env, check=False)
+        if persisted.returncode:
+            complete_catalog(
+                invocation_id,
+                "failed",
+                master_meta_path,
+                error="authoritative smart-search batch persistence failed",
+                exit_code=persisted.returncode,
+            )
+            raise SystemExit(persisted.returncode)
+    complete_catalog(invocation_id, "completed", master_meta_path)
 
 if __name__ == "__main__":
     main()

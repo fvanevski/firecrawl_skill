@@ -22,6 +22,7 @@ class CorpusService:
         index=None,
         embedder=None,
         reranker=None,
+        queue=None,
     ):
         self.config = config
         self.uow_factory = uow_factory
@@ -29,8 +30,22 @@ class CorpusService:
         self.index = index
         self.embedder = embedder
         self.reranker = reranker
+        self.queue = queue
 
     def ingest(self, request: IngestRequest) -> IngestResult:
+        prepared = self._prepare_ingest(request)
+        with self.uow_factory() as uow:
+            result = uow.snapshots.persist_ingest(*prepared)
+        self._notify(result.chunk_ids)
+        return result
+
+    def _notify(self, identifiers) -> None:
+        if self.queue:
+            for identifier in identifiers:
+                self.queue.notify(identifier)
+                break
+
+    def _prepare_ingest(self, request: IngestRequest):
         canonical = canonicalize_url(request.final_url or request.requested_url)
         blob = self.blob_store.put(BytesIO(request.content), request.mime_type)
         normalized = (
@@ -43,17 +58,109 @@ class CorpusService:
         if not blocks:
             raise ValueError("retrieved content produced no structural blocks")
         chunks = deterministic_chunks(blocks)
+        return (
+            request,
+            canonical,
+            blob,
+            text,
+            blocks,
+            chunks,
+            self.config.parser_version,
+            self.config.chunker_version,
+            self.config.normalization_version,
+        )
+
+    def ingest_batch(
+        self,
+        invocation_id: str,
+        operation: str,
+        requests: list[IngestRequest | dict],
+        *,
+        research_run_external_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        """Persist a reconstructable invocation using one outer transaction.
+
+        Asset failures roll back to savepoints while their failure records and
+        every successful asset commit atomically with the batch manifest.
+        """
+        failures = 0
         with self.uow_factory() as uow:
-            return uow.snapshots.persist_ingest(
-                request,
-                canonical,
-                blob,
-                text,
-                blocks,
-                chunks,
-                self.config.parser_version,
-                self.config.chunker_version,
+            batch_id = uow.start_ingestion_batch(
+                invocation_id, operation, research_run_external_id, metadata
             )
+            seen_ordinals = set()
+            for fallback_ordinal, item in enumerate(requests):
+                ordinal = fallback_ordinal
+                if isinstance(item, dict):
+                    result_index = (
+                        item.get("metadata", {})
+                        .get("firecrawl", {})
+                        .get("result_index")
+                    )
+                    if isinstance(result_index, int) and result_index >= 0:
+                        ordinal = result_index
+                if ordinal in seen_ordinals:
+                    raise ValueError(f"duplicate ingestion result ordinal: {ordinal}")
+                seen_ordinals.add(ordinal)
+                request = item if isinstance(item, IngestRequest) else item.get("request")
+                requested_url = (
+                    request.requested_url
+                    if request is not None
+                    else item.get("requested_url") or item.get("url") or "unknown:"
+                )
+                try:
+                    if request is None:
+                        raise RuntimeError(item.get("error") or "acquisition failed")
+                    prepared = self._prepare_ingest(request)
+                    with uow.savepoint():
+                        result = uow.persist_ingest(*prepared)
+                        uow.record_batch_asset(
+                            batch_id, ordinal, requested_url, "complete", result,
+                            metadata=item.get("metadata") if isinstance(item, dict) else None,
+                        )
+                        if research_run_external_id:
+                            uow.link_run_asset(
+                                research_run_external_id, result.snapshot_id, "acquired"
+                            )
+                except Exception as exc:
+                    failures += 1
+                    uow.record_batch_asset(
+                        batch_id,
+                        ordinal,
+                        requested_url,
+                        "failed",
+                        error=f"{type(exc).__name__}: {exc}",
+                        metadata=item.get("metadata") if isinstance(item, dict) else None,
+                    )
+            status = "complete" if not failures else (
+                "failed" if failures == len(requests) else "partial"
+            )
+            uow.finish_ingestion_batch(batch_id, status)
+            manifest = uow.export_invocation(invocation_id)
+        self._notify(
+            chunk_id
+            for asset in manifest["assets"]
+            if asset["status"] == "complete"
+            for chunk_id in asset["chunk_ids"]
+        )
+        manifest["failure_count"] = failures
+        return manifest
+
+    def persist_manifest_batch(
+        self, metadata: dict, assets: list, research_run_external_id: str | None = None
+    ) -> dict:
+        """Wrapper-oriented adapter around :meth:`ingest_batch`.
+
+        Each item may be an IngestRequest or a mapping containing ``request``.
+        """
+        return self.ingest_batch(
+            metadata["invocation_id"],
+            metadata["operation"],
+            assets,
+            research_run_external_id=research_run_external_id,
+            metadata=metadata,
+        )
 
     def corpus_overview(self) -> dict:
         with self.uow_factory() as uow:
@@ -80,12 +187,14 @@ class CorpusService:
             semantic = []
             if self.index and self.embedder:
                 try:
-                    points = self.index.search(
-                        self.embedder(query),
-                        _qdrant_filter(filters),
-                        candidate_limit * 2,
-                    )
-                    semantic = [_semantic_candidate(point) for point in points]
+                    active = self.index.list_aliases().get(self.config.qdrant_alias)
+                    if active == self.config.physical_collection:
+                        points = self.index.search(
+                            self.embedder(query),
+                            _qdrant_filter(filters, self.config),
+                            candidate_limit * 2,
+                        )
+                        semantic = [_semantic_candidate(point) for point in points]
                 except Exception:
                     semantic = []
             candidates = reciprocal_rank_fusion([lexical, semantic])[
@@ -107,17 +216,23 @@ class CorpusService:
             candidates = candidates[:candidate_limit]
             if run_id:
                 for rank, candidate in enumerate(candidates, 1):
+                    reasons = candidate.get("match_reasons") or []
+                    stage = "hybrid" if len(reasons) > 1 else candidate.get(
+                        "retriever", "retrieval"
+                    )
+                    raw_score = candidate.get("lexical_score")
+                    if raw_score is None:
+                        raw_score = candidate.get("semantic_score")
                     uow.retrieval_events.log_retrieval(
                         run_id,
                         {
-                            "stage": "lexical",
+                            "stage": stage,
                             "query": query,
                             "filters": filters,
                             "retriever": candidate.get("retriever", "hybrid_rrf"),
                             "candidate_type": "chunk",
                             "candidate_id": candidate["candidate_id"],
-                            "raw_score": candidate.get("lexical_score")
-                            or candidate.get("semantic_score"),
+                            "raw_score": raw_score,
                             "normalized_score": candidate.get("fused_score"),
                             "reranker_score": candidate.get("reranker_score"),
                             "rank": rank,
@@ -202,8 +317,15 @@ def _semantic_candidate(point: dict) -> dict:
     }
 
 
-def _qdrant_filter(filters: dict) -> dict:
-    must = []
+def _qdrant_filter(filters: dict, config: StoreConfig) -> dict:
+    must = [
+        {"key": "parser_version", "match": {"value": config.parser_version}},
+        {
+            "key": "normalization_version",
+            "match": {"value": config.normalization_version},
+        },
+        {"key": "chunker_version", "match": {"value": config.chunker_version}},
+    ]
     if filters.get("domain"):
         must.append({"key": "domain", "match": {"value": filters["domain"]}})
     if filters.get("source_type"):

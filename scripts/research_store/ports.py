@@ -22,6 +22,7 @@ class SnapshotRepository(Protocol):
         chunks: list[Any],
         parser_version: str,
         chunker_version: str,
+        normalization_version: str,
     ) -> IngestResult: ...
 
 
@@ -44,6 +45,9 @@ class ChunkRepository(Protocol):
 
 class ResearchRunRepository(Protocol):
     def start_run(self, original_request: str, metadata: dict[str, Any]) -> UUID: ...
+    def link_run_asset(
+        self, external_run_id: str, snapshot_id: UUID, role: str = "acquired"
+    ) -> None: ...
 
 
 class RetrievalEventRepository(Protocol):
@@ -51,8 +55,24 @@ class RetrievalEventRepository(Protocol):
 
 
 class IndexJobRepository(Protocol):
-    def claim_jobs(self, limit: int) -> list[dict[str, Any]]: ...
-    def finish_job(self, job_id: UUID, error: str | None = None) -> None: ...
+    def claim_jobs(
+        self,
+        limit: int,
+        lease_seconds: int = 300,
+        worker_id: str = "compat",
+        max_attempts: int = 5,
+        fingerprint: str | None = None,
+    ) -> list[dict[str, Any]]: ...
+    def renew_job(
+        self, job_id: UUID, lease_token: UUID, lease_seconds: int = 300
+    ) -> bool: ...
+    def finish_job(
+        self,
+        job_id: UUID,
+        lease_token: UUID,
+        error: str | None = None,
+        max_attempts: int = 5,
+    ) -> bool: ...
 
 
 class BlobStore(Protocol):

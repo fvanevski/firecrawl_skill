@@ -66,6 +66,21 @@ class IngestResult:
     chunk_ids: tuple[UUID, ...]
     content_sha256: str
     reused_snapshot: bool
+    reused_document: bool = False
+    reused_chunks: bool = False
+
+
+@dataclass(frozen=True)
+class IndexDefinition:
+    id: UUID
+    fingerprint: str
+    physical_collection: str
+    model_name: str
+    model_revision: str
+    dimension: int
+    distance_metric: str = "Cosine"
+    normalization: str = ""
+    instruction_template_hash: str = ""
 
 
 def new_id() -> UUID:

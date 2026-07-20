@@ -7,6 +7,7 @@ from .config import StoreConfig
 from .postgres import PostgresUnitOfWork
 from .indexing import OpenAICompatibleEmbedder
 from .qdrant import QdrantIndex
+from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
 from .service import CorpusService
 
@@ -20,6 +21,7 @@ def build_service(config: StoreConfig | None = None) -> CorpusService:
             config.embedding_model,
             config.embedding_api_key,
             config.embedding_dimension,
+            config.embedding_fingerprint,
         )
         if config.embedding_url
         else None
@@ -27,7 +29,7 @@ def build_service(config: StoreConfig | None = None) -> CorpusService:
     index = QdrantIndex(
         config.qdrant_url,
         config.qdrant_api_key,
-        config.qdrant_collection,
+        config.qdrant_alias,
         config.embedding_dimension,
     )
     reranker = (
@@ -42,13 +44,17 @@ def build_service(config: StoreConfig | None = None) -> CorpusService:
         partial(
             PostgresUnitOfWork,
             config.database_url,
-            config.qdrant_collection,
+            config.physical_collection,
             config.embedding_model,
             config.embedding_revision,
             config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
         ),
         ContentAddressedBlobStore(config.blob_root),
         index=index,
         embedder=embedder,
         reranker=reranker,
+        queue=ValkeyQueue(config.valkey_url),
     )

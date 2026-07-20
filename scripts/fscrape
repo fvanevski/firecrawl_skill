@@ -17,6 +17,22 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env" ]]; then
   source "$SCRIPT_DIR/research-env"
 fi
+case "${FIRECRAWL_RESEARCH_PERSIST:-auto}" in
+  auto) [[ -n "${DATABASE_URL:-}" ]] && export FIRECRAWL_RESEARCH_ACTIVE=1 || export FIRECRAWL_RESEARCH_ACTIVE=0 ;;
+  on)
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+      echo "ERROR: FIRECRAWL_RESEARCH_PERSIST=on requires DATABASE_URL" >&2
+      exit 1
+    fi
+    export FIRECRAWL_RESEARCH_ACTIVE=1
+    if ! "$SCRIPT_DIR/research-db" ingest-ready >/dev/null; then
+      echo "ERROR: authoritative research store is not ingest-ready" >&2
+      exit 1
+    fi
+    ;;
+  off) export FIRECRAWL_RESEARCH_ACTIVE=0 ;;
+  *) echo "ERROR: FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off" >&2; exit 2 ;;
+esac
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 FORMAT="markdown"
@@ -195,7 +211,7 @@ def process_url(idx_url_tuple):
             content = f.read()
 
         raw_scratch_file = ""
-        if os.environ.get("DATABASE_URL"):
+        if os.environ.get("FIRECRAWL_RESEARCH_ACTIVE") == "1":
             raw_dir = os.path.join(outdir, "_raw")
             os.makedirs(raw_dir, exist_ok=True)
             raw_scratch_file = os.path.join(raw_dir, os.path.basename(outfile))
@@ -364,7 +380,9 @@ PYEOF
 # PostgreSQL becomes authoritative when DATABASE_URL is configured. Scratch
 # artifacts remain a compatibility export, and persistence uses this explicit
 # manifest rather than scanning directories.
-if [[ -n "${DATABASE_URL:-}" ]]; then
-  "${FIRECRAWL_RESEARCH_PYTHON:-python3}" "$SCRIPT_DIR/persist_results.py" "$OUTPUT_DIR/_meta.json" --output "$OUTPUT_DIR/_corpus.json" >/dev/null
+if [[ "${FIRECRAWL_RESEARCH_ACTIVE:-0}" == "1" ]]; then
+  persist_args=("$OUTPUT_DIR/_meta.json" --output "$OUTPUT_DIR/_corpus.json")
+  [[ -n "$RESEARCH_RUN_ID" ]] && persist_args+=(--research-run-id "$RESEARCH_RUN_ID")
+  "${FIRECRAWL_RESEARCH_PYTHON:-python3}" "$SCRIPT_DIR/persist_results.py" "${persist_args[@]}" >/dev/null
   echo "  Corpus IDs: $OUTPUT_DIR/_corpus.json" >&2
 fi

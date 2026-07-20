@@ -18,6 +18,22 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env" ]]; then
   source "$SCRIPT_DIR/research-env"
 fi
+case "${FIRECRAWL_RESEARCH_PERSIST:-auto}" in
+  auto) [[ -n "${DATABASE_URL:-}" ]] && export FIRECRAWL_RESEARCH_ACTIVE=1 || export FIRECRAWL_RESEARCH_ACTIVE=0 ;;
+  on)
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+      echo "ERROR: FIRECRAWL_RESEARCH_PERSIST=on requires DATABASE_URL" >&2
+      exit 1
+    fi
+    export FIRECRAWL_RESEARCH_ACTIVE=1
+    if ! "$SCRIPT_DIR/research-db" ingest-ready >/dev/null; then
+      echo "ERROR: authoritative research store is not ingest-ready" >&2
+      exit 1
+    fi
+    ;;
+  off) export FIRECRAWL_RESEARCH_ACTIVE=0 ;;
+  *) echo "ERROR: FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off" >&2; exit 2 ;;
+esac
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 LIMIT=20
@@ -221,6 +237,10 @@ from classifier import classify_target, PROFILES
 
 profile_name = os.environ.get("FSEARCH_PROFILE", "")
 invocation_id = os.environ["FIRECRAWL_INVOCATION_ID"]
+capture_raw = (
+    os.environ.get("FIRECRAWL_RESEARCH_ACTIVE") == "1"
+    or os.environ.get("FIRECRAWL_CAPTURE_RAW") == "1"
+)
 
 with open(search_file) as f:
     data = json.load(f)
@@ -260,7 +280,7 @@ def scrape_once(url, flags, outfile, timeout=60):
         with open(outfile) as f:
             content = f.read()
 
-        if os.environ.get("DATABASE_URL"):
+        if capture_raw:
             raw_dir = os.path.join(scratch_dir, "_raw")
             os.makedirs(raw_dir, exist_ok=True)
             with open(os.path.join(raw_dir, os.path.basename(outfile)), "w") as raw_handle:
@@ -395,7 +415,7 @@ def process_item(item_index_tuple):
         "snippet": snippet,
         "description": description,
         "scratch_file": outfile,
-        "raw_scratch_file": os.path.join(scratch_dir, "_raw", os.path.basename(outfile)) if status == "ok" and os.environ.get("DATABASE_URL") else "",
+        "raw_scratch_file": os.path.join(scratch_dir, "_raw", os.path.basename(outfile)) if status == "ok" and capture_raw else "",
         "format": "json" if is_candidate else "markdown",
         "size_kb": round(size_bytes / 1024, 1),
         "char_count": os.path.getsize(outfile) if status == "ok" and os.path.exists(outfile) else 0,
@@ -554,8 +574,10 @@ print(f"\nFiles saved to: \033[1;36m{scratch_dir}\033[0m")
 print(f"\n── Next: '\033[1;36mrtk proxy {script_dir}/fread {scratch_dir}\033[0m' to read content ──")
 PYEOF
 
-if [[ -n "${DATABASE_URL:-}" ]]; then
-  "${FIRECRAWL_RESEARCH_PYTHON:-python3}" "$SCRIPT_DIR/persist_results.py" "$DIR/_meta.json" --output "$DIR/_corpus.json" >/dev/null
+if [[ "${FIRECRAWL_RESEARCH_ACTIVE:-0}" == "1" ]]; then
+  persist_args=("$DIR/_meta.json" --output "$DIR/_corpus.json")
+  [[ -n "$RESEARCH_RUN_ID" ]] && persist_args+=(--research-run-id "$RESEARCH_RUN_ID")
+  "${FIRECRAWL_RESEARCH_PYTHON:-python3}" "$SCRIPT_DIR/persist_results.py" "${persist_args[@]}" >/dev/null
   echo "  Corpus IDs: $DIR/_corpus.json" >&2
 fi
 

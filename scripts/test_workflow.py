@@ -1,5 +1,6 @@
 import importlib.util
 from importlib.machinery import SourceFileLoader
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -381,6 +382,14 @@ def test_smart_search_consolidates_deduplicated_candidates(fake_cli):
     calls = [json.loads(line) for line in Path(env["FAKE_FIRECRAWL_LOG"]).read_text().splitlines()]
     assert [call[0] for call in calls].count("search") == 2
     assert [call[0] for call in calls].count("scrape") == 2
+    successful = [item for item in meta["results"] if item.get("status") == "ok"]
+    assert successful
+    assert all(Path(item["raw_scratch_file"]).is_file() for item in successful)
+    assert all(
+        item.get("scrape_status") == "ok"
+        for item in meta["candidates"]
+        if item.get("selected") and item.get("status") == "ok"
+    )
     catalog_record = json.loads(next((tmp_path / "catalog" / "invocations").glob("fc_*.json")).read_text())
     assert catalog_record["operation"] == "smart_search"
     assert catalog_record["execution"]["status"] == "succeeded"
@@ -395,6 +404,49 @@ def test_catalog_disabled_creates_no_persistent_record(fake_cli):
     assert not (tmp_path / "catalog").exists()
 
 
+def test_catalog_serializes_first_use_and_rejects_active_retry(fake_cli, monkeypatch):
+    env, tmp_path = fake_cli
+    monkeypatch.setenv("FIRECRAWL_CATALOG_DIR", env["FIRECRAWL_CATALOG_DIR"])
+    invocation_id = "fc_" + "a" * 32
+
+    def attempt(operation):
+        try:
+            catalog.begin(invocation_id, operation, {"query": operation})
+            return "started"
+        except SystemExit as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(attempt, ("search", "scrape")))
+    assert outcomes.count("started") == 1
+    assert any("original operation and research run" in item for item in outcomes)
+    record = json.loads(
+        (tmp_path / "catalog" / "invocations" / f"{invocation_id}.json").read_text()
+    )
+    with pytest.raises(SystemExit, match="already running"):
+        catalog.begin(invocation_id, record["operation"], {"query": "retry"})
+
+
+def test_smart_search_atexit_marks_unexpected_exit_failed(fake_cli):
+    env, tmp_path = fake_cli
+    invocation_id = "fc_" + "b" * 32
+    result = run_script(
+        "fsearch_smart",
+        "fail-safe proof",
+        "--max-searches",
+        "0",
+        "--invocation-id",
+        invocation_id,
+        env=env,
+    )
+    assert result.returncode != 0
+    record = json.loads(
+        (tmp_path / "catalog" / "invocations" / f"{invocation_id}.json").read_text()
+    )
+    assert record["execution"]["status"] == "failed"
+    assert record["execution"]["error"] == "smart-search exited before explicit completion"
+
+
 def test_research_run_links_operations_and_reports_quality(fake_cli):
     env, tmp_path = fake_cli
     started = run_script("frun", "start", "audit objective", env=env)
@@ -405,7 +457,40 @@ def test_research_run_links_operations_and_reports_quality(fake_cli):
     assert result.returncode == 0, result.stderr
     finished = run_script("frun", "finish", run_id, "--outcome", "satisfied", "--used-url", "https://example.com/one", env=env)
     assert finished.returncode == 0, finished.stderr
+    repeated = run_script(
+        "frun", "finish", run_id, "--outcome", "satisfied", env=env
+    )
+    assert repeated.returncode == 0, repeated.stderr
+    different_evidence = run_script(
+        "frun",
+        "finish",
+        run_id,
+        "--outcome",
+        "satisfied",
+        "--used-url",
+        "https://example.com/different",
+        env=env,
+    )
+    assert different_evidence.returncode != 0
+    mismatch = run_script(
+        "frun", "finish", run_id, "--outcome", "failed", env=env
+    )
+    assert mismatch.returncode != 0
     run = json.loads((tmp_path / "catalog" / "runs" / f"{run_id}.json").read_text())
+    second = run_script("frun", "start", "second owner", env=env)
+    assert second.returncode == 0
+    reused = run_script(
+        "fsearch",
+        "cross-run reuse",
+        "--scrape-limit",
+        "0",
+        "--invocation-id",
+        run["invocation_ids"][0],
+        "--research-run-id",
+        second.stdout.strip(),
+        env=env,
+    )
+    assert reused.returncode != 0
     assert run["declared_outcome"] == "satisfied"
     assert run["lifecycle"]["state"] == "finished"
     assert len(run["invocation_ids"]) == 1
@@ -419,6 +504,41 @@ def test_research_run_links_operations_and_reports_quality(fake_cli):
     assert '"operational_summary"' in report.stdout
     listing = run_script("fread", "--catalog", env=env)
     assert run_id in listing.stdout
+
+
+def test_reopen_clears_completion_evidence_and_repeated_reopen_fails(fake_cli):
+    env, tmp_path = fake_cli
+    run_id = run_script("frun", "start", "reopen proof", env=env).stdout.strip()
+    answer = tmp_path / "answer.md"
+    answer.write_text("Prior answer", encoding="utf-8")
+    finished = run_script(
+        "frun",
+        "finish",
+        run_id,
+        "--outcome",
+        "satisfied",
+        "--answer-file",
+        answer,
+        env=env,
+    )
+    assert finished.returncode == 0, finished.stderr
+    reopened = run_script(
+        "frun", "reopen", run_id, "--reason", "new evidence", env=env
+    )
+    assert reopened.returncode == 0, reopened.stderr
+    repeated = run_script(
+        "frun", "reopen", run_id, "--reason", "again", env=env
+    )
+    assert repeated.returncode != 0
+    refinished = run_script(
+        "frun", "finish", run_id, "--outcome", "satisfied", env=env
+    )
+    assert refinished.returncode == 0, refinished.stderr
+    run = json.loads((tmp_path / "catalog" / "runs" / f"{run_id}.json").read_text())
+    assert run["final_answer"] is None
+    assert run["claims"] == []
+    assert run["used_sources"] == []
+    assert run["completion_inputs"]["answer_sha256"] is None
 
 
 def test_catalog_collects_nonbinding_source_hints_without_semantic_verdicts():
