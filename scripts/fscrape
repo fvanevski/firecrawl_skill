@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+# fscrape — Firecrawl scrape with metadata
+#
+# Usage:
+#   fscrape <url1> [url2 ...] [--format markdown,links] [--summary]
+#            [--output-dir <scratch-dir>]
+#
+# Scrapes one or more URLs, writes each to a scratch file, and prints
+# a compact index so the agent knows what it got without loading it all
+# into context.
+#
+# Default output is below the platform temporary directory.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# ── Defaults ────────────────────────────────────────────────────────────────
+FORMAT="markdown"
+SUMMARY=false
+OUTPUT_DIR=""
+SCHEMA=""
+SCHEMA_FILE=""
+URLS=()
+INVOCATION_ID="${FIRECRAWL_INVOCATION_ID:-}"
+RESEARCH_RUN_ID="${FIRECRAWL_RESEARCH_RUN_ID:-}"
+
+# ── Parse args ──────────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --format)     FORMAT="$2";   shift 2 ;;
+    --summary| -S) SUMMARY=true; shift ;;
+    --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
+    --schema)     SCHEMA="$2";   shift 2 ;;
+    --schema-file) SCHEMA_FILE="$2"; shift 2 ;;
+    --invocation-id) INVOCATION_ID="$2"; shift 2 ;;
+    --research-run-id) RESEARCH_RUN_ID="$2"; shift 2 ;;
+    -h|--help)
+      echo -e "\033[1;36mfscrape\033[0m — Firecrawl scrape with metadata"
+      echo ""
+      echo -e "\033[1mUsage:\033[0m"
+      echo "  fscrape <url1> [url2 ...] [options]"
+      echo ""
+      echo -e "\033[1mOptions:\033[0m"
+      echo "  --format <fmt>      Output format (markdown, html, rawHtml, links, images, summary, json)"
+      echo "  --summary, -S       Generate a summarized version of the page"
+      echo "  --output-dir <dir>  Custom output directory (default: <platform-temp>/firecrawl_scratch/<invocation-id>/scrape)"
+      echo "  --invocation-id <ID>  Reuse a parent fc_<uuid> ID"
+      echo "  --research-run-id <ID>  Link this operation to an explicit fr_<uuid> research run"
+      echo "  --schema <json>     JSON Schema string for structured extraction (forces json format)"
+      echo "  --schema-file <fp>  Path to a JSON Schema file for structured extraction (forces json format)"
+      echo "  -h, --help          Show this help message"
+      exit 0
+      ;;
+    --)           shift; URLS+=("$@"); break ;;
+    -*)           echo -e "\033[0;31mERROR: unknown flag: $1\033[0m" >&2; exit 1 ;;
+    *)            URLS+=("$1");  shift ;;
+  esac
+done
+
+if [[ ${#URLS[@]} -eq 0 ]]; then
+  echo -e "\033[0;31mERROR: at least one URL required\033[0m" >&2
+  echo "Usage: fscrape <url1> [url2 ...] [--format markdown,links] [--summary] [--output-dir <dir>]" >&2
+  exit 1
+fi
+
+if [[ ! "$FORMAT" =~ ^(markdown|html|rawHtml|links|images|summary|json)$ ]]; then
+  echo -e "\033[0;31mERROR: unsupported format: $FORMAT\033[0m" >&2
+  exit 1
+fi
+
+if [[ -z "$INVOCATION_ID" ]]; then
+  INVOCATION_ID="$(python3 "$SCRIPT_DIR/invocation_id.py")"
+else
+  INVOCATION_ID="$(python3 "$SCRIPT_DIR/invocation_id.py" --validate "$INVOCATION_ID")"
+fi
+
+if [[ -z "$OUTPUT_DIR" ]]; then
+  TEMP_ROOT="${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}"
+  OUTPUT_DIR="$TEMP_ROOT/firecrawl_scratch/$INVOCATION_ID/scrape"
+fi
+
+mkdir -p "$OUTPUT_DIR"
+
+CATALOG_META="$OUTPUT_DIR/_meta.json"
+catalog_finish() {
+  local code="$1"
+  local status="completed"
+  local error=""
+  if (( code != 0 )); then
+    status="failed"
+    error="fscrape exited with status $code"
+  fi
+  python3 "$SCRIPT_DIR/invocation_catalog.py" finish --invocation-id "$INVOCATION_ID" --status "$status" --meta "$CATALOG_META" --error "$error" --exit-code "$code" >/dev/null 2>&1 || true
+}
+
+CATALOG_INPUT="$OUTPUT_DIR/_catalog_input.json"
+python3 - "$CATALOG_INPUT" "$FORMAT" "$SUMMARY" "${SCHEMA:+schema}" "${SCHEMA_FILE:+schema_file}" "${URLS[@]}" <<'PYEOF'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({"format": sys.argv[2], "summary": sys.argv[3] == "true", "schema_mode": sys.argv[4] or sys.argv[5], "urls": sys.argv[6:]}), encoding="utf-8")
+PYEOF
+catalog_start=(start --invocation-id "$INVOCATION_ID" --operation scrape --input-json "$(<"$CATALOG_INPUT")")
+[[ -n "$RESEARCH_RUN_ID" ]] && catalog_start+=(--research-run-id "$RESEARCH_RUN_ID")
+python3 "$SCRIPT_DIR/invocation_catalog.py" "${catalog_start[@]}" >/dev/null
+trap 'catalog_finish $?' EXIT
+
+echo -e "\033[1;32m── fscrape: ${#URLS[@]} URL(s) ──\033[0m" >&2
+echo -e "  \033[1mformat:\033[0m $FORMAT" >&2
+echo -e "  \033[1minvocation ID:\033[0m $INVOCATION_ID" >&2
+echo -e "  \033[1moutput dir:\033[0m $OUTPUT_DIR" >&2
+
+# ── Export for Python sub-process ──────────────────────────────────────────
+export FSCRAPES_DIR="$OUTPUT_DIR"
+export FSCRAPES_FMT="$FORMAT"
+export FSCRAPES_SUMM="$SUMMARY"
+export FSCRAPES_SCHEMA="${SCHEMA:-}"
+export FSCRAPES_SCHEMA_FILE="${SCHEMA_FILE:-}"
+export FIRECRAWL_SKILL_SCRIPT_DIR="$SCRIPT_DIR"
+export FIRECRAWL_INVOCATION_ID="$INVOCATION_ID"
+
+python3 - "${URLS[@]}" << 'PYEOF'
+import json, itertools, re, subprocess, os, sys, concurrent.futures
+
+outdir = os.environ["FSCRAPES_DIR"]
+fmt = os.environ["FSCRAPES_FMT"]
+do_summary = os.environ["FSCRAPES_SUMM"] == "true"
+urls = sys.argv[1:]
+script_dir = os.environ["FIRECRAWL_SKILL_SCRIPT_DIR"]
+invocation_id = os.environ["FIRECRAWL_INVOCATION_ID"]
+
+schema = os.environ.get("FSCRAPES_SCHEMA", "")
+schema_file = os.environ.get("FSCRAPES_SCHEMA_FILE", "")
+is_schema = bool(schema or schema_file)
+
+if is_schema:
+    fmt = "json"
+
+meta = {"invocation_id": invocation_id, "operation": "scrape", "results": [], "total_size_kb": 0, "total_words": 0, "scratch_dir": outdir}
+
+def process_url(idx_url_tuple):
+    i, url = idx_url_tuple
+    ext = "json" if is_schema else ("md" if fmt == "markdown" else fmt)
+    outfile = os.path.join(outdir, f"url_{i:03d}.{ext}")
+    flags = ["firecrawl", "scrape", url, "-o", outfile, "--format", fmt]
+
+    if do_summary:
+        flags.append("--summary")
+    else:
+        if is_schema:
+            if schema:
+                flags.extend(["--schema", schema])
+            elif schema_file:
+                flags.extend(["--schema-file", schema_file])
+        elif fmt == "markdown":
+            flags.append("--only-main-content")
+            # Exclude standard boilerplate elements and sidebars
+            exclude_selectors = "nav,footer,aside,header,script,style,.sidebar,#sidebar,.ad,.menu,#menu,.header,.footer,#header,#footer,#nav,.nav"
+            flags.extend(["--exclude-tags", exclude_selectors])
+
+    print(f"  Scraping [{i+1}/{len(urls)}]: {url[:80]}...", file=sys.stderr)
+
+    try:
+        result = subprocess.run(flags, capture_output=True, text=True, timeout=60)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        message = f"{type(exc).__name__}: {exc}"
+        print(f"    ❌ Error [{i+1}/{len(urls)}]: {message}", file=sys.stderr)
+        return {
+            "index": i,
+            "url": url,
+            "title": url,
+            "scratch_file": outfile,
+            "format": fmt,
+            "has_summary": do_summary,
+            "status": "error",
+            "size_kb": 0,
+            "char_count": 0,
+            "word_count": 0,
+            "preview_head": "",
+            "error": message[:200],
+        }
+
+    size_bytes = 0
+    char_count = 0
+    word_count = 0
+    preview = ""
+    title = url
+
+    if result.returncode == 0 and os.path.exists(outfile):
+        with open(outfile) as f:
+            content = f.read()
+
+        # Pretty print JSON files for structured extraction:
+        if is_schema:
+            try:
+                data = json.loads(content)
+                pretty_content = json.dumps(data, indent=2)
+                with open(outfile, "w") as f:
+                    f.write(pretty_content)
+                content = pretty_content
+            except Exception as e:
+                print(f"    ⚠️ JSON pretty printing failed: {e}", file=sys.stderr)
+
+        # Run programmatic cleanup pass:
+        if not is_schema and fmt == "markdown":
+            try:
+                sys.path.insert(0, os.environ["FIRECRAWL_SKILL_SCRIPT_DIR"])
+                from cleanup import clean_markdown
+                cleaned_content = clean_markdown(content)
+                if cleaned_content and cleaned_content != content:
+                    with open(outfile, "w") as f:
+                        f.write(cleaned_content)
+                    content = cleaned_content
+            except Exception as e:
+                print(f"    ⚠️ Cleanup error: {e}", file=sys.stderr)
+
+        size_bytes = len(content.encode("utf-8"))
+        char_count = len(content)
+        word_count = len(content.split())
+
+        # Try to extract the page title in order of preference:
+        if is_schema:
+            try:
+                output_data = json.loads(content)
+                extracted_title = None
+                if isinstance(output_data, dict):
+                    if "data" in output_data and isinstance(output_data["data"], dict):
+                        extracted_title = output_data["data"].get("metadata", {}).get("title")
+                    
+                    if not extracted_title:
+                        # Extract the scraped structured object
+                        scraped_json = {}
+                        raw_data_field = output_data.get("data")
+                        if isinstance(raw_data_field, dict) and "json" in raw_data_field:
+                            scraped_json = raw_data_field["json"]
+                        elif "json" in output_data:
+                            scraped_json = output_data["json"]
+                        else:
+                            scraped_json = output_data
+                        
+                        if isinstance(scraped_json, dict):
+                            for key in ["title", "product_name", "name", "headline"]:
+                                if key in scraped_json and scraped_json[key]:
+                                    extracted_title = str(scraped_json[key])
+                                    break
+                if extracted_title:
+                    title = extracted_title
+            except Exception as e:
+                print(f"    ⚠️ Title extraction from JSON failed: {e}", file=sys.stderr)
+        else:
+            for ii, line in itertools.islice(enumerate(content.split("\n")), 10):
+                if title == url and line.startswith("# ") and len(line) < 200:
+                    title = line[2:].strip()
+                    break
+            if title == url:
+                lines = content.split("\n")
+                for jj in range(min(len(lines), 12)):
+                    next_line = lines[jj + 1] if jj + 1 < len(lines) else ""
+                    if jj == 0 and len(lines[jj]) < 200 and len(lines[jj].strip()) > 0:
+                        if re.match(r'^[=-]{3,}$', next_line):
+                            title = lines[jj].strip()
+                            break
+                        # Handle indented underlines
+                        stripped = next_line.strip()
+                        if re.match(r'^-{3,}$', stripped) and re.match(r'^ +---', next_line):
+                            title = lines[jj].strip()
+                            break
+                        if re.match(r'={3,}$', stripped) and re.match(r'^ +===', next_line):
+                            title = lines[jj].strip()
+                            break
+            if title == url:
+                m = re.search(r'<title[^>]*>(.*?)</title>', content[:4096], re.I)
+                if m:
+                    title = re.sub(r'\s*[-|/]\s*.*', '', m.group(1).strip())
+                    if len(title) < 200:
+                        title = title
+
+        preview = content[:300].replace('\n', ' ').strip()
+
+    status = "ok" if result.returncode == 0 and os.path.exists(outfile) else "error"
+
+    if status == "ok":
+        print(f"    ✔ Done [{i+1}/{len(urls)}]: {size_bytes / 1024:.1f} KB, {word_count} words", file=sys.stderr)
+    else:
+        err_msg = result.stderr[:200].strip() or "Unknown error"
+        print(f"    ❌ Error [{i+1}/{len(urls)}]: {err_msg}", file=sys.stderr)
+
+    return {
+        "index": i,
+        "url": url,
+        "title": title,
+        "scratch_file": outfile,
+        "format": fmt,
+        "has_summary": do_summary,
+        "status": status,
+        "size_kb": round(size_bytes / 1024, 1),
+        "char_count": char_count,
+        "word_count": word_count,
+        "preview_head": preview[:300],
+        "error": result.stderr[:200] if status == "error" else "",
+    }
+
+items_to_process = list(enumerate(urls))
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(items_to_process))) as executor:
+    results_list = list(executor.map(process_url, items_to_process))
+
+results_list.sort(key=lambda x: x["index"])
+
+for r in results_list:
+    meta["results"].append(r)
+    meta["total_size_kb"] += r["size_kb"]
+    meta["total_words"] += r["word_count"]
+
+with open(os.path.join(outdir, "_meta.json"), "w") as f:
+    json.dump(meta, f, indent=2)
+
+# ── Write _index.md ───────────────────────────────────────────────────────
+index_path = os.path.join(outdir, "_index.md")
+with open(index_path, "w") as f:
+    f.write(f"# Scrape Scratch Index\n\n")
+    f.write(f"- **Invocation ID**: `{invocation_id}`\n")
+    f.write(f"- **Scratch Directory**: `{outdir}`\n")
+    f.write(f"- **Total URLs**: {len(urls)}\n")
+    f.write(f"- **Total Size**: {round(meta['total_size_kb'], 1)} KB\n")
+    f.write(f"- **Total Words**: {meta['total_words']}\n\n")
+    f.write(f"| # | Size (KB) | Words | Status | Title / File Path |\n")
+    f.write(f"|---|-----------|-------|--------|-------------------|\n")
+    for r in meta["results"]:
+        tag = "OK" if r["status"] == "ok" else "ERR"
+        file_url = f"file://{r['scratch_file']}"
+        f.write(f"| {r['index']+1} | {r['size_kb']:.1f} | {r['word_count']} | {tag} | [{r['title']}]({file_url}) |\n")
+
+# ── Print index to stdout ─────────────────────────────────────────────────
+print(f"\n\033[1;32m=== Scrape Scratch Index ===\033[0m")
+print(f"\033[1mSCRATCH_DIR\033[0m={outdir}")
+print(f"\033[1mInvocation:\033[0m  {invocation_id}")
+print(f"\033[1mTotal:\033[0m       {len(urls)} URLs")
+print(f"\033[1mTotal size:\033[0m  ~\033[1;33m{round(meta['total_size_kb'], 1)} KB\033[0m / ~{meta['total_words']} words")
+print(f"\n\033[1m{'#':>3}  {'KB':>5}  {'Words':>6}  Title\033[0m")
+print(f"\033[1;30m{'─'*60}\033[0m")
+for u in meta["results"]:
+    tag = "\033[1;32mOK\033[0m" if u["status"] == "ok" else "\033[1;31mERR\033[0m"
+    print(f"{u['index']+1:>3}  {u['size_kb']:>5.1f}  {u['word_count']:>6}  [{tag}] \033[1m{u['title']}\033[0m")
+    if u["error"]:
+        print(f"      \033[0;31mERROR: {u['error'][:120]}\033[0m")
+print(f"\nFiles saved to: \033[1;36m{outdir}\033[0m")
+print(f"\n── Next: '\033[1;36mrtk proxy {script_dir}/fread {outdir}\033[0m' to read content ──")
+PYEOF

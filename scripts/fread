@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# fread — Read a Firecrawl scratch file with sizing metadata
+#
+# Usage:
+#   fread <scratch_file_path> [--lines N] [--skip N]
+#
+# Shows file size context before content so the agent can decide
+# whether to load the full file or just a synopsis.
+#
+# Example: skip an initial section and show body content
+#   fread "<scratch-dir>/result_000.md" --skip 3 --lines 50
+
+set -eo pipefail
+
+# ── Defaults ────────────────────────────────────────────────────────────────
+LINES=40
+SKIP=0
+GREP_PATTERN=""
+HISTORY=false
+CATALOG=false
+CATALOG_ID=""
+CATALOG_JSON=false
+CATALOG_VERBOSE=false
+CATALOG_COMPARE=()
+
+# ── Parse args ──────────────────────────────────────────────────────────────
+FILE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --lines)     LINES="$2";    shift 2 ;;
+    --skip)      SKIP="$2";     shift 2 ;;
+    --grep)      GREP_PATTERN="$2"; shift 2 ;;
+    -H|--history) HISTORY=true; shift ;;
+    --catalog)
+      CATALOG=true
+      if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then CATALOG_ID="$2"; shift 2; else shift; fi
+      ;;
+    --json) CATALOG_JSON=true; shift ;;
+    --verbose) CATALOG_VERBOSE=true; shift ;;
+    --compare)
+      CATALOG=true
+      shift
+      while [[ -n "${1:-}" && "${1:0:1}" != "-" ]]; do CATALOG_COMPARE+=("$1"); shift; done
+      ;;
+    -h|--help)
+      echo -e "\033[1;36mfread\033[0m — Read a Firecrawl scratch file with sizing metadata"
+      echo ""
+      echo -e "\033[1mUsage:\033[0m"
+      echo "  fread <scratch_file_path> [options]"
+      echo "  fread --history"
+      echo "  fread --catalog [fc_<uuid>|fr_<uuid>] [--json|--verbose]"
+      echo "  fread --compare <fr_id> <fr_id> [...]"
+      echo ""
+      echo -e "\033[1mOptions:\033[0m"
+      echo "  --lines <num>       Number of lines to show (default: 40, set 0 to show entire file)"
+      echo "  --skip <num>        Number of lines to skip from the beginning (default: 0)"
+      echo "  --grep <pattern>    Search for a pattern across all markdown results in a directory"
+      echo "  -H, --history       List previous search and scrape scratch sessions"
+      echo "  --catalog [id]      List records or show an invocation/research-run summary"
+      echo "  --json              Show raw catalog JSON with --catalog <id>"
+      echo "  --verbose           Show complete normalized invocation details"
+      echo "  --compare <ids...>  Compare research-run scorecards"
+      echo "  -h, --help          Show this help message"
+      exit 0
+      ;;
+    --)        shift; FILE="${1:-}"; break ;;
+    -*)        echo -e "\033[1;31mERROR: unknown flag: $1\033[0m" >&2; exit 1 ;;
+    *)         FILE="$1";     shift ;;
+  esac
+done
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
+if [[ "$CATALOG" == true ]]; then
+  if (( ${#CATALOG_COMPARE[@]} )); then
+    python3 "$SCRIPT_DIR/invocation_catalog.py" compare "${CATALOG_COMPARE[@]}"
+  elif [[ -n "$CATALOG_ID" ]]; then
+    args=(show "$CATALOG_ID")
+    [[ "$CATALOG_JSON" == true ]] && args+=(--json)
+    [[ "$CATALOG_VERBOSE" == true ]] && args+=(--verbose)
+    python3 "$SCRIPT_DIR/invocation_catalog.py" "${args[@]}"
+  else
+    python3 "$SCRIPT_DIR/invocation_catalog.py" list
+  fi
+  exit $?
+fi
+
+if [[ "$HISTORY" == true ]]; then
+  TEMP_ROOT="${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}"
+  BASE_DIR="$TEMP_ROOT/firecrawl_scratch"
+  if [[ ! -d "$BASE_DIR" ]]; then
+    echo -e "\033[1;33mNo scratch sessions found at $BASE_DIR\033[0m"
+    exit 0
+  fi
+  python3 - "$BASE_DIR" <<'PYEOF'
+import json
+import os
+import sys
+
+base_dir = sys.argv[1]
+print("\033[1;32m=== Firecrawl Scratch Sessions History ===\033[0m")
+print(f"Location: {base_dir}\n")
+directories = []
+for root, _, files in os.walk(base_dir):
+    if "_meta.json" in files:
+        directories.append(root)
+directories.sort(key=os.path.getmtime, reverse=True)
+for directory in directories:
+    query = "Unknown"
+    word_count = 0
+    results_count = 0
+    invocation_id = os.path.relpath(directory, base_dir).split(os.sep, 1)[0]
+    operation = os.path.basename(directory)
+    meta_file = os.path.join(directory, "_meta.json")
+    if os.path.isfile(meta_file):
+        try:
+            with open(meta_file, encoding="utf-8") as handle:
+                data = json.load(handle)
+            query = data.get("query") or data.get("topic") or "Batch Scrape"
+            invocation_id = data.get("invocation_id") or invocation_id
+            operation = data.get("operation") or operation
+            word_count = data.get("estimated_total_words") or data.get("total_words") or data.get("total_estimated_words") or 0
+            results_count = len(data.get("results") or data.get("queries_executed") or [])
+        except (OSError, ValueError, TypeError):
+            pass
+    relative_path = os.path.relpath(directory, base_dir)
+    print(f"  \033[1m{invocation_id}\033[0m  [{operation}]  {relative_path}")
+    print(f"    Query:      \033[1;36m{query}\033[0m ({results_count} results, ~{word_count} words)")
+    print(f"    Path:       {directory}{os.sep}")
+    print()
+PYEOF
+  exit 0
+fi
+
+if [[ -d "$FILE" ]]; then
+  if [[ -n "$GREP_PATTERN" ]]; then
+    echo -e "\033[1;32m── fread grep search: '$GREP_PATTERN' in $FILE ──\033[0m\n"
+    python3 - "$FILE" "$GREP_PATTERN" <<'PYEOF'
+import os, sys, re
+
+folder = sys.argv[1]
+pattern = sys.argv[2]
+try:
+    rx = re.compile(pattern, re.IGNORECASE)
+except re.error as exc:
+    print(f"ERROR: invalid regular expression: {exc}", file=sys.stderr)
+    raise SystemExit(2)
+
+any_found = False
+for root, _, files in os.walk(folder):
+    for f in sorted(files):
+        if (f.endswith('.md') or f.endswith('.json')) and not f.startswith('_'):
+            filepath = os.path.join(root, f)
+            with open(filepath, errors='ignore') as file_obj:
+                for idx, line in enumerate(file_obj):
+                    if rx.search(line):
+                        any_found = True
+                        clean_line = line.strip()
+                        if len(clean_line) > 150:
+                            clean_line = clean_line[:140] + ' ...'
+                        print(f'\033[1;36m{f}\033[0m:\033[1;33m{idx+1}\033[0m: {clean_line}')
+
+if not any_found:
+    print('  No matches found for pattern.')
+PYEOF
+    exit 0
+  else
+    if [[ -f "$FILE/_index.md" ]]; then
+      FILE="$FILE/_index.md"
+    elif [[ -f "$FILE/_meta.json" ]]; then
+      FILE="$FILE/_meta.json"
+    fi
+  fi
+elif [[ -n "$GREP_PATTERN" ]]; then
+  echo -e "\033[1;31mERROR: --grep can only be used on directories containing search/scrape outputs\033[0m" >&2
+  exit 1
+fi
+
+if [[ -z "$FILE" ]] || [[ ! -f "$FILE" ]]; then
+  echo -e "\033[1;31mERROR: file or directory not found: ${FILE:-'<empty>'}\033[0m" >&2
+  echo "Usage: fread <scratch_file_path> [--lines N] [--skip N] or fread --history" >&2
+  exit 1
+fi
+
+SIZE_BYTES=$(python3 - "$FILE" <<'PYEOF'
+import os
+import sys
+print(os.path.getsize(sys.argv[1]))
+PYEOF
+)
+SIZE_KB=$(python3 -c "print(round($SIZE_BYTES / 1024, 1))" 2>/dev/null || echo "unknown")
+WORD_COUNT=$(wc -w < "$FILE" 2>/dev/null || echo "unknown")
+LINE_COUNT=$(wc -l < "$FILE" 2>/dev/null || echo "unknown")
+
+echo -e "\033[1;32m── fread: $(basename "$FILE") ──\033[0m"
+echo -e "  \033[1mpath:\033[0m $FILE"
+echo -e "  \033[1msize:\033[0m \033[1;33m${SIZE_KB} KB\033[0m  (${WORD_COUNT} words, ${LINE_COUNT} lines)"
+if [[ "$LINES" -eq 0 ]] 2>/dev/null; then
+  if [[ "$SKIP" -gt 0 ]]; then
+    echo -e "  \033[1mshowing:\033[0m lines \033[1;36m$((SKIP + 1))-${LINE_COUNT}\033[0m (through end of file)"
+  else
+    echo -e "  \033[1mshowing:\033[0m entire file"
+  fi
+elif [[ "$SKIP" -gt 0 ]]; then
+  START_LINE=$((SKIP + 1))
+  END_LINE=$((SKIP + LINES))
+  if [[ "$END_LINE" -gt "$LINE_COUNT" ]]; then
+    END_LINE="$LINE_COUNT"
+  fi
+  echo -e "  \033[1mshowing:\033[0m lines \033[1;36m${START_LINE}-${END_LINE}\033[0m (of $LINE_COUNT total)"
+else
+  echo -e "  \033[1mshowing:\033[0m first \033[1;36m$LINES\033[0m lines${LINES:+ (of $LINE_COUNT total)}"
+fi
+echo ""
+
+if [[ "$LINES" -eq 0 ]] 2>/dev/null || [[ "$LINES" == "0"* ]]; then
+  if [[ "$SKIP" -gt 0 ]]; then
+    tail -n +$((SKIP + 1)) "$FILE"
+  else
+    cat "$FILE"
+  fi
+else
+  if [[ "$SKIP" -gt 0 ]]; then
+    (tail -n +$((SKIP + 1)) "$FILE" | head -n "$LINES") || true
+  else
+    if [[ "$LINE_COUNT" -gt "$LINES" ]]; then
+      head -n "$LINES" "$FILE"
+      echo ""
+      echo "  ... (${LINE_COUNT} total lines, showing first $LINES)"
+    else
+      cat "$FILE"
+    fi
+  fi
+fi

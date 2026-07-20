@@ -1,0 +1,4 @@
+interface:
+  display_name: "Firecrawl Research"
+  short_description: "Search and audit web research workflows"
+  default_prompt: "Use $firecrawl to research a topic with auditable scratch artifacts."

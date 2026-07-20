@@ -1,0 +1,932 @@
+#!/usr/bin/env python3
+# fsearch_smart — Advanced automated multi-query search orchestrator for Firecrawl
+#
+# Usage:
+#   fsearch_smart "<topic>" [--complexity simple|moderate|complex] [--tbs qdr:d|w|m|y]
+#
+
+import sys
+import os
+import json
+import argparse
+import subprocess
+import urllib.request
+import urllib.error
+import tempfile
+import re
+import time
+from urllib.parse import urlsplit, urlunsplit
+from concurrent.futures import ThreadPoolExecutor
+
+SCRIPT_DIR = os.environ.get("FIRECRAWL_SKILL_SCRIPT_DIR") or os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
+from invocation_id import resolve_invocation_id
+import invocation_catalog as catalog
+import research_workflow as workflow
+
+# Colors
+CYAN = "\033[1;36m"
+GREEN = "\033[1;32m"
+YELLOW = "\033[1;33m"
+RED = "\033[1;31m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+COMPLEXITY_TIERS = {
+    "simple": {"queries": 2, "results_per_query": 15, "total_scrapes": 6},
+    "moderate": {"queries": 3, "results_per_query": 25, "total_scrapes": 12},
+    "complex": {"queries": 5, "results_per_query": 40, "total_scrapes": 25},
+}
+
+# Stop words for keyword extraction
+STOP_WORDS = {
+    "the", "a", "an", "is", "of", "on", "for", "with", "in", "to", "how", "what", "why",
+    "run", "setup", "get", "using", "by", "from", "and", "or", "about", "at", "but",
+    "if", "not", "out", "up", "some", "any", "now", "focus", "on", "aspect", "use",
+    "using", "where", "which", "who", "whom", "this", "that", "these", "those",
+    "vs", "versus", "difference", "between", "compare", "comparing", "pipeline", "related", "ongoing",
+    "current", "package", "command"
+}
+
+
+def subject_keywords(keywords, complexity):
+    """Keep enough of a long topic to preserve its distinctive subject.
+
+    The heuristic planner has no semantic model.  Keeping only the first four
+    tokens made requests such as California Eid-holiday research become the
+    unrelated query ``california proposed legislation school``.  A bounded,
+    de-duplicated prefix remains broad while retaining the requested subject.
+    """
+    widths = {"simple": 12, "moderate": 14, "complex": 18}
+    selected = []
+    for keyword in keywords:
+        if keyword not in selected:
+            selected.append(keyword)
+        if len(selected) >= widths[complexity]:
+            break
+    return selected
+
+def extract_keywords(topic):
+    # Split, clean punctuation, and filter
+    words = []
+    for w in topic.lower().split():
+        clean_w = "".join(c for c in w if c.isalnum() or c in "-_")
+        if clean_w and clean_w not in STOP_WORDS:
+            words.append(clean_w)
+    return words
+
+def classify_complexity(topic, keywords):
+    length = len(topic)
+    word_count = len(topic.split())
+    
+    # Check for hardware, compiling, low-level, or troubleshooting terms
+    complex_signals = {
+        "vulkan", "turnip", "virgl", "zink", "mesa", "acceleration", "gpu", "gl", "opengl",
+        "kernel", "driver", "compile", "build", "error", "benchmark", "performance",
+        "troubleshoot", "pipeline", "proot", "chroot", "x11", "wayland", "termux-x11",
+        "wine", "dxvk", "box64", "mobox", "optimizing", "opt", "performance", "benchmark"
+    }
+    
+    signal_hits = [k for k in keywords if k in complex_signals]
+    
+    reasons = []
+    if word_count > 6:
+        reasons.append(f"high word count ({word_count} words)")
+    if length > 40:
+        reasons.append(f"long descriptive topic ({length} chars)")
+    if signal_hits:
+        reasons.append(f"contains specialized terms: {', '.join(signal_hits)}")
+        
+    if len(reasons) >= 2 or (signal_hits and word_count >= 5):
+        return "complex", reasons
+    elif len(reasons) == 1 or word_count >= 4:
+        return "moderate", reasons
+    else:
+        return "simple", ["short direct query, no complex signal keywords found"]
+
+LAST_PLANNER_PROVENANCE = {}
+
+
+def generate_queries_via_llm(topic, complexity, failed_context=None):
+    global LAST_PLANNER_PROVENANCE
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return None
+        
+    num_queries = 2 if complexity == "simple" else (3 if complexity == "moderate" else 5)
+    if failed_context:
+        prompt = (
+            f"We are researching the topic: '{topic}'\n"
+            f"The following queries failed or yielded poor results (0 pages successfully scraped):\n"
+            f"{failed_context}\n\n"
+            f"Generate {num_queries} revised, broader, or alternative search queries to find relevant results. "
+            f"If the previous queries used restrictive 'site:' filters or too many quoted phrases that caused them to fail, "
+            f"make the revised queries broader and remove the restrictive filters. Return the list of queries in JSON format."
+        )
+    else:
+        prompt = (
+            f"Generate {num_queries} complementary, highly targeted search queries for the topic: '{topic}'.\n"
+            f"Complexity level: {complexity}.\n"
+            f"Optimize these queries for broad one-batch coverage. The first query must be domain-neutral. "
+            f"Use distinct facets such as overview, primary evidence, failure modes or counterevidence, current developments, "
+            f"and implementation details. At most two queries may use site: constraints. Avoid near-duplicates. "
+            f"You can use operators like AND, OR, exclusions, and quoted phrases. "
+            f"For simple complexity, return 2 queries. For moderate, return 3. For complex, return 5. "
+            f"Return the list of queries in JSON format."
+        )
+        
+    model = os.environ.get("FIRECRAWL_QUERY_PLANNER_MODEL", "gemini-2.5-flash")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "queries": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"}
+                    }
+                },
+                "required": ["queries"]
+            }
+        }
+    }
+    
+    started = time.monotonic()
+    prompt_hash = __import__("hashlib").sha256(prompt.encode()).hexdigest()
+    try:
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(payload).encode("utf-8"), 
+            headers=headers, 
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            request_id = response.headers.get("x-request-id")
+            text = res_data["candidates"][0]["content"]["parts"][0]["text"]
+            queries_data = json.loads(text)
+            LAST_PLANNER_PROVENANCE = {
+                "provider": "gemini", "requested_model": model, "returned_model": res_data.get("modelVersion"),
+                "request_id": request_id, "prompt_hash": prompt_hash,
+                "latency_ms": int((time.monotonic() - started) * 1000), "usage": res_data.get("usageMetadata", {}),
+                "status": "succeeded",
+            }
+            return queries_data.get("queries")
+    except Exception as e:
+        LAST_PLANNER_PROVENANCE = {
+            "provider": "gemini", "requested_model": model, "prompt_hash": prompt_hash,
+            "latency_ms": int((time.monotonic() - started) * 1000), "status": "failed",
+            "error": f"{type(e).__name__}: {e}"[:300], "fallback": "heuristic",
+        }
+        print(f"  ⚠️ LLM query generation failed/timed out ({e}). Falling back to rules-based heuristics.", file=sys.stderr)
+        return None
+
+def _dedupe_queries(queries):
+    seen = set()
+    unique = []
+    for query in queries:
+        query = " ".join(str(query).split()).strip()
+        normalized = re.sub(r"[^a-z0-9]+", " ", query.lower()).strip()
+        if query and normalized not in seen:
+            seen.add(normalized)
+            unique.append(query)
+    return unique
+
+
+def query_facet(query, position=0):
+    lowered = query.lower()
+    if position == 0 and "site:" not in lowered:
+        return "broad_overview"
+    if any(term in lowered for term in ("official", "documentation", "specification", "site:gov", "site:edu")):
+        return "primary_sources"
+    if any(term in lowered for term in ("failure", "limitation", "problem", "error", "criticism", "counter")):
+        return "failure_modes"
+    if any(term in lowered for term in ("latest", "2026", "news", "update", "recent")):
+        return "current_developments"
+    if any(term in lowered for term in ("research", "evidence", "study", "paper")):
+        return "research_evidence"
+    if any(term in lowered for term in ("github", "stackoverflow", "reddit", "forum", "community")):
+        return "implementation_or_community"
+    return "focused_detail"
+
+
+def build_query_plan(queries):
+    return [
+        {
+            "query": query,
+            "facet": query_facet(query, index),
+            "domain_restricted": "site:" in query.lower(),
+        }
+        for index, query in enumerate(queries)
+    ]
+
+
+def generate_queries(topic, keywords, complexity):
+    if not keywords:
+        keywords = [w.lower() for w in topic.split() if w.lower() not in STOP_WORDS]
+    if not keywords:
+        keywords = topic.lower().split()
+        
+    # Detect whether the query is technical enough to prefer code and Q&A sources.
+    tech_signals = {
+        "termux", "proot", "chroot", "linux", "pkg", "apt", "android", "bash", "python", 
+        "script", "vulkan", "turnip", "virgl", "zink", "mesa", "acceleration", "gpu", "opengl",
+        "compile", "build", "wayland", "x11", "wine", "box64", "mobox", "driver"
+    }
+    is_tech = any(k in tech_signals for k in keywords)
+    
+    # The search subject must retain distinctive trailing qualifiers, not just
+    # the opening context.  This is deliberately bounded to avoid converting
+    # every research brief into a full-text query.
+    subject_terms = subject_keywords(keywords, complexity)
+    broad_subject = " ".join(subject_terms) or topic
+    subject = broad_subject
+    primary = subject
+    queries = [broad_subject]
+
+    if complexity == "simple":
+        if is_tech:
+            queries.append(f'"{subject}" official documentation')
+        else:
+            queries.append(f'"{subject}" authoritative source')
+    elif complexity == "moderate":
+        if is_tech:
+            queries.append(f'"{subject}" official documentation implementation')
+            queries.append(f'"{subject}" failure modes compatibility troubleshooting')
+        else:
+            queries.append(f'"{subject}" research evidence primary sources')
+            queries.append(f'"{subject}" limitations criticism counterevidence')
+    else:
+        if is_tech:
+            queries.extend([
+                f'"{subject}" official documentation architecture',
+                f'"{subject}" research benchmarks compatibility',
+                f'"{subject}" failure modes errors troubleshooting',
+                f'(site:github.com OR site:stackoverflow.com) "{primary}" implementation issues',
+            ])
+        else:
+            queries.extend([
+                f'"{subject}" research evidence systematic review',
+                f'"{subject}" limitations criticism counterevidence',
+                f'"{subject}" latest developments 2026',
+                f'(site:.gov OR site:.edu) "{subject}" primary sources data',
+            ])
+
+    target_count = 5 if complexity == "complex" else (3 if complexity == "moderate" else 2)
+    return _dedupe_queries(queries)[:target_count]
+
+
+def normalize_queries(queries, topic, keywords, complexity):
+    target_count = 5 if complexity == "complex" else (3 if complexity == "moderate" else 2)
+    fallback = generate_queries(topic, keywords, complexity)
+    normalized = _dedupe_queries([fallback[0], *list(queries or []), *fallback[1:]])
+    domain_neutral = [query for query in normalized if "site:" not in query.lower()]
+    if domain_neutral and (not normalized or "site:" in normalized[0].lower()):
+        first = domain_neutral[0]
+        normalized.remove(first)
+        normalized.insert(0, first)
+    return normalized[:target_count]
+
+
+def broaden_query(query):
+    query = re.sub(r"\(?\s*site:[^\s)]+\s*(?:OR|AND)?\s*", " ", query, flags=re.I)
+    query = query.replace('"', " ")
+    query = re.sub(r"\b(?:AND|OR)\b", " ", query, flags=re.I)
+    return " ".join(query.split())
+
+def retains_anchors(original, candidate):
+    """Never retry with a generic fragment that loses the research subject."""
+    anchors = [word for word in extract_keywords(original) if len(word) >= 3]
+    if not anchors:
+        return bool(candidate)
+    candidate_words = set(extract_keywords(candidate))
+    required = min(2, len(set(anchors)))
+    return len(candidate_words.intersection(anchors)) >= required and len(candidate_words.intersection(anchors)) / len(set(anchors)) >= 0.4
+
+
+def adaptive_retry_query(keywords, failure_number, topic):
+    if not keywords:
+        return topic
+    if failure_number == 1:
+        selected = keywords[:2]
+    else:
+        selected = keywords[2:5] or keywords[:3]
+    return " ".join(selected)
+
+
+def canonical_url(url):
+    try:
+        parts = urlsplit(url)
+        return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query, ""))
+    except Exception:
+        return url
+
+
+def select_candidates(master_results, total_scrapes, per_domain_cap=None):
+    """Select a diverse global scrape set from already-acquired branch ledgers."""
+    by_url = {}
+    for result in master_results:
+        facet = result.get("facet", "focused_detail")
+        for candidate in result["metadata"].get("candidates", []):
+            key = canonical_url(candidate.get("url", ""))
+            if not key:
+                continue
+            record = by_url.setdefault(key, dict(candidate, branches=[], facets=[], occurrences=[]))
+            branch = result["query_index"]
+            rank = candidate.get("rank", 999)
+            if branch not in record["branches"]:
+                record["branches"].append(branch)
+            if facet not in record["facets"]:
+                record["facets"].append(facet)
+            record["occurrences"].append({"branch": branch, "rank": rank})
+
+    candidates = list(by_url.values())
+    for record in candidates:
+        ranks = [item["rank"] for item in record["occurrences"]]
+        record["selection_score"] = round(
+            sum(1.0 / (20 + rank) for rank in ranks)
+            + 0.025 * (len(record["branches"]) - 1)
+            + 0.01 * (len(record["facets"]) - 1),
+            6,
+        )
+        record["best_rank"] = min(ranks)
+
+    candidates.sort(key=lambda item: (-item["selection_score"], item["best_rank"], item.get("url", "")))
+    if total_scrapes == 0:
+        return candidates, []
+    domain_cap = per_domain_cap or max(2, (total_scrapes + 5) // 6)
+    domain_counts = {}
+    selected = []
+    deferred = []
+    for record in candidates:
+        domain = urlsplit(record.get("url", "")).netloc.lower()
+        if domain and domain_counts.get(domain, 0) >= domain_cap:
+            deferred.append(record)
+            continue
+        selected.append(record)
+        domain_counts[domain] = domain_counts.get(domain, 0) + 1
+        if len(selected) >= total_scrapes:
+            break
+    if len(selected) < total_scrapes:
+        selected_urls = {canonical_url(item.get("url", "")) for item in selected}
+        for record in deferred:
+            if canonical_url(record.get("url", "")) not in selected_urls:
+                selected.append(record)
+            if len(selected) >= total_scrapes:
+                break
+    return candidates, selected
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="fsearch_smart - multi-query depth-based search for Firecrawl",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument("topic", help="The search topic or research objective")
+    parser.add_argument(
+        "-c", "--complexity", 
+        choices=["simple", "moderate", "complex", "auto"], 
+        default="auto",
+        help="Complexity level. Default 'auto' performs first-pass decision."
+    )
+    parser.add_argument(
+        "-p", "--profile",
+        choices=["ecommerce", "forum", "news_article", "media_release", "academic_debate"],
+        help="Target schema profile (e.g., ecommerce, forum, news_article, media_release, academic_debate) to use progressive JSON schema scraping."
+    )
+    parser.add_argument("--tbs", default="", help="Time filter, e.g., qdr:d (day), qdr:w (week), qdr:m (month), qdr:y (year)")
+    parser.add_argument("--planner", choices=["auto", "gemini", "heuristic"], default="auto", help="Planner mode: auto uses the selected LLM (local by default); heuristic is explicit legacy mode")
+    parser.add_argument("--llm", choices=["local", "openai", "gemini"], default="local", help="LLM provider for planning and candidate triage")
+    parser.add_argument("--model", help="Model ID; required for commercial providers")
+    parser.add_argument("--commercial-fallback", choices=["openai", "gemini"], help="Explicit paid fallback provider")
+    parser.add_argument("--fallback-model", help="Model for an explicitly selected commercial fallback")
+    parser.add_argument("--research-profile", choices=["auto", "general", "breaking_news", "legislative_legal", "technical_docs"], default="auto")
+    parser.add_argument("--max-searches", type=int, help="Hard cap on search branches")
+    parser.add_argument("--max-scrapes", type=int, help="Hard cap on attempted page scrapes")
+    parser.add_argument("--max-iterations", type=int, default=3, help="Maximum adaptive scrape waves")
+    parser.add_argument("--no-llm-triage", action="store_true", help="Disable semantic candidate triage for diagnostics")
+    parser.add_argument("--results-per-query", type=int, help="Override metadata candidates acquired per query (1-100)")
+    parser.add_argument("--total-scrapes", type=int, help="Override the global post-deduplication scrape budget")
+    parser.add_argument("--per-domain-cap", type=int, help="Maximum selected pages per domain before relaxed backfill")
+    parser.add_argument("--invocation-id", help="Reuse an existing fc_<uuid> ID instead of generating one")
+    parser.add_argument("--research-run-id", default=os.environ.get("FIRECRAWL_RESEARCH_RUN_ID", ""), help="Link this operation to an explicit fr_<uuid> research run")
+    parser.add_argument("--dry-run", action="store_true", help="Generate and print the query plan without running Firecrawl")
+    
+    args = parser.parse_args()
+    if args.planner == "gemini":
+        args.llm = "gemini"
+        if not args.model:
+            parser.error("--planner gemini requires --model; prefer --llm gemini --model MODEL")
+    try:
+        invocation_id = resolve_invocation_id(args.invocation_id)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    catalog.begin(invocation_id, "smart_search", {
+        "topic": args.topic,
+        "requested_complexity": args.complexity,
+        "planner": args.planner,
+        "results_per_query": args.results_per_query,
+        "total_scrapes": args.total_scrapes,
+        "per_domain_cap": args.per_domain_cap,
+        "tbs": args.tbs,
+        "profile": args.profile,
+        "research_profile": args.research_profile,
+        "llm": args.llm,
+        "model": args.model,
+        "max_searches": args.max_searches,
+        "max_scrapes": args.max_scrapes,
+        "max_iterations": args.max_iterations,
+        "llm_triage": not args.no_llm_triage,
+        "dry_run": args.dry_run,
+    }, args.research_run_id or None)
+    
+    # 1. Extract keywords and make decision on complexity
+    keywords = extract_keywords(args.topic)
+    
+    if args.complexity == "auto":
+        complexity, reasons = classify_complexity(args.topic, keywords)
+    else:
+        complexity = args.complexity
+        reasons = ["manually specified by user"]
+        
+    tier = COMPLEXITY_TIERS[complexity]
+    num_queries = tier["queries"]
+    search_cap = args.max_searches or (num_queries + 2)
+    if args.max_searches is not None:
+        if args.max_searches < 1:
+            parser.error("--max-searches must be positive")
+        num_queries = min(num_queries, args.max_searches)
+    results_per_query = args.results_per_query or tier["results_per_query"]
+    total_scrapes = args.total_scrapes if args.total_scrapes is not None else tier["total_scrapes"]
+    if args.max_scrapes is not None:
+        if args.max_scrapes < 0:
+            parser.error("--max-scrapes must be non-negative")
+        total_scrapes = min(total_scrapes, args.max_scrapes)
+    if args.max_iterations < 1:
+        parser.error("--max-iterations must be positive")
+    if args.commercial_fallback and not args.fallback_model:
+        parser.error("--commercial-fallback requires --fallback-model")
+    color = {"simple": GREEN, "moderate": YELLOW, "complex": RED}[complexity]
+    if not 1 <= results_per_query <= 100:
+        parser.error("--results-per-query must be between 1 and 100")
+    if total_scrapes < 0:
+        parser.error("--total-scrapes must be non-negative")
+    if args.per_domain_cap is not None and args.per_domain_cap < 1:
+        parser.error("--per-domain-cap must be positive")
+        
+    print(f"{CYAN}=== Smart Search Orchestrator ==={RESET}")
+    print(f"{BOLD}Topic:{RESET}       {args.topic}")
+    print(f"{BOLD}Invocation:{RESET}  {invocation_id}")
+    print(f"{BOLD}Keywords:{RESET}    {', '.join(keywords)}")
+    print(f"{BOLD}Complexity:{RESET}  {color}{complexity.upper()}{RESET}")
+    print(f"{BOLD}Decision:{RESET}    Based on {', '.join(reasons)}")
+    print(f"{BOLD}Strategy:{RESET}    acquire {num_queries} x {results_per_query} metadata candidates first; then scrape {total_scrapes} globally selected pages.")
+    print("")
+    
+    # 2. Interpret the objective and generate a structured query plan.
+    research_brief = workflow.conservative_brief(args.topic, args.research_profile)
+    brief_provenance = {"status": "not_run", "provider": "deterministic"}
+    planner_used = "heuristic"
+    planner_provenance = {}
+    structured_plan = []
+    if args.planner != "heuristic":
+        print(f"Using {args.llm} LLM for research interpretation and query planning...")
+        research_brief, brief_provenance = workflow.build_research_brief(args.topic, args.research_profile, args.llm, args.model, args.commercial_fallback, args.fallback_model)
+        structured_plan, planner_provenance = workflow.plan_queries(args.topic, research_brief, num_queries, args.llm, args.model, args.commercial_fallback, args.fallback_model)
+        if structured_plan:
+            planner_used = args.llm
+    if structured_plan:
+        query_plan = structured_plan
+        queries = [entry["query"] for entry in query_plan]
+    elif args.planner == "heuristic":
+        queries = normalize_queries(None, args.topic, keywords, complexity)[:num_queries]
+        query_plan = build_query_plan(queries)
+        planner_provenance = {"provider": "deterministic", "status": "explicit_legacy_mode", "requested_model": None}
+    else:
+        # A failed semantic planner gets one conservative exact-objective query;
+        # do not silently broaden into unrelated heuristic facets.
+        queries = [" ".join(args.topic.split())]
+        query_plan = [{"query": queries[0], "facet": "degraded_exact_objective", "subquestion": args.topic, "intended_source_class": "unspecified", "expected_organizations": [], "freshness_requirement": research_brief.get("time_window", "as stated"), "domain_neutral": True, "expected_contribution": "direct results for the exact objective"}]
+        planner_provenance = {**planner_provenance, "status": "degraded", "fallback": "exact_objective_only"}
+        if args.research_run_id:
+            catalog.annotate_run(args.research_run_id, "pivot", "LLM query planning failed; used one conservative exact-objective query", to_invocation=invocation_id)
+    
+    print(f"{BOLD}Generated Advanced Queries:{RESET}")
+    for idx, entry in enumerate(query_plan, 1):
+        print(f"  {idx}. {CYAN}{entry['query']}{RESET} [{entry['facet']}]")
+    print("")
+
+    if args.dry_run:
+        print(json.dumps({
+            "topic": args.topic,
+            "invocation_id": invocation_id,
+            "complexity": complexity,
+            "planner": planner_used,
+            "planner_provenance": planner_provenance,
+            "research_brief": research_brief,
+            "brief_provenance": brief_provenance,
+            "strategy": {
+                "num_queries": num_queries,
+                "results_per_query": results_per_query,
+                "candidate_capacity": num_queries * results_per_query,
+                "total_scrape_budget": total_scrapes,
+                "acquisition_mode": "metadata_first_single_pass",
+            },
+            "queries": query_plan,
+        }, indent=2))
+        catalog.complete(invocation_id, "completed")
+        return
+    
+    # Create unified base directory
+    tmp_base = os.environ.get("TMPDIR") or tempfile.gettempdir()
+    invocation_dir = os.path.join(tmp_base, "firecrawl_scratch", invocation_id)
+    base_dir = os.path.join(invocation_dir, "smart")
+    os.makedirs(base_dir, exist_ok=True)
+    
+    print(f"Aggregating results to: {GREEN}{base_dir}{RESET}\n")
+    
+    # 3. Execute Searches
+    master_results = []
+    failed_queries = []
+    retry_query_plan = []
+    
+    idx = 1
+    active_queries = list(queries)
+    
+    while idx <= len(active_queries):
+        q = active_queries[idx - 1]
+        planned_facet = query_plan[idx - 1].get("facet", query_facet(q, idx - 1)) if idx <= len(query_plan) else query_facet(q, idx - 1)
+        print(f"{BOLD}[Query {idx}/{len(active_queries)}]{RESET} Running fsearch: '{CYAN}{q}{RESET}'")
+        sub_dir = os.path.join(base_dir, f"query_{idx:02d}")
+        
+        # Build fsearch command
+        cmd = [
+            os.path.join(SCRIPT_DIR, "fsearch"),
+            q,
+            "--limit", str(results_per_query),
+            "--scrape-limit", "0",
+            "--invocation-id", invocation_id,
+            "--dir", sub_dir
+        ]
+        if args.profile:
+            cmd += ["--profile", args.profile]
+        if args.tbs:
+            cmd += ["--tbs", args.tbs]
+            
+        candidate_count = 0
+        try:
+            # Let stdout/stderr flow naturally to avoid OS pipe buffer deadlocks and show progress logs
+            child_env = os.environ.copy()
+            child_env["FIRECRAWL_CATALOG_CHILD"] = "1"
+            if args.research_run_id:
+                child_env["FIRECRAWL_RESEARCH_RUN_ID"] = args.research_run_id
+            branch_started = time.monotonic()
+            res = subprocess.run(cmd, env=child_env)
+            branch_duration_ms = int((time.monotonic() - branch_started) * 1000)
+            
+            # Read sub_dir/_meta.json to aggregate
+            sub_meta_file = os.path.join(sub_dir, "_meta.json")
+            if os.path.exists(sub_meta_file):
+                with open(sub_meta_file) as sf:
+                    sub_meta = json.load(sf)
+                    candidate_count = sub_meta.get("candidate_count", 0)
+                    master_results.append({
+                        "query_index": idx,
+                        "query_string": q,
+                        "facet": planned_facet,
+                        "sub_dir": sub_dir,
+                        "metadata": sub_meta
+                    })
+                print(f"  ✔ Stored {candidate_count} candidate metadata records without scraping.")
+                catalog.add_event(invocation_id, "branch_finished", {
+                    "branch": idx, "query": q, "facet": planned_facet,
+                    "status": "ok", "exit_code": res.returncode, "candidate_count": candidate_count,
+                    "scratch_dir": sub_dir, "duration_ms": branch_duration_ms,
+                })
+            else:
+                print(f"  ❌ Query failed or returned empty meta.")
+                catalog.add_event(invocation_id, "branch_finished", {
+                    "branch": idx, "query": q, "facet": planned_facet,
+                    "status": "failed", "exit_code": res.returncode, "candidate_count": 0,
+                    "scratch_dir": sub_dir, "duration_ms": branch_duration_ms,
+                })
+        except Exception as e:
+            print(f"  ❌ Failed to execute fsearch: {e}")
+            catalog.add_event(invocation_id, "branch_finished", {
+                "branch": idx, "query": q, "facet": planned_facet,
+                "status": "failed", "error": f"{type(e).__name__}: {e}", "candidate_count": 0,
+                "scratch_dir": sub_dir,
+            })
+            
+        # The legacy heuristic mode retains its deterministic retry behavior.
+        # LLM-planned runs never silently broaden a failed branch: later audit
+        # and the agent can see the failure and choose a targeted recovery.
+        if candidate_count == 0:
+            print(f"  ⚠️ {YELLOW}Poor search result detected (0 candidates acquired).{RESET}")
+            failed_queries.append(q)
+            
+            if args.planner == "heuristic" and len(failed_queries) <= 2 and len(active_queries) < (args.max_searches or num_queries + 2):
+                print(f"  Adapting search strategy... Broadening the failed query deterministically.")
+                new_q = adaptive_retry_query(keywords, len(failed_queries), args.topic)
+                if not new_q or new_q in active_queries:
+                    new_q = broaden_query(q)
+                if new_q and not retains_anchors(args.topic, new_q):
+                    catalog.add_event(invocation_id, "retry_rejected", {"failed_query": q, "candidate_query": new_q, "reason": "semantic anchors lost"})
+                    new_q = ""
+                if new_q and new_q not in active_queries:
+                    print(f"  ↳ Generated revised query: '{CYAN}{new_q}{RESET}'")
+                    active_queries.append(new_q)
+                    retry_query_plan.append({"query": new_q, "facet": "adaptive_broadening", "domain_restricted": False, "retries": q})
+            elif args.research_run_id:
+                catalog.annotate_run(args.research_run_id, "pivot", f"Search branch returned no candidates and was not broadened automatically: {q}", from_invocation=invocation_id)
+                    
+        print("")
+        idx += 1
+        
+    if not master_results:
+        catalog.complete(invocation_id, "failed", error="No queries returned valid results")
+        print(f"{RED}ERROR: No queries returned valid results.{RESET}")
+        sys.exit(1)
+
+    # Deduplicate globally, then use semantic triage for LLM-planned research.
+    # Deterministic selection remains available only in explicit legacy or
+    # diagnostic mode.
+    all_candidates, deterministic_selected = select_candidates(
+        master_results, total_scrapes, args.per_domain_cap
+    )
+    triage_provenance = {"status": "not_run", "reason": "explicit heuristic or --no-llm-triage"}
+    if args.no_llm_triage or args.planner == "heuristic":
+        ordered_candidates = list(deterministic_selected)
+    else:
+        ordered_candidates, triage_provenance = workflow.triage_candidates(args.topic, research_brief, all_candidates, args.llm, args.model, fallback_provider=args.commercial_fallback, fallback_model=args.fallback_model)
+        triage_provenance["status"] = "succeeded" if ordered_candidates else "failed"
+        if not ordered_candidates and args.research_run_id:
+            catalog.annotate_run(args.research_run_id, "pivot", "LLM candidate triage produced no scrapeable candidates; triggered semantic recovery before spending scrape budget", from_invocation=invocation_id)
+
+    # One semantic recovery branch is allowed when acquisition returned volume
+    # but triage found no useful candidates.  This fixes the exact failure mode
+    # where over-constrained Boolean queries return dictionaries or other generic
+    # pages.  The recovery is itself LLM-planned and remains inside search_cap.
+    if not ordered_candidates and not args.no_llm_triage and args.planner != "heuristic" and len(master_results) < search_cap:
+        rejected_titles = [item.get("title", "") for item in all_candidates[:8]]
+        failure_context = "All candidates were rejected as irrelevant or unsuitable. Representative titles: " + "; ".join(rejected_titles)
+        recovery_plan, recovery_provenance = workflow.plan_queries(args.topic, research_brief, 1, args.llm, args.model, args.commercial_fallback, args.fallback_model, failure_context)
+        recovery_query = recovery_plan[0]["query"] if recovery_plan else " ".join(args.topic.split())
+        if recovery_query in active_queries:
+            recovery_query = " ".join(args.topic.split())
+        if recovery_query not in active_queries:
+            branch_index = len(master_results) + 1
+            sub_dir = os.path.join(base_dir, f"query_{branch_index:02d}")
+            cmd = [os.path.join(SCRIPT_DIR, "fsearch"), recovery_query, "--limit", str(results_per_query), "--scrape-limit", "0", "--invocation-id", invocation_id, "--dir", sub_dir]
+            if args.profile:
+                cmd += ["--profile", args.profile]
+            if args.tbs:
+                cmd += ["--tbs", args.tbs]
+            child_env = os.environ.copy(); child_env["FIRECRAWL_CATALOG_CHILD"] = "1"
+            if args.research_run_id:
+                child_env["FIRECRAWL_RESEARCH_RUN_ID"] = args.research_run_id
+            started_recovery = time.monotonic(); recovery_result = subprocess.run(cmd, check=False, env=child_env)
+            meta_file = os.path.join(sub_dir, "_meta.json")
+            if os.path.isfile(meta_file):
+                with open(meta_file) as handle:
+                    recovery_meta = json.load(handle)
+                recovery_entry = recovery_plan[0] if recovery_plan else {"query": recovery_query, "facet": "semantic_recovery", "domain_neutral": True}
+                recovery_entry = {**recovery_entry, "query": recovery_query, "recovery_for": "all_initial_candidates_rejected"}
+                query_plan.append(recovery_entry); retry_query_plan.append(recovery_entry)
+                master_results.append({"query_index": branch_index, "query_string": recovery_query, "facet": recovery_entry.get("facet", "semantic_recovery"), "sub_dir": sub_dir, "metadata": recovery_meta})
+                catalog.add_event(invocation_id, "semantic_recovery_search", {"branch": branch_index, "query": recovery_query, "candidate_count": recovery_meta.get("candidate_count", 0), "exit_code": recovery_result.returncode, "duration_ms": int((time.monotonic() - started_recovery) * 1000), "planner_provenance": recovery_provenance})
+                if args.research_run_id:
+                    catalog.annotate_run(args.research_run_id, "pivot", "Initial candidate set was semantically irrelevant; added a shorter LLM-planned recovery query", from_invocation=invocation_id, to_invocation=invocation_id)
+                all_candidates, _ = select_candidates(master_results, total_scrapes, args.per_domain_cap)
+                ordered_candidates, triage_provenance = workflow.triage_candidates(args.topic, research_brief, all_candidates, args.llm, args.model, fallback_provider=args.commercial_fallback, fallback_model=args.fallback_model)
+                triage_provenance["status"] = "succeeded" if ordered_candidates else "failed"
+
+    required_successes = min(total_scrapes, max(2, len(research_brief.get("questions", [])) * 2)) if total_scrapes else 0
+    attempted, successful_urls, scrape_results_by_url = [], set(), {}
+    remaining = list(ordered_candidates)
+    for wave in range(1, args.max_iterations + 1):
+        if not remaining or len(attempted) >= total_scrapes or len(successful_urls) >= required_successes:
+            break
+        remaining_budget = total_scrapes - len(attempted)
+        wave_size = max(1, min(remaining_budget, (total_scrapes + args.max_iterations - 1) // args.max_iterations))
+        wave_candidates, remaining = remaining[:wave_size], remaining[wave_size:]
+        selected_by_branch = {}
+        for candidate in wave_candidates:
+            occurrence = min(candidate["occurrences"], key=lambda item: (item["rank"], item["branch"]))
+            selected_by_branch.setdefault(occurrence["branch"], []).append(occurrence["rank"])
+            attempted.append(candidate)
+        catalog.add_event(invocation_id, "scrape_wave_started", {"wave": wave, "candidate_ids": [item.get("triage_candidate_id") for item in wave_candidates], "attempted_before": len(attempted) - len(wave_candidates), "remaining_budget": remaining_budget})
+        wave_successes = 0
+        for result in master_results:
+            ranks = selected_by_branch.get(result["query_index"], [])
+            if not ranks:
+                continue
+            print(f"  Wave {wave}: scraping branch {result['query_index']} stored ranks: {','.join(map(str, ranks))}")
+            cmd = [
+                os.path.join(SCRIPT_DIR, "fsearch"),
+                result["query_string"],
+                "--limit", str(results_per_query),
+                "--scrape-limit", str(len(ranks)),
+                "--scrape-ranks", ",".join(map(str, ranks)),
+                "--invocation-id", invocation_id,
+                "--dir", result["sub_dir"],
+            ]
+            if args.profile:
+                cmd += ["--profile", args.profile]
+            child_env = os.environ.copy()
+            child_env["FIRECRAWL_CATALOG_CHILD"] = "1"
+            if args.research_run_id:
+                child_env["FIRECRAWL_RESEARCH_RUN_ID"] = args.research_run_id
+            scrape_started = time.monotonic()
+            scrape_result = subprocess.run(cmd, check=False, env=child_env)
+            catalog.add_event(invocation_id, "branch_scrape_finished", {
+                "wave": wave, "branch": result["query_index"], "ranks": ranks, "exit_code": scrape_result.returncode,
+                "scratch_dir": result["sub_dir"], "duration_ms": int((time.monotonic() - scrape_started) * 1000),
+            })
+            sub_meta_file = os.path.join(result["sub_dir"], "_meta.json")
+            if os.path.exists(sub_meta_file):
+                with open(sub_meta_file) as sf:
+                    wave_meta = json.load(sf)
+                prior_pages = {canonical_url(page.get("url", "")): page for page in result["metadata"].get("results", [])}
+                for page in wave_meta.get("results", []):
+                    key = canonical_url(page.get("url", "")); scrape_results_by_url[key] = page
+                    prior_pages[key] = page
+                    if page.get("status") == "ok": successful_urls.add(key); wave_successes += 1
+                result["metadata"]["results"] = list(prior_pages.values())
+                result["metadata"]["total_scraped"] = sum(page.get("status") == "ok" for page in prior_pages.values())
+                result["metadata"]["estimated_total_words"] = sum(page.get("word_count", 0) for page in prior_pages.values() if page.get("status") == "ok")
+        catalog.add_event(invocation_id, "scrape_wave_finished", {"wave": wave, "attempted": len(wave_candidates), "successful": wave_successes, "cumulative_successful": len(successful_urls)})
+        if wave_successes < len(wave_candidates) and remaining and args.research_run_id:
+            catalog.annotate_run(args.research_run_id, "pivot", f"Scrape wave {wave} had {len(wave_candidates)-wave_successes} failed extraction(s); advanced to replacement candidates", from_invocation=invocation_id)
+
+    selected_candidates = attempted
+    for candidate in all_candidates:
+        candidate["selected"] = candidate in attempted
+        scraped = scrape_results_by_url.get(canonical_url(candidate.get("url", "")))
+        if scraped:
+            candidate.update({key: value for key, value in scraped.items() if value not in (None, "")})
+    print(f"{BOLD}Global selection:{RESET} attempted {len(selected_candidates)} of {len(all_candidates)} unique candidates; {len(successful_urls)} successful")
+        
+    # 4. Generate Master Index and Metadata
+    print(f"=== Generating Consolidated Master Index ===")
+    
+    master_index_path = os.path.join(base_dir, "_index.md")
+    master_meta_path = os.path.join(base_dir, "_meta.json")
+    
+    total_scraped_pages = sum(r["metadata"].get("total_scraped", 0) for r in master_results)
+    total_est_words = sum(r["metadata"].get("estimated_total_words", 0) for r in master_results)
+    
+    # Save Master Metadata JSON
+    master_meta = {
+        "invocation_id": invocation_id,
+        "operation": "smart_search",
+        "topic": args.topic,
+        "complexity": complexity,
+        "planner": planner_used,
+        "planner_provenance": planner_provenance,
+        "research_brief": research_brief,
+        "brief_provenance": brief_provenance,
+        "triage_provenance": triage_provenance,
+        "query_plan": query_plan,
+        "retry_query_plan": retry_query_plan,
+        "strategy": {
+            "num_queries": num_queries,
+            "results_per_query": results_per_query,
+            "candidate_capacity": num_queries * results_per_query,
+            "total_scrape_budget": total_scrapes,
+            "per_domain_cap": args.per_domain_cap,
+            "max_iterations": args.max_iterations,
+            "required_successes": required_successes,
+            "acquisition_mode": "metadata_first_llm_triage_adaptive_scrape"
+        },
+        "base_dir": base_dir,
+        "total_scraped_pages": total_scraped_pages,
+        "total_estimated_words": total_est_words,
+        "queries_executed": master_results
+    }
+
+    scrape_by_url = {}
+    for result in master_results:
+        for candidate in result["metadata"].get("candidates", []):
+            if candidate.get("scrape_status") == "ok":
+                scrape_by_url[canonical_url(candidate.get("url", ""))] = candidate
+    master_candidates = all_candidates
+    for candidate in master_candidates:
+        scraped = scrape_by_url.get(canonical_url(candidate.get("url", "")))
+        candidate["selected"] = candidate in selected_candidates
+        if scraped:
+            candidate.update({k: v for k, v in scraped.items() if v not in (None, "")})
+    master_meta["candidate_count"] = len(master_candidates)
+    master_meta["candidates"] = master_candidates
+    
+    with open(master_meta_path, "w") as mf:
+        json.dump(master_meta, mf, indent=2)
+    with open(os.path.join(base_dir, "_candidates.json"), "w") as cf:
+        json.dump(master_candidates, cf, indent=2)
+    context_manifest = {
+        "invocation_id": invocation_id,
+        "operation": "smart_search",
+        "topic": args.topic,
+        "complexity": complexity,
+        "facets": [entry["facet"] for entry in query_plan],
+        "candidate_count": len(master_candidates),
+        "selected_count": len(selected_candidates),
+        "selected": [
+            {
+                "url": item.get("url"),
+                "title": item.get("title"),
+                "snippet": item.get("snippet"),
+                "facets": item.get("facets", []),
+                "branches": item.get("branches", []),
+                "selection_score": item.get("selection_score"),
+                "scrape_status": item.get("scrape_status"),
+                "scratch_file": item.get("scratch_file"),
+                "word_count": item.get("word_count", 0),
+            }
+            for item in master_candidates if item.get("selected")
+        ],
+        "artifact_layers": {
+            "orientation": "_index.md",
+            "context_manifest": "_context.json",
+            "candidate_ledger": "_candidates.json",
+            "full_metadata": "_meta.json",
+            "raw_searches": "query_*/_search.json",
+            "scraped_content": "query_*/result_*",
+        },
+    }
+    with open(os.path.join(base_dir, "_context.json"), "w") as context_file:
+        json.dump(context_manifest, context_file, indent=2)
+    research_packet = workflow.evidence_packet(
+        args.topic, research_brief, query_plan, master_candidates,
+        [event for event in catalog.read_record(invocation_id).get("events", [])] if catalog.read_record(invocation_id) else [],
+        master_meta["strategy"], planner_provenance, triage_provenance,
+    )
+    with open(os.path.join(base_dir, "_evidence.json"), "w") as evidence_file:
+        json.dump(research_packet, evidence_file, indent=2)
+        
+    # Save Master Index Markdown
+    with open(master_index_path, "w") as mif:
+        mif.write(f"# Consolidated Research Index\n\n")
+        mif.write(f"- **Invocation ID**: `{invocation_id}`\n")
+        mif.write(f"- **Topic**: `{args.topic}`\n")
+        mif.write(f"- **Topic Complexity**: `{complexity.upper()}`\n")
+        mif.write(f"- **Consolidated Directory**: `{base_dir}`\n")
+        mif.write(f"- **Total Search Branches**: {len(master_results)}\n")
+        mif.write(f"- **Unique Candidates Acquired**: {len(master_candidates)}\n")
+        mif.write(f"- **Global Scrape Budget**: {total_scrapes}\n")
+        mif.write(f"- **Total Pages Scraped**: {total_scraped_pages}\n")
+        mif.write(f"- **Total Estimated Words**: {total_est_words} words\n\n")
+        mif.write(f"- **Research Packet**: `_evidence.json`\n")
+        mif.write(f"- **Planner State**: `{planner_provenance.get('status', 'unknown')}`\n")
+        mif.write(f"- **Triage State**: `{triage_provenance.get('status', 'unknown')}`\n\n")
+        
+        mif.write(f"## 🗺️ Search Branches & Queries\n\n")
+        mif.write(f"| # | Target Query | Scraped | Directory |\n")
+        mif.write(f"|---|--------------|---------|-----------|\n")
+        for r in master_results:
+            rel_dir = os.path.basename(r["sub_dir"])
+            mif.write(f"| {r['query_index']} | `{r['query_string']}` | {r['metadata'].get('total_scraped', 0)} | [{rel_dir}](file://{r['sub_dir']}) |\n")
+        mif.write("\n---\n\n")
+
+        mif.write("## Candidate Ledger\n\n")
+        mif.write("| # | Selected | Branches | Status | Domain | Title |\n")
+        mif.write("|---|----------|----------|--------|--------|-------|\n")
+        for candidate_index, candidate in enumerate(master_candidates, 1):
+            domain = urlsplit(candidate.get("url", "")).netloc
+            branches = ",".join(str(value) for value in candidate.get("branches", []))
+            status = candidate.get("scrape_status", "not_scraped")
+            selected = "yes" if candidate.get("selected") else ""
+            mif.write(f"| {candidate_index} | {selected} | {branches} | {status} | {domain} | {candidate.get('title', 'Untitled')} |\n")
+        mif.write("\n---\n\n")
+        
+        mif.write(f"## 📚 Consolidated Results Ledger\n\n")
+        mif.write(f"| # | Branch | Size (KB) | Words | Title / Local File Link |\n")
+        mif.write(f"|---|--------|-----------|-------|--------------------------|\n")
+        
+        count = 1
+        for r in master_results:
+            rel_dir = os.path.basename(r["sub_dir"])
+            for page in r["metadata"].get("results", []):
+                if page["status"] == "ok":
+                    file_url = f"file://{page['scratch_file']}"
+                    mif.write(f"| {count} | `{rel_dir}` | {page['size_kb']:.1f} | {page['word_count']} | [{page['title']}]({file_url}) |\n")
+                    if page.get("snippet"):
+                        clean_snip = page["snippet"].replace("\n", " ").strip()
+                        mif.write(f"| | | | | *Snippet*: {clean_snip[:150]}... |\n")
+                    count += 1
+                    
+    print(f"✔ Master index generated at: {GREEN}{master_index_path}{RESET}")
+    print(f"✔ Unified JSON meta generated at: {GREEN}{master_meta_path}{RESET}")
+    print("")
+    print(f"{BOLD}Consolidated Search Complete!{RESET}")
+    print(f"  To scan all results for terms, run:  {CYAN}rtk proxy {SCRIPT_DIR}/fread {base_dir} --grep \"<your_term>\"{RESET}")
+    print(f"  To inspect the index, run:           {CYAN}rtk proxy {SCRIPT_DIR}/fread {base_dir}{RESET}")
+    print("")
+    catalog.complete(invocation_id, "completed", master_meta_path)
+
+if __name__ == "__main__":
+    main()

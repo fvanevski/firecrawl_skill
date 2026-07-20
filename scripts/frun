@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# frun — explicit Firecrawl research-run lifecycle.
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+case "${1:-}" in
+  start) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" run-start "$@" ;;
+  finish) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" run-finish "$@" ;;
+  reopen) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" run-reopen "$@" ;;
+  annotate) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" run-annotate "$@" ;;
+  status|show) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" run-show "$@" ;;
+  verify) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" verify "$@" ;;
+  audit) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" audit "$@" ;;
+  audit-status) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" audit-status "$@" ;;
+  aggregate) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" aggregate "$@" ;;
+  recompute) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" recompute "$@" ;;
+  migrate) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" migrate "$@" ;;
+  compare) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" compare "$@" ;;
+  purge) shift; exec python3 "$SCRIPT_DIR/invocation_catalog.py" purge "$@" ;;
+  *) echo "Usage: frun {start <objective> [--profile PROFILE]|finish <fr_id> --outcome OUTCOME [--source-manifest FILE] [--answer-file FILE]|reopen <fr_id> --reason TEXT|annotate <fr_id> --type TYPE --reason TEXT|status <fr_id>|verify <id>|audit <id> [--llm PROVIDER] [--stages LIST]|audit-status <id>|aggregate|recompute <id>|migrate [--apply]|compare <fr_id>...|purge [filters] [--force]}" >&2; exit 2 ;;
+esac

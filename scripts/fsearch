@@ -1,0 +1,548 @@
+#!/usr/bin/env bash
+# fsearch — Firecrawl search + selective scrape with metadata
+#
+# Usage:
+#   fsearch <query> [--limit N] [--scrape-limit N] [--sources web,news] [--tbs qdr:d]
+#
+# Does a full workflow:
+#   1. Firecrawl search → _search.json (raw JSON with URLs + snippets)
+#   2. Scrapes top N results as markdown → result_000.md, result_001.md, ...
+#   3. Generates _index.md (compact human-readable index)
+#   4. Generates _meta.json (machine-readable with sizes, file paths, previews)
+#
+# Scratch files go below the platform temporary directory.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# ── Defaults ────────────────────────────────────────────────────────────────
+LIMIT=20
+SCRAPES_LIMIT=5
+SOURCES="web"
+TBS=""
+DIR=""
+PROFILE=""
+REUSE_SEARCH=0
+SCRAPE_RANKS=""
+INVOCATION_ID="${FIRECRAWL_INVOCATION_ID:-}"
+SEARCH_RETRIES="${FIRECRAWL_SEARCH_RETRIES:-2}"
+CATALOG_CHILD="${FIRECRAWL_CATALOG_CHILD:-0}"
+RESEARCH_RUN_ID="${FIRECRAWL_RESEARCH_RUN_ID:-}"
+
+# ── Parse args ──────────────────────────────────────────────────────────────
+QUERY=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --limit)         LIMIT="$2";         shift 2 ;;
+    --scrape-limit)  SCRAPES_LIMIT="$2"; shift 2 ;;
+    --sources)       SOURCES="$2";       shift 2 ;;
+    --tbs)           TBS="$2";           shift 2 ;;
+    --dir)           DIR="$2";           shift 2 ;;
+    --profile)       PROFILE="$2";       shift 2 ;;
+    --reuse-search)  REUSE_SEARCH=1;     shift ;;
+    --scrape-ranks)  SCRAPE_RANKS="$2"; shift 2 ;;
+    --invocation-id) INVOCATION_ID="$2"; shift 2 ;;
+    --research-run-id) RESEARCH_RUN_ID="$2"; shift 2 ;;
+    -h|--help)
+      echo -e "\033[1;36mfsearch\033[0m — Firecrawl search + selective scrape with metadata"
+      echo ""
+      echo -e "\033[1mUsage:\033[0m"
+      echo "  fsearch <query> [options]"
+      echo ""
+      echo -e "\033[1mOptions:\033[0m"
+      echo "  --limit <N>         Maximum search results to pull (default: 20; Firecrawl max: 100)"
+      echo "  --scrape-limit <N>  Maximum top results to scrape as markdown (default: 5; 0 stores metadata only)"
+      echo "  --sources <srcs>    Search sources (default: web, options: web, news)"
+      echo "  --tbs <tbs>         Search time filters e.g. qdr:d (day), qdr:w (week)"
+      echo "  --dir <path>        Custom output scratch directory"
+      echo "  --profile <prof>    Classification profile: ecommerce, forum, news_article, media_release, academic_debate (default: none)"
+      echo "  --reuse-search      Reuse <dir>/_search.json instead of issuing another search"
+      echo "  --scrape-ranks <N>  Comma-separated 1-based candidate ranks to scrape; implies --reuse-search"
+      echo "  --invocation-id <ID>  Reuse a parent fc_<uuid> ID (normally set by fsearch_smart)"
+      echo "  --research-run-id <ID>  Link this operation to an explicit fr_<uuid> research run"
+      echo "  -h, --help          Show this help message"
+      exit 0
+      ;;
+    -*)
+      echo -e "\033[0;31mERROR: unknown flag: $1\033[0m" >&2
+      exit 1
+      ;;
+    *)               QUERY="$1";         shift ;;
+  esac
+done
+
+if [[ -n "$SCRAPE_RANKS" ]]; then
+  REUSE_SEARCH=1
+fi
+if [[ -z "$INVOCATION_ID" && "$REUSE_SEARCH" -eq 1 && -n "$DIR" && -s "$DIR/_meta.json" ]]; then
+  INVOCATION_ID="$(python3 - "$DIR/_meta.json" <<'PYEOF'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle).get("invocation_id", ""))
+PYEOF
+)"
+fi
+if [[ -z "$INVOCATION_ID" ]]; then
+  INVOCATION_ID="$(python3 "$SCRIPT_DIR/invocation_id.py")"
+else
+  INVOCATION_ID="$(python3 "$SCRIPT_DIR/invocation_id.py" --validate "$INVOCATION_ID")"
+fi
+
+if [[ -z "$DIR" ]]; then
+  TEMP_ROOT="${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}"
+  DIR="$TEMP_ROOT/firecrawl_scratch/$INVOCATION_ID/search"
+fi
+mkdir -p "$DIR"
+
+CATALOG_META="$DIR/_meta.json"
+catalog_finish() {
+  local code="$1"
+  [[ "$CATALOG_CHILD" == "1" ]] && return
+  local status="completed"
+  local error=""
+  if (( code != 0 )); then
+    status="failed"
+    error="fsearch exited with status $code"
+  fi
+  python3 "$SCRIPT_DIR/invocation_catalog.py" finish --invocation-id "$INVOCATION_ID" --status "$status" --meta "$CATALOG_META" --error "$error" --exit-code "$code" >/dev/null 2>&1 || true
+}
+
+if [[ -z "$QUERY" ]]; then
+  echo -e "\033[0;31mERROR: query required\033[0m" >&2
+  echo "Usage: fsearch <query> [--limit N] [--scrape-limit N] [--sources web,news] [--tbs qdr:d]" >&2
+  exit 1
+fi
+
+if [[ -n "$PROFILE" && ! "$PROFILE" =~ ^(ecommerce|forum|news_article|media_release|academic_debate)$ ]]; then
+  echo "ERROR: unsupported profile: $PROFILE" >&2
+  exit 1
+fi
+
+if ! [[ "$LIMIT" =~ ^[0-9]+$ ]] || (( LIMIT < 1 || LIMIT > 100 )); then
+  echo "ERROR: --limit must be between 1 and 100" >&2
+  exit 1
+fi
+if ! [[ "$SCRAPES_LIMIT" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: --scrape-limit must be a non-negative integer" >&2
+  exit 1
+fi
+if ! [[ "$SEARCH_RETRIES" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: FIRECRAWL_SEARCH_RETRIES must be a non-negative integer" >&2
+  exit 1
+fi
+SEARCH_FILE="$DIR/_search.json"
+SEARCH_ERROR_FILE="$DIR/_search_error.log"
+
+if [[ "$CATALOG_CHILD" != "1" ]]; then
+  CATALOG_INPUT="$DIR/_catalog_input.json"
+  python3 - "$CATALOG_INPUT" "$QUERY" "$LIMIT" "$SCRAPES_LIMIT" "$SOURCES" "$TBS" "$PROFILE" "$REUSE_SEARCH" "$SCRAPE_RANKS" <<'PYEOF'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({"query": sys.argv[2], "limits": {"results": int(sys.argv[3]), "scrapes": int(sys.argv[4])}, "sources": sys.argv[5], "tbs": sys.argv[6], "profile": sys.argv[7], "reuse_search": sys.argv[8] == "1", "scrape_ranks": sys.argv[9]}), encoding="utf-8")
+PYEOF
+  catalog_start=(start --invocation-id "$INVOCATION_ID" --operation search --input-json "$(<"$CATALOG_INPUT")")
+  [[ -n "$RESEARCH_RUN_ID" ]] && catalog_start+=(--research-run-id "$RESEARCH_RUN_ID")
+  python3 "$SCRIPT_DIR/invocation_catalog.py" "${catalog_start[@]}" >/dev/null
+  trap 'catalog_finish $?' EXIT
+fi
+
+echo "── fsearch: '$QUERY' ──" >&2
+echo "  invocation_id=$INVOCATION_ID" >&2
+echo "  limit=$LIMIT scrape_limit=$SCRAPES_LIMIT sources=$SOURCES tbs=$TBS profile=$PROFILE" >&2
+echo "  scratch dir: $DIR" >&2
+
+# ── Step 1: Search (no scrape — just get URLs + snippets) ──────────────────
+echo "  [1/2] Acquiring candidate metadata..." >&2
+
+if (( REUSE_SEARCH )); then
+  if [[ ! -s "$SEARCH_FILE" ]]; then
+    echo "  ERROR: --reuse-search requires a non-empty $SEARCH_FILE" >&2
+    exit 1
+  fi
+  echo "  Reusing stored search response." >&2
+else
+  SEARCH_ARGS=(search "$QUERY" --limit "$LIMIT" --sources "$SOURCES" --ignore-invalid-urls --json -o "$SEARCH_FILE")
+  if [[ -n "$TBS" ]]; then
+    SEARCH_ARGS+=(--tbs "$TBS")
+  fi
+  attempt=0
+  : > "$SEARCH_ERROR_FILE"
+  while true; do
+    if firecrawl "${SEARCH_ARGS[@]}" 2>>"$SEARCH_ERROR_FILE"; then
+      break
+    else
+      search_status=$?
+    fi
+    error_text="$(<"$SEARCH_ERROR_FILE")"
+    if (( attempt >= SEARCH_RETRIES )) || [[ "$error_text" != *"EAI_AGAIN"* && "$error_text" != *"ENOTFOUND"* && "$error_text" != *"ECONNRESET"* && "$error_text" != *"ETIMEDOUT"* ]]; then
+      echo "  ERROR: Firecrawl search failed (exit $search_status). Diagnostics: $SEARCH_ERROR_FILE" >&2
+      tail -n 12 "$SEARCH_ERROR_FILE" >&2
+      exit "$search_status"
+    fi
+    attempt=$((attempt + 1))
+    echo "  ⚠️ Transient Firecrawl search failure (attempt $attempt/$SEARCH_RETRIES); retrying in ${attempt}s. Diagnostics: $SEARCH_ERROR_FILE" >&2
+    sleep "$attempt"
+  done
+fi
+
+if [[ ! -s "$SEARCH_FILE" ]]; then
+  python3 - "$SEARCH_FILE" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({"data": {"web": []}}), encoding="utf-8")
+PYEOF
+fi
+
+echo "  Done." >&2
+
+# ── Step 2: Scrape top N results & generate index ─────────────────────────
+echo "  [2/2] Scraping top $SCRAPES_LIMIT results..." >&2
+
+export FSEARCH_DIR="$DIR" FSEARCH_QUERY="$QUERY" FSEARCH_LIMIT="$SCRAPES_LIMIT" FSEARCH_PROFILE="$PROFILE" FSEARCH_RANKS="$SCRAPE_RANKS"
+export FIRECRAWL_INVOCATION_ID="$INVOCATION_ID"
+export FIRECRAWL_SKILL_SCRIPT_DIR="$SCRIPT_DIR"
+python3 << 'PYEOF'
+import json, subprocess, os, sys, concurrent.futures
+
+scratch_dir = os.environ["FSEARCH_DIR"]
+search_file = os.path.join(scratch_dir, "_search.json")
+search_limit = int(os.environ["FSEARCH_LIMIT"])
+requested_ranks = os.environ.get("FSEARCH_RANKS", "").strip()
+
+script_dir = os.environ["FIRECRAWL_SKILL_SCRIPT_DIR"]
+sys.path.insert(0, script_dir)
+from classifier import classify_target, PROFILES
+
+profile_name = os.environ.get("FSEARCH_PROFILE", "")
+invocation_id = os.environ["FIRECRAWL_INVOCATION_ID"]
+
+with open(search_file) as f:
+    data = json.load(f)
+
+raw_web_data = data.get("data", {})
+if isinstance(raw_web_data, dict):
+    results = raw_web_data.get("web") or []
+else:
+    results = raw_web_data if isinstance(raw_web_data, list) else []
+
+if not isinstance(results, list):
+    print("  ERROR: No search results found", file=sys.stderr)
+    sys.exit(1)
+
+print(f"  Found {len(results)} search results, scraping up to {search_limit} concurrently...", file=sys.stderr)
+
+def scrape_once(url, flags, outfile, timeout=60):
+    """Run firecrawl scrape and return (size_bytes, content_or_None)."""
+    try:
+        os.makedirs(os.path.dirname(outfile), exist_ok=True)
+
+        # Build list of flags with native tag exclusions (unless scraping summary or using schema)
+        extended_flags = list(flags)
+        if "--summary" not in flags and "--schema" not in flags:
+            exclude_selectors = "nav,footer,aside,header,script,style,.sidebar,#sidebar,.ad,.menu,#menu,.header,.footer,#header,#footer,#nav,.nav"
+            extended_flags += ["--exclude-tags", exclude_selectors]
+
+        proc = subprocess.run(
+            ["firecrawl", "scrape", url] + extended_flags + ["-o", outfile],
+            capture_output=True, text=True, timeout=timeout
+        )
+        if proc.returncode != 0 or not os.path.exists(outfile):
+            return 0, None
+        sz = os.path.getsize(outfile)
+        if sz == 0:
+            return 0, None
+        with open(outfile) as f:
+            content = f.read()
+
+        # Pretty print JSON if JSON format / schema extraction is active:
+        if "--schema" in flags:
+            try:
+                data = json.loads(content)
+                pretty_content = json.dumps(data, indent=2)
+                with open(outfile, "w") as f:
+                    f.write(pretty_content)
+                content = pretty_content
+                sz = len(content.encode("utf-8"))
+            except Exception as e:
+                print(f"    ⚠️ JSON pretty printing failed: {e}", file=sys.stderr)
+
+        # Run programmatic cleanup pass (only for markdown!):
+        elif "--schema" not in flags:
+            try:
+                from cleanup import clean_markdown
+                cleaned_content = clean_markdown(content)
+                if cleaned_content and cleaned_content != content:
+                    with open(outfile, "w") as f:
+                        f.write(cleaned_content)
+                    content = cleaned_content
+                    sz = len(content.encode("utf-8"))
+            except Exception as e:
+                print(f"    ⚠️ Cleanup error: {e}", file=sys.stderr)
+
+        return sz, content
+    except Exception as e:
+        return 0, None
+
+def process_item(item_index_tuple):
+    i, item = item_index_tuple
+    url = item.get("url", "")
+    title = item.get("title", "Untitled")
+    snippet = (item.get("snippet", "") or item.get("description", ""))[:250]
+    description = (item.get("description", "") or "")[:500]
+    
+    # Run classification if profile is enabled
+    is_candidate = False
+    if profile_name:
+        category, is_match = classify_target(url, title, snippet)
+        if category == profile_name and is_match:
+            is_candidate = True
+            
+    ext = "json" if is_candidate else "md"
+    outfile = os.path.join(scratch_dir, f"result_{i:03d}.{ext}")
+    print(f"  Scraping [{i+1}/{search_limit}]: {url[:80]}...", file=sys.stderr)
+
+    content_res = 0
+    content_text = None
+
+    if is_candidate:
+        schema_dict = PROFILES[profile_name]["target_schema"]
+        schema_str = json.dumps(schema_dict)
+        print(f"    ↳ Identified candidate matching profile '{profile_name}'. Requesting structured schema...", file=sys.stderr)
+        content_res, content_text = scrape_once(
+            url, ["--format", "json", "--schema", schema_str], outfile, timeout=60
+        )
+    else:
+        # --- Progressive scrape strategy ---
+        content_res, content_text = scrape_once(
+            url, ["--format", "markdown", "--only-main-content"], outfile, timeout=25
+        )
+
+        if content_res < 200:
+            content_res, content_text = scrape_once(
+                url, ["--format", "markdown"], outfile, timeout=30
+            )
+
+        if 0 < content_res < 500:
+            content_res, content_text = scrape_once(
+                url, ["--summary"], outfile, timeout=30
+            )
+
+    status = "ok"
+    size_bytes = 0
+    err_msg = ""
+    preview_head = ""
+    word_count = 0
+
+    if content_text is not None and len(content_text) > 0:
+        word_count = len(content_text.split())
+        preview_head = content_text[:250].replace('\n', ' ').strip()
+
+    # Highly-structured schemas can have small word counts, so bypass 50 word error check for schemas
+    if content_text is not None and (word_count > 50 or is_candidate):
+        size_bytes = content_res
+    elif content_text is not None and word_count > 0:
+        size_bytes = content_res
+        status = "error"
+        err_msg = "fewer than 50 words in result (likely anti-bot block)"
+    else:
+        status = "error"
+        err_msg = "no content retrieved (anti-bot or timeout)"
+
+    # Title extraction from structured JSON payloads
+    if status == "ok" and is_candidate and content_text:
+        try:
+            output_data = json.loads(content_text)
+            extracted_title = None
+            if isinstance(output_data, dict):
+                if "data" in output_data and isinstance(output_data["data"], dict):
+                    extracted_title = output_data["data"].get("metadata", {}).get("title")
+                if not extracted_title:
+                    raw_data_field = output_data.get("data")
+                    scraped_json = {}
+                    if isinstance(raw_data_field, dict) and "json" in raw_data_field:
+                        scraped_json = raw_data_field["json"]
+                    elif "json" in output_data:
+                        scraped_json = output_data["json"]
+                    else:
+                        scraped_json = output_data
+                    
+                    if isinstance(scraped_json, dict):
+                        for key in ["title", "product_name", "name", "headline"]:
+                            if key in scraped_json and scraped_json[key]:
+                                extracted_title = str(scraped_json[key])
+                                break
+            if extracted_title:
+                title = extracted_title
+        except Exception as e:
+            print(f"    ⚠️ Title extraction from JSON failed: {e}", file=sys.stderr)
+
+    entry = {
+        "index": i,
+        "url": url,
+        "title": title,
+        "snippet": snippet,
+        "description": description,
+        "scratch_file": outfile,
+        "format": "json" if is_candidate else "markdown",
+        "size_kb": round(size_bytes / 1024, 1),
+        "char_count": os.path.getsize(outfile) if status == "ok" and os.path.exists(outfile) else 0,
+        "word_count": word_count,
+        "preview_head": preview_head,
+        "status": status,
+    }
+    if status == "error":
+        entry["error"] = err_msg
+
+    if status == "ok":
+        print(f"    ✔ Done [{i+1}/{search_limit}]: {size_bytes / 1024:.1f} KB, {word_count} words", file=sys.stderr)
+    else:
+        print(f"    ❌ Error [{i+1}/{search_limit}]: {err_msg}", file=sys.stderr)
+
+    return entry
+
+if requested_ranks:
+    ranks = []
+    for value in requested_ranks.split(","):
+        rank = int(value)
+        if rank < 1 or rank > len(results):
+            raise SystemExit(f"ERROR: scrape rank {rank} is outside the 1..{len(results)} candidate range")
+        if rank not in ranks:
+            ranks.append(rank)
+    items_to_process = [(rank - 1, results[rank - 1]) for rank in ranks]
+    search_limit = len(items_to_process)
+else:
+    items_to_process = list(enumerate(results[:search_limit]))
+meta_entries = []
+total_words = 0
+scratch_files = []
+
+if items_to_process:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(items_to_process))) as executor:
+        results_list = list(executor.map(process_item, items_to_process))
+else:
+    results_list = []
+
+results_list.sort(key=lambda x: x["index"])
+
+for r in results_list:
+    meta_entries.append(r)
+    total_words += r["word_count"]
+    if r["status"] == "ok":
+        scratch_files.append(r["scratch_file"])
+
+result_by_index = {entry["index"]: entry for entry in meta_entries}
+candidates = []
+for index, item in enumerate(results):
+    scraped = result_by_index.get(index, {})
+    candidates.append({
+        "rank": index + 1,
+        "url": item.get("url", ""),
+        "title": item.get("title", "Untitled"),
+        "snippet": (item.get("snippet", "") or item.get("description", ""))[:500],
+        "description": (item.get("description", "") or "")[:1000],
+        "publishedDate": item.get("publishedDate") or item.get("published_date") or item.get("date"),
+        "selected": bool(scraped),
+        "scrape_status": scraped.get("status", "not_scraped"),
+        "scratch_file": scraped.get("scratch_file"),
+        "word_count": scraped.get("word_count", 0),
+    })
+
+# ── Write _meta.json ──────────────────────────────────────────────────────
+meta = {
+    "invocation_id": invocation_id,
+    "operation": "search",
+    "query": os.environ["FSEARCH_QUERY"],
+    "provider_request_id": data.get("id"),
+    "scratch_dir": scratch_dir,
+    "scrape_format": f"selective_schema:{profile_name}" if profile_name else "markdown",
+    "total_scraped": len(scratch_files),
+    "estimated_total_words": total_words,
+    "candidate_count": len(candidates),
+    "candidates": candidates,
+    "results": meta_entries,
+}
+
+with open(os.path.join(scratch_dir, "_meta.json"), "w") as f:
+    json.dump(meta, f, indent=2)
+with open(os.path.join(scratch_dir, "_candidates.json"), "w") as f:
+    json.dump(candidates, f, indent=2)
+context_manifest = {
+    "invocation_id": invocation_id,
+    "operation": "search",
+    "query": os.environ["FSEARCH_QUERY"],
+    "candidate_count": len(candidates),
+    "scraped_count": len(scratch_files),
+    "scraped": [
+        {
+            "rank": candidate["rank"],
+            "url": candidate["url"],
+            "title": candidate["title"],
+            "snippet": candidate["snippet"],
+            "scrape_status": candidate["scrape_status"],
+            "scratch_file": candidate["scratch_file"],
+            "word_count": candidate["word_count"],
+        }
+        for candidate in candidates if candidate["scrape_status"] != "not_scraped"
+    ],
+    "artifact_layers": {
+        "orientation": "_index.md",
+        "context_manifest": "_context.json",
+        "candidate_ledger": "_candidates.json",
+        "full_metadata": "_meta.json",
+        "raw_search": "_search.json",
+        "scraped_content": "result_*",
+    },
+}
+with open(os.path.join(scratch_dir, "_context.json"), "w") as f:
+    json.dump(context_manifest, f, indent=2)
+
+# ── Write _index.md ───────────────────────────────────────────────────────
+index_path = os.path.join(scratch_dir, "_index.md")
+query_str = os.environ["FSEARCH_QUERY"]
+with open(index_path, "w") as f:
+    f.write(f"# Search Scratch Index\n\n")
+    f.write(f"- **Invocation ID**: `{invocation_id}`\n")
+    f.write(f"- **Query**: `{query_str}`\n")
+    f.write(f"- **Scratch Directory**: `{scratch_dir}`\n")
+    f.write(f"- **Estimated Total Words**: {total_words}\n\n")
+    f.write(f"| # | Size (KB) | Words | Status | Title / File Path |\n")
+    f.write(f"|---|-----------|-------|--------|-------------------|\n")
+    for r in meta_entries:
+        tag = "OK" if r["status"] == "ok" else "ERR"
+        file_url = f"file://{r['scratch_file']}"
+        f.write(f"| {r['index']+1} | {r['size_kb']:.1f} | {r['word_count']} | {tag} | [{r['title']}]({file_url}) |\n")
+        if r.get("snippet"):
+            snippet_clean = r["snippet"].replace('\n', ' ').strip()
+            f.write(f"| | | | | *Snippet*: {snippet_clean[:180]}... |\n")
+    f.write("\n## Candidate Ledger\n\n")
+    f.write("| Rank | Status | Title | URL |\n")
+    f.write("|------|--------|-------|-----|\n")
+    for candidate in candidates:
+        f.write(f"| {candidate['rank']} | {candidate['scrape_status']} | {candidate['title']} | {candidate['url']} |\n")
+
+# ── Print index to stdout ─────────────────────────────────────────────────
+query_str = os.environ["FSEARCH_QUERY"]
+print(f"\n\033[1;32m=== fsearch Scratch Index ===\033[0m")
+print(f"\033[1mQuery:\033[0m       {query_str}")
+print(f"\033[1mInvocation:\033[0m  {invocation_id}")
+print(f"\033[1mTotal found:\033[0m {len(results)}")
+print(f"\033[1mScraped:\033[0m     {len(scratch_files)} / {min(search_limit, len(results))}")
+print(f"\033[1mScratch dir:\033[0m \033[1;36m{scratch_dir}\033[0m")
+print(f"\033[1mEst. total:\033[0m  {total_words} words")
+
+print(f"\n\033[1m{'#':>3}  {'KB':>5}  {'Words':>6}  Title\033[0m")
+print(f"\033[1;30m{'─'*60}\033[0m")
+for r in meta_entries:
+    tag = "\033[1;32mOK\033[0m" if r["status"] == "ok" else "\033[1;31mERR\033[0m"
+    print(f"{r['index']+1:>3}  {r['size_kb']:>5.1f}  {r['word_count']:>6}  [{tag}] \033[1m{r['title']}\033[0m")
+    if r.get("snippet"):
+        print(f"      \033[0;37mSnippet: {r['snippet'][:120]}\033[0m")
+print(f"\nFiles saved to: \033[1;36m{scratch_dir}\033[0m")
+print(f"\n── Next: '\033[1;36mrtk proxy {script_dir}/fread {scratch_dir}\033[0m' to read content ──")
+PYEOF
+
+echo "" >&2
+echo "Done. Scratch dir: $DIR" >&2

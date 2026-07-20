@@ -1,0 +1,21 @@
+{
+  "policy_version": "2026-07-20-v5",
+  "evaluator_version": "catalog-v5.0",
+  "snapshot": {
+    "max_invocation_bytes": 2097152,
+    "max_excerpt_bytes_per_result": 4096,
+    "max_excerpts_per_result": 3
+  },
+  "audit": {
+    "automatic_for_research_runs": true,
+    "default_provider": "local",
+    "max_calls": 8,
+    "max_total_seconds": 480,
+    "call_timeout_seconds": 120,
+    "target_input_tokens": 48000,
+    "context_fraction": 0.5,
+    "max_output_tokens": 16384,
+    "max_candidate_card_chars": 700,
+    "max_excerpt_chars": 4096
+  }
+}

@@ -1,0 +1,77 @@
+# ==========================================
+# Codex CLI Skill - Python Skill .gitignore
+# ==========================================
+
+# --- Environment & Secrets ---
+.env
+.env.*
+*.pem
+*.key
+*.crt
+secrets/
+credentials/
+*.secret
+
+# --- Python & Bytecode ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyo
+*.pyd
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+.venv*/
+
+# --- Testing, Coverage & Quality Tools ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.coverage_html/
+.coverage_xml/
+.ruff_cache/
+.mypy_cache/
+.pytype/
+.pyre/
+
+# --- Package Build & Distribution ---
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# --- Logs & Temporary Files ---
+*.log
+tmp/
+temp/
+.cache/
+.pip/
+.uv/
+
+# --- Codex CLI & Skill Caches ---
+.codex_cache/
+.codex_config/
+.skill_cache/
+.skill_config/
+.cached_responses/
+test_output/
+output/
+
+# --- IDE & Editor Settings ---
+.idea/
+.vscode/
+.settings/
+*.swp
+*.swo
+*~
+
+# --- OS Generated Files ---
+.DS_Store
+Thumbs.db
+desktop.ini
