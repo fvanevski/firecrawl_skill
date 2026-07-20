@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Bash adapter sourced by the Firecrawl wrappers to bind dedicated services.
+# Values remain file-backed; no secret is copied into the repository.
+
+research_skill_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+research_python="${FIRECRAWL_RESEARCH_PYTHON:-$research_skill_root/.venv-research-store/bin/python}"
+if [[ ! -x "$research_python" ]]; then
+  research_python="$(command -v python3)"
+fi
+
+research_postgres_dir="${RESEARCH_POSTGRES_DIR:-/opt/containers/research-postgres}"
+research_qdrant_dir="${RESEARCH_QDRANT_DIR:-/opt/containers/research-qdrant}"
+research_valkey_dir="${RESEARCH_VALKEY_DIR:-/opt/containers/research-valkey}"
+
+research_urlencode() {
+  "$research_python" -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip(), safe=""))'
+}
+
+if [[ -r "$research_postgres_dir/secrets/research_postgres_password.txt" ]]; then
+  research_pg_password="$(research_urlencode < "$research_postgres_dir/secrets/research_postgres_password.txt")"
+  export DATABASE_URL="postgresql://${RESEARCH_POSTGRES_USER:-research_app}:${research_pg_password}@127.0.0.1:${RESEARCH_POSTGRES_PORT:-55432}/${RESEARCH_POSTGRES_DB:-research_assets}"
+  unset research_pg_password
+fi
+
+if [[ -r "$research_qdrant_dir/secrets/research_qdrant_api_key.txt" ]]; then
+  export QDRANT_API_KEY="$(tr -d '\r\n' < "$research_qdrant_dir/secrets/research_qdrant_api_key.txt")"
+  export QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:${RESEARCH_QDRANT_HTTP_PORT:-6333}}"
+  export QDRANT_COLLECTION="${QDRANT_COLLECTION:-research_chunks_v1}"
+fi
+
+if [[ -r "$research_valkey_dir/secrets/research_valkey_password.txt" ]]; then
+  research_valkey_password="$(research_urlencode < "$research_valkey_dir/secrets/research_valkey_password.txt")"
+  export VALKEY_URL="redis://${RESEARCH_VALKEY_USER:-research_app}:${research_valkey_password}@127.0.0.1:${RESEARCH_VALKEY_PORT:-56379}/0"
+  unset research_valkey_password
+fi
+
+export BLOB_ROOT="${BLOB_ROOT:-/opt/containers/research-assets/blobs}"
+export EMBEDDING_URL="${EMBEDDING_URL:-http://127.0.0.1:8004/v1/embeddings}"
+export EMBEDDING_MODEL="${EMBEDDING_MODEL:-embed}"
+export EMBEDDING_REVISION="${EMBEDDING_REVISION:-qwen3-embedding-0.6b-q6_k@8c605f43dcb0}"
+export EMBEDDING_DIMENSION="${EMBEDDING_DIMENSION:-1024}"
+export RERANKER_URL="${RERANKER_URL:-http://127.0.0.1:8004/v1/rerank}"
+export RERANKER_MODEL="${RERANKER_MODEL:-rerank}"
+export FIRECRAWL_RESEARCH_PYTHON="${FIRECRAWL_RESEARCH_PYTHON:-$research_skill_root/.venv-research-store/bin/python}"
+
+unset research_skill_root research_python research_postgres_dir research_qdrant_dir research_valkey_dir
+unset -f research_urlencode

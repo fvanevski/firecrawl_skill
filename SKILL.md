@@ -99,6 +99,23 @@ Treat a schema transition as a clean audit boundary. `migrate` is a dry run by d
 
 See `references/cli-script-disambiguation.md` when the `firecrawl` command is missing or when you need to distinguish the Node.js CLI, Python SDK, and MCP tools.
 
+## Authoritative Research Asset Store
+
+When `DATABASE_URL` is configured, every successful `fsearch` and `fscrape` result is persisted through the research-store service before the wrapper completes. PostgreSQL is authoritative; content-addressed blobs retain immutable payload bytes; Qdrant is a rebuildable retrieval projection; Valkey is transient coordination only. The wrapper also writes `_corpus.json` with stable source, snapshot, document, and chunk IDs. Scratch files remain compatibility/debugging exports and must not be scanned for routine retrieval.
+
+Use manifest-first database operations for retained research:
+
+```bash
+rtk proxy "<skill-root>/scripts/research-db" corpus-overview
+rtk proxy "<skill-root>/scripts/research-db" search-assets "<query>" --limit 20
+rtk proxy "<skill-root>/scripts/research-db" inspect-asset "<candidate-id>"
+rtk proxy "<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --max-tokens 2000
+```
+
+`search-assets` uses PostgreSQL full-text candidates plus Qdrant dense candidates, reciprocal-rank fusion, and the configured local reranker over a bounded fused set. Candidate manifests expose lexical, semantic, fused, and reranker scores without preloading full documents.
+
+Initialize and diagnose the store with `research-db migrate` and `research-db doctor`. Import old scratch trees with `import-scratch --dry-run` before applying the idempotent import. Read `references/research-store-architecture.md` for boundaries and `references/research-store-operations.md` for deployment, backup/restore, rebuild, recovery, and configuration.
+
 ## Scripts
 
 | Script | Purpose | Output files |
@@ -107,6 +124,7 @@ See `references/cli-script-disambiguation.md` when the `firecrawl` command is mi
 | `scripts/fsearch` | Search Firecrawl, preserve all candidates, and scrape a bounded subset | `_search.json`, `_index.md`, `_context.json`, `_candidates.json`, `_meta.json`, `result_NNN.md` or `result_NNN.json` |
 | `scripts/fscrape` | Scrape arbitrary URLs to scratch files | `_index.md`, `_meta.json`, `url_NNN.md` or `url_NNN.json` |
 | `scripts/fread` | Read scratch files, list history, walk directories, and grep results | Console output only |
+| `scripts/research-db` | Migrate, import, inspect, retrieve, reindex, reconcile, export, and diagnose the authoritative corpus | JSON manifests and bounded passages |
 
 ## Procedure
 

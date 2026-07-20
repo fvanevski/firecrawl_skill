@@ -104,6 +104,7 @@ def fake_cli(tmp_path):
     env["FAKE_FIRECRAWL_LOG"] = str(tmp_path / "calls.jsonl")
     env["FIRECRAWL_CATALOG_DIR"] = str(tmp_path / "catalog")
     env["FIRECRAWL_AUDIT_AUTO_SEMANTIC"] = "0"
+    env["FIRECRAWL_RESEARCH_AUTO_ENV"] = "0"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env, tmp_path
 

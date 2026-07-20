@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env" ]]; then
+  source "$SCRIPT_DIR/research-env"
+fi
+RESEARCH_PYTHON="${FIRECRAWL_RESEARCH_PYTHON:-python3}"
+exec env PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$RESEARCH_PYTHON" -m research_store.cli "$@"

@@ -15,6 +15,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env" ]]; then
+  source "$SCRIPT_DIR/research-env"
+fi
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 LIMIT=20
@@ -257,6 +260,12 @@ def scrape_once(url, flags, outfile, timeout=60):
         with open(outfile) as f:
             content = f.read()
 
+        if os.environ.get("DATABASE_URL"):
+            raw_dir = os.path.join(scratch_dir, "_raw")
+            os.makedirs(raw_dir, exist_ok=True)
+            with open(os.path.join(raw_dir, os.path.basename(outfile)), "w") as raw_handle:
+                raw_handle.write(content)
+
         # Pretty print JSON if JSON format / schema extraction is active:
         if "--schema" in flags:
             try:
@@ -386,6 +395,7 @@ def process_item(item_index_tuple):
         "snippet": snippet,
         "description": description,
         "scratch_file": outfile,
+        "raw_scratch_file": os.path.join(scratch_dir, "_raw", os.path.basename(outfile)) if status == "ok" and os.environ.get("DATABASE_URL") else "",
         "format": "json" if is_candidate else "markdown",
         "size_kb": round(size_bytes / 1024, 1),
         "char_count": os.path.getsize(outfile) if status == "ok" and os.path.exists(outfile) else 0,
@@ -543,6 +553,11 @@ for r in meta_entries:
 print(f"\nFiles saved to: \033[1;36m{scratch_dir}\033[0m")
 print(f"\n── Next: '\033[1;36mrtk proxy {script_dir}/fread {scratch_dir}\033[0m' to read content ──")
 PYEOF
+
+if [[ -n "${DATABASE_URL:-}" ]]; then
+  "${FIRECRAWL_RESEARCH_PYTHON:-python3}" "$SCRIPT_DIR/persist_results.py" "$DIR/_meta.json" --output "$DIR/_corpus.json" >/dev/null
+  echo "  Corpus IDs: $DIR/_corpus.json" >&2
+fi
 
 echo "" >&2
 echo "Done. Scratch dir: $DIR" >&2

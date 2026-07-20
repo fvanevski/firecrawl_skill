@@ -14,6 +14,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env" ]]; then
+  source "$SCRIPT_DIR/research-env"
+fi
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 FORMAT="markdown"
@@ -100,6 +103,7 @@ import json, sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({"format": sys.argv[2], "summary": sys.argv[3] == "true", "schema_mode": sys.argv[4] or sys.argv[5], "urls": sys.argv[6:]}), encoding="utf-8")
 PYEOF
+
 catalog_start=(start --invocation-id "$INVOCATION_ID" --operation scrape --input-json "$(<"$CATALOG_INPUT")")
 [[ -n "$RESEARCH_RUN_ID" ]] && catalog_start+=(--research-run-id "$RESEARCH_RUN_ID")
 python3 "$SCRIPT_DIR/invocation_catalog.py" "${catalog_start[@]}" >/dev/null
@@ -189,6 +193,14 @@ def process_url(idx_url_tuple):
     if result.returncode == 0 and os.path.exists(outfile):
         with open(outfile) as f:
             content = f.read()
+
+        raw_scratch_file = ""
+        if os.environ.get("DATABASE_URL"):
+            raw_dir = os.path.join(outdir, "_raw")
+            os.makedirs(raw_dir, exist_ok=True)
+            raw_scratch_file = os.path.join(raw_dir, os.path.basename(outfile))
+            with open(raw_scratch_file, "w") as raw_handle:
+                raw_handle.write(content)
 
         # Pretty print JSON files for structured extraction:
         if is_schema:
@@ -290,6 +302,7 @@ def process_url(idx_url_tuple):
         "url": url,
         "title": title,
         "scratch_file": outfile,
+        "raw_scratch_file": raw_scratch_file if status == "ok" else "",
         "format": fmt,
         "has_summary": do_summary,
         "status": status,
@@ -347,3 +360,11 @@ for u in meta["results"]:
 print(f"\nFiles saved to: \033[1;36m{outdir}\033[0m")
 print(f"\n── Next: '\033[1;36mrtk proxy {script_dir}/fread {outdir}\033[0m' to read content ──")
 PYEOF
+
+# PostgreSQL becomes authoritative when DATABASE_URL is configured. Scratch
+# artifacts remain a compatibility export, and persistence uses this explicit
+# manifest rather than scanning directories.
+if [[ -n "${DATABASE_URL:-}" ]]; then
+  "${FIRECRAWL_RESEARCH_PYTHON:-python3}" "$SCRIPT_DIR/persist_results.py" "$OUTPUT_DIR/_meta.json" --output "$OUTPUT_DIR/_corpus.json" >/dev/null
+  echo "  Corpus IDs: $OUTPUT_DIR/_corpus.json" >&2
+fi

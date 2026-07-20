@@ -1,0 +1,5 @@
+alembic==1.16.4
+psycopg[binary]==3.2.10
+qdrant-client==1.15.1
+redis==6.4.0
+SQLAlchemy==2.0.43
