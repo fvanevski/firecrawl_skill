@@ -95,6 +95,16 @@ class ResearchRunRepository(SemanticCallRepository, Protocol):
         policy_version: str,
         **metadata: Any,
     ) -> dict[str, Any]: ...
+    def revise_execution_mode(
+        self,
+        run_id: UUID,
+        next_mode: str,
+        expected_revision: int,
+        idempotency_key: str,
+        actor_type: str,
+        policy_version: str,
+        **metadata: Any,
+    ) -> dict[str, Any]: ...
     def append_run_transition(
         self,
         run_id: UUID,

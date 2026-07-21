@@ -14,6 +14,9 @@ and scratch records remain compatibility and diagnostic exports.
 - Existing rows are marked with `execution_mode=legacy` because their original
   semantic authority cannot be inferred safely. New repository-created rows
   default to `agent_led` unless the caller supplies another supported mode.
+- `ExecutionModePolicy` maps each new run to exactly one semantic authority:
+  host-agent input for `agent_led`, the configured local model for
+  `autonomous_local`, or supplied fixtures for `deterministic_debug`.
 - `research_run_transitions` and `research_events` reject `UPDATE` and `DELETE`
   at the database layer. Corrections are new ledger rows, never rewrites.
 - Idempotency keys are scoped to their owning run or semantic call. Reuse with
@@ -73,11 +76,27 @@ usage, and transport-attempt claims that did not occur. Credential-bearing
 keys, bearer values, and sensitive URL parameters are redacted before request,
 response, error, or artifact values are hashed and persisted.
 
-The CLI exposes `run-status`, `run-transition`, `run-finish`, `run-cancel`, and
-`run-reopen` as machine-readable service adapters. Callers proposing semantic
-or concurrent work should always supply `--expected-revision` and a stable
-`--idempotency-key`. This phase does not integrate later planning, acquisition,
-coverage, report, or audit services.
+`SemanticCallService.decide` is the mode-aware decision boundary. It requires
+the caller's run revision, rejects stale decisions, and never falls through to
+a different authority. A valid host-agent artifact in `agent_led` is persisted
+without invoking an inner model. Autonomous-local model calls are stage- and
+idempotency-key scoped so a failed stage can be retried independently with a
+new attempt key. Deterministic fixtures use the same validation and provenance
+path, make no transport claims, and record semantic coverage as `unassessed`.
+
+Execution-mode changes use `ResearchRunService.change_execution_mode` and the
+`run-mode-change` CLI command. They compare-and-swap the run revision, record
+the requester, approver, reason, prior mode, next mode, and policy version in
+one append-only `run.execution_mode_changed` event, then invalidate prior valid
+semantic artifacts without deleting provenance. Terminal runs must be reopened
+before changing mode. The host-facing service defaults to `agent_led`; the
+standalone `run-start` CLI defaults to `autonomous_local`.
+
+The CLI exposes `run-status`, `run-mode-change`, `run-transition`, `run-finish`,
+`run-cancel`, and `run-reopen` as machine-readable service adapters. Callers
+proposing semantic or concurrent work should always supply
+`--expected-revision` and a stable `--idempotency-key`. This phase does not
+integrate later planning, acquisition, coverage, report, or audit services.
 
 ## Migration and repair
 

@@ -92,12 +92,24 @@ def parser():
     run_start.add_argument(
         "--mode",
         choices=("agent_led", "autonomous_local", "deterministic_debug"),
-        default="agent_led",
+        default="autonomous_local",
     )
     run_start.add_argument("--idempotency-key")
     run_start.add_argument("--actor", default="cli")
     run_status = sub.add_parser("run-status")
     run_status.add_argument("external_id")
+    run_mode = sub.add_parser("run-mode-change")
+    run_mode.add_argument("external_id")
+    run_mode.add_argument(
+        "mode", choices=("agent_led", "autonomous_local", "deterministic_debug")
+    )
+    run_mode.add_argument("--expected-revision", type=int, required=True)
+    run_mode.add_argument("--idempotency-key", required=True)
+    run_mode.add_argument("--requested-by", required=True)
+    run_mode.add_argument("--approved-by", required=True)
+    run_mode.add_argument("--reason", required=True)
+    run_mode.add_argument("--actor", default="operator")
+    run_mode.add_argument("--actor-identifier")
     run_transition = sub.add_parser("run-transition")
     run_transition.add_argument("external_id")
     run_transition.add_argument("next_state")
@@ -1018,6 +1030,7 @@ def main(argv=None):
         return 0
     if args.command in {
         "run-status",
+        "run-mode-change",
         "run-transition",
         "run-finish",
         "run-reopen",
@@ -1033,6 +1046,20 @@ def main(argv=None):
             if args.expected_revision is not None
             else status.lifecycle_revision
         )
+    if args.command == "run-mode-change":
+        result = run_service.change_execution_mode(
+            status.id,
+            args.mode,
+            expected_revision=expected_revision,
+            idempotency_key=args.idempotency_key,
+            requested_by=args.requested_by,
+            approved_by=args.approved_by,
+            reason=args.reason,
+            actor_type=args.actor,
+            actor_identifier=args.actor_identifier,
+        )
+        print(dumps(result.to_dict()))
+        return 0
     if args.command == "run-transition":
         result = run_service.transition(
             status.id,

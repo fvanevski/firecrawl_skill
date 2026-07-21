@@ -35,9 +35,16 @@ live_validation = load_module("firecrawl_live_validate", SCRIPTS / "live_validat
 
 
 class MemorySemanticRepository:
-    def __init__(self):
+    def __init__(self, execution_mode="autonomous_local"):
         self.calls = {}
         self.artifacts = {}
+        self.status = {
+            "execution_mode": execution_mode,
+            "lifecycle_revision": 0,
+        }
+
+    def get_run_status(self, *, run_id=None, external_id=None):
+        return {"id": run_id, **self.status}
 
     def record_semantic_call(self, run_id, stage, provider, model, prompt_version, request, idempotency_key, **metadata):
         existing = next((item for item in self.calls.values() if item["run_id"] == run_id and item["idempotency_key"] == idempotency_key), None)
@@ -93,12 +100,13 @@ class MemorySemanticUow:
         return False
 
 
-def semantic_fixture():
-    repository = MemorySemanticRepository()
+def semantic_fixture(execution_mode="autonomous_local"):
+    repository = MemorySemanticRepository(execution_mode)
     service = SemanticCallService(lambda: MemorySemanticUow(repository))
     context = {
         "run_id": uuid4(), "stage": "planning", "schema_name": "test-result",
         "schema_version": 1, "artifact_type": "test_result",
+        "run_revision": 0,
         "idempotency_key": f"semantic:{uuid4()}", "input_artifact_ids": [uuid4()],
     }
     schema = {
@@ -1149,7 +1157,7 @@ def test_semantic_fallback_is_explicit_and_keeps_both_calls(monkeypatch):
 
 
 def test_host_agent_artifacts_share_validation_and_do_not_fake_transport_metadata():
-    repository, persistence, context, schema = semantic_fixture()
+    repository, persistence, context, schema = semantic_fixture("agent_led")
     valid = persistence.ingest_host_artifact(
         context, {"result": "Bearer host-secret"}, schema, actor_identifier="codex"
     )
@@ -1169,6 +1177,81 @@ def test_host_agent_artifacts_share_validation_and_do_not_fake_transport_metadat
     assert invalid.value is None
     assert invalid.error
     assert invalid_artifact["validation_status"] == "invalid"
+
+
+def test_agent_led_supplied_artifact_suppresses_inner_model_call():
+    repository, persistence, context, schema = semantic_fixture("agent_led")
+    inner_calls = []
+
+    result = persistence.decide(
+        context,
+        schema,
+        host_artifact={"result": "host decision"},
+        local_decision=lambda **kwargs: inner_calls.append(kwargs),
+        actor_identifier="codex",
+    )
+
+    assert result.value == {"result": "host decision"}
+    assert inner_calls == []
+    call = repository.calls[UUID(result.provenance["semantic_call_id"])]
+    assert call["provider"] == "host-agent"
+    assert call["response_metadata"]["transport_attempts"] == []
+
+
+def test_deterministic_debug_fixture_marks_semantic_coverage_unassessed():
+    repository, persistence, context, schema = semantic_fixture("deterministic_debug")
+    result = persistence.decide(
+        context,
+        schema,
+        deterministic_fixture={"result": "fixture"},
+        actor_identifier="pytest",
+    )
+    call = repository.calls[UUID(result.provenance["semantic_call_id"])]
+    assert call["provider"] == "deterministic-fixture"
+    assert call["response_metadata"]["semantic_coverage"] == "unassessed"
+
+
+def test_autonomous_local_stage_can_retry_with_independent_attempt_key():
+    repository, persistence, context, schema = semantic_fixture("autonomous_local")
+    first = persistence.start_model_call(
+        context,
+        provider="local",
+        requested_model="chat",
+        model_revision="test",
+        endpoint_alias="local",
+        prompt_version="test-v1",
+        prompt_hash="a" * 64,
+        schema=schema,
+        input_token_estimate=5,
+    )
+    persistence.finish_model_call(
+        context,
+        first,
+        status="failed",
+        provenance={"provider": "local"},
+        attempts=[{"attempt": 1, "error": "timeout"}],
+        artifacts=[],
+        error="timeout",
+    )
+    retry_context = {
+        **context,
+        "idempotency_key": context["idempotency_key"] + ":attempt:2",
+    }
+    second = persistence.start_model_call(
+        retry_context,
+        provider="local",
+        requested_model="chat",
+        model_revision="test",
+        endpoint_alias="local",
+        prompt_version="test-v1",
+        prompt_hash="a" * 64,
+        schema=schema,
+        input_token_estimate=5,
+    )
+    assert first != second
+    assert repository.calls[first]["stage"] == repository.calls[second]["stage"]
+    assert repository.calls[first]["status"] == "failed"
+    assert repository.calls[second]["status"] == "running"
 
 
 def test_v4_selective_purge_is_dry_run_and_removes_associated_events(fake_cli):
