@@ -3256,6 +3256,568 @@ class PostgresUnitOfWork:
                 "active_leases": active,
             }
 
+    # ------------------------------------------------------------------
+    # Coverage event repository
+    # ------------------------------------------------------------------
+
+    def create_items(
+        self,
+        run_id,
+        items,
+        idempotency_key,
+        source_event_id=None,
+        source_invocation_id=None,
+        execution_mode="deterministic_debug",
+    ):
+        """Seed coverage items from a ResearchSpec.
+
+        Returns the list of coverage item IDs created.
+        """
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+            item_ids = []
+            for item in items:
+                cur.execute(
+                    """INSERT INTO coverage_events(
+                        run_id, coverage_revision, prior_coverage_revision,
+                        event_type, item_id, item_type, subject_id,
+                        new_status, previous_status,
+                        source_event_id, source_invocation_id,
+                        payload, idempotency_key
+                    ) VALUES(%s, 1, 0, 'item_created', gen_random_uuid(), %s, %s,
+                        'unassessed', NULL,
+                        %s, %s,
+                        %s, %s)
+                    ON CONFLICT(run_id, idempotency_key) DO NOTHING
+                    RETURNING id""",
+                    (
+                        run_id,
+                        item["item_type"],
+                        item["subject_id"],
+                        source_event_id,
+                        source_invocation_id,
+                        json.dumps({
+                            "execution_mode": execution_mode,
+                            "text": item.get("text", ""),
+                        }),
+                        idempotency_key,
+                    ),
+                )
+                row = cur.fetchone()
+                if row:
+                    item_ids.append(row[0])
+            if not item_ids:
+                # Already existed — return existing IDs
+                cur.execute(
+                    """SELECT id FROM coverage_events
+                    WHERE run_id=%s AND event_type='item_created'
+                      AND item_type=ANY(%s)
+                    ORDER BY id""",
+                    (
+                        run_id,
+                        [item["item_type"] for item in items],
+                    ),
+                )
+                item_ids = [r[0] for r in cur.fetchall()]
+            return item_ids
+
+    def apply_event(
+        self,
+        run_id,
+        event_type,
+        item_id=None,
+        item_type=None,
+        subject_id=None,
+        new_status=None,
+        previous_status=None,
+        new_freshness_status=None,
+        previous_freshness_status=None,
+        source_event_id=None,
+        source_invocation_id=None,
+        payload=None,
+        idempotency_key=None,
+    ):
+        """Apply one coverage event.
+
+        Returns the event row as a dict.  Raises ValueError for stale
+        revisions or unknown items.
+        """
+        payload = payload or {}
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+
+            # Check idempotency
+            cur.execute(
+                """SELECT id, coverage_revision, prior_coverage_revision,
+                    event_type, item_id, item_type, subject_id,
+                    new_status, previous_status,
+                    new_freshness_status, previous_freshness_status,
+                    source_event_id, source_invocation_id,
+                    payload, idempotency_key, created_at
+                FROM coverage_events
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing:
+                keys = (
+                    "id", "coverage_revision", "prior_coverage_revision",
+                    "event_type", "item_id", "item_type", "subject_id",
+                    "new_status", "previous_status",
+                    "new_freshness_status", "previous_freshness_status",
+                    "source_event_id", "source_invocation_id",
+                    "payload", "idempotency_key", "created_at",
+                )
+                return dict(zip(keys, existing))
+
+            # Get current revision
+            cur.execute(
+                "SELECT current_coverage_revision FROM research_runs WHERE id=%s",
+                (run_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            current_revision = row[0]
+
+            new_revision = current_revision + 1
+
+            # Validate revision ordering
+            if new_revision <= current_revision:
+                raise ValueError(
+                    f"stale coverage revision: proposed {new_revision} "
+                    f"does not exceed current {current_revision}"
+                )
+
+            # Validate item reference if provided
+            if item_id is not None:
+                cur.execute(
+                    """SELECT 1 FROM coverage_events
+                    WHERE run_id=%s AND item_id=%s AND event_type='item_created'
+                    LIMIT 1""",
+                    (run_id, item_id),
+                )
+                if not cur.fetchone():
+                    raise ValueError(
+                        f"unknown coverage item {item_id} for run {run_id}"
+                    )
+
+            # Insert the event
+            cur.execute(
+                """INSERT INTO coverage_events(
+                    run_id, coverage_revision, prior_coverage_revision,
+                    event_type, item_id, item_type, subject_id,
+                    new_status, previous_status,
+                    new_freshness_status, previous_freshness_status,
+                    source_event_id, source_invocation_id,
+                    payload, idempotency_key
+                ) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, coverage_revision, prior_coverage_revision,
+                    event_type, item_id, item_type, subject_id,
+                    new_status, previous_status,
+                    new_freshness_status, previous_freshness_status,
+                    source_event_id, source_invocation_id,
+                    payload, idempotency_key, created_at""",
+                (
+                    run_id,
+                    new_revision,
+                    current_revision,
+                    event_type,
+                    item_id,
+                    item_type,
+                    subject_id,
+                    new_status,
+                    previous_status,
+                    new_freshness_status,
+                    previous_freshness_status,
+                    source_event_id,
+                    source_invocation_id,
+                    json.dumps(payload),
+                    idempotency_key,
+                ),
+            )
+            row = cur.fetchone()
+            keys = (
+                "id", "coverage_revision", "prior_coverage_revision",
+                "event_type", "item_id", "item_type", "subject_id",
+                "new_status", "previous_status",
+                "new_freshness_status", "previous_freshness_status",
+                "source_event_id", "source_invocation_id",
+                "payload", "idempotency_key", "created_at",
+            )
+            result = dict(zip(keys, row))
+
+            # Update run's current_coverage_revision
+            cur.execute(
+                "UPDATE research_runs SET current_coverage_revision=%s WHERE id=%s",
+                (new_revision, run_id),
+            )
+
+            return result
+
+    def rebuild_projection(
+        self,
+        run_id,
+        idempotency_key,
+        source_event_id=None,
+    ):
+        """Rebuild the current coverage projection from events.
+
+        Returns a ledger dict that can be materialized as a snapshot.
+        """
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+
+            # Get all events in deterministic order
+            cur.execute(
+                """SELECT event_type, item_id, item_type, subject_id,
+                    new_status, previous_status,
+                    new_freshness_status, previous_freshness_status,
+                    payload
+                FROM coverage_events
+                WHERE run_id=%s
+                ORDER BY coverage_revision, id""",
+                (run_id,),
+            )
+            events = cur.fetchall()
+
+            # Build item state from events
+            items = {}
+            max_revision = 0
+            for evt in events:
+                event_type, item_id, item_type, subject_id, new_status, \
+                    previous_status, new_freshness_status, \
+                    previous_freshness_status, payload = evt
+
+                if event_type == "item_created":
+                    items[str(item_id)] = {
+                        "coverage_item_id": str(item_id),
+                        "item_type": item_type or "question",
+                        "subject_id": subject_id or "",
+                        "status": "unassessed",
+                        "freshness_status": "not_applicable",
+                        "candidate_ids": [],
+                        "snapshot_ids": [],
+                        "passage_ids": [],
+                        "independent_source_count": 0,
+                        "required_independent_source_count": 0,
+                        "authority_classes_present": [],
+                        "remaining_gap": (payload or {}).get("text", ""),
+                        "confidence": 0.0,
+                    }
+                elif event_type == "item_status_changed" and item_id:
+                    key = str(item_id)
+                    if key in items:
+                        items[key]["status"] = new_status or items[key]["status"]
+                        items[key]["confidence"] = (payload or {}).get(
+                            "confidence", items[key].get("confidence", 0.0)
+                        )
+                        items[key]["remaining_gap"] = (payload or {}).get(
+                            "remaining_gap", items[key].get("remaining_gap", "")
+                        )
+                        if "candidate_ids" in (payload or {}):
+                            items[key]["candidate_ids"] = [
+                                str(cid) for cid in payload["candidate_ids"]
+                            ]
+                        if "snapshot_ids" in (payload or {}):
+                            items[key]["snapshot_ids"] = [
+                                str(sid) for sid in payload["snapshot_ids"]
+                            ]
+                        if "passage_ids" in (payload or {}):
+                            items[key]["passage_ids"] = [
+                                str(pid) for pid in payload["passage_ids"]
+                            ]
+                        if "independent_source_count" in (payload or {}):
+                            items[key]["independent_source_count"] = payload[
+                                "independent_source_count"
+                            ]
+                        if "authority_classes_present" in (payload or {}):
+                            items[key]["authority_classes_present"] = payload[
+                                "authority_classes_present"
+                            ]
+                    else:
+                        # Item was created by a later event — create it
+                        items[key] = {
+                            "coverage_item_id": str(item_id),
+                            "item_type": item_type or "question",
+                            "subject_id": subject_id or "",
+                            "status": new_status or "unassessed",
+                            "freshness_status": "not_applicable",
+                            "candidate_ids": [],
+                            "snapshot_ids": [],
+                            "passage_ids": [],
+                            "independent_source_count": 0,
+                            "required_independent_source_count": 0,
+                            "authority_classes_present": [],
+                            "remaining_gap": "",
+                            "confidence": 0.0,
+                        }
+                elif event_type == "item_gap_identified" and item_id:
+                    key = str(item_id)
+                    if key in items:
+                        items[key]["status"] = "blocked"
+                elif event_type == "item_gap_resolved" and item_id:
+                    key = str(item_id)
+                    if key in items:
+                        items[key]["status"] = "satisfied"
+
+                if event_type != "snapshot_created":
+                    max_revision = max(
+                        max_revision,
+                        int(payload.get("coverage_revision", 0))
+                        if isinstance(payload, dict) and "coverage_revision" in (payload or {})
+                        else 0,
+                    )
+
+            # Calculate overall status
+            if not items:
+                overall_status = "unassessed"
+            else:
+                satisfied = sum(
+                    1 for item in items.values()
+                    if item["status"] in ("satisfied", "waived")
+                )
+                blocked = sum(
+                    1 for item in items.values()
+                    if item["status"] == "blocked"
+                )
+                total = len(items)
+                if satisfied == total:
+                    overall_status = "sufficient"
+                elif blocked > 0:
+                    overall_status = "blocked"
+                elif satisfied > 0:
+                    overall_status = "partial"
+                else:
+                    overall_status = "insufficient"
+
+            # Get the current revision from the max event
+            cur.execute(
+                "SELECT COALESCE(MAX(coverage_revision), 0) FROM coverage_events WHERE run_id=%s",
+                (run_id,),
+            )
+            current_rev = cur.fetchone()[0]
+            if current_rev == 0:
+                current_rev = 1
+
+            ledger = {
+                "schema_version": "coverage-ledger-v1",
+                "run_id": str(run_id),
+                "revision": current_rev,
+                "items": list(items.values()),
+                "overall_status": overall_status,
+            }
+
+            # Create a projection snapshot event
+            cur.execute(
+                """INSERT INTO coverage_events(
+                    run_id, coverage_revision, prior_coverage_revision,
+                    event_type, source_event_id,
+                    payload, idempotency_key
+                ) VALUES(%s, %s, %s, 'projection_rebuilt', %s, %s, %s)
+                ON CONFLICT(run_id, idempotency_key) DO NOTHING
+                RETURNING id""",
+                (
+                    run_id,
+                    current_rev + 1,
+                    current_rev,
+                    source_event_id,
+                    json.dumps({
+                        "item_count": len(items),
+                        "overall_status": overall_status,
+                        "source_event_id": str(source_event_id) if source_event_id else None,
+                        "coverage_revision": current_rev,
+                    }),
+                    idempotency_key,
+                ),
+            )
+
+            return ledger
+
+    def create_snapshot(
+        self,
+        run_id,
+        coverage_revision,
+        ledger,
+        content_sha256,
+        idempotency_key,
+        triggering_event_id=None,
+    ):
+        """Materialize an immutable ledger snapshot."""
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+
+            # Check idempotency
+            cur.execute(
+                """SELECT id, run_id, coverage_revision, ledger,
+                    content_sha256, triggering_event_id, created_at
+                FROM coverage_snapshots
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing:
+                keys = (
+                    "id", "run_id", "coverage_revision", "ledger",
+                    "content_sha256", "triggering_event_id", "created_at",
+                )
+                return dict(zip(keys, existing))
+
+            cur.execute(
+                """INSERT INTO coverage_snapshots(
+                    run_id, coverage_revision, ledger,
+                    content_sha256, triggering_event_id, idempotency_key
+                ) VALUES(%s, %s, %s, %s, %s, %s)
+                RETURNING id, run_id, coverage_revision, ledger,
+                    content_sha256, triggering_event_id, created_at""",
+                (
+                    run_id,
+                    coverage_revision,
+                    json.dumps(ledger),
+                    content_sha256,
+                    triggering_event_id,
+                    idempotency_key,
+                ),
+            )
+            row = cur.fetchone()
+            keys = (
+                "id", "run_id", "coverage_revision", "ledger",
+                "content_sha256", "triggering_event_id", "created_at",
+            )
+            result = dict(zip(keys, row))
+
+            # Update run's current_coverage_revision
+            cur.execute(
+                "UPDATE research_runs SET current_coverage_revision=%s WHERE id=%s",
+                (coverage_revision, run_id),
+            )
+
+            return result
+
+    def get_snapshot(self, run_id, coverage_revision):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, coverage_revision, ledger,
+                    content_sha256, triggering_event_id, created_at
+                FROM coverage_snapshots
+                WHERE run_id=%s AND coverage_revision=%s""",
+                (run_id, coverage_revision),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        keys = (
+            "id", "run_id", "coverage_revision", "ledger",
+            "content_sha256", "triggering_event_id", "created_at",
+        )
+        return dict(zip(keys, row))
+
+    def get_latest_snapshot(self, run_id):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, coverage_revision, ledger,
+                    content_sha256, triggering_event_id, created_at
+                FROM coverage_snapshots
+                WHERE run_id=%s
+                ORDER BY coverage_revision DESC LIMIT 1""",
+                (run_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        keys = (
+            "id", "run_id", "coverage_revision", "ledger",
+            "content_sha256", "triggering_event_id", "created_at",
+        )
+        return dict(zip(keys, row))
+
+    def list_events(
+        self,
+        run_id,
+        item_id=None,
+        event_type=None,
+        limit=100,
+        offset=0,
+    ):
+        conditions = ["run_id = %s"]
+        params = [run_id]
+        if item_id is not None:
+            conditions.append("item_id = %s")
+            params.append(item_id)
+        if event_type is not None:
+            conditions.append("event_type = %s")
+            params.append(event_type)
+
+        where = " AND ".join(conditions)
+        with self.connection.cursor() as cur:
+            cur.execute(
+                f"""SELECT id, run_id, coverage_revision, prior_coverage_revision,
+                    event_type, item_id, item_type, subject_id,
+                    new_status, previous_status,
+                    new_freshness_status, previous_freshness_status,
+                    source_event_id, source_invocation_id,
+                    payload, idempotency_key, created_at
+                FROM coverage_events
+                WHERE {where}
+                ORDER BY coverage_revision, id
+                LIMIT %s OFFSET %s""",
+                (*params, limit, offset),
+            )
+            keys = (
+                "id", "run_id", "coverage_revision", "prior_coverage_revision",
+                "event_type", "item_id", "item_type", "subject_id",
+                "new_status", "previous_status",
+                "new_freshness_status", "previous_freshness_status",
+                "source_event_id", "source_invocation_id",
+                "payload", "idempotency_key", "created_at",
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    def get_event(self, run_id, event_id):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, coverage_revision, prior_coverage_revision,
+                    event_type, item_id, item_type, subject_id,
+                    new_status, previous_status,
+                    new_freshness_status, previous_freshness_status,
+                    source_event_id, source_invocation_id,
+                    payload, idempotency_key, created_at
+                FROM coverage_events
+                WHERE run_id=%s AND id=%s""",
+                (run_id, event_id),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        keys = (
+            "id", "run_id", "coverage_revision", "prior_coverage_revision",
+            "event_type", "item_id", "item_type", "subject_id",
+            "new_status", "previous_status",
+            "new_freshness_status", "previous_freshness_status",
+            "source_event_id", "source_invocation_id",
+            "payload", "idempotency_key", "created_at",
+        )
+        return dict(zip(keys, row))
+
+    def get_current_revision(self, run_id):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(current_coverage_revision, 0) FROM research_runs WHERE id=%s",
+                (run_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return 0
+        return row[0]
+
+    def count_events(self, run_id):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM coverage_events WHERE run_id=%s",
+                (run_id,),
+            )
+            return cur.fetchone()[0]
+
     def chunks_for_index(self, chunk_ids=None, manifest_id=None):
         with self.connection.cursor() as cur:
             cur.execute(
