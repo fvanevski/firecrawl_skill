@@ -158,3 +158,55 @@ class SearchAdapterResult:
     transport_metadata: dict[str, Any] = field(default_factory=dict)
     requested_at: datetime = field(default_factory=utcnow)
     responded_at: datetime = field(default_factory=utcnow)
+
+
+@dataclass(frozen=True)
+class CandidateCard:
+    id: UUID
+    run_id: UUID
+    canonical_url: str
+    original_url: str
+    domain: str
+    title: str | None = None
+    snippet: str | None = None
+    published_at: str | None = None
+    recurrence_count: int = 1
+    duplicate_group_id: UUID | None = None
+    date_signals: dict[str, Any] = field(default_factory=dict)
+    backend_metadata: dict[str, Any] = field(default_factory=dict)
+    occurrences: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "canonical_url": self.canonical_url,
+            "original_url": self.original_url,
+            "domain": self.domain,
+            "title": self.title,
+            "snippet": self.snippet,
+            "published_at": self.published_at,
+            "recurrence_count": self.recurrence_count,
+            "duplicate_group_id": self.duplicate_group_id,
+            "date_signals": self.date_signals,
+            "backend_metadata": self.backend_metadata,
+            "occurrences": self.occurrences,
+        }
+
+
+@dataclass(frozen=True)
+class PaginatedCandidates:
+    items: list[dict[str, Any]]
+    total_count: int
+    limit: int
+    offset: int
+    has_next: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "items": self.items,
+            "total_count": self.total_count,
+            "limit": self.limit,
+            "offset": self.offset,
+            "has_next": self.has_next,
+        }

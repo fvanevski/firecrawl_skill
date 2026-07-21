@@ -138,12 +138,26 @@ class CandidateRepository(Protocol):
         min_recurrence: int | None = None,
         duplicate_group_id: UUID | None = None,
     ) -> list[dict[str, Any]]: ...
+    def list_candidates_paginated(
+        self,
+        run_id: UUID,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+        query_text: str | None = None,
+        domain: str | None = None,
+        min_recurrence: int | None = None,
+        duplicate_group_id: UUID | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict[str, Any]: ...
     def list_candidate_occurrences(
         self, candidate_id: UUID, run_id: UUID | None = None
     ) -> list[dict[str, Any]]: ...
     def assign_duplicate_group(
         self, candidate_ids: list[UUID], group_id: UUID | None = None, run_id: UUID | None = None
     ) -> UUID: ...
+
 
 
 class ResearchRunRepository(

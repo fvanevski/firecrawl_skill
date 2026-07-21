@@ -604,3 +604,168 @@ class ResearchRunService:
                 candidate_ids, group_id=group_id, run_id=run_id
             )
 
+    def list_candidates_paginated(
+        self,
+        run_id: UUID,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+        query_text: str | None = None,
+        domain: str | None = None,
+        min_recurrence: int | None = None,
+        duplicate_group_id: UUID | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        with self.uow_factory() as uow:
+            return uow.runs.list_candidates_paginated(
+                run_id,
+                plan_id=plan_id,
+                plan_query_id=plan_query_id,
+                query_text=query_text,
+                domain=domain,
+                min_recurrence=min_recurrence,
+                duplicate_group_id=duplicate_group_id,
+                limit=limit,
+                offset=offset,
+            )
+
+    def get_candidate_card(
+        self,
+        candidate_id: UUID,
+        run_id: UUID | None = None,
+        *,
+        max_snippet_length: int = 500,
+        max_occurrences: int = 10,
+    ) -> dict[str, Any]:
+        with self.uow_factory() as uow:
+            cand = uow.runs.get_candidate(candidate_id, run_id=run_id)
+            occs = uow.runs.list_candidate_occurrences(candidate_id, run_id=run_id)
+
+            snippet = cand.get("snippet")
+            if snippet and len(snippet) > max_snippet_length:
+                snippet = snippet[:max_snippet_length].rstrip() + "..."
+
+            pub_date = cand.get("published_at")
+            pub_date_str = (
+                pub_date.isoformat()
+                if hasattr(pub_date, "isoformat")
+                else (str(pub_date) if pub_date else None)
+            )
+
+            occ_summaries = []
+            for occ in occs[:max_occurrences]:
+                disc_at = occ.get("discovered_at")
+                disc_at_str = (
+                    disc_at.isoformat()
+                    if hasattr(disc_at, "isoformat")
+                    else (str(disc_at) if disc_at else None)
+                )
+                occ_summaries.append(
+                    {
+                        "query_text": occ.get("query_text"),
+                        "rank": occ.get("rank"),
+                        "plan_id": str(occ["plan_id"]) if occ.get("plan_id") else None,
+                        "plan_query_id": str(occ["plan_query_id"])
+                        if occ.get("plan_query_id")
+                        else None,
+                        "discovered_at": disc_at_str,
+                    }
+                )
+
+            return {
+                "id": str(cand["id"]),
+                "run_id": str(cand["run_id"]),
+                "canonical_url": cand["canonical_url"],
+                "original_url": cand["original_url"],
+                "domain": cand["domain"],
+                "title": cand.get("title"),
+                "snippet": snippet,
+                "published_at": pub_date_str,
+                "recurrence_count": cand["recurrence_count"],
+                "duplicate_group_id": str(cand["duplicate_group_id"])
+                if cand.get("duplicate_group_id")
+                else None,
+                "date_signals": cand.get("date_signals", {}),
+                "backend_metadata": cand.get("backend_metadata", {}),
+                "occurrences": occ_summaries,
+            }
+
+    def build_triage_input(
+        self,
+        run_id: UUID,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+        query_text: str | None = None,
+        domain: str | None = None,
+        min_recurrence: int | None = None,
+        duplicate_group_id: UUID | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        max_snippet_length: int = 500,
+    ) -> dict[str, Any]:
+        paginated = self.list_candidates_paginated(
+            run_id,
+            plan_id=plan_id,
+            plan_query_id=plan_query_id,
+            query_text=query_text,
+            domain=domain,
+            min_recurrence=min_recurrence,
+            duplicate_group_id=duplicate_group_id,
+            limit=limit,
+            offset=offset,
+        )
+
+        cards = [
+            self.get_candidate_card(
+                UUID(str(item["id"])),
+                run_id=run_id,
+                max_snippet_length=max_snippet_length,
+            )
+            for item in paginated["items"]
+        ]
+
+        from .domain import utcnow
+
+        return {
+            "run_id": str(run_id),
+            "candidate_cards": cards,
+            "total_count": paginated["total_count"],
+            "limit": paginated["limit"],
+            "offset": paginated["offset"],
+            "has_next": paginated["has_next"],
+            "filters_applied": {
+                "plan_id": str(plan_id) if plan_id else None,
+                "plan_query_id": str(plan_query_id) if plan_query_id else None,
+                "query_text": query_text,
+                "domain": domain,
+                "min_recurrence": min_recurrence,
+                "duplicate_group_id": str(duplicate_group_id)
+                if duplicate_group_id
+                else None,
+            },
+            "generated_at": utcnow().isoformat(),
+        }
+
+    def replay_candidates(
+        self,
+        run_id: UUID,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+        domain: str | None = None,
+        min_recurrence: int | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Replay candidate corpus for a run offline without live acquisition."""
+        return self.build_triage_input(
+            run_id,
+            plan_id=plan_id,
+            plan_query_id=plan_query_id,
+            domain=domain,
+            min_recurrence=min_recurrence,
+            limit=limit,
+            offset=offset,
+        )

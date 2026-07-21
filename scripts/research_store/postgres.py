@@ -2334,6 +2334,122 @@ class PostgresUnitOfWork:
                 )
             return results
 
+    def list_candidates_paginated(
+        self,
+        run_id,
+        *,
+        plan_id=None,
+        plan_query_id=None,
+        query_text=None,
+        domain=None,
+        min_recurrence=None,
+        duplicate_group_id=None,
+        limit=20,
+        offset=0,
+    ):
+        run_id = UUID(str(run_id))
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+
+        with self.connection.cursor() as cur:
+            needs_join = (
+                plan_id is not None
+                or plan_query_id is not None
+                or query_text is not None
+            )
+
+            if needs_join:
+                base_from = """FROM search_candidates c
+                               JOIN candidate_occurrences o ON o.candidate_id = c.id
+                               WHERE c.run_id=%s"""
+                select_cols = """DISTINCT c.id, c.run_id, c.canonical_url, c.canonical_url_sha256, c.original_url,
+                                  c.title, c.snippet, c.domain, c.backend, c.published_at, c.date_signals,
+                                  c.backend_metadata, c.recurrence_count, c.duplicate_group_id,
+                                  c.first_seen_at, c.last_seen_at, c.created_at"""
+            else:
+                base_from = """FROM search_candidates c WHERE c.run_id=%s"""
+                select_cols = """c.id, c.run_id, c.canonical_url, c.canonical_url_sha256, c.original_url,
+                                  c.title, c.snippet, c.domain, c.backend, c.published_at, c.date_signals,
+                                  c.backend_metadata, c.recurrence_count, c.duplicate_group_id,
+                                  c.first_seen_at, c.last_seen_at, c.created_at"""
+
+            where_clauses = []
+            params = [run_id]
+
+            if plan_id is not None:
+                where_clauses.append("o.plan_id=%s")
+                params.append(UUID(str(plan_id)))
+            if plan_query_id is not None:
+                where_clauses.append("o.plan_query_id=%s")
+                params.append(UUID(str(plan_query_id)))
+            if query_text is not None:
+                where_clauses.append("o.query_text=%s")
+                params.append(query_text)
+            if domain is not None:
+                where_clauses.append("c.domain=%s")
+                params.append(domain)
+            if min_recurrence is not None:
+                where_clauses.append("c.recurrence_count>=%s")
+                params.append(int(min_recurrence))
+            if duplicate_group_id is not None:
+                where_clauses.append("c.duplicate_group_id=%s")
+                params.append(UUID(str(duplicate_group_id)))
+
+            where_str = ""
+            if where_clauses:
+                where_str = " AND " + " AND ".join(where_clauses)
+
+            if needs_join:
+                count_sql = f"SELECT COUNT(*) FROM (SELECT DISTINCT c.id {base_from}{where_str}) sub"
+            else:
+                count_sql = f"SELECT COUNT(*) {base_from}{where_str}"
+
+            cur.execute(count_sql, tuple(params))
+            total_count = cur.fetchone()[0]
+
+            order_by_sql = " ORDER BY c.recurrence_count DESC, c.created_at ASC, c.id ASC"
+            limit_sql = " LIMIT %s OFFSET %s"
+            full_sql = f"SELECT {select_cols} {base_from}{where_str}{order_by_sql}{limit_sql}"
+
+            query_params = list(params)
+            query_params.extend([limit, offset])
+
+            cur.execute(full_sql, tuple(query_params))
+            items = []
+            for row in cur.fetchall():
+                items.append(
+                    {
+                        "id": row[0],
+                        "run_id": row[1],
+                        "canonical_url": row[2],
+                        "canonical_url_sha256": row[3],
+                        "original_url": row[4],
+                        "title": row[5],
+                        "snippet": row[6],
+                        "domain": row[7],
+                        "backend": row[8],
+                        "published_at": row[9],
+                        "date_signals": row[10],
+                        "backend_metadata": row[11],
+                        "recurrence_count": row[12],
+                        "duplicate_group_id": row[13],
+                        "first_seen_at": row[14],
+                        "last_seen_at": row[15],
+                        "created_at": row[16],
+                    }
+                )
+
+            return {
+                "items": items,
+                "total_count": total_count,
+                "limit": limit,
+                "offset": offset,
+                "has_next": (offset + len(items)) < total_count,
+            }
+
+
     def list_candidate_occurrences(self, candidate_id, run_id=None):
         candidate_id = UUID(str(candidate_id))
         with self.connection.cursor() as cur:

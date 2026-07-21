@@ -224,6 +224,43 @@ def parser():
     acq_recon = sub.add_parser("acquisition-reconcile")
     acq_recon.add_argument("external_id")
 
+    cand_list_pag = sub.add_parser("candidate-list-paginated")
+    cand_list_pag.add_argument("external_id")
+    cand_list_pag.add_argument("--plan-id")
+    cand_list_pag.add_argument("--plan-query-id")
+    cand_list_pag.add_argument("--query-text")
+    cand_list_pag.add_argument("--domain")
+    cand_list_pag.add_argument("--min-recurrence", type=int)
+    cand_list_pag.add_argument("--duplicate-group-id")
+    cand_list_pag.add_argument("--limit", type=int, default=20)
+    cand_list_pag.add_argument("--offset", type=int, default=0)
+
+    cand_card = sub.add_parser("candidate-card")
+    cand_card.add_argument("candidate_id")
+    cand_card.add_argument("--max-snippet-length", type=int, default=500)
+
+    cand_triage = sub.add_parser("candidate-triage-input")
+    cand_triage.add_argument("external_id")
+    cand_triage.add_argument("--plan-id")
+    cand_triage.add_argument("--plan-query-id")
+    cand_triage.add_argument("--query-text")
+    cand_triage.add_argument("--domain")
+    cand_triage.add_argument("--min-recurrence", type=int)
+    cand_triage.add_argument("--duplicate-group-id")
+    cand_triage.add_argument("--limit", type=int, default=50)
+    cand_triage.add_argument("--offset", type=int, default=0)
+    cand_triage.add_argument("--max-snippet-length", type=int, default=500)
+
+    cand_replay = sub.add_parser("candidate-replay")
+    cand_replay.add_argument("external_id")
+    cand_replay.add_argument("--plan-id")
+    cand_replay.add_argument("--plan-query-id")
+    cand_replay.add_argument("--domain")
+    cand_replay.add_argument("--min-recurrence", type=int)
+    cand_replay.add_argument("--limit", type=int, default=100)
+    cand_replay.add_argument("--offset", type=int, default=0)
+
+
 
 
 
@@ -1410,6 +1447,66 @@ def main(argv=None):
         reconciled = acq_svc.reconcile_pending_searches(status.id)
         print(dumps(reconciled))
         return 0
+    if args.command == "candidate-list-paginated":
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        paginated = run_svc.list_candidates_paginated(
+            status.id,
+            plan_id=UUID(args.plan_id) if args.plan_id else None,
+            plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
+            query_text=args.query_text,
+            domain=args.domain,
+            min_recurrence=args.min_recurrence,
+            duplicate_group_id=UUID(args.duplicate_group_id)
+            if args.duplicate_group_id
+            else None,
+            limit=args.limit,
+            offset=args.offset,
+        )
+        print(dumps(paginated))
+        return 0
+    if args.command == "candidate-card":
+        run_svc = build_run_service(config)
+        card = run_svc.get_candidate_card(
+            UUID(args.candidate_id),
+            max_snippet_length=args.max_snippet_length,
+        )
+        print(dumps(card))
+        return 0
+    if args.command == "candidate-triage-input":
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        triage = run_svc.build_triage_input(
+            status.id,
+            plan_id=UUID(args.plan_id) if args.plan_id else None,
+            plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
+            query_text=args.query_text,
+            domain=args.domain,
+            min_recurrence=args.min_recurrence,
+            duplicate_group_id=UUID(args.duplicate_group_id)
+            if args.duplicate_group_id
+            else None,
+            limit=args.limit,
+            offset=args.offset,
+            max_snippet_length=args.max_snippet_length,
+        )
+        print(dumps(triage))
+        return 0
+    if args.command == "candidate-replay":
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        replayed = run_svc.replay_candidates(
+            status.id,
+            plan_id=UUID(args.plan_id) if args.plan_id else None,
+            plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
+            domain=args.domain,
+            min_recurrence=args.min_recurrence,
+            limit=args.limit,
+            offset=args.offset,
+        )
+        print(dumps(replayed))
+        return 0
+
 
 
 
