@@ -13,6 +13,7 @@ This Codex skill combines Firecrawl web acquisition with a persistent, auditable
 - Persist source, immutable snapshot, versioned derivation, chunk, run, batch, and retrieval-event identities.
 - Rebuild, activate, roll back, or prune fingerprinted Qdrant vector indexes without modifying authoritative corpus data.
 - Manage multi-step research runs (`fr_<uuid>`) with explicit lifecycle states, automatic semantic audits (`--auto-audit`), pivots, and Catalog v5 provenance.
+- Map validated ResearchSpec semantics to versioned hard resource caps, rule-coded proposal rejections, stricter user limits, and immutable per-run PostgreSQL budget snapshots.
 
 ## First use
 
@@ -32,6 +33,8 @@ rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/article"
 ```
 
 Wrappers write `firecrawl_scratch/fc_<uuid>/...` artifacts. When persistence is enabled they also commit an invocation batch and produce `_corpus.json` with stable source, snapshot, document, and chunk IDs.
+
+`fsearch_smart` uses `budget-policy-v1`; objective length and the legacy `--complexity` label do not select resources. Pass `--research-spec spec.json` for a canonical spec or let the wrapper create a narrow deterministic fallback. Numeric overrides can only tighten policy caps. Every smart-search artifact includes `_budget.json` and `_research_spec.json`; explicit persisted runs record the same immutable snapshot in PostgreSQL before acquisition. See `references/budget-policy.md`.
 
 ## Persistence modes
 
@@ -106,10 +109,11 @@ Run the full deterministic suite without network access:
 rtk proxy env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
   "<skill-root>/scripts/test_classifier.py" \
   "<skill-root>/scripts/test_workflow.py" \
+  "<skill-root>/scripts/test_budget_policy.py" \
   "<skill-root>/scripts/test_research_store.py" \
   "<skill-root>/scripts/test_index_runtime.py"
 ```
 
-Run `scripts/test_research_store_integration.py` only against an explicitly named disposable PostgreSQL target whose name contains a standalone `test` segment, and set `RESEARCH_STORE_TEST_ALLOW_RESET` to that exact name. Its guarded session setup drops the public schema and covers the non-empty migration (v1 through v5), database concurrency, derivations, retry ledgers, leases, runs, and manifest binding. Use a separate recorded disposable-service campaign for wrapper preflight/fail-closed behavior, Valkey loss, damaged Qdrant rebuild, alias activation, and rollback proofs required before production.
+Run `scripts/test_research_store_integration.py` only against an explicitly named disposable PostgreSQL target whose name contains a standalone `test` segment, and set `RESEARCH_STORE_TEST_ALLOW_RESET` to that exact name. Its guarded session setup drops the public schema and covers populated migrations, database concurrency, derivations, retry ledgers, leases, runs, budget snapshots, and manifest binding. Use a separate recorded disposable-service campaign for wrapper preflight/fail-closed behavior, Valkey loss, damaged Qdrant rebuild, alias activation, and rollback proofs required before production.
 
 For the design invariants, read `references/research-store-architecture.md`. For deployment, migration, backup/restore, worker, indexing, and recovery procedures, read `references/research-store-operations.md`. For Catalog v5 manifests and semantic audits, read `references/catalog-v5.md`.

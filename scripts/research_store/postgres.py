@@ -837,6 +837,132 @@ class PostgresUnitOfWork:
             )
             return spec_id
 
+    def record_budget_snapshot(
+        self,
+        run_id,
+        research_spec_id,
+        spec_revision,
+        run_revision,
+        policy_version,
+        policy_config_sha256,
+        snapshot,
+        idempotency_key,
+    ):
+        """Persist one immutable budget authorization boundary for a run."""
+        expected_snapshot_fields = {
+            "policy_version": policy_version,
+            "policy_config_sha256": policy_config_sha256,
+            "spec_revision": spec_revision,
+            "run_revision": run_revision,
+        }
+        mismatched = {
+            name: {"expected": expected, "actual": snapshot.get(name)}
+            for name, expected in expected_snapshot_fields.items()
+            if snapshot.get(name) != expected
+        }
+        if mismatched:
+            raise ValueError(
+                f"budget snapshot envelope does not match repository arguments: {mismatched}"
+            )
+        with self.connection.cursor() as cur:
+            _, current_revision = self._lock_workflow_run(cur, run_id)
+            if run_revision != current_revision:
+                raise ValueError(
+                    f"budget snapshot run revision {run_revision} is stale; "
+                    f"current revision is {current_revision}"
+                )
+            cur.execute(
+                """SELECT spec_revision FROM research_specs
+                WHERE id=%s AND run_id=%s""",
+                (research_spec_id, run_id),
+            )
+            stored_spec = cur.fetchone()
+            if stored_spec is None:
+                raise ValueError("budget snapshot references an unknown research spec")
+            if stored_spec[0] != spec_revision:
+                raise ValueError("budget snapshot spec revision does not match its spec")
+            payload_json = _canonical_json(snapshot)
+            digest = _json_sha256(snapshot)
+            cur.execute(
+                """SELECT id,research_spec_id,spec_revision,run_revision,
+                policy_version,policy_config_sha256,content_sha256
+                FROM research_budget_snapshots
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            idempotent = cur.fetchone()
+            expected = (
+                research_spec_id,
+                spec_revision,
+                run_revision,
+                policy_version,
+                policy_config_sha256,
+                digest,
+            )
+            if idempotent is not None:
+                if idempotent[1:] != expected:
+                    raise ValueError(
+                        "idempotency key was used for another budget snapshot"
+                    )
+                return idempotent[0]
+            cur.execute(
+                """SELECT id,research_spec_id,spec_revision,policy_config_sha256,
+                content_sha256 FROM research_budget_snapshots
+                WHERE run_id=%s AND policy_version=%s AND run_revision=%s""",
+                (run_id, policy_version, run_revision),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                expected = (
+                    research_spec_id,
+                    spec_revision,
+                    policy_config_sha256,
+                    digest,
+                )
+                if existing[1:] != expected:
+                    raise ValueError(
+                        "budget change requires a new policy version or explicit run revision"
+                    )
+                return existing[0]
+            cur.execute(
+                """INSERT INTO research_budget_snapshots(
+                run_id,research_spec_id,spec_revision,run_revision,policy_version,
+                policy_config_sha256,snapshot,content_sha256,idempotency_key)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT(run_id,idempotency_key) DO UPDATE
+                  SET idempotency_key=excluded.idempotency_key
+                RETURNING id,research_spec_id,spec_revision,run_revision,policy_version,
+                policy_config_sha256,content_sha256""",
+                (
+                    run_id,
+                    research_spec_id,
+                    spec_revision,
+                    run_revision,
+                    policy_version,
+                    policy_config_sha256,
+                    payload_json,
+                    digest,
+                    idempotency_key,
+                ),
+            )
+            row = cur.fetchone()
+            expected = (
+                research_spec_id,
+                spec_revision,
+                run_revision,
+                policy_version,
+                policy_config_sha256,
+                digest,
+            )
+            if row[1:] != expected:
+                raise ValueError("idempotency key was used for another budget snapshot")
+            cur.execute(
+                """UPDATE research_runs SET budget_snapshot_id=%s,
+                budget_policy_version=%s WHERE id=%s""",
+                (row[0], policy_version, run_id),
+            )
+            return row[0]
+
     def record_semantic_call(
         self,
         run_id,

@@ -149,7 +149,7 @@ rtk proxy "<skill-root>/scripts/research-db" index-prune --dry-run
 
 Initialize with `research-db migrate`, then use `research-db ingest-ready` for the writable-store preflight. Persistence `on` runs that preflight before Firecrawl acquisition. Treat `doctor` as read-only: it reports schema, blob, worker, job, active-index, Qdrant coverage, and model-service health without creating or repairing anything. Import old scratch trees with `import-scratch --dry-run` before applying the idempotent import. Use `rederive` to rebuild parser/chunker derivations from retained blob bytes, and `export-invocation fc_<uuid>` to reconstruct `_corpus.json` after an interrupted export.
 
-Read `references/research-store-architecture.md` for boundaries and consistency rules. Read `references/research-store-operations.md` before deploying the worker, changing an embedding definition, migrating, restoring, rebuilding, pruning, or running live fixtures. Read `references/workflow-state-schema.md` for the authoritative workflow tables, data dictionary, idempotency scopes, and v6 forward-repair procedure.
+Read `references/research-store-architecture.md` for boundaries and consistency rules. Read `references/research-store-operations.md` before deploying the worker, changing an embedding definition, migrating, restoring, rebuilding, pruning, or running live fixtures. Read `references/workflow-state-schema.md` for the authoritative workflow tables and `references/budget-policy.md` for deterministic caps, rejection rules, persisted budget snapshots, and v7 repair.
 
 ## Scripts
 
@@ -163,28 +163,28 @@ Read `references/research-store-architecture.md` for boundaries and consistency 
 
 ## Procedure
 
-### 1. Choose Search Depth
+### 1. Apply the Budget Policy
 
-Before searching, classify the request's complexity. Let `fsearch_smart` auto-classify unless the user has made scope clear.
+`fsearch_smart` maps a validated `ResearchSpec` to `budget-policy-v1`. If no spec file is supplied, it creates a narrow deterministic fallback that preserves the exact objective as one question and marks unresolved semantics. Word count, topic length, and the legacy complexity label do not select budgets.
 
-| Complexity | Use for | Strategy |
+| Policy tier | Semantic floor | Search and extraction caps |
 | --- | --- | --- |
-| `simple` | Fact checks, direct setup lookups, single definitions | Acquire 2 x 15 candidates, then scrape 6 globally selected pages |
-| `moderate` | Comparisons, configuration options, API usage, multi-step setup | Acquire 3 x 25 candidates, then scrape 12 globally selected pages |
-| `complex` | Deep research, troubleshooting, academic topics, architecture choices | Acquire 5 x 40 candidates, then scrape 25 globally selected pages |
+| `focused` | Low-risk, narrow semantic scope | 2 x 15 candidates; 8 attempts; 6 successes |
+| `standard` | Medium risk, freshness, corroboration, or multipart scope | 3 x 25 candidates; 18 attempts; 12 successes |
+| `intensive` | High risk, expected disagreement, broad source requirements, or large scope | 5 x 40 candidates; 36 attempts; 25 successes |
 
 ```bash
-rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --complexity moderate
-rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --complexity complex --tbs qdr:w
-rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --complexity complex --planner heuristic --dry-run
-rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --complexity moderate --results-per-query 40 --total-scrapes 18
+rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-spec spec.json
+rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-profile technical_docs --tbs qdr:w
+rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --planner heuristic --dry-run
+rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --max-searches 2 --max-scrapes 6 --max-successful-extractions 4
 ```
 
 Use the default `auto` planner with the local model. It first produces a structured research brief and then a complementary query plan. If planning fails, the workflow runs only the exact objective as a degraded query; it does not silently broaden through deterministic facets. Use `--planner heuristic` only for reproducible legacy diagnostics. Commercial planning or fallback requires explicit provider and model options.
 
-Treat search and scrape as separate budgets. `fsearch_smart` issues each search once, saves every raw response, deduplicates candidates, asks the selected LLM to triage compact candidate cards, and scrapes in bounded waves. Internal branches force corpus persistence off; the completed parent consolidates their successful results and persists exactly one reconstructable `smart_search` batch. Failed extractions advance to replacement candidates and emit pivot events. Increase `--results-per-query` before `--total-scrapes`; metadata remains the inexpensive orientation layer.
+Treat search, extraction attempts, and successful extractions as separate hard budgets. `fsearch_smart` issues each search once, saves every raw response, deduplicates candidates, asks the selected LLM to triage compact candidate cards, and scrapes in bounded waves. Internal branches force corpus persistence off; the completed parent consolidates their successful results and persists exactly one reconstructable `smart_search` batch. Failed extractions advance to replacement candidates and emit pivot events.
 
-Use `--max-searches`, `--max-scrapes`, and `--max-iterations` as hard limits. Use `--no-llm-triage` only to diagnose model-independent acquisition. Read `_evidence.json` after `_context.json`; it contains the research brief, candidate decisions, scrape-wave provenance, source dossiers, coverage placeholders, and limitations for answer composition.
+Use `--max-searches`, `--results-per-query`, `--max-scrapes`, `--max-successful-extractions`, and `--max-iterations` only to tighten policy caps. A looser value is rejected with a machine-readable rule ID. `_budget.json` records the exact authorization boundary. Use `--no-llm-triage` only to diagnose model-independent acquisition. Read `_evidence.json` after `_context.json`; it contains the research brief, candidate decisions, scrape-wave provenance, source dossiers, coverage placeholders, and limitations for answer composition.
 
 ### 2. Run Single-Query Search When Needed
 
@@ -283,6 +283,7 @@ Run the full deterministic suite without network usage:
 rtk proxy env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
   "<skill-root>/scripts/test_classifier.py" \
   "<skill-root>/scripts/test_workflow.py" \
+  "<skill-root>/scripts/test_budget_policy.py" \
   "<skill-root>/scripts/test_research_store.py" \
   "<skill-root>/scripts/test_index_runtime.py"
 ```

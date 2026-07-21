@@ -27,7 +27,7 @@ Resolve `FIRECRAWL_RESEARCH_PYTHON` once. Fail clearly if an explicit path is in
 
 ## Migrate and inspect
 
-Use Alembic as the only schema authority. The current head is `0006_workflow_state`; v3 adds the composite manifest/definition job constraint, v4 repairs the stale v1 embedding uniqueness constraint, v5 enforces terminal legacy research-run lifecycle invariants, and v6 adds the authoritative workflow-state foundation without deleting existing corpus or index data. Apply revisions explicitly and verify the reported current/head revisions. Exercise a fresh migration and the populated v5-to-v6 upgrade on a disposable database before production. See `workflow-state-schema.md` for the v6 data dictionary and forward-repair procedure.
+Use Alembic as the only schema authority. The current head is `0007_budget_snapshots`; v3 adds the composite manifest/definition job constraint, v4 repairs the stale v1 embedding uniqueness constraint, v5 enforces terminal legacy research-run lifecycle invariants, v6 adds the authoritative workflow-state foundation, and v7 adds immutable per-run budget snapshots without rewriting corpus or index data. Apply revisions explicitly and verify the reported current/head revisions. Exercise a fresh migration and populated prior-head upgrade on a disposable database before production. See `workflow-state-schema.md` and `budget-policy.md` for data dictionaries and forward-repair procedures.
 
 ```bash
 rtk proxy scripts/research-db migrate

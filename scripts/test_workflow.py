@@ -371,17 +371,20 @@ def test_smart_search_consolidates_deduplicated_candidates(fake_cli):
         for path in roots[0].glob("query_*/_meta.json")
     )
     assert meta["planner"] == "heuristic"
-    assert meta["candidate_count"] == 6
-    assert len(meta["query_plan"]) == 2
+    assert meta["candidate_count"] == 9
+    assert len(meta["query_plan"]) == 3
     assert (roots[0] / "_candidates.json").is_file()
     assert (roots[0] / "_context.json").is_file()
     assert (roots[0] / "_evidence.json").is_file()
     assert meta["strategy"]["acquisition_mode"] == "metadata_first_llm_triage_adaptive_scrape"
-    assert meta["strategy"]["results_per_query"] == 15
-    assert meta["strategy"]["total_scrape_budget"] == 6
+    assert meta["budget_snapshot"]["policy_version"] == "budget-policy-v1"
+    assert meta["budget_snapshot"]["selected_tier"] == "standard"
+    assert meta["strategy"]["results_per_query"] == 25
+    assert meta["strategy"]["total_scrape_budget"] == 18
+    assert meta["strategy"]["max_successful_extractions"] == 12
     calls = [json.loads(line) for line in Path(env["FAKE_FIRECRAWL_LOG"]).read_text().splitlines()]
-    assert [call[0] for call in calls].count("search") == 2
-    assert [call[0] for call in calls].count("scrape") == 2
+    assert [call[0] for call in calls].count("search") == 3
+    assert [call[0] for call in calls].count("scrape") == 6
     successful = [item for item in meta["results"] if item.get("status") == "ok"]
     assert successful
     assert all(Path(item["raw_scratch_file"]).is_file() for item in successful)
@@ -393,7 +396,7 @@ def test_smart_search_consolidates_deduplicated_candidates(fake_cli):
     catalog_record = json.loads(next((tmp_path / "catalog" / "invocations").glob("fc_*.json")).read_text())
     assert catalog_record["operation"] == "smart_search"
     assert catalog_record["execution"]["status"] == "succeeded"
-    assert len([event for event in catalog_record["events"] if event["type"] == "branch_finished"]) == 2
+    assert len([event for event in catalog_record["events"] if event["type"] == "branch_finished"]) == 3
     assert len([event for event in catalog_record["events"] if event["type"] == "scrape_wave_finished"]) == 1
 
 
@@ -445,6 +448,22 @@ def test_smart_search_atexit_marks_unexpected_exit_failed(fake_cli):
     )
     assert record["execution"]["status"] == "failed"
     assert record["execution"]["error"] == "smart-search exited before explicit completion"
+
+
+def test_smart_search_rejects_looser_user_budget_with_rule_id(fake_cli):
+    env, _ = fake_cli
+    result = run_script(
+        "fsearch_smart",
+        "bounded policy",
+        "--planner",
+        "heuristic",
+        "--results-per-query",
+        "100",
+        env=env,
+    )
+    assert result.returncode == 2
+    assert '"error": "budget_rejected"' in result.stderr
+    assert "user_limit.not_stricter.results_per_branch" in result.stderr
 
 
 def test_research_run_links_operations_and_reports_quality(fake_cli):

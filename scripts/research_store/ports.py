@@ -77,6 +77,17 @@ class ResearchRunRepository(Protocol):
         idempotency_key: str,
         **metadata: Any,
     ) -> UUID: ...
+    def record_budget_snapshot(
+        self,
+        run_id: UUID,
+        research_spec_id: UUID,
+        spec_revision: int,
+        run_revision: int,
+        policy_version: str,
+        policy_config_sha256: str,
+        snapshot: dict[str, Any],
+        idempotency_key: str,
+    ) -> UUID: ...
     def record_semantic_call(
         self,
         run_id: UUID,
