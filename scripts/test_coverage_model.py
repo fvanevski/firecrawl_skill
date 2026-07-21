@@ -153,7 +153,8 @@ class MemoryCoverageRepository:
         self.revisions[str(run_id)] = new_revision
         return event.to_dict()
 
-    def rebuild_projection(self, run_id, idempotency_key, source_event_id=None):
+    def compute_projection(self, run_id):
+        """Pure query — no side effects. Returns ledger dict."""
         items = {}
         events = [e for k, e in self.events.items() if k[0] == str(run_id)]
         events.sort(key=lambda e: (e.coverage_revision, str(e.id)))
@@ -199,8 +200,8 @@ class MemoryCoverageRepository:
                 overall_status = "insufficient"
 
         max_rev = max((e.coverage_revision for e in events), default=0)
-        # Update revision for the projection_rebuilt event
-        self.revisions[str(run_id)] = max(self.revisions.get(str(run_id), 0), max_rev)
+        if max_rev == 0:
+            max_rev = 1
         return {
             "schema_version": "coverage-ledger-v1",
             "run_id": str(run_id),
@@ -208,6 +209,55 @@ class MemoryCoverageRepository:
             "items": list(items.values()),
             "overall_status": overall_status,
         }
+
+    def record_projection_rebuilt(
+        self,
+        run_id,
+        idempotency_key,
+        source_event_id=None,
+    ):
+        """Command: creates a projection_rebuilt event. Idempotent."""
+        key = (str(run_id), idempotency_key)
+
+        # Idempotency check
+        if key in self.events:
+            return self.events[key].to_dict()
+
+        current_revision = self.revisions.get(str(run_id), 0)
+        new_revision = current_revision + 1
+
+        event = CoverageEvent(
+            id=uuid4(),
+            run_id=run_id,
+            coverage_revision=new_revision,
+            prior_coverage_revision=current_revision,
+            event_type="projection_rebuilt",
+            item_id=None,
+            item_type=None,
+            subject_id=None,
+            new_status=None,
+            previous_status=None,
+            new_freshness_status=None,
+            previous_freshness_status=None,
+            source_event_id=source_event_id,
+            source_invocation_id=None,
+            payload={"coverage_revision": current_revision},
+            idempotency_key=idempotency_key,
+            created_at=None,
+        )
+        self.events[key] = event
+        self.revisions[str(run_id)] = new_revision
+        return event.to_dict()
+
+    def rebuild_projection(self, run_id, idempotency_key, source_event_id=None):
+        """Deprecated: use compute_projection + record_projection_rebuilt."""
+        ledger = self.compute_projection(run_id)
+        self.record_projection_rebuilt(
+            run_id,
+            idempotency_key=idempotency_key,
+            source_event_id=source_event_id,
+        )
+        return ledger
 
     def create_snapshot(
         self,
@@ -590,6 +640,132 @@ class TestProjectionRebuilding:
         second = service.rebuild_projection(run_id, idempotency_key="rebuild:1")
         assert first.items == second.items
         assert first.overall_status == second.overall_status
+
+
+class TestComputeProjection:
+    """Tests for compute_projection — pure query, no side effects."""
+
+    def test_compute_returns_ledger(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {
+                "questions": [
+                    {"question_id": uuid4(), "text": "Q1"},
+                    {"question_id": uuid4(), "text": "Q2"},
+                ],
+            },
+        )
+        ledger = service.compute_projection(run_id)
+        assert len(ledger.items) == 2
+        assert all(item.status == CoverageStatus.UNASSESSED for item in ledger.items)
+        assert ledger.overall_status == OverallCoverageStatus.INSUFFICIENT
+
+    def test_compute_no_side_effects(self):
+        """compute_projection must not create events or increment revision."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        initial_revision = repo.get_current_revision(run_id)
+        initial_count = repo.count_events(run_id)
+
+        # Call compute_projection multiple times
+        service.compute_projection(run_id)
+        service.compute_projection(run_id)
+
+        # Revision and event count must be unchanged
+        assert repo.get_current_revision(run_id) == initial_revision
+        assert repo.count_events(run_id) == initial_count
+
+    def test_compute_with_status_changes(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_event(
+            run_id,
+            "item_status_changed",
+            item_id=UUID(item_id),
+            new_status="satisfied",
+            idempotency_key="evt:satisfy",
+        )
+        ledger = service.compute_projection(run_id)
+        assert ledger.overall_status == OverallCoverageStatus.SUFFICIENT
+
+    def test_compute_idempotent(self):
+        """Multiple calls return the same ledger."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        first = service.compute_projection(run_id)
+        second = service.compute_projection(run_id)
+        assert first.items == second.items
+        assert first.overall_status == second.overall_status
+
+
+class TestRecordProjectionRebuilt:
+    """Tests for record_projection_rebuilt — command, increments revision."""
+
+    def test_records_event(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        event = service.record_projection_rebuilt(run_id, idempotency_key="rebuild:1")
+        assert event.event_type == "projection_rebuilt"
+        assert event.coverage_revision == 2  # 1 from items + 1 from rebuild
+
+    def test_idempotent(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        first = service.record_projection_rebuilt(run_id, idempotency_key="rebuild:1")
+        second = service.record_projection_rebuilt(run_id, idempotency_key="rebuild:1")
+        assert first.id == second.id
+        # Revision should only increment once
+        assert repo.get_current_revision(run_id) == 2
+
+    def test_different_keys_increment_separately(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        service.record_projection_rebuilt(run_id, idempotency_key="rebuild:1")
+        service.record_projection_rebuilt(run_id, idempotency_key="rebuild:2")
+        # Each unique key increments revision
+        assert repo.get_current_revision(run_id) == 3  # 1 + 1 + 1
+
+    def test_rejects_missing_run_id(self):
+        _, service = coverage_fixture()
+        with pytest.raises(CoverageError, match="run_id is required"):
+            service.record_projection_rebuilt(None, idempotency_key="rebuild:1")
+
+    def test_rejects_empty_idempotency_key(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        with pytest.raises(CoverageError, match="nonempty"):
+            service.record_projection_rebuilt(run_id, idempotency_key="  ")
 
 
 class TestSnapshots:

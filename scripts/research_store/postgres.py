@@ -8,10 +8,17 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
-from .domain import BlobReference, IngestRequest, IngestResult, RawSearchResponse, SearchCandidate, CandidateOccurrence, utcnow
+from .domain import (
+    BlobReference,
+    IngestRequest,
+    IngestResult,
+    RawSearchResponse,
+    SearchCandidate,
+    CandidateOccurrence,
+    utcnow,
+)
 from .parsing import parse_raw_search_response
 from .url import canonicalize_candidate_url
-
 
 
 try:
@@ -21,6 +28,7 @@ try:
     from research_domain.validation import ValidationContext, validate_references
 except ImportError:
     import sys
+
     sys.path.insert(0, str(Path(__file__).parents[1]))
     from research_domain import load_model, serialize_model
     from research_domain.codec import to_dict
@@ -117,7 +125,6 @@ class PostgresUnitOfWork:
         self.sources = self.snapshots = self.documents = self.chunks = self.runs = (
             self.retrieval_events
         ) = self.index_jobs = self.search_responses = self.candidates = self
-
 
         return self
 
@@ -1413,7 +1420,9 @@ class PostgresUnitOfWork:
             spec_model = load_model(spec_payload)
 
             if plan_model.research_spec_id != spec_model.research_spec_id:
-                raise ValueError("search plan research_spec_id does not match research spec")
+                raise ValueError(
+                    "search plan research_spec_id does not match research spec"
+                )
 
             validate_references(plan_model, ValidationContext(research_spec=spec_model))
 
@@ -1508,9 +1517,7 @@ class PostgresUnitOfWork:
 
             return plan_id
 
-    def get_search_plan(
-        self, run_id, plan_id=None, revision=None
-    ):
+    def get_search_plan(self, run_id, plan_id=None, revision=None):
         with self.connection.cursor() as cur:
             if plan_id is not None:
                 cur.execute(
@@ -1624,9 +1631,7 @@ class PostgresUnitOfWork:
                 for r in rows
             ]
 
-    def get_plan_query(
-        self, query_id, run_id=None
-    ):
+    def get_plan_query(self, query_id, run_id=None):
         with self.connection.cursor() as cur:
             if run_id is not None:
                 cur.execute(
@@ -1741,9 +1746,7 @@ class PostgresUnitOfWork:
             raise ValueError("idempotency_key must be non-empty")
 
         raw_bytes = (
-            raw_payload.encode("utf-8")
-            if isinstance(raw_payload, str)
-            else raw_payload
+            raw_payload.encode("utf-8") if isinstance(raw_payload, str) else raw_payload
         )
 
         content_sha256 = hashlib.sha256(raw_bytes).hexdigest()
@@ -1820,7 +1823,9 @@ class PostgresUnitOfWork:
                     (plan_id, run_id),
                 )
                 if cur.fetchone() is None:
-                    raise ValueError(f"search plan {plan_id} not found for run {run_id}")
+                    raise ValueError(
+                        f"search plan {plan_id} not found for run {run_id}"
+                    )
 
             if plan_query_id is not None:
                 cur.execute(
@@ -1829,16 +1834,24 @@ class PostgresUnitOfWork:
                 )
                 pq_row = cur.fetchone()
                 if pq_row is None:
-                    raise ValueError(f"search plan query {plan_query_id} not found for run {run_id}")
+                    raise ValueError(
+                        f"search plan query {plan_query_id} not found for run {run_id}"
+                    )
                 if plan_id is not None and pq_row[1] != plan_id:
-                    raise ValueError(f"search plan query {plan_query_id} does not belong to plan {plan_id}")
+                    raise ValueError(
+                        f"search plan query {plan_query_id} does not belong to plan {plan_id}"
+                    )
                 if plan_id is None:
                     plan_id = pq_row[1]
 
-            blob_ref = blob_store.put(io.BytesIO(raw_bytes), mime_type="application/json")
+            blob_ref = blob_store.put(
+                io.BytesIO(raw_bytes), mime_type="application/json"
+            )
 
-            parsed_status, parsed_result_count, parsed_summary, parsed_error = parse_raw_search_response(
-                raw_bytes, http_status=http_status, parser_version=parser_version
+            parsed_status, parsed_result_count, parsed_summary, parsed_error = (
+                parse_raw_search_response(
+                    raw_bytes, http_status=http_status, parser_version=parser_version
+                )
             )
 
             final_error = error_message or parsed_error
@@ -2079,7 +2092,9 @@ class PostgresUnitOfWork:
                 backend_meta = {}
 
                 if isinstance(item, dict):
-                    raw_url = item.get("url") or item.get("link") or item.get("target_url")
+                    raw_url = (
+                        item.get("url") or item.get("link") or item.get("target_url")
+                    )
                     title = item.get("title") or item.get("name")
                     snippet = (
                         item.get("snippet")
@@ -2409,9 +2424,13 @@ class PostgresUnitOfWork:
             cur.execute(count_sql, tuple(params))
             total_count = cur.fetchone()[0]
 
-            order_by_sql = " ORDER BY c.recurrence_count DESC, c.created_at ASC, c.id ASC"
+            order_by_sql = (
+                " ORDER BY c.recurrence_count DESC, c.created_at ASC, c.id ASC"
+            )
             limit_sql = " LIMIT %s OFFSET %s"
-            full_sql = f"SELECT {select_cols} {base_from}{where_str}{order_by_sql}{limit_sql}"
+            full_sql = (
+                f"SELECT {select_cols} {base_from}{where_str}{order_by_sql}{limit_sql}"
+            )
 
             query_params = list(params)
             query_params.extend([limit, offset])
@@ -2448,7 +2467,6 @@ class PostgresUnitOfWork:
                 "offset": offset,
                 "has_next": (offset + len(items)) < total_count,
             }
-
 
     def list_candidate_occurrences(self, candidate_id, run_id=None):
         candidate_id = UUID(str(candidate_id))
@@ -2490,9 +2508,7 @@ class PostgresUnitOfWork:
         if not candidate_ids:
             raise ValueError("candidate_ids must not be empty")
         cand_uuids = [UUID(str(cid)) for cid in candidate_ids]
-        target_group_id = (
-            UUID(str(group_id)) if group_id is not None else cand_uuids[0]
-        )
+        target_group_id = UUID(str(group_id)) if group_id is not None else cand_uuids[0]
 
         with self.connection.cursor() as cur:
             if run_id is not None:
@@ -2511,8 +2527,6 @@ class PostgresUnitOfWork:
                     (target_group_id, cand_uuids),
                 )
         return target_group_id
-
-
 
     def record_semantic_call(
         self,
@@ -2594,7 +2608,9 @@ class PostgresUnitOfWork:
         self, run_id, call_id, status, response_metadata, error=None
     ):
         if status not in {"complete", "failed", "cancelled"}:
-            raise ValueError("semantic call final status must be complete, failed, or cancelled")
+            raise ValueError(
+                "semantic call final status must be complete, failed, or cancelled"
+            )
         response_json = _canonical_json(response_metadata or {})
         with self.connection.cursor() as cur:
             self._lock_workflow_run(cur, run_id)
@@ -2646,9 +2662,21 @@ class PostgresUnitOfWork:
             if row is None:
                 raise ValueError("semantic call does not belong to the research run")
             keys = (
-                "id", "run_id", "invocation_id", "stage", "provider", "model",
-                "model_revision", "prompt_version", "input_sha256", "request",
-                "response_metadata", "status", "error", "started_at", "completed_at",
+                "id",
+                "run_id",
+                "invocation_id",
+                "stage",
+                "provider",
+                "model",
+                "model_revision",
+                "prompt_version",
+                "input_sha256",
+                "request",
+                "response_metadata",
+                "status",
+                "error",
+                "started_at",
+                "completed_at",
                 "created_at",
             )
             result = dict(zip(keys, row))
@@ -2660,10 +2688,19 @@ class PostgresUnitOfWork:
                 (call_id, run_id),
             )
             artifact_keys = (
-                "id", "artifact_type", "schema_name", "schema_version", "payload",
-                "content_sha256", "validation_status", "validation_errors", "created_at",
+                "id",
+                "artifact_type",
+                "schema_name",
+                "schema_version",
+                "payload",
+                "content_sha256",
+                "validation_status",
+                "validation_errors",
+                "created_at",
             )
-            result["artifacts"] = [dict(zip(artifact_keys, item)) for item in cur.fetchall()]
+            result["artifacts"] = [
+                dict(zip(artifact_keys, item)) for item in cur.fetchall()
+            ]
             return result
 
     def record_semantic_artifact(
@@ -3296,10 +3333,12 @@ class PostgresUnitOfWork:
                         item["subject_id"],
                         source_event_id,
                         source_invocation_id,
-                        json.dumps({
-                            "execution_mode": execution_mode,
-                            "text": item.get("text", ""),
-                        }),
+                        json.dumps(
+                            {
+                                "execution_mode": execution_mode,
+                                "text": item.get("text", ""),
+                            }
+                        ),
                         idempotency_key,
                     ),
                 )
@@ -3361,12 +3400,22 @@ class PostgresUnitOfWork:
             existing = cur.fetchone()
             if existing:
                 keys = (
-                    "id", "coverage_revision", "prior_coverage_revision",
-                    "event_type", "item_id", "item_type", "subject_id",
-                    "new_status", "previous_status",
-                    "new_freshness_status", "previous_freshness_status",
-                    "source_event_id", "source_invocation_id",
-                    "payload", "idempotency_key", "created_at",
+                    "id",
+                    "coverage_revision",
+                    "prior_coverage_revision",
+                    "event_type",
+                    "item_id",
+                    "item_type",
+                    "subject_id",
+                    "new_status",
+                    "previous_status",
+                    "new_freshness_status",
+                    "previous_freshness_status",
+                    "source_event_id",
+                    "source_invocation_id",
+                    "payload",
+                    "idempotency_key",
+                    "created_at",
                 )
                 return dict(zip(keys, existing))
 
@@ -3438,12 +3487,22 @@ class PostgresUnitOfWork:
             )
             row = cur.fetchone()
             keys = (
-                "id", "coverage_revision", "prior_coverage_revision",
-                "event_type", "item_id", "item_type", "subject_id",
-                "new_status", "previous_status",
-                "new_freshness_status", "previous_freshness_status",
-                "source_event_id", "source_invocation_id",
-                "payload", "idempotency_key", "created_at",
+                "id",
+                "coverage_revision",
+                "prior_coverage_revision",
+                "event_type",
+                "item_id",
+                "item_type",
+                "subject_id",
+                "new_status",
+                "previous_status",
+                "new_freshness_status",
+                "previous_freshness_status",
+                "source_event_id",
+                "source_invocation_id",
+                "payload",
+                "idempotency_key",
+                "created_at",
             )
             result = dict(zip(keys, row))
 
@@ -3455,15 +3514,11 @@ class PostgresUnitOfWork:
 
             return result
 
-    def rebuild_projection(
-        self,
-        run_id,
-        idempotency_key,
-        source_event_id=None,
-    ):
-        """Rebuild the current coverage projection from events.
+    def compute_projection(self, run_id):
+        """Compute the current coverage projection from events.
 
-        Returns a ledger dict that can be materialized as a snapshot.
+        Pure query — no side effects.  Returns a ledger dict that can be
+        materialized as a snapshot.
         """
         with self.connection.cursor() as cur:
             self._lock_workflow_run(cur, run_id)
@@ -3485,9 +3540,17 @@ class PostgresUnitOfWork:
             items = {}
             max_revision = 0
             for evt in events:
-                event_type, item_id, item_type, subject_id, new_status, \
-                    previous_status, new_freshness_status, \
-                    previous_freshness_status, payload = evt
+                (
+                    event_type,
+                    item_id,
+                    item_type,
+                    subject_id,
+                    new_status,
+                    previous_status,
+                    new_freshness_status,
+                    previous_freshness_status,
+                    payload,
+                ) = evt
 
                 if event_type == "item_created":
                     items[str(item_id)] = {
@@ -3561,25 +3624,26 @@ class PostgresUnitOfWork:
                     if key in items:
                         items[key]["status"] = "satisfied"
 
-                if event_type != "snapshot_created":
-                    max_revision = max(
-                        max_revision,
-                        int(payload.get("coverage_revision", 0))
-                        if isinstance(payload, dict) and "coverage_revision" in (payload or {})
-                        else 0,
-                    )
+                # Track max revision from all events except snapshot_created
+                # (snapshots are materialized separately, not via events)
+                if (
+                    payload
+                    and isinstance(payload, dict)
+                    and "coverage_revision" in payload
+                ):
+                    max_revision = max(max_revision, int(payload["coverage_revision"]))
 
             # Calculate overall status
             if not items:
                 overall_status = "unassessed"
             else:
                 satisfied = sum(
-                    1 for item in items.values()
+                    1
+                    for item in items.values()
                     if item["status"] in ("satisfied", "waived")
                 )
                 blocked = sum(
-                    1 for item in items.values()
-                    if item["status"] == "blocked"
+                    1 for item in items.values() if item["status"] == "blocked"
                 )
                 total = len(items)
                 if satisfied == total:
@@ -3600,7 +3664,7 @@ class PostgresUnitOfWork:
             if current_rev == 0:
                 current_rev = 1
 
-            ledger = {
+            return {
                 "schema_version": "coverage-ledger-v1",
                 "run_id": str(run_id),
                 "revision": current_rev,
@@ -3608,31 +3672,143 @@ class PostgresUnitOfWork:
                 "overall_status": overall_status,
             }
 
-            # Create a projection snapshot event
+    def record_projection_rebuilt(
+        self,
+        run_id,
+        idempotency_key,
+        source_event_id=None,
+    ):
+        """Record a projection rebuild event.
+
+        Command: creates a ``projection_rebuilt`` event that increments
+        the coverage revision.  Idempotent — duplicate idempotency keys
+        are silently deduplicated.
+
+        Returns the event row as a dict.
+        """
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+
+            # Get current revision
+            cur.execute(
+                "SELECT COALESCE(MAX(coverage_revision), 0) FROM coverage_events WHERE run_id=%s",
+                (run_id,),
+            )
+            current_rev = cur.fetchone()[0]
+            if current_rev == 0:
+                current_rev = 1
+
+            # Check idempotency
+            cur.execute(
+                """SELECT id, coverage_revision, prior_coverage_revision,
+                    event_type, item_id, item_type, subject_id,
+                    new_status, previous_status,
+                    new_freshness_status, previous_freshness_status,
+                    source_event_id, source_invocation_id,
+                    payload, idempotency_key, created_at
+                FROM coverage_events
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing:
+                keys = (
+                    "id",
+                    "coverage_revision",
+                    "prior_coverage_revision",
+                    "event_type",
+                    "item_id",
+                    "item_type",
+                    "subject_id",
+                    "new_status",
+                    "previous_status",
+                    "new_freshness_status",
+                    "previous_freshness_status",
+                    "source_event_id",
+                    "source_invocation_id",
+                    "payload",
+                    "idempotency_key",
+                    "created_at",
+                )
+                return dict(zip(keys, existing))
+
+            new_rev = current_rev + 1
+
             cur.execute(
                 """INSERT INTO coverage_events(
                     run_id, coverage_revision, prior_coverage_revision,
                     event_type, source_event_id,
                     payload, idempotency_key
                 ) VALUES(%s, %s, %s, 'projection_rebuilt', %s, %s, %s)
-                ON CONFLICT(run_id, idempotency_key) DO NOTHING
-                RETURNING id""",
+                RETURNING id, coverage_revision, prior_coverage_revision,
+                    event_type, item_id, item_type, subject_id,
+                    new_status, previous_status,
+                    new_freshness_status, previous_freshness_status,
+                    source_event_id, source_invocation_id,
+                    payload, idempotency_key, created_at""",
                 (
                     run_id,
-                    current_rev + 1,
+                    new_rev,
                     current_rev,
                     source_event_id,
-                    json.dumps({
-                        "item_count": len(items),
-                        "overall_status": overall_status,
-                        "source_event_id": str(source_event_id) if source_event_id else None,
-                        "coverage_revision": current_rev,
-                    }),
+                    json.dumps(
+                        {
+                            "coverage_revision": current_rev,
+                        }
+                    ),
                     idempotency_key,
                 ),
             )
+            row = cur.fetchone()
+            keys = (
+                "id",
+                "coverage_revision",
+                "prior_coverage_revision",
+                "event_type",
+                "item_id",
+                "item_type",
+                "subject_id",
+                "new_status",
+                "previous_status",
+                "new_freshness_status",
+                "previous_freshness_status",
+                "source_event_id",
+                "source_invocation_id",
+                "payload",
+                "idempotency_key",
+                "created_at",
+            )
+            result = dict(zip(keys, row))
 
-            return ledger
+            # Update run's current_coverage_revision
+            cur.execute(
+                "UPDATE research_runs SET current_coverage_revision=%s WHERE id=%s",
+                (new_rev, run_id),
+            )
+
+            return result
+
+    def rebuild_projection(
+        self,
+        run_id,
+        idempotency_key,
+        source_event_id=None,
+    ):
+        """Rebuild the current coverage projection from events.
+
+        Returns a ledger dict that can be materialized as a snapshot.
+
+        .. deprecated::
+            Use :meth:`compute_projection` for a pure query, then
+            :meth:`record_projection_rebuilt` to record the rebuild event.
+        """
+        ledger = self.compute_projection(run_id)
+        self.record_projection_rebuilt(
+            run_id,
+            idempotency_key=idempotency_key,
+            source_event_id=source_event_id,
+        )
+        return ledger
 
     def create_snapshot(
         self,
@@ -3658,8 +3834,13 @@ class PostgresUnitOfWork:
             existing = cur.fetchone()
             if existing:
                 keys = (
-                    "id", "run_id", "coverage_revision", "ledger",
-                    "content_sha256", "triggering_event_id", "created_at",
+                    "id",
+                    "run_id",
+                    "coverage_revision",
+                    "ledger",
+                    "content_sha256",
+                    "triggering_event_id",
+                    "created_at",
                 )
                 return dict(zip(keys, existing))
 
@@ -3681,8 +3862,13 @@ class PostgresUnitOfWork:
             )
             row = cur.fetchone()
             keys = (
-                "id", "run_id", "coverage_revision", "ledger",
-                "content_sha256", "triggering_event_id", "created_at",
+                "id",
+                "run_id",
+                "coverage_revision",
+                "ledger",
+                "content_sha256",
+                "triggering_event_id",
+                "created_at",
             )
             result = dict(zip(keys, row))
 
@@ -3707,8 +3893,13 @@ class PostgresUnitOfWork:
         if row is None:
             return None
         keys = (
-            "id", "run_id", "coverage_revision", "ledger",
-            "content_sha256", "triggering_event_id", "created_at",
+            "id",
+            "run_id",
+            "coverage_revision",
+            "ledger",
+            "content_sha256",
+            "triggering_event_id",
+            "created_at",
         )
         return dict(zip(keys, row))
 
@@ -3726,8 +3917,13 @@ class PostgresUnitOfWork:
         if row is None:
             return None
         keys = (
-            "id", "run_id", "coverage_revision", "ledger",
-            "content_sha256", "triggering_event_id", "created_at",
+            "id",
+            "run_id",
+            "coverage_revision",
+            "ledger",
+            "content_sha256",
+            "triggering_event_id",
+            "created_at",
         )
         return dict(zip(keys, row))
 
@@ -3764,12 +3960,23 @@ class PostgresUnitOfWork:
                 (*params, limit, offset),
             )
             keys = (
-                "id", "run_id", "coverage_revision", "prior_coverage_revision",
-                "event_type", "item_id", "item_type", "subject_id",
-                "new_status", "previous_status",
-                "new_freshness_status", "previous_freshness_status",
-                "source_event_id", "source_invocation_id",
-                "payload", "idempotency_key", "created_at",
+                "id",
+                "run_id",
+                "coverage_revision",
+                "prior_coverage_revision",
+                "event_type",
+                "item_id",
+                "item_type",
+                "subject_id",
+                "new_status",
+                "previous_status",
+                "new_freshness_status",
+                "previous_freshness_status",
+                "source_event_id",
+                "source_invocation_id",
+                "payload",
+                "idempotency_key",
+                "created_at",
             )
             return [dict(zip(keys, row)) for row in cur.fetchall()]
 
@@ -3790,12 +3997,23 @@ class PostgresUnitOfWork:
         if row is None:
             return None
         keys = (
-            "id", "run_id", "coverage_revision", "prior_coverage_revision",
-            "event_type", "item_id", "item_type", "subject_id",
-            "new_status", "previous_status",
-            "new_freshness_status", "previous_freshness_status",
-            "source_event_id", "source_invocation_id",
-            "payload", "idempotency_key", "created_at",
+            "id",
+            "run_id",
+            "coverage_revision",
+            "prior_coverage_revision",
+            "event_type",
+            "item_id",
+            "item_type",
+            "subject_id",
+            "new_status",
+            "previous_status",
+            "new_freshness_status",
+            "previous_freshness_status",
+            "source_event_id",
+            "source_invocation_id",
+            "payload",
+            "idempotency_key",
+            "created_at",
         )
         return dict(zip(keys, row))
 

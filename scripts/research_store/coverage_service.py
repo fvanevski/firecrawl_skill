@@ -207,7 +207,8 @@ class CoverageService:
 
     * ``create_items_from_spec`` — seed coverage items from a ResearchSpec.
     * ``apply_event`` — apply one coverage event (idempotent, stale-reject).
-    * ``rebuild_projection`` — rebuild current coverage from events.
+    * ``rebuild_projection`` — rebuild current coverage from events (pure query).
+    * ``record_projection_rebuilt`` — record a rebuild event (increments revision).
     * ``create_snapshot`` — materialize an immutable ledger snapshot.
     * ``current_projection`` — return the latest snapshot or rebuild.
     * ``list_events`` — query events by run, item, or type.
@@ -235,6 +236,10 @@ class CoverageService:
 
         This is the initial population step.  Each question, claim, and
         requirement becomes a coverage item with status ``unassessed``.
+
+        Identity: each returned CoverageItem uses the event ID as
+        ``coverage_item_id`` (event-centric identity).  The original
+        spec identifier is preserved in ``subject_id`` for lookups.
         """
         if not run_id:
             raise CoverageError("run_id is required")
@@ -365,6 +370,11 @@ class CoverageService:
 
         Stale-reject: the new coverage_revision must exceed the current
         coverage revision stored on ``research_runs``.
+
+        Status transitions are unrestricted — any status may transition
+        to any other status.  If a transition table becomes important,
+        it should be enforced at a higher level (e.g. in the orchestration
+        layer).
         """
         if not run_id:
             raise CoverageError("run_id is required")
@@ -398,25 +408,18 @@ class CoverageService:
     # Projection rebuilding
     # ------------------------------------------------------------------
 
-    def rebuild_projection(
+    def compute_projection(
         self,
         run_id: UUID,
-        *,
-        idempotency_key: str | None = None,
-        source_event_id: UUID | None = None,
     ) -> CoverageLedger:
-        """Rebuild the current coverage projection from events.
+        """Compute the current coverage projection from events.
 
-        Deterministic: events are processed in
-        ``(coverage_revision, id)`` order.  The resulting ledger is
-        materialized as a snapshot.
+        Pure query — no side effects.  Events are processed in
+        ``(coverage_revision, id)`` order to produce a deterministic
+        ledger.
         """
         with self.uow_factory() as uow:
-            ledger = uow.coverage.rebuild_projection(
-                run_id,
-                idempotency_key=idempotency_key or f"rebuild:{run_id}",
-                source_event_id=source_event_id,
-            )
+            ledger = uow.coverage.compute_projection(run_id)
         return CoverageLedger(
             schema_version="coverage-ledger-v1",
             run_id=run_id,
@@ -457,6 +460,93 @@ class CoverageService:
             ),
             mechanical_failures=tuple(),
         )
+
+    def rebuild_projection(
+        self,
+        run_id: UUID,
+        *,
+        idempotency_key: str | None = None,
+        source_event_id: UUID | None = None,
+    ) -> CoverageLedger:
+        """Rebuild the current coverage projection from events.
+
+        Pure query — no side effects.  Events are processed in
+        ``(coverage_revision, id)`` order to produce a deterministic
+        ledger.
+
+        To record a rebuild event that increments the coverage revision,
+        call :meth:`record_projection_rebuilt` explicitly.
+        """
+        with self.uow_factory() as uow:
+            ledger = uow.coverage.compute_projection(run_id)
+        return CoverageLedger(
+            schema_version="coverage-ledger-v1",
+            run_id=run_id,
+            revision=ledger["revision"],
+            items=tuple(
+                CoverageItem(
+                    coverage_item_id=UUID(str(item["coverage_item_id"])),
+                    item_type=_str_to_item_type(item["item_type"]),
+                    subject_id=item["subject_id"],
+                    status=_str_to_coverage_status(item["status"]),
+                    candidate_ids=tuple(
+                        UUID(str(cid)) for cid in item.get("candidate_ids", [])
+                    ),
+                    snapshot_ids=tuple(
+                        UUID(str(sid)) for sid in item.get("snapshot_ids", [])
+                    ),
+                    passage_ids=tuple(
+                        UUID(str(pid)) for pid in item.get("passage_ids", [])
+                    ),
+                    independent_source_count=item.get("independent_source_count", 0),
+                    required_independent_source_count=item.get(
+                        "required_independent_source_count", 0
+                    ),
+                    authority_classes_present=tuple(
+                        item.get("authority_classes_present", [])
+                    ),
+                    freshness_status=_str_to_freshness_status(
+                        item.get("freshness_status", "not_applicable")
+                    ),
+                    remaining_gap=item.get("remaining_gap", ""),
+                    confidence=item.get("confidence", 0.0),
+                    mechanical_failure_ids=tuple(),
+                )
+                for item in ledger["items"]
+            ),
+            overall_status=_str_to_overall_status(
+                ledger.get("overall_status", "unassessed")
+            ),
+            mechanical_failures=tuple(),
+        )
+
+    def record_projection_rebuilt(
+        self,
+        run_id: UUID,
+        *,
+        idempotency_key: str | None = None,
+        source_event_id: UUID | None = None,
+    ) -> CoverageEvent:
+        """Record a projection rebuild event.
+
+        Command: creates a ``projection_rebuilt`` event that increments
+        the coverage revision.  Idempotent — duplicate idempotency keys
+        are silently deduplicated and return the existing event.
+        """
+        if not run_id:
+            raise CoverageError("run_id is required")
+        if not idempotency_key:
+            idempotency_key = f"rebuild:{run_id}"
+        if not idempotency_key.strip():
+            raise CoverageError("idempotency_key must be nonempty")
+
+        with self.uow_factory() as uow:
+            result = uow.coverage.record_projection_rebuilt(
+                run_id,
+                idempotency_key=idempotency_key,
+                source_event_id=source_event_id,
+            )
+        return CoverageEvent.from_mapping(result)
 
     # ------------------------------------------------------------------
     # Snapshots
