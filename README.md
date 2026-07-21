@@ -142,3 +142,5 @@ rtk proxy env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
 Run `scripts/test_research_store_integration.py` only against an explicitly named disposable PostgreSQL target whose name contains a standalone `test` segment, and set `RESEARCH_STORE_TEST_ALLOW_RESET` to that exact name. Its guarded session setup drops the public schema and covers populated migrations, database concurrency, derivations, retry ledgers, leases, runs, budget snapshots, and manifest binding. Use a separate recorded disposable-service campaign for wrapper preflight/fail-closed behavior, Valkey loss, damaged Qdrant rebuild, alias activation, and rollback proofs required before production.
 
 For the design invariants, read `references/research-store-architecture.md`. For deployment, migration, backup/restore, worker, indexing, and recovery procedures, read `references/research-store-operations.md`. For Catalog v5 manifests and semantic audits, read `references/catalog-v5.md`.
+The Phase 1 exit decision and its acceptance evidence are recorded in
+`references/phase-1-gate-report.md`.

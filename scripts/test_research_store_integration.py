@@ -10,6 +10,7 @@ from __future__ import annotations
 
 # ruff: noqa: E402 - load the sibling script package without installing it.
 
+from copy import deepcopy
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -35,6 +36,7 @@ from research_store.run_service import (
 )
 from research_store.legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from research_store.semantic_service import SemanticCallService
+from research_domain import load_model, schema_registry, serialize_model
 
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
@@ -336,6 +338,121 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             1,
         )
         assert artifact_id is not None and export_id is not None
+
+
+def test_phase1_gate_run_spec_and_transactional_rejection(service):
+    """Exercise the Phase 1 exit criteria through authoritative services."""
+    runs = ResearchRunService(service.uow_factory)
+    semantic = SemanticCallService(service.uow_factory)
+    agent_run = runs.create(
+        "Phase 1 gate agent-led run",
+        f"fr_phase1_agent_{uuid4().hex}",
+        execution_mode="agent_led",
+    )
+    local_run = runs.create(
+        "Phase 1 gate autonomous-local run",
+        f"fr_phase1_local_{uuid4().hex}",
+        execution_mode="autonomous_local",
+    )
+    assert agent_run.execution_mode == "agent_led"
+    assert local_run.execution_mode == "autonomous_local"
+
+    fixtures = json.loads(
+        (SCRIPTS.parent / "tests/fixtures/research_domain/valid.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    proposed_payload = deepcopy(fixtures["research-spec-v1"])
+    proposed_payload["research_spec_id"] = str(uuid4())
+    validated = load_model(proposed_payload)
+    canonical_payload = serialize_model(validated)
+    proposal = semantic.ingest_host_artifact(
+        {
+            "run_id": agent_run.id,
+            "run_revision": 0,
+            "stage": "planning",
+            "schema_name": "research-spec",
+            "schema_version": 1,
+            "artifact_type": "research_spec",
+            "idempotency_key": "phase1-gate:research-spec:proposal",
+        },
+        canonical_payload,
+        schema_registry()["research-spec-v1"],
+        actor_identifier="phase1-gate",
+    )
+    assert proposal.error == ""
+    assert proposal.value == canonical_payload
+
+    revised_payload = deepcopy(canonical_payload)
+    revised_payload["objective"] = "Confirm the versioned Phase 1 gate behavior."
+    revised_payload = serialize_model(load_model(revised_payload))
+    with service.uow_factory() as uow:
+        first_spec_id = uow.record_research_spec(
+            agent_run.id,
+            1,
+            "research-spec",
+            1,
+            canonical_payload,
+            "phase1-gate:research-spec:r1",
+        )
+        second_spec_id = uow.record_research_spec(
+            agent_run.id,
+            2,
+            "research-spec",
+            1,
+            revised_payload,
+            "phase1-gate:research-spec:r2",
+        )
+
+    before = runs.status(run_id=agent_run.id)
+    with pytest.raises(RunStateError, match="transition rejected"):
+        runs.transition(
+            agent_run.id,
+            "completed",
+            expected_revision=before.lifecycle_revision,
+            idempotency_key="phase1-gate:invalid-transition",
+            actor_type="phase1-gate",
+        )
+    after = runs.status(run_id=agent_run.id)
+    assert (after.state, after.lifecycle_revision) == (
+        before.state,
+        before.lifecycle_revision,
+    )
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT spec_revision,payload->>'objective',validation_status
+            FROM research_specs WHERE run_id=%s ORDER BY spec_revision""",
+            (agent_run.id,),
+        )
+        assert cursor.fetchall() == [
+            (1, canonical_payload["objective"], "valid"),
+            (2, revised_payload["objective"], "valid"),
+        ]
+        cursor.execute(
+            "SELECT research_spec_id FROM research_runs WHERE id=%s",
+            (agent_run.id,),
+        )
+        assert cursor.fetchone()[0] == second_spec_id
+        cursor.execute(
+            """SELECT validation_status FROM semantic_artifacts
+            WHERE id=%s""",
+            (UUID(proposal.provenance["semantic_artifact_id"]),),
+        )
+        assert cursor.fetchone()[0] == "valid"
+        cursor.execute(
+            """SELECT count(*) FROM research_run_transitions
+            WHERE run_id=%s""",
+            (agent_run.id,),
+        )
+        assert cursor.fetchone()[0] == 0
+        cursor.execute(
+            """SELECT count(*) FROM research_events
+            WHERE run_id=%s AND event_type <> 'run.created'""",
+            (agent_run.id,),
+        )
+        assert cursor.fetchone()[0] == 0
+    assert first_spec_id != second_spec_id
 
 
 def test_shadow_comparisons_are_queryable_append_only_and_do_not_mutate_run(service):
