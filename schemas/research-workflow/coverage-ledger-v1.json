@@ -1,0 +1,204 @@
+{
+  "$defs": {
+    "CoverageItem": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_classes_present": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "candidate_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "coverage_item_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "freshness_status": {
+          "enum": [
+            "satisfied",
+            "unsatisfied",
+            "uncertain",
+            "not_applicable"
+          ],
+          "type": "string"
+        },
+        "independent_source_count": {
+          "type": "integer"
+        },
+        "item_type": {
+          "enum": [
+            "question",
+            "claim",
+            "source_requirement",
+            "freshness_requirement",
+            "corroboration_requirement",
+            "contradiction_requirement"
+          ],
+          "type": "string"
+        },
+        "mechanical_failure_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "passage_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "remaining_gap": {
+          "type": "string"
+        },
+        "required_independent_source_count": {
+          "type": "integer"
+        },
+        "snapshot_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "missing",
+            "candidate_identified",
+            "acquired",
+            "partially_supported",
+            "supported",
+            "contradicted",
+            "qualified",
+            "satisfied",
+            "blocked",
+            "waived",
+            "unassessed"
+          ],
+          "type": "string"
+        },
+        "subject_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "coverage_item_id",
+        "item_type",
+        "subject_id",
+        "status",
+        "candidate_ids",
+        "snapshot_ids",
+        "passage_ids",
+        "independent_source_count",
+        "required_independent_source_count",
+        "authority_classes_present",
+        "freshness_status",
+        "remaining_gap",
+        "confidence",
+        "mechanical_failure_ids"
+      ],
+      "type": "object"
+    },
+    "MechanicalFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "type": "string"
+        },
+        "error_class": {
+          "type": "string"
+        },
+        "failure_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "degraded",
+            "failed",
+            "unavailable"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "failure_id",
+        "component",
+        "error_class",
+        "message",
+        "status",
+        "retryable"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/coverage-ledger-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/CoverageItem"
+      },
+      "type": "array"
+    },
+    "mechanical_failures": {
+      "items": {
+        "$ref": "#/$defs/MechanicalFailure"
+      },
+      "type": "array"
+    },
+    "overall_status": {
+      "enum": [
+        "insufficient",
+        "partial",
+        "sufficient",
+        "blocked",
+        "unassessed"
+      ],
+      "type": "string"
+    },
+    "revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "run_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "coverage-ledger-v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "revision",
+    "items",
+    "overall_status",
+    "mechanical_failures"
+  ],
+  "title": "CoverageLedger",
+  "type": "object"
+}

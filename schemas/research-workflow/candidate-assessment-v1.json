@@ -1,0 +1,146 @@
+{
+  "$defs": {
+    "FreshnessAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "satisfied",
+            "unsatisfied",
+            "uncertain",
+            "not_applicable"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "rationale"
+      ],
+      "type": "object"
+    },
+    "IndependenceAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "independent",
+            "dependent",
+            "uncertain",
+            "unassessed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "rationale"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/candidate-assessment-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+    },
+    "extraction_recommendation": {
+      "enum": [
+        "scrape",
+        "metadata_only",
+        "defer",
+        "reject"
+      ],
+      "type": "string"
+    },
+    "freshness_assessment": {
+      "$ref": "#/$defs/FreshnessAssessment"
+    },
+    "independence_assessment": {
+      "$ref": "#/$defs/IndependenceAssessment"
+    },
+    "priority": {
+      "maximum": 100,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "rationale": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "relevance": {
+      "enum": [
+        "high",
+        "medium",
+        "low",
+        "unrelated",
+        "uncertain"
+      ],
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "candidate-assessment-v1",
+      "type": "string"
+    },
+    "source_role": {
+      "enum": [
+        "primary",
+        "controlling",
+        "authoritative_secondary",
+        "independent_secondary",
+        "context_only",
+        "unsuitable",
+        "uncertain"
+      ],
+      "type": "string"
+    },
+    "target_claim_ids": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "target_question_ids": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "uncertainty": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "relevance",
+    "source_role",
+    "target_question_ids",
+    "target_claim_ids",
+    "freshness_assessment",
+    "independence_assessment",
+    "extraction_recommendation",
+    "priority",
+    "rationale",
+    "confidence",
+    "uncertainty"
+  ],
+  "title": "CandidateAssessment",
+  "type": "object"
+}

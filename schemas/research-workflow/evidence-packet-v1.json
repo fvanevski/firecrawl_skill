@@ -1,0 +1,342 @@
+{
+  "$defs": {
+    "ClaimEvidenceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "binding_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "claim_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "passage_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "relationship": {
+          "enum": [
+            "supports",
+            "contradicts",
+            "qualifies",
+            "context"
+          ],
+          "type": "string"
+        },
+        "uncertainty": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding_id",
+        "claim_id",
+        "passage_ids",
+        "relationship",
+        "confidence",
+        "uncertainty"
+      ],
+      "type": "object"
+    },
+    "EvidenceClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "semantic_status": {
+          "enum": [
+            "supported",
+            "contradicted",
+            "qualified",
+            "unsupported",
+            "uncertain",
+            "unassessed"
+          ],
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        },
+        "uncertainty": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "statement",
+        "semantic_status",
+        "uncertainty"
+      ],
+      "type": "object"
+    },
+    "EvidenceGroup": {
+      "additionalProperties": false,
+      "properties": {
+        "evaluated": {
+          "type": "boolean"
+        },
+        "group_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "passage_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "group_id",
+        "passage_ids",
+        "rationale",
+        "evaluated"
+      ],
+      "type": "object"
+    },
+    "EvidencePassage": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "chunk_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "passage_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "source_url": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "passage_id",
+        "candidate_id",
+        "snapshot_id",
+        "chunk_id",
+        "text",
+        "source_url"
+      ],
+      "type": "object"
+    },
+    "MechanicalFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "type": "string"
+        },
+        "error_class": {
+          "type": "string"
+        },
+        "failure_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "degraded",
+            "failed",
+            "unavailable"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "failure_id",
+        "component",
+        "error_class",
+        "message",
+        "status",
+        "retryable"
+      ],
+      "type": "object"
+    },
+    "RetrievalProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "component_errors": {
+          "items": {
+            "$ref": "#/$defs/MechanicalFailure"
+          },
+          "type": "array"
+        },
+        "executed_mode": {
+          "type": "string"
+        },
+        "mechanical_status": {
+          "enum": [
+            "succeeded",
+            "degraded",
+            "failed",
+            "unavailable"
+          ],
+          "type": "string"
+        },
+        "requested_mode": {
+          "type": "string"
+        },
+        "retrieval_event_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "selected_passage_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "retrieval_event_id",
+        "requested_mode",
+        "executed_mode",
+        "mechanical_status",
+        "component_errors",
+        "selected_passage_ids"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/evidence-packet-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "claim_evidence_bindings": {
+      "items": {
+        "$ref": "#/$defs/ClaimEvidenceBinding"
+      },
+      "type": "array"
+    },
+    "claims": {
+      "items": {
+        "$ref": "#/$defs/EvidenceClaim"
+      },
+      "type": "array"
+    },
+    "contradicting_groups": {
+      "items": {
+        "$ref": "#/$defs/EvidenceGroup"
+      },
+      "type": "array"
+    },
+    "corroborating_groups": {
+      "items": {
+        "$ref": "#/$defs/EvidenceGroup"
+      },
+      "type": "array"
+    },
+    "coverage_revision": {
+      "type": "integer"
+    },
+    "freshness_summary": {
+      "additionalProperties": {},
+      "type": "object"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "near_duplicate_groups": {
+      "items": {
+        "$ref": "#/$defs/EvidenceGroup"
+      },
+      "type": "array"
+    },
+    "passages": {
+      "items": {
+        "$ref": "#/$defs/EvidencePassage"
+      },
+      "type": "array"
+    },
+    "qualifying_groups": {
+      "items": {
+        "$ref": "#/$defs/EvidenceGroup"
+      },
+      "type": "array"
+    },
+    "research_spec_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "retrieval_provenance": {
+      "items": {
+        "$ref": "#/$defs/RetrievalProvenance"
+      },
+      "type": "array"
+    },
+    "run_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "evidence-packet-v1",
+      "type": "string"
+    },
+    "source_diversity_summary": {
+      "additionalProperties": {},
+      "type": "object"
+    },
+    "unresolved_items": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "research_spec_id",
+    "coverage_revision",
+    "claims",
+    "passages",
+    "claim_evidence_bindings",
+    "corroborating_groups",
+    "contradicting_groups",
+    "qualifying_groups",
+    "near_duplicate_groups",
+    "source_diversity_summary",
+    "freshness_summary",
+    "limitations",
+    "unresolved_items",
+    "retrieval_provenance"
+  ],
+  "title": "EvidencePacket",
+  "type": "object"
+}
