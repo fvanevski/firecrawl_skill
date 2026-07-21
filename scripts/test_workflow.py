@@ -7,8 +7,10 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
+from uuid import UUID, uuid4
 
 import pytest
+from research_store.semantic_service import SemanticCallService
 
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -30,6 +32,80 @@ catalog = load_module("firecrawl_invocation_catalog", SCRIPTS / "invocation_cata
 gateway = load_module("firecrawl_model_gateway", SCRIPTS / "model_gateway.py")
 research = load_module("firecrawl_research_workflow", SCRIPTS / "research_workflow.py")
 live_validation = load_module("firecrawl_live_validate", SCRIPTS / "live_validate.py")
+
+
+class MemorySemanticRepository:
+    def __init__(self):
+        self.calls = {}
+        self.artifacts = {}
+
+    def record_semantic_call(self, run_id, stage, provider, model, prompt_version, request, idempotency_key, **metadata):
+        existing = next((item for item in self.calls.values() if item["run_id"] == run_id and item["idempotency_key"] == idempotency_key), None)
+        candidate = {
+            "run_id": run_id, "stage": stage, "provider": provider, "model": model,
+            "prompt_version": prompt_version, "request": request,
+            "idempotency_key": idempotency_key, "status": metadata.get("status", "pending"),
+            "response_metadata": {}, "error": None, **metadata,
+        }
+        if existing:
+            assert {key: existing[key] for key in candidate} == candidate
+            return existing["id"]
+        call_id = uuid4()
+        self.calls[call_id] = {"id": call_id, **candidate}
+        return call_id
+
+    def finalize_semantic_call(self, run_id, call_id, status, response_metadata, error=None):
+        call = self.calls[call_id]
+        assert call["run_id"] == run_id
+        call.update(status=status, response_metadata=response_metadata, error=error)
+        return call_id
+
+    def annotate_semantic_call(self, run_id, call_id, metadata):
+        assert self.calls[call_id]["run_id"] == run_id
+        self.calls[call_id]["response_metadata"].update(metadata)
+        return call_id
+
+    def record_semantic_artifact(self, run_id, semantic_call_id, artifact_type, schema_name, schema_version, payload, idempotency_key, **metadata):
+        artifact_id = uuid4()
+        self.artifacts[artifact_id] = {
+            "id": artifact_id, "run_id": run_id, "semantic_call_id": semantic_call_id,
+            "artifact_type": artifact_type, "schema_name": schema_name,
+            "schema_version": schema_version, "payload": payload,
+            "idempotency_key": idempotency_key, **metadata,
+        }
+        return artifact_id
+
+    def get_semantic_call(self, run_id, call_id):
+        call = dict(self.calls[call_id])
+        assert call["run_id"] == run_id
+        call["artifacts"] = [item for item in self.artifacts.values() if item["semantic_call_id"] == call_id]
+        return call
+
+
+class MemorySemanticUow:
+    def __init__(self, repository):
+        self.runs = repository
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+def semantic_fixture():
+    repository = MemorySemanticRepository()
+    service = SemanticCallService(lambda: MemorySemanticUow(repository))
+    context = {
+        "run_id": uuid4(), "stage": "planning", "schema_name": "test-result",
+        "schema_version": 1, "artifact_type": "test_result",
+        "idempotency_key": f"semantic:{uuid4()}", "input_artifact_ids": [uuid4()],
+    }
+    schema = {
+        "type": "object", "additionalProperties": False,
+        "properties": {"result": {"type": "string"}}, "required": ["result"],
+    }
+    return repository, service, context, schema
 
 
 @pytest.fixture
@@ -939,6 +1015,160 @@ def test_v5_local_gateway_records_empty_reasoning_retry_and_provenance(monkeypat
     assert result.attempts[0]["finish_reason"] == "length"
     assert result.attempts[0]["reasoning_excerpt"]
     assert result.attempts[1]["structured_mode"] == "json_object"
+
+
+def test_semantic_gateway_persists_success_and_redacts_sensitive_data(monkeypatch):
+    repository, persistence, context, schema = semantic_fixture()
+
+    class Response:
+        status = 200
+        headers = {"x-request-id": "req-secret"}
+        def __init__(self, payload): self.payload = payload
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def read(self): return json.dumps(self.payload).encode()
+
+    transport_bodies = []
+    def fake_urlopen(request, timeout):
+        if request.full_url.endswith("/models"):
+            return Response({"data": [{"id": "chat", "max_model_len": 1000}]})
+        transport_bodies.append(request.data.decode())
+        return Response({
+            "id": "call-success", "model": "chat", "usage": {"completion_tokens": 4},
+            "choices": [{"finish_reason": "stop", "message": {
+                "content": json.dumps({"result": "https://example.test/?token=top-secret"})
+            }}],
+        })
+
+    monkeypatch.setattr(gateway, "urlopen", fake_urlopen)
+    result = gateway.call_structured(
+        "local", None, "Authorization: Bearer prompt-secret", "api_key=user-secret",
+        schema, max_attempts=1, prompt_version="test-v1",
+        semantic_persistence=persistence, semantic_context=context,
+    )
+    assert result.value["result"].endswith("token=[REDACTED]")
+    call = repository.calls[result.semantic_call_id]
+    assert call["status"] == "complete"
+    assert call["request"]["prompt_hash"] == result.provenance["prompt_hash"]
+    assert call["request"]["schema"] == schema
+    assert call["request"]["input_artifact_ids"] == [str(context["input_artifact_ids"][0])]
+    assert isinstance(call["request"]["input_token_estimate"], int)
+    assert call["response_metadata"]["provenance"]["usage"]["completion_tokens"] == 4
+    artifact = repository.artifacts[result.artifact_ids[-1]]
+    assert artifact["validation_status"] == "valid"
+    assert artifact["payload"]["result"].endswith("token=[REDACTED]")
+    persisted = json.dumps({"call": call, "artifact": artifact}, default=str)
+    assert "prompt-secret" not in persisted
+    assert "user-secret" not in persisted
+    assert "top-secret" not in persisted
+    assert "prompt-secret" not in transport_bodies[0]
+    assert "user-secret" not in transport_bodies[0]
+
+
+@pytest.mark.parametrize("failure", ["invalid-json", "schema", "timeout"])
+def test_semantic_gateway_persists_failure_paths(monkeypatch, failure):
+    repository, persistence, context, schema = semantic_fixture()
+
+    class Response:
+        status = 200
+        headers = {}
+        def __init__(self, payload): self.payload = payload
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def read(self): return json.dumps(self.payload).encode()
+
+    def fake_urlopen(request, timeout):
+        if request.full_url.endswith("/models"):
+            return Response({"data": [{"id": "chat"}]})
+        if failure == "timeout":
+            raise TimeoutError("Bearer timeout-secret")
+        content = "{broken" if failure == "invalid-json" else json.dumps({"wrong": "shape"})
+        return Response({"id": f"call-{failure}", "model": "chat", "choices": [{
+            "finish_reason": "stop", "message": {"content": content}
+        }]})
+
+    monkeypatch.setattr(gateway, "urlopen", fake_urlopen)
+    result = gateway.call_structured(
+        "local", None, "system", "user", schema, max_attempts=1,
+        semantic_persistence=persistence, semantic_context=context,
+    )
+    call = repository.calls[result.semantic_call_id]
+    assert result.value is None
+    assert call["status"] == "failed"
+    assert call["response_metadata"]["attempt_count"] == 1
+    assert "timeout-secret" not in json.dumps(call, default=str)
+    artifacts = [item for item in repository.artifacts.values() if item["semantic_call_id"] == result.semantic_call_id]
+    if failure == "schema":
+        assert len(artifacts) == 1
+        assert artifacts[0]["validation_status"] == "invalid"
+        assert artifacts[0]["validation_errors"]
+    else:
+        assert artifacts == []
+
+
+def test_semantic_fallback_is_explicit_and_keeps_both_calls(monkeypatch):
+    repository, persistence, context, schema = semantic_fixture()
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
+
+    class Response:
+        status = 200
+        headers = {}
+        def __init__(self, payload): self.payload = payload
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def read(self): return json.dumps(self.payload).encode()
+
+    def fake_urlopen(request, timeout):
+        if request.full_url.endswith("/models"):
+            return Response({"data": [{"id": "chat"}]})
+        if request.full_url.endswith("/chat/completions"):
+            return Response({"id": "local-invalid", "model": "chat", "choices": [{
+                "finish_reason": "stop", "message": {"content": "not-json"}
+            }]})
+        return Response({
+            "id": "response-fallback", "model": "gpt-test", "status": "completed",
+            "usage": {"output_tokens": 3}, "output_text": json.dumps({"result": "fallback"}),
+        })
+
+    monkeypatch.setattr(gateway, "urlopen", fake_urlopen)
+    monkeypatch.setitem(research.call_structured.__globals__, "urlopen", fake_urlopen)
+    result = research._structured(
+        "local", None, "system", "user", schema, "test-v1", max_output_tokens=10,
+        fallback_provider="openai", fallback_model="gpt-test",
+        semantic_persistence=persistence, semantic_context=context,
+    )
+    assert result.value == {"result": "fallback"}
+    assert len(repository.calls) == 2
+    primary = next(item for item in repository.calls.values() if item["provider"] == "local")
+    fallback = next(item for item in repository.calls.values() if item["provider"] == "openai")
+    assert primary["status"] == "failed"
+    assert primary["response_metadata"]["fallback"]["used"] is True
+    assert fallback["request"]["fallback_from_call_id"] == str(primary["id"])
+    assert fallback["response_metadata"]["provenance"]["fallback"]["used"] is True
+    assert result.provenance["fallback_from"]["provider"] == "local"
+
+
+def test_host_agent_artifacts_share_validation_and_do_not_fake_transport_metadata():
+    repository, persistence, context, schema = semantic_fixture()
+    valid = persistence.ingest_host_artifact(
+        context, {"result": "Bearer host-secret"}, schema, actor_identifier="codex"
+    )
+    assert valid.value == {"result": "Bearer [REDACTED]"}
+    call = repository.calls[UUID(valid.provenance["semantic_call_id"])]
+    artifact = repository.artifacts[UUID(valid.provenance["semantic_artifact_id"])]
+    assert call["provider"] == "host-agent"
+    assert call["model"] == ""
+    assert "endpoint_alias" not in call["request"]
+    assert "prompt_hash" not in call["request"]
+    assert call["response_metadata"]["transport_attempts"] == []
+    assert artifact["payload"] == {"result": "Bearer [REDACTED]"}
+
+    invalid_context = {**context, "idempotency_key": context["idempotency_key"] + ":invalid"}
+    invalid = persistence.ingest_host_artifact(invalid_context, {"wrong": "shape"}, schema)
+    invalid_artifact = repository.artifacts[UUID(invalid.provenance["semantic_artifact_id"])]
+    assert invalid.value is None
+    assert invalid.error
+    assert invalid_artifact["validation_status"] == "invalid"
 
 
 def test_v4_selective_purge_is_dry_run_and_removes_associated_events(fake_cli):
