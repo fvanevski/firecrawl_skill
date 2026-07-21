@@ -50,10 +50,21 @@ def service(tmp_path, prepared_database):
 
 @pytest.fixture(scope="session")
 def prepared_database():
-    """Prove a populated, multi-index v1 database upgrades without data loss."""
+    """Prove fresh and populated prior-head migrations without data loss."""
     require_disposable_database_reset(
         TEST_DSN, os.environ.get("RESEARCH_STORE_TEST_ALLOW_RESET", "")
     )
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute("DROP SCHEMA public CASCADE")
+        cursor.execute("CREATE SCHEMA public")
+    assert migrate(TEST_DSN) == 6
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT to_regclass('research_run_transitions'),
+            to_regclass('research_events'),to_regclass('semantic_artifacts')"""
+        )
+        assert all(cursor.fetchone())
+
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
@@ -106,8 +117,49 @@ def prepared_database():
                 (chunk_id, index_name),
             )
 
-    assert migrate(TEST_DSN) == 5
+    assert migrate(TEST_DSN, "0005_run_lifecycle") == 5
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """INSERT INTO research_runs(
+            original_request,query_plan,skill_version,retrieval_policy_version,
+            status,external_run_id)
+            VALUES('populated v5 run','{}','v5','v5','running',%s) RETURNING id""",
+            (f"fr_v5_{uuid4().hex}",),
+        )
+        legacy_run_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO research_runs(
+            original_request,query_plan,skill_version,retrieval_policy_version,
+            status,outcome,completed_at,external_run_id)
+            VALUES('populated partial v5 run','{}','v5','v5','complete','partial',
+              now(),%s) RETURNING id""",
+            (f"fr_v5_partial_{uuid4().hex}",),
+        )
+        legacy_partial_run_id = cursor.fetchone()[0]
+
+    # PostgreSQL transactional DDL leaves no partial v6 objects after an
+    # interrupted attempt, so the supported repair is a normal forward retry.
+    with pytest.raises(RuntimeError, match="synthetic interruption"):
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute("CREATE TABLE interrupted_v6_probe(id integer)")
+            raise RuntimeError("synthetic interruption")
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT to_regclass('interrupted_v6_probe')")
+        assert cursor.fetchone()[0] is None
+
+    assert migrate(TEST_DSN) == 6
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT state,lifecycle_revision,execution_mode,objective
+            FROM research_runs WHERE id=%s""",
+            (legacy_run_id,),
+        )
+        assert cursor.fetchone() == ("created", 0, "legacy", "populated v5 run")
+        cursor.execute(
+            "SELECT state,declared_outcome FROM research_runs WHERE id=%s",
+            (legacy_partial_run_id,),
+        )
+        assert cursor.fetchone() == ("partial", "partial")
         cursor.execute(
             """SELECT count(*),count(DISTINCT index_definition_id)
             FROM embedding_manifests WHERE chunk_id=%s""",
@@ -145,6 +197,213 @@ def prepared_database():
             "embedding_manifests_definition_key",
             "embedding_manifests_id_definition_key",
         ]
+
+
+def test_workflow_repository_records_are_idempotent_and_referential(service):
+    external_id = f"fr_workflow_{uuid4().hex}"
+    with service.uow_factory() as uow:
+        run_id = uow.start_run(
+            "workflow schema",
+            {"external_run_id": external_id, "execution_mode": "agent_led"},
+        )
+        external_invocation_id = f"fc_{uuid4().hex}"
+        invocation_id = uow.record_invocation(
+            run_id,
+            "search",
+            "invocation:create",
+            external_invocation_id=external_invocation_id,
+        )
+        assert invocation_id == uow.record_invocation(
+            run_id,
+            "search",
+            "invocation:create",
+            external_invocation_id=external_invocation_id,
+        )
+        event_id = uow.append_event(
+            run_id,
+            "workflow.created",
+            "system",
+            "event:created",
+            invocation_id=invocation_id,
+            payload={"source": "integration"},
+        )
+        assert event_id == uow.append_event(
+            run_id,
+            "workflow.created",
+            "system",
+            "event:created",
+            invocation_id=invocation_id,
+            payload={"source": "integration"},
+        )
+        spec_id = uow.record_research_spec(
+            run_id,
+            1,
+            "research-spec",
+            1,
+            {"schema_version": 1, "objective": "workflow schema"},
+            "spec:v1",
+        )
+        call_id = uow.record_semantic_call(
+            run_id,
+            "planning",
+            "host-agent",
+            "host",
+            "planning-v1",
+            {"spec_id": str(spec_id)},
+            "semantic-call:planning",
+            invocation_id=invocation_id,
+        )
+        artifact_id = uow.record_semantic_artifact(
+            run_id,
+            call_id,
+            "research_spec",
+            "research-spec",
+            1,
+            {"spec_id": str(spec_id)},
+            "semantic-artifact:spec",
+        )
+        export_id = uow.record_compatibility_export(
+            run_id,
+            "_meta.json",
+            5,
+            "a" * 64,
+            "complete",
+            "export:meta:v5",
+            invocation_id=invocation_id,
+            database_revision=0,
+        )
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT r.research_spec_id,count(DISTINCT i.id),count(DISTINCT e.id),
+            count(DISTINCT c.id),count(DISTINCT a.id),count(DISTINCT x.id)
+            FROM research_runs r
+            LEFT JOIN research_invocations i ON i.run_id=r.id
+            LEFT JOIN research_events e ON e.run_id=r.id
+            LEFT JOIN semantic_calls c ON c.run_id=r.id
+            LEFT JOIN semantic_artifacts a ON a.run_id=r.id
+            LEFT JOIN compatibility_exports x ON x.run_id=r.id
+            WHERE r.id=%s GROUP BY r.research_spec_id""",
+            (run_id,),
+        )
+        assert cursor.fetchone() == (spec_id, 1, 1, 1, 1, 1)
+        assert artifact_id is not None and export_id is not None
+
+
+def test_concurrent_event_idempotency_and_conflicting_reuse_rejection(service):
+    with service.uow_factory() as uow:
+        run_id = uow.start_run(
+            "concurrent events",
+            {"external_run_id": f"fr_event_{uuid4().hex}"},
+        )
+
+    def append_once(_attempt):
+        with service.uow_factory() as uow:
+            return uow.append_event(
+                run_id,
+                "workflow.created",
+                "system",
+                "event:created",
+                payload={"source": "concurrent-test"},
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = list(executor.map(append_once, range(2)))
+    assert first == second
+
+    with service.uow_factory() as uow:
+        with pytest.raises(ValueError, match="another event"):
+            uow.append_event(
+                run_id,
+                "workflow.changed",
+                "system",
+                "event:created",
+                payload={"source": "different-command"},
+            )
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT r.state,r.lifecycle_revision,count(e.id)
+            FROM research_runs r LEFT JOIN research_events e ON e.run_id=r.id
+            WHERE r.id=%s GROUP BY r.state,r.lifecycle_revision""",
+            (run_id,),
+        )
+        assert cursor.fetchone() == ("created", 0, 1)
+
+
+def test_transition_and_event_ledgers_are_append_only(service):
+    with service.uow_factory() as uow:
+        run_id = uow.start_run(
+            "append only", {"external_run_id": f"fr_append_{uuid4().hex}"}
+        )
+        event_id = uow.append_event(
+            run_id, "workflow.created", "system", "event:append-only"
+        )
+        transition_id = uow.append_run_transition(
+            run_id,
+            1,
+            "created",
+            "planning",
+            "transition:append-only",
+            "system",
+            "state-policy-v1",
+            triggering_event_id=event_id,
+        )["id"]
+        with pytest.raises(ValueError, match="another transition"):
+            uow.append_run_transition(
+                run_id,
+                1,
+                "created",
+                "planning",
+                "transition:append-only",
+                "different-actor",
+                "state-policy-v1",
+                triggering_event_id=event_id,
+            )
+
+    for table, row_id in (
+        ("research_events", event_id),
+        ("research_run_transitions", transition_id),
+    ):
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            with pytest.raises(Exception) as error:
+                cursor.execute(f"DELETE FROM {table} WHERE id=%s", (row_id,))
+            assert "append-only" in str(error.value)
+
+
+def test_workflow_constraints_reject_cross_run_and_invalid_hash(service):
+    with service.uow_factory() as uow:
+        first_run = uow.start_run(
+            "first", {"external_run_id": f"fr_first_{uuid4().hex}"}
+        )
+        first_invocation = uow.record_invocation(
+            first_run, "search", "first:invocation"
+        )
+    with service.uow_factory() as uow:
+        second_run = uow.start_run(
+            "second", {"external_run_id": f"fr_second_{uuid4().hex}"}
+        )
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        with pytest.raises(Exception) as cross_run:
+            cursor.execute(
+                """INSERT INTO research_events(
+                run_id,invocation_id,event_type,actor_type,run_revision,idempotency_key)
+                VALUES(%s,%s,'invalid.cross_run','test',0,'cross-run')""",
+                (second_run, first_invocation),
+            )
+        assert "research_events_invocation_id_run_id_fkey" in str(cross_run.value)
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        with pytest.raises(Exception) as bad_hash:
+            cursor.execute(
+                """INSERT INTO research_specs(
+                run_id,spec_revision,schema_name,schema_version,payload,content_sha256,
+                validation_status,idempotency_key)
+                VALUES(%s,1,'research-spec',1,'{}','not-a-hash','valid','bad-hash')""",
+                (second_run,),
+            )
+        assert "research_specs_content_sha256_check" in str(bad_hash.value)
 
 
 def test_firecrawl_result_versioning_and_transactional_index_jobs(service):

@@ -149,7 +149,7 @@ rtk proxy "<skill-root>/scripts/research-db" index-prune --dry-run
 
 Initialize with `research-db migrate`, then use `research-db ingest-ready` for the writable-store preflight. Persistence `on` runs that preflight before Firecrawl acquisition. Treat `doctor` as read-only: it reports schema, blob, worker, job, active-index, Qdrant coverage, and model-service health without creating or repairing anything. Import old scratch trees with `import-scratch --dry-run` before applying the idempotent import. Use `rederive` to rebuild parser/chunker derivations from retained blob bytes, and `export-invocation fc_<uuid>` to reconstruct `_corpus.json` after an interrupted export.
 
-Read `references/research-store-architecture.md` for boundaries and consistency rules. Read `references/research-store-operations.md` before deploying the worker, changing an embedding definition, migrating, restoring, rebuilding, pruning, or running live fixtures.
+Read `references/research-store-architecture.md` for boundaries and consistency rules. Read `references/research-store-operations.md` before deploying the worker, changing an embedding definition, migrating, restoring, rebuilding, pruning, or running live fixtures. Read `references/workflow-state-schema.md` for the authoritative workflow tables, data dictionary, idempotency scopes, and v6 forward-repair procedure.
 
 ## Scripts
 

@@ -4,7 +4,7 @@
 
 | Component | Role | Recovery rule |
 | --- | --- | --- |
-| PostgreSQL | Authoritative sources, snapshots, derivations, chunks, runs, batches, retrieval events, embedding manifests, and jobs | Restore first; never infer corpus truth from Qdrant or Valkey. |
+| PostgreSQL | Authoritative sources, snapshots, derivations, chunks, workflow runs and ledgers, batches, retrieval events, semantic provenance, compatibility-export records, embedding manifests, and jobs | Restore first; never infer corpus or workflow truth from Qdrant, Valkey, or filesystem exports. |
 | Blob root | Immutable, content-addressed raw payload bytes referenced by snapshots | Restore with PostgreSQL at one recovery boundary; report unreferenced hashes before bounded cleanup. |
 | Qdrant | Rebuildable dense-retrieval projection | Rebuild a versioned physical collection, verify it, then switch the active alias. |
 | Valkey | Best-effort worker wakeups and transient cache | Lose or clear it safely; the worker recovers PostgreSQL jobs by polling. |
@@ -35,6 +35,13 @@ Agent
 ```
 
 Commit corpus rows, batch provenance, manifests, and indexing jobs together. Treat blob writes that precede a rolled-back transaction as reportable orphans, not as corpus records. Use per-asset savepoints so one failed result does not erase retained siblings; record the failure and return nonzero because enabled persistence is fail-closed.
+
+Workflow state uses the same authority boundary. The v6 schema provides one
+current state and lifecycle revision plus append-only transition and event
+ledgers; the follow-on `ResearchRunService` owns atomic transition policy and
+state mutation. Structured specs and semantic artifacts retain schema versions
+and content hashes; compatibility exports record their source-state revision
+and remain regenerable rather than authoritative.
 
 ## Identity and derivation versioning
 

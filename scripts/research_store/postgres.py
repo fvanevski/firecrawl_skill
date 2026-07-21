@@ -10,6 +10,14 @@ from uuid import UUID
 from .domain import BlobReference, IngestRequest, IngestResult
 
 
+def _canonical_json(value) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _json_sha256(value) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
 def connect(database_url: str):
     try:
         import psycopg
@@ -561,8 +569,9 @@ class PostgresUnitOfWork:
         with self.connection.cursor() as cur:
             cur.execute(
                 """INSERT INTO research_runs(original_request,query_plan,skill_version,llm_model,
-                retrieval_policy_version,status,external_run_id,catalog_pointer)
-                VALUES(%s,%s,%s,%s,%s,'running',%s,%s)
+                retrieval_policy_version,status,external_run_id,catalog_pointer,state,
+                execution_mode,objective,budget_policy_version,metadata)
+                VALUES(%s,%s,%s,%s,%s,'running',%s,%s,'created',%s,%s,%s,%s)
                 ON CONFLICT(external_run_id) DO UPDATE
                 SET external_run_id=excluded.external_run_id
                 RETURNING id""",
@@ -574,9 +583,396 @@ class PostgresUnitOfWork:
                     metadata.get("policy_version"),
                     metadata.get("external_run_id"),
                     metadata.get("catalog_pointer"),
+                    metadata.get("execution_mode", "agent_led"),
+                    original_request,
+                    metadata.get("budget_policy_version"),
+                    _canonical_json(metadata.get("metadata", {})),
                 ),
             )
             return cur.fetchone()[0]
+
+    @staticmethod
+    def _lock_workflow_run(cur, run_id):
+        cur.execute(
+            """SELECT state,lifecycle_revision FROM research_runs
+            WHERE id=%s FOR UPDATE""",
+            (run_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return row
+
+    def append_run_transition(
+        self,
+        run_id,
+        lifecycle_revision,
+        prior_state,
+        next_state,
+        idempotency_key,
+        actor_type,
+        policy_version,
+        *,
+        actor_identifier=None,
+        triggering_event_id=None,
+        semantic_proposal_id=None,
+        validation_result=None,
+        error=None,
+    ):
+        """Append one immutable ledger row without applying state-machine policy."""
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+            validation_json = _canonical_json(validation_result or {})
+            cur.execute(
+                """SELECT id,lifecycle_revision,prior_state,next_state,
+                triggering_event_id,actor_type,actor_identifier,policy_version,
+                semantic_proposal_id,validation_result,error
+                FROM research_run_transitions
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                expected = (
+                    lifecycle_revision,
+                    prior_state,
+                    next_state,
+                    triggering_event_id,
+                    actor_type,
+                    actor_identifier,
+                    policy_version,
+                    semantic_proposal_id,
+                    json.loads(validation_json),
+                    error,
+                )
+                if existing[1:] != expected:
+                    raise ValueError("idempotency key was used for another transition")
+                return {
+                    "id": existing[0],
+                    "lifecycle_revision": existing[1],
+                    "prior_state": existing[2],
+                    "next_state": existing[3],
+                    "reused": True,
+                }
+            cur.execute(
+                """INSERT INTO research_run_transitions(
+                run_id,lifecycle_revision,prior_state,next_state,triggering_event_id,
+                actor_type,actor_identifier,policy_version,semantic_proposal_id,
+                validation_result,idempotency_key,error)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    run_id,
+                    lifecycle_revision,
+                    prior_state,
+                    next_state,
+                    triggering_event_id,
+                    actor_type,
+                    actor_identifier,
+                    policy_version,
+                    semantic_proposal_id,
+                    validation_json,
+                    idempotency_key,
+                    error,
+                ),
+            )
+            transition_id = cur.fetchone()[0]
+            return {
+                "id": transition_id,
+                "lifecycle_revision": lifecycle_revision,
+                "prior_state": prior_state,
+                "next_state": next_state,
+                "reused": False,
+            }
+
+    def record_invocation(
+        self,
+        run_id,
+        operation,
+        idempotency_key,
+        *,
+        parent_invocation_id=None,
+        external_invocation_id=None,
+        status="pending",
+        input_payload=None,
+        metadata=None,
+    ):
+        with self.connection.cursor() as cur:
+            _state, revision = self._lock_workflow_run(cur, run_id)
+            input_json = _canonical_json(input_payload or {})
+            metadata_json = _canonical_json(metadata or {})
+            cur.execute(
+                """SELECT id,parent_invocation_id,external_invocation_id,operation,
+                status,input,metadata FROM research_invocations
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                expected = (
+                    parent_invocation_id,
+                    external_invocation_id,
+                    operation,
+                    status,
+                    json.loads(input_json),
+                    json.loads(metadata_json),
+                )
+                if existing[1:] != expected:
+                    raise ValueError("idempotency key was used for another invocation")
+                return existing[0]
+            cur.execute(
+                """INSERT INTO research_invocations(
+                run_id,parent_invocation_id,external_invocation_id,operation,status,
+                lifecycle_revision,idempotency_key,input,metadata)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id""",
+                (
+                    run_id,
+                    parent_invocation_id,
+                    external_invocation_id,
+                    operation,
+                    status,
+                    revision,
+                    idempotency_key,
+                    input_json,
+                    metadata_json,
+                ),
+            )
+            return cur.fetchone()[0]
+
+    def append_event(
+        self,
+        run_id,
+        event_type,
+        actor_type,
+        idempotency_key,
+        *,
+        invocation_id=None,
+        actor_identifier=None,
+        payload=None,
+    ):
+        with self.connection.cursor() as cur:
+            _state, revision = self._lock_workflow_run(cur, run_id)
+            payload_json = _canonical_json(payload or {})
+            cur.execute(
+                """SELECT id,invocation_id,event_type,actor_type,actor_identifier,payload
+                FROM research_events
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                expected = (
+                    invocation_id,
+                    event_type,
+                    actor_type,
+                    actor_identifier,
+                    json.loads(payload_json),
+                )
+                if existing[1:] != expected:
+                    raise ValueError("idempotency key was used for another event")
+                return existing[0]
+            cur.execute(
+                """INSERT INTO research_events(
+                run_id,invocation_id,event_type,actor_type,actor_identifier,payload,
+                run_revision,idempotency_key)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id,event_type,run_revision""",
+                (
+                    run_id,
+                    invocation_id,
+                    event_type,
+                    actor_type,
+                    actor_identifier,
+                    payload_json,
+                    revision,
+                    idempotency_key,
+                ),
+            )
+            event_id, stored_type, stored_revision = cur.fetchone()
+            if (stored_type, stored_revision) != (event_type, revision):
+                raise ValueError("idempotency key was used for another event")
+            return event_id
+
+    def record_research_spec(
+        self,
+        run_id,
+        spec_revision,
+        schema_name,
+        schema_version,
+        payload,
+        idempotency_key,
+        *,
+        validation_status="valid",
+        validation_errors=None,
+    ):
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+            digest = _json_sha256(payload)
+            cur.execute(
+                """INSERT INTO research_specs(
+                run_id,spec_revision,schema_name,schema_version,payload,content_sha256,
+                validation_status,validation_errors,idempotency_key)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT(run_id,idempotency_key) DO UPDATE
+                  SET idempotency_key=excluded.idempotency_key
+                RETURNING id,spec_revision,content_sha256""",
+                (
+                    run_id,
+                    spec_revision,
+                    schema_name,
+                    schema_version,
+                    _canonical_json(payload),
+                    digest,
+                    validation_status,
+                    _canonical_json(validation_errors or []),
+                    idempotency_key,
+                ),
+            )
+            spec_id, stored_revision, stored_digest = cur.fetchone()
+            if (stored_revision, stored_digest) != (spec_revision, digest):
+                raise ValueError("idempotency key was used for another research spec")
+            cur.execute(
+                "UPDATE research_runs SET research_spec_id=%s WHERE id=%s",
+                (spec_id, run_id),
+            )
+            return spec_id
+
+    def record_semantic_call(
+        self,
+        run_id,
+        stage,
+        provider,
+        model,
+        prompt_version,
+        request,
+        idempotency_key,
+        *,
+        invocation_id=None,
+        model_revision="",
+        status="pending",
+    ):
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+            digest = _json_sha256(request)
+            cur.execute(
+                """INSERT INTO semantic_calls(
+                run_id,invocation_id,stage,provider,model,model_revision,prompt_version,
+                input_sha256,request,status,idempotency_key)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT(run_id,idempotency_key) DO UPDATE
+                  SET idempotency_key=excluded.idempotency_key
+                RETURNING id,stage,input_sha256""",
+                (
+                    run_id,
+                    invocation_id,
+                    stage,
+                    provider,
+                    model,
+                    model_revision,
+                    prompt_version,
+                    digest,
+                    _canonical_json(request),
+                    status,
+                    idempotency_key,
+                ),
+            )
+            call_id, stored_stage, stored_digest = cur.fetchone()
+            if (stored_stage, stored_digest) != (stage, digest):
+                raise ValueError("idempotency key was used for another semantic call")
+            return call_id
+
+    def record_semantic_artifact(
+        self,
+        run_id,
+        semantic_call_id,
+        artifact_type,
+        schema_name,
+        schema_version,
+        payload,
+        idempotency_key,
+        *,
+        validation_status="valid",
+        validation_errors=None,
+    ):
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+            digest = _json_sha256(payload)
+            cur.execute(
+                """INSERT INTO semantic_artifacts(
+                run_id,semantic_call_id,artifact_type,schema_name,schema_version,payload,
+                content_sha256,validation_status,validation_errors,idempotency_key)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT(semantic_call_id,idempotency_key) DO UPDATE
+                  SET idempotency_key=excluded.idempotency_key
+                RETURNING id,artifact_type,content_sha256""",
+                (
+                    run_id,
+                    semantic_call_id,
+                    artifact_type,
+                    schema_name,
+                    schema_version,
+                    _canonical_json(payload),
+                    digest,
+                    validation_status,
+                    _canonical_json(validation_errors or []),
+                    idempotency_key,
+                ),
+            )
+            artifact_id, stored_type, stored_digest = cur.fetchone()
+            if (stored_type, stored_digest) != (artifact_type, digest):
+                raise ValueError("idempotency key was used for another semantic artifact")
+            return artifact_id
+
+    def record_compatibility_export(
+        self,
+        run_id,
+        export_type,
+        export_schema_version,
+        source_state_sha256,
+        status,
+        idempotency_key,
+        *,
+        invocation_id=None,
+        database_revision=None,
+        event_cursor=None,
+        blob_uri=None,
+        filesystem_path=None,
+        error=None,
+        metadata=None,
+    ):
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+            cur.execute(
+                """INSERT INTO compatibility_exports(
+                run_id,invocation_id,export_type,export_schema_version,database_revision,
+                event_cursor,source_state_sha256,blob_uri,filesystem_path,status,error,
+                metadata,idempotency_key,completed_at)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                  CASE WHEN %s IN ('complete','failed') THEN now() ELSE NULL END)
+                ON CONFLICT(run_id,idempotency_key) DO UPDATE
+                  SET idempotency_key=excluded.idempotency_key
+                RETURNING id,export_type,source_state_sha256""",
+                (
+                    run_id,
+                    invocation_id,
+                    export_type,
+                    export_schema_version,
+                    database_revision,
+                    event_cursor,
+                    source_state_sha256,
+                    blob_uri,
+                    filesystem_path,
+                    status,
+                    error,
+                    _canonical_json(metadata or {}),
+                    idempotency_key,
+                    status,
+                ),
+            )
+            export_id, stored_type, stored_hash = cur.fetchone()
+            if (stored_type, stored_hash) != (export_type, source_state_sha256):
+                raise ValueError("idempotency key was used for another export")
+            return export_id
 
     def link_run_asset(self, external_run_id, snapshot_id, role="acquired", metadata=None):
         with self.connection.cursor() as cur:
