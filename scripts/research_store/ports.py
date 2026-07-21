@@ -117,7 +117,39 @@ class SearchResponseRepository(Protocol):
     ) -> BinaryIO: ...
 
 
-class ResearchRunRepository(SemanticCallRepository, SearchResponseRepository, Protocol):
+class CandidateRepository(Protocol):
+    def record_response_candidates(
+        self,
+        run_id: UUID,
+        search_response_id: UUID,
+        blob_store: BlobStore,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+    ) -> list[dict[str, Any]]: ...
+    def get_candidate(
+        self, candidate_id: UUID, run_id: UUID | None = None
+    ) -> dict[str, Any]: ...
+    def list_candidates(
+        self,
+        run_id: UUID,
+        *,
+        domain: str | None = None,
+        min_recurrence: int | None = None,
+        duplicate_group_id: UUID | None = None,
+    ) -> list[dict[str, Any]]: ...
+    def list_candidate_occurrences(
+        self, candidate_id: UUID, run_id: UUID | None = None
+    ) -> list[dict[str, Any]]: ...
+    def assign_duplicate_group(
+        self, candidate_ids: list[UUID], group_id: UUID | None = None, run_id: UUID | None = None
+    ) -> UUID: ...
+
+
+class ResearchRunRepository(
+    SemanticCallRepository, SearchResponseRepository, CandidateRepository, Protocol
+):
+
 
 
     def start_run(self, original_request: str, metadata: dict[str, Any]) -> UUID: ...
@@ -294,6 +326,7 @@ class UnitOfWork(AbstractContextManager, Protocol):
     chunks: ChunkRepository
     runs: ResearchRunRepository
     search_responses: SearchResponseRepository
+    candidates: CandidateRepository
     retrieval_events: RetrievalEventRepository
     index_jobs: IndexJobRepository
 

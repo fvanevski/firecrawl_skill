@@ -8,8 +8,10 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
-from .domain import BlobReference, IngestRequest, IngestResult, RawSearchResponse, utcnow
+from .domain import BlobReference, IngestRequest, IngestResult, RawSearchResponse, SearchCandidate, CandidateOccurrence, utcnow
 from .parsing import parse_raw_search_response
+from .url import canonicalize_candidate_url
+
 
 
 try:
@@ -114,7 +116,8 @@ class PostgresUnitOfWork:
         self.connection = connect(self.database_url)
         self.sources = self.snapshots = self.documents = self.chunks = self.runs = (
             self.retrieval_events
-        ) = self.index_jobs = self.search_responses = self
+        ) = self.index_jobs = self.search_responses = self.candidates = self
+
 
         return self
 
@@ -2017,6 +2020,382 @@ class PostgresUnitOfWork:
         resp = self.get_search_response(response_id, run_id=run_id)
         sha256_digest = resp["raw_blob_sha256"]
         return blob_store.open(sha256_digest)
+
+    def record_response_candidates(
+        self,
+        run_id,
+        search_response_id,
+        blob_store,
+        *,
+        plan_id=None,
+        plan_query_id=None,
+    ):
+        """Extract and persist search candidates and ranked occurrences from a search response."""
+        run_id = UUID(str(run_id))
+        search_response_id = UUID(str(search_response_id))
+        if plan_id is not None:
+            plan_id = UUID(str(plan_id))
+        if plan_query_id is not None:
+            plan_query_id = UUID(str(plan_query_id))
+
+        resp = self.get_search_response(search_response_id, run_id=run_id)
+        if plan_id is None and resp.get("plan_id") is not None:
+            plan_id = resp["plan_id"]
+        if plan_query_id is None and resp.get("plan_query_id") is not None:
+            plan_query_id = resp["plan_query_id"]
+
+        query_text = resp["query_text"]
+        backend = resp["backend"]
+
+        raw_blob_sha = resp["raw_blob_sha256"]
+        with blob_store.open(raw_blob_sha) as handle:
+            raw_bytes = handle.read()
+
+        try:
+            payload_data = json.loads(raw_bytes.decode("utf-8"))
+        except Exception:
+            payload_data = {}
+
+        items = []
+        if isinstance(payload_data, list):
+            items = payload_data
+        elif isinstance(payload_data, dict):
+            for key in ("data", "results", "candidates", "items"):
+                if isinstance(payload_data.get(key), list):
+                    items = payload_data[key]
+                    break
+
+        occurrences_created = []
+
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+
+            for idx, item in enumerate(items, start=1):
+                raw_url = None
+                title = None
+                snippet = None
+                pub_date = None
+                date_signals = {}
+                backend_meta = {}
+
+                if isinstance(item, dict):
+                    raw_url = item.get("url") or item.get("link") or item.get("target_url")
+                    title = item.get("title") or item.get("name")
+                    snippet = (
+                        item.get("snippet")
+                        or item.get("description")
+                        or item.get("content")
+                        or item.get("markdown")
+                    )
+                    pub_date = (
+                        item.get("published_at")
+                        or item.get("publishedDate")
+                        or item.get("date")
+                    )
+                    if pub_date:
+                        date_signals["published_date"] = str(pub_date)
+                    backend_meta = {
+                        k: v
+                        for k, v in item.items()
+                        if k
+                        not in (
+                            "url",
+                            "link",
+                            "title",
+                            "snippet",
+                            "description",
+                            "content",
+                            "markdown",
+                        )
+                    }
+                elif isinstance(item, str):
+                    raw_url = item
+
+                if not raw_url or not isinstance(raw_url, str) or not raw_url.strip():
+                    continue
+
+                try:
+                    canonical_url, redacted_orig_url = canonicalize_candidate_url(
+                        raw_url
+                    )
+                except ValueError:
+                    continue
+
+                canonical_sha = hashlib.sha256(canonical_url.encode()).hexdigest()
+                domain = urlsplit(canonical_url).hostname or "unknown"
+
+                cur.execute(
+                    """SELECT id, recurrence_count, title, snippet, date_signals, backend_metadata
+                       FROM search_candidates
+                       WHERE run_id=%s AND canonical_url_sha256=%s""",
+                    (run_id, canonical_sha),
+                )
+                cand_row = cur.fetchone()
+                now_dt = utcnow()
+
+                if cand_row is not None:
+                    (
+                        cand_id,
+                        rec_count,
+                        ex_title,
+                        ex_snippet,
+                        ex_dates,
+                        ex_backend_meta,
+                    ) = cand_row
+                    new_rec_count = rec_count + 1
+                    updated_title = title or ex_title
+                    updated_snippet = snippet or ex_snippet
+                    merged_dates = {**(ex_dates or {}), **date_signals}
+                    merged_backend_meta = {**(ex_backend_meta or {}), **backend_meta}
+
+                    cur.execute(
+                        """UPDATE search_candidates
+                           SET recurrence_count=%s,
+                               last_seen_at=%s,
+                               title=%s,
+                               snippet=%s,
+                               date_signals=%s,
+                               backend_metadata=%s
+                           WHERE id=%s AND run_id=%s""",
+                        (
+                            new_rec_count,
+                            now_dt,
+                            updated_title,
+                            updated_snippet,
+                            json.dumps(merged_dates),
+                            json.dumps(merged_backend_meta),
+                            cand_id,
+                            run_id,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """INSERT INTO search_candidates(
+                            run_id, canonical_url, canonical_url_sha256, original_url,
+                            title, snippet, domain, backend, date_signals, backend_metadata,
+                            recurrence_count, first_seen_at, last_seen_at, created_at
+                        ) VALUES (
+                            %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s,
+                            1, %s, %s, %s
+                        ) RETURNING id""",
+                        (
+                            run_id,
+                            canonical_url,
+                            canonical_sha,
+                            redacted_orig_url,
+                            title,
+                            snippet,
+                            domain,
+                            backend,
+                            json.dumps(date_signals),
+                            json.dumps(backend_meta),
+                            now_dt,
+                            now_dt,
+                            now_dt,
+                        ),
+                    )
+                    cand_id = cur.fetchone()[0]
+
+                raw_item_dict = item if isinstance(item, dict) else {"url": raw_url}
+
+                cur.execute(
+                    """INSERT INTO candidate_occurrences(
+                        candidate_id, run_id, search_response_id, plan_id, plan_query_id,
+                        rank, query_text, original_url, title, snippet, raw_item, discovered_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s
+                    ) ON CONFLICT (search_response_id, rank) DO UPDATE
+                    SET candidate_id=EXCLUDED.candidate_id,
+                        original_url=EXCLUDED.original_url,
+                        title=EXCLUDED.title,
+                        snippet=EXCLUDED.snippet,
+                        raw_item=EXCLUDED.raw_item
+                    RETURNING id""",
+                    (
+                        cand_id,
+                        run_id,
+                        search_response_id,
+                        plan_id,
+                        plan_query_id,
+                        idx,
+                        query_text,
+                        redacted_orig_url,
+                        title,
+                        snippet,
+                        json.dumps(raw_item_dict),
+                        now_dt,
+                    ),
+                )
+                occ_id = cur.fetchone()[0]
+                occurrences_created.append(
+                    {
+                        "id": occ_id,
+                        "candidate_id": cand_id,
+                        "run_id": run_id,
+                        "search_response_id": search_response_id,
+                        "plan_id": plan_id,
+                        "plan_query_id": plan_query_id,
+                        "rank": idx,
+                        "query_text": query_text,
+                        "canonical_url": canonical_url,
+                        "original_url": redacted_orig_url,
+                    }
+                )
+
+        return occurrences_created
+
+    def get_candidate(self, candidate_id, run_id=None):
+        candidate_id = UUID(str(candidate_id))
+        with self.connection.cursor() as cur:
+            query = """SELECT id, run_id, canonical_url, canonical_url_sha256, original_url,
+                              title, snippet, domain, backend, published_at, date_signals,
+                              backend_metadata, recurrence_count, duplicate_group_id,
+                              first_seen_at, last_seen_at, created_at
+                       FROM search_candidates WHERE id=%s"""
+            params = [candidate_id]
+            if run_id is not None:
+                query += " AND run_id=%s"
+                params.append(UUID(str(run_id)))
+
+            cur.execute(query, tuple(params))
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"search candidate {candidate_id} not found")
+
+            return {
+                "id": row[0],
+                "run_id": row[1],
+                "canonical_url": row[2],
+                "canonical_url_sha256": row[3],
+                "original_url": row[4],
+                "title": row[5],
+                "snippet": row[6],
+                "domain": row[7],
+                "backend": row[8],
+                "published_at": row[9],
+                "date_signals": row[10],
+                "backend_metadata": row[11],
+                "recurrence_count": row[12],
+                "duplicate_group_id": row[13],
+                "first_seen_at": row[14],
+                "last_seen_at": row[15],
+                "created_at": row[16],
+            }
+
+    def list_candidates(
+        self, run_id, *, domain=None, min_recurrence=None, duplicate_group_id=None
+    ):
+        run_id = UUID(str(run_id))
+        with self.connection.cursor() as cur:
+            query = """SELECT id, run_id, canonical_url, canonical_url_sha256, original_url,
+                              title, snippet, domain, backend, published_at, date_signals,
+                              backend_metadata, recurrence_count, duplicate_group_id,
+                              first_seen_at, last_seen_at, created_at
+                       FROM search_candidates WHERE run_id=%s"""
+            params = [run_id]
+
+            if domain is not None:
+                query += " AND domain=%s"
+                params.append(domain)
+            if min_recurrence is not None:
+                query += " AND recurrence_count>=%s"
+                params.append(int(min_recurrence))
+            if duplicate_group_id is not None:
+                query += " AND duplicate_group_id=%s"
+                params.append(UUID(str(duplicate_group_id)))
+
+            query += " ORDER BY recurrence_count DESC, created_at ASC, id ASC"
+
+            cur.execute(query, tuple(params))
+            results = []
+            for row in cur.fetchall():
+                results.append(
+                    {
+                        "id": row[0],
+                        "run_id": row[1],
+                        "canonical_url": row[2],
+                        "canonical_url_sha256": row[3],
+                        "original_url": row[4],
+                        "title": row[5],
+                        "snippet": row[6],
+                        "domain": row[7],
+                        "backend": row[8],
+                        "published_at": row[9],
+                        "date_signals": row[10],
+                        "backend_metadata": row[11],
+                        "recurrence_count": row[12],
+                        "duplicate_group_id": row[13],
+                        "first_seen_at": row[14],
+                        "last_seen_at": row[15],
+                        "created_at": row[16],
+                    }
+                )
+            return results
+
+    def list_candidate_occurrences(self, candidate_id, run_id=None):
+        candidate_id = UUID(str(candidate_id))
+        with self.connection.cursor() as cur:
+            query = """SELECT id, candidate_id, run_id, search_response_id, plan_id,
+                              plan_query_id, rank, query_text, original_url, title,
+                              snippet, raw_item, discovered_at
+                       FROM candidate_occurrences WHERE candidate_id=%s"""
+            params = [candidate_id]
+            if run_id is not None:
+                query += " AND run_id=%s"
+                params.append(UUID(str(run_id)))
+
+            query += " ORDER BY discovered_at ASC, rank ASC, id ASC"
+
+            cur.execute(query, tuple(params))
+            results = []
+            for row in cur.fetchall():
+                results.append(
+                    {
+                        "id": row[0],
+                        "candidate_id": row[1],
+                        "run_id": row[2],
+                        "search_response_id": row[3],
+                        "plan_id": row[4],
+                        "plan_query_id": row[5],
+                        "rank": row[6],
+                        "query_text": row[7],
+                        "original_url": row[8],
+                        "title": row[9],
+                        "snippet": row[10],
+                        "raw_item": row[11],
+                        "discovered_at": row[12],
+                    }
+                )
+            return results
+
+    def assign_duplicate_group(self, candidate_ids, group_id=None, run_id=None):
+        if not candidate_ids:
+            raise ValueError("candidate_ids must not be empty")
+        cand_uuids = [UUID(str(cid)) for cid in candidate_ids]
+        target_group_id = (
+            UUID(str(group_id)) if group_id is not None else cand_uuids[0]
+        )
+
+        with self.connection.cursor() as cur:
+            if run_id is not None:
+                run_uuid = UUID(str(run_id))
+                cur.execute(
+                    """UPDATE search_candidates
+                       SET duplicate_group_id=%s
+                       WHERE id=ANY(%s) AND run_id=%s""",
+                    (target_group_id, cand_uuids, run_uuid),
+                )
+            else:
+                cur.execute(
+                    """UPDATE search_candidates
+                       SET duplicate_group_id=%s
+                       WHERE id=ANY(%s)""",
+                    (target_group_id, cand_uuids),
+                )
+        return target_group_id
+
 
 
     def record_semantic_call(
