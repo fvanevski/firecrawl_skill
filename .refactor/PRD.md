@@ -1,3 +1,5 @@
+<!-- @format -->
+
 ## Product Requirements Document
 
 ## Firecrawl Research Skill Priority Architecture Refactor
@@ -17,36 +19,21 @@ The following decisions are approved and constitute the project’s architectura
 
 PostgreSQL shall be authoritative for:
 
--   research-run lifecycle;
-    
--   invocation lifecycle;
-    
--   search plans and revisions;
-    
--   raw search-response manifests;
-    
--   candidate metadata;
-    
--   candidate assessments;
-    
--   extraction attempts;
-    
--   corpus assets and derivations;
-    
--   coverage state;
-    
--   retrieval events;
-    
--   claim-to-evidence bindings;
-    
--   report artifacts;
-    
--   semantic audits;
-    
--   LLM call provenance;
-    
--   operational events.
-    
+- research-run lifecycle;
+- invocation lifecycle;
+- search plans and revisions;
+- raw search-response manifests;
+- candidate metadata;
+- candidate assessments;
+- extraction attempts;
+- corpus assets and derivations;
+- coverage state;
+- retrieval events;
+- claim-to-evidence bindings;
+- report artifacts;
+- semantic audits;
+- LLM call provenance;
+- operational events.
 
 Qdrant shall remain a rebuildable vector-retrieval projection.
 
@@ -61,9 +48,7 @@ Scratch directories and Catalog v5 files shall become compatibility, debugging, 
 The public workflow shall support:
 
 1.  `agent_led`
-    
 2.  `autonomous_local`
-    
 
 A third internal mode, `deterministic_debug`, shall be retained for testing, regression isolation, and infrastructure diagnosis, but shall not be represented as equivalent-quality autonomous research.
 
@@ -77,43 +62,27 @@ Successful page count, candidate count, word count, or elapsed iterations may co
 
 Every additional acquisition or retrieval action must identify:
 
--   the unresolved coverage gap it addresses;
-    
--   the expected contribution;
-    
--   the hard budget it consumes;
-    
--   the decision authority that proposed it;
-    
--   the deterministic policy checks that authorized it.
-    
+- the unresolved coverage gap it addresses;
+- the expected contribution;
+- the hard budget it consumes;
+- the decision authority that proposed it;
+- the deterministic policy checks that authorized it.
 
 ## 2\. Executive Summary
 
 The existing skill has evolved from a scratch-file-backed Firecrawl wrapper into a hybrid research platform comprising:
 
--   broad metadata-first acquisition;
-    
--   LLM-generated research briefs and query plans;
-    
--   LLM candidate triage;
-    
--   iterative extraction;
-    
--   PostgreSQL corpus persistence;
-    
--   content-addressed blobs;
-    
--   Qdrant dense retrieval;
-    
--   PostgreSQL full-text retrieval;
-    
--   cross-encoder reranking;
-    
--   Valkey-backed worker wakeups;
-    
--   filesystem Catalog v5 auditing.
-    
+- broad metadata-first acquisition;
+- LLM-generated research briefs and query plans;
+- LLM candidate triage;
+- iterative extraction;
+- PostgreSQL corpus persistence;
+- content-addressed blobs;
+- Qdrant dense retrieval;
+- PostgreSQL full-text retrieval;
+- cross-encoder reranking;
+- Valkey-backed worker wakeups;
+- filesystem Catalog v5 auditing.
 
 The refactoring has produced a strong deterministic corpus and indexing subsystem, but workflow authority and semantic control are fragmented.
 
@@ -121,24 +90,15 @@ The current architecture already defines PostgreSQL as authoritative for corpus 
 
 The remaining problems are concentrated in the research workflow:
 
--   complexity and profile selection still rely on legacy keyword heuristics;
-    
--   search candidates that are not scraped are not first-class durable research assets;
-    
--   workflow state is divided between PostgreSQL and filesystem Catalog records;
-    
--   search recovery behavior is inconsistent with documented policy;
-    
--   adaptive stopping uses successful-page counts rather than evidence coverage;
-    
--   extraction quality is judged with weak proxies;
-    
--   evidence-packet construction is incomplete;
-    
--   final synthesis contracts differ implicitly depending on the host agent;
-    
--   semantic and operational traces are not uniformly queryable from PostgreSQL.
-    
+- complexity and profile selection still rely on legacy keyword heuristics;
+- search candidates that are not scraped are not first-class durable research assets;
+- workflow state is divided between PostgreSQL and filesystem Catalog records;
+- search recovery behavior is inconsistent with documented policy;
+- adaptive stopping uses successful-page counts rather than evidence coverage;
+- extraction quality is judged with weak proxies;
+- evidence-packet construction is incomplete;
+- final synthesis contracts differ implicitly depending on the host agent;
+- semantic and operational traces are not uniformly queryable from PostgreSQL.
 
 This project will replace those fragmented routines with a single persisted research state machine. Deterministic code will own identity, state, policy, validation, transactions, resource limits, provenance, and reproducibility. Generative models or the outer agent will own semantic interpretation, candidate relevance, evidence-role classification, coverage analysis, and synthesis through versioned structured contracts.
 
@@ -146,29 +106,19 @@ This project will replace those fragmented routines with a single persisted rese
 
 The skill shall function as a durable, auditable research engine that can be operated by either:
 
--   a foundational host model such as ChatGPT or Gemini; or
-    
--   a capable local model running on a single NVIDIA RTX 5090 32 GB system.
-    
+- a foundational host model such as ChatGPT or Gemini; or
+- a capable local model running on a single NVIDIA RTX 5090 32 GB system.
 
 The engine shall:
 
 1.  acquire a broad live candidate corpus before committing substantial agent context;
-    
 2.  persist the entire acquisition trail;
-    
 3.  selectively extract and index promising sources;
-    
 4.  continually evaluate unresolved research coverage;
-    
 5.  dynamically revise search strategy only in response to specific gaps;
-    
 6.  retrieve bounded, citation-ready passages;
-    
 7.  generate or support generation of a responsive report;
-    
 8.  retain complete provenance for debugging, regression analysis, and downstream audit.
-    
 
 The workflow shall be model-flexible but model-governed: models may make semantic judgments, but they may not mutate authoritative state without deterministic validation.
 
@@ -200,18 +150,12 @@ The existing strengths of immutable snapshots, content hashes, derivation versio
 
 Every semantic or operational decision must identify:
 
--   its inputs;
-    
--   its implementation version;
-    
--   its model or deterministic policy;
-    
--   its output;
-    
--   its validation status;
-    
--   its relationship to the research run.
-    
+- its inputs;
+- its implementation version;
+- its model or deterministic policy;
+- its output;
+- its validation status;
+- its relationship to the research run.
 
 ### G-7 — Support local hardware efficiently
 
@@ -226,27 +170,17 @@ The project must provide baseline, migration, regression, and comparative evalua
 The following are outside the initial priority refactor:
 
 1.  Replacing Firecrawl as the primary public acquisition backend.
-    
 2.  Building a general-purpose browser automation framework.
-    
 3.  Providing a consumer-facing graphical interface.
-    
 4.  Adding unsupported cloud-provider fallbacks automatically.
-    
 5.  Making Qdrant authoritative for source content or workflow state.
-    
 6.  Making Valkey durable.
-    
 7.  Replacing canonical source text with LLM summaries.
-    
 8.  Guaranteeing that a local model matches frontier-model research quality.
-    
 9.  Building a full knowledge-graph reasoning system before claim/evidence storage is stable.
-    
-10.  Optimizing every workflow for maximum throughput before correctness and traceability are validated.
-    
-11.  Adding pgvector merely because PostgreSQL supports it. It may be added only for a documented retrieval, fallback, evaluation, or transactional-embedding requirement.
-    
+10. Optimizing every workflow for maximum throughput before correctness and traceability are validated.
+
+11. Adding pgvector merely because PostgreSQL supports it. It may be added only for a documented retrieval, fallback, evaluation, or transactional-embedding requirement.
 
 ## 6\. Current-State Baseline
 
@@ -282,80 +216,51 @@ The current structural parser and chunker use regular-expression block detection
 
 Examples:
 
--   OpenAI ChatGPT;
-    
--   Google Gemini;
-    
--   another capable hosted agent with tool-use capability.
-    
+- OpenAI ChatGPT;
+- Google Gemini;
+- another capable hosted agent with tool-use capability.
 
 Expected behavior:
 
--   the outer agent interprets the user’s intent;
-    
--   the outer agent may approve, revise, or supply the `ResearchSpec`;
-    
--   the skill performs acquisition, persistence, indexing, retrieval, and trace capture;
-    
--   the outer agent selects or requests evidence expansions;
-    
--   the outer agent generates the final report unless autonomous synthesis is explicitly requested.
-    
+- the outer agent interprets the user’s intent;
+- the outer agent may approve, revise, or supply the `ResearchSpec`;
+- the skill performs acquisition, persistence, indexing, retrieval, and trace capture;
+- the outer agent selects or requests evidence expansions;
+- the outer agent generates the final report unless autonomous synthesis is explicitly requested.
 
 ## 7.2 Autonomous local operator
 
 Expected local environment:
 
--   Garuda Linux;
-    
--   NVIDIA RTX 5090 with 32 GB VRAM;
-    
--   32 GB system RAM;
-    
--   AMD Ryzen 9 5950X;
-    
--   OpenAI-compatible local model endpoint;
-    
--   local embedding endpoint;
-    
--   local reranker endpoint;
-    
--   PostgreSQL;
-    
--   Qdrant;
-    
--   Valkey.
-    
+- Garuda Linux;
+- NVIDIA RTX 5090 with 32 GB VRAM;
+- 32 GB system RAM;
+- AMD Ryzen 9 5950X;
+- OpenAI-compatible local model endpoint;
+- local embedding endpoint;
+- local reranker endpoint;
+- PostgreSQL;
+- Qdrant;
+- Valkey.
 
 Expected behavior:
 
--   the skill invokes the local LLM for structured semantic stages;
-    
--   code enforces all state changes and hard limits;
-    
--   large semantic tasks are decomposed into bounded calls;
-    
--   no commercial fallback occurs without explicit configuration;
-    
--   the workflow remains resumable after model or service failure.
-    
+- the skill invokes the local LLM for structured semantic stages;
+- code enforces all state changes and hard limits;
+- large semantic tasks are decomposed into bounded calls;
+- no commercial fallback occurs without explicit configuration;
+- the workflow remains resumable after model or service failure.
 
 ## 7.3 Maintainer or debugging operator
 
 The operator needs:
 
--   deterministic reproduction;
-    
--   complete event history;
-    
--   prompt and policy version comparison;
-    
--   regression fixtures;
-    
--   replay without issuing new live searches where retained inputs are sufficient;
-    
--   clear distinction between mechanical failure and semantic failure.
-    
+- deterministic reproduction;
+- complete event history;
+- prompt and policy version comparison;
+- regression fixtures;
+- replay without issuing new live searches where retained inputs are sufficient;
+- clear distinction between mechanical failure and semantic failure.
 
 ## 8\. Design Principles
 
@@ -363,51 +268,31 @@ The operator needs:
 
 Only deterministic code may:
 
--   allocate identifiers;
-    
--   commit workflow transitions;
-    
--   enforce budgets;
-    
--   validate schemas;
-    
--   write authoritative state;
-    
--   calculate content hashes;
-    
--   determine transaction boundaries;
-    
--   declare persistence success;
-    
--   activate or retire indexes;
-    
--   verify evidence references.
-    
+- allocate identifiers;
+- commit workflow transitions;
+- enforce budgets;
+- validate schemas;
+- write authoritative state;
+- calculate content hashes;
+- determine transaction boundaries;
+- declare persistence success;
+- activate or retire indexes;
+- verify evidence references.
 
 ## DP-2 — Semantic delegation
 
 The outer agent or configured LLM may:
 
--   interpret the objective;
-    
--   propose research questions and claims;
-    
--   propose search queries;
-    
--   assess candidate relevance;
-    
--   assess source role;
-    
--   map passages to claims;
-    
--   identify contradiction or qualification;
-    
--   assess unresolved coverage;
-    
--   draft reports;
-    
--   perform semantic audits.
-    
+- interpret the objective;
+- propose research questions and claims;
+- propose search queries;
+- assess candidate relevance;
+- assess source role;
+- map passages to claims;
+- identify contradiction or qualification;
+- assess unresolved coverage;
+- draft reports;
+- perform semantic audits.
 
 ## DP-3 — Proposal before mutation
 
@@ -507,34 +392,20 @@ Research Orchestrator
 
 The authoritative `research_runs.state` field shall support:
 
--   `created`
-    
--   `planning`
-    
--   `corpus_review`
-    
--   `acquiring`
-    
--   `extracting`
-    
--   `indexing`
-    
--   `coverage_review`
-    
--   `retrieving`
-    
--   `synthesizing`
-    
--   `validating`
-    
--   `completed`
-    
--   `partial`
-    
--   `failed`
-    
--   `cancelled`
-    
+- `created`
+- `planning`
+- `corpus_review`
+- `acquiring`
+- `extracting`
+- `indexing`
+- `coverage_review`
+- `retrieving`
+- `synthesizing`
+- `validating`
+- `completed`
+- `partial`
+- `failed`
+- `cancelled`
 
 A run may also carry a lifecycle revision number and a `reopened_from_revision` reference.
 
@@ -586,47 +457,28 @@ Transitions not listed above must be rejected unless a migration or explicit adm
 
 Every transition shall record:
 
--   transition ID;
-    
--   run ID;
-    
--   prior state;
-    
--   next state;
-    
--   triggering event;
-    
--   actor type;
-    
--   actor identifier;
-    
--   policy version;
-    
--   semantic proposal ID, where applicable;
-    
--   validation result;
-    
--   timestamp;
-    
--   idempotency key;
-    
--   error, where applicable.
-    
+- transition ID;
+- run ID;
+- prior state;
+- next state;
+- triggering event;
+- actor type;
+- actor identifier;
+- policy version;
+- semantic proposal ID, where applicable;
+- validation result;
+- timestamp;
+- idempotency key;
+- error, where applicable.
 
 ## 10.4 State mutation rules
 
 1.  State transitions occur within PostgreSQL transactions.
-    
 2.  External side effects use transactional outbox records.
-    
 3.  Retried commands use idempotency keys.
-    
 4.  The current state must be locked before transition.
-    
 5.  A stale semantic proposal may not mutate a newer run revision.
-    
 6.  Terminal runs may not receive new acquisition, extraction, or retrieval work without reopening.
-    
 
 ## 11\. Execution Modes
 
@@ -634,37 +486,23 @@ Every transition shall record:
 
 ### Responsibilities of the host agent
 
--   approve or supply the `ResearchSpec`;
-    
--   make semantic decisions when requested;
-    
--   review coverage summaries;
-    
--   request retrieval expansion;
-    
--   produce the final report unless autonomous synthesis is explicitly invoked.
-    
+- approve or supply the `ResearchSpec`;
+- make semantic decisions when requested;
+- review coverage summaries;
+- request retrieval expansion;
+- produce the final report unless autonomous synthesis is explicitly invoked.
 
 ### Responsibilities of the skill
 
--   validate proposals;
-    
--   persist all state;
-    
--   execute searches and scrapes;
-    
--   manage retries;
-    
--   build candidate manifests;
-    
--   maintain the coverage ledger;
-    
--   retrieve passages;
-    
--   construct a structured evidence packet;
-    
--   validate citations and provenance.
-    
+- validate proposals;
+- persist all state;
+- execute searches and scrapes;
+- manage retries;
+- build candidate manifests;
+- maintain the coverage ledger;
+- retrieve passages;
+- construct a structured evidence packet;
+- validate citations and provenance.
 
 ### Requirement
 
@@ -674,22 +512,14 @@ The skill must not invoke the configured inner generative LLM for a semantic dec
 
 ### Responsibilities of the local LLM
 
--   generate the initial `ResearchSpec`;
-    
--   propose the search plan;
-    
--   triage candidates;
-    
--   propose adaptive search revisions;
-    
--   assess coverage;
-    
--   map evidence to claims;
-    
--   draft the report;
-    
--   participate in semantic validation and auditing.
-    
+- generate the initial `ResearchSpec`;
+- propose the search plan;
+- triage candidates;
+- propose adaptive search revisions;
+- assess coverage;
+- map evidence to claims;
+- draft the report;
+- participate in semantic validation and auditing.
 
 ### Responsibilities of deterministic code
 
@@ -703,16 +533,11 @@ Each LLM stage must be independently retryable and resumable.
 
 This mode shall:
 
--   avoid generative semantic decisions;
-    
--   use explicit user-supplied plans or deterministic fixtures;
-    
--   execute acquisition, extraction, persistence, indexing, and retrieval;
-    
--   make no claim of semantic research adequacy;
-    
--   mark semantic coverage fields as `unassessed`.
-    
+- avoid generative semantic decisions;
+- use explicit user-supplied plans or deterministic fixtures;
+- execute acquisition, extraction, persistence, indexing, and retrieval;
+- make no claim of semantic research adequacy;
+- mark semantic coverage fields as `unassessed`.
 
 ## 12\. Core Domain Schemas
 
@@ -878,63 +703,36 @@ Required fields:
 
 The system shall add or extend PostgreSQL tables for:
 
--   `research_runs`
-    
--   `research_run_transitions`
-    
--   `research_invocations`
-    
--   `research_events`
-    
--   `research_specs`
-    
--   `search_plans`
-    
--   `search_plan_queries`
-    
--   `search_responses`
-    
--   `search_candidates`
-    
--   `candidate_occurrences`
-    
--   `candidate_assessments`
-    
--   `extraction_attempts`
-    
--   `coverage_events`
-    
--   `coverage_snapshots`
-    
--   `strategy_revisions`
-    
--   `semantic_calls`
-    
--   `semantic_artifacts`
-    
--   `research_claims`
-    
--   `claim_evidence_links`
-    
--   `report_artifacts`
-    
--   `audit_assessments`
-    
--   `compatibility_exports`
-    
+- `research_runs`
+- `research_run_transitions`
+- `research_invocations`
+- `research_events`
+- `research_specs`
+- `search_plans`
+- `search_plan_queries`
+- `search_responses`
+- `search_candidates`
+- `candidate_occurrences`
+- `candidate_assessments`
+- `extraction_attempts`
+- `coverage_events`
+- `coverage_snapshots`
+- `strategy_revisions`
+- `semantic_calls`
+- `semantic_artifacts`
+- `research_claims`
+- `claim_evidence_links`
+- `report_artifacts`
+- `audit_assessments`
+- `compatibility_exports`
 
 ### Acceptance criteria
 
 1.  A complete run can be reconstructed without reading scratch or Catalog files.
-    
 2.  A run’s current lifecycle state has one authoritative answer.
-    
 3.  Filesystem exports can be deleted and regenerated from PostgreSQL and blob storage.
-    
 4.  A failed filesystem export does not roll back committed research state.
-    
 5.  A PostgreSQL failure cannot result in a run being reported as authoritatively completed.
-    
 
 ## FR-002 — Explicit execution-mode selection
 
@@ -942,34 +740,23 @@ The run-start API and CLI shall require or resolve an execution mode.
 
 Defaults:
 
--   host-agent integration: `agent_led`;
-    
--   standalone local CLI: `autonomous_local`;
-    
--   tests: explicit mode.
-    
+- host-agent integration: `agent_led`;
+- standalone local CLI: `autonomous_local`;
+- tests: explicit mode.
 
 Execution mode must appear in:
 
--   `ResearchSpec`;
-    
--   run metadata;
-    
--   event stream;
-    
--   report provenance;
-    
--   audit packet.
-    
+- `ResearchSpec`;
+- run metadata;
+- event stream;
+- report provenance;
+- audit packet.
 
 ### Acceptance criteria
 
 1.  The same run may not silently alternate between host-agent and local semantic authorities.
-    
 2.  A strategy revision changing mode records who requested and approved the change.
-    
 3.  Inner-LLM calls are absent from agent-led stages where host-agent output has been supplied.
-    
 
 ## FR-003 — Structured `ResearchSpec`
 
@@ -979,86 +766,54 @@ The semantic authority proposes the specification.
 
 Deterministic validation shall verify:
 
--   stable IDs;
-    
--   enum values;
-    
--   nonempty objective;
-    
--   referenced question and claim IDs;
-    
--   time-window syntax;
-    
--   no unsupported execution mode;
-    
--   no unbounded completion criteria.
-    
+- stable IDs;
+- enum values;
+- nonempty objective;
+- referenced question and claim IDs;
+- time-window syntax;
+- no unsupported execution mode;
+- no unbounded completion criteria.
 
 A deterministic conservative fallback may preserve the exact objective but must mark unresolved semantic fields as `unassessed` or `uncertain`. It shall not silently create broad facets.
 
 ### Acceptance criteria
 
 1.  No workflow budget is selected directly from word count or topic length.
-    
 2.  Legacy complexity output may be retained only as diagnostic metadata during migration.
-    
 3.  Every query can be traced to a question, claim, or source requirement.
-    
 
 ## FR-004 — Deterministic budget policy
 
 A versioned budget policy shall map the validated `ResearchSpec` to:
 
--   maximum search branches;
-    
--   results per branch;
-    
--   maximum extraction attempts;
-    
--   maximum successful extractions;
-    
--   maximum adaptive cycles;
-    
--   maximum LLM calls;
-    
--   maximum input and output tokens;
-    
--   maximum retrieval candidates;
-    
--   maximum reranker candidates;
-    
--   maximum evidence-packet tokens;
-    
--   maximum wall-clock duration where appropriate.
-    
+- maximum search branches;
+- results per branch;
+- maximum extraction attempts;
+- maximum successful extractions;
+- maximum adaptive cycles;
+- maximum LLM calls;
+- maximum input and output tokens;
+- maximum retrieval candidates;
+- maximum reranker candidates;
+- maximum evidence-packet tokens;
+- maximum wall-clock duration where appropriate.
 
 Policy inputs may include:
 
--   research archetype;
-    
--   risk level;
-    
--   number of questions and claims;
-    
--   freshness sensitivity;
-    
--   expected disagreement;
-    
--   required source classes;
-    
--   user-supplied limits.
-    
+- research archetype;
+- risk level;
+- number of questions and claims;
+- freshness sensitivity;
+- expected disagreement;
+- required source classes;
+- user-supplied limits.
 
 ### Acceptance criteria
 
 1.  The semantic authority may propose actions but cannot exceed policy.
-    
 2.  Every rejected proposal records the violated rule.
-    
 3.  Budgets are persisted with a policy version.
-    
 4.  User-specified stricter limits override defaults.
-    
 
 ## FR-005 — Retained-corpus preflight
 
@@ -1067,24 +822,16 @@ Before issuing a live search, the system shall evaluate retained corpus coverage
 The preflight shall:
 
 1.  retrieve candidate chunks from PostgreSQL FTS and Qdrant;
-    
 2.  rerank the bounded fused set;
-    
 3.  evaluate freshness against the `ResearchSpec`;
-    
 4.  map retained evidence to coverage items;
-    
 5.  determine whether new acquisition is required.
-    
 
 ### Acceptance criteria
 
 1.  Live search is skipped when retained evidence satisfies all applicable completion criteria.
-    
 2.  Skipped acquisition records the corpus state and coverage reasoning.
-    
 3.  Stale retained evidence may be used as background but cannot satisfy current-freshness requirements without an explicit waiver.
-    
 
 ## FR-006 — Search-plan proposal and validation
 
@@ -1092,37 +839,23 @@ Search queries shall be proposed by the host agent or local LLM.
 
 Deterministic validation shall enforce:
 
--   nonempty query;
-    
--   preserved distinctive entities;
-    
--   preserved jurisdiction and time constraints where required;
-    
--   query normalization;
-    
--   duplicate and near-duplicate rejection;
-    
--   search-backend syntax constraints;
-    
--   domain-restriction limits;
-    
--   budget limits;
-    
--   target coverage IDs;
-    
--   no unexplained scope expansion.
-    
+- nonempty query;
+- preserved distinctive entities;
+- preserved jurisdiction and time constraints where required;
+- query normalization;
+- duplicate and near-duplicate rejection;
+- search-backend syntax constraints;
+- domain-restriction limits;
+- budget limits;
+- target coverage IDs;
+- no unexplained scope expansion.
 
 ### Acceptance criteria
 
 1.  Every executed query has a persisted plan record.
-    
 2.  Every query identifies its expected coverage contribution.
-    
 3.  Recovery queries are validated by the same policy as initial queries.
-    
 4.  Deterministic string broadening cannot execute without a recorded strategy-revision proposal.
-    
 
 ## FR-007 — Complete candidate-corpus persistence
 
@@ -1130,53 +863,32 @@ Every acquired search candidate shall be persisted before semantic triage or scr
 
 Persisted candidate data shall include:
 
--   query and response IDs;
-    
--   canonical URL;
-    
--   original URL;
-    
--   title;
-    
--   snippet;
-    
--   description;
-    
--   published-date signals;
-    
--   rank;
-    
--   search source;
-    
--   provider request ID;
-    
--   raw-response blob reference;
-    
--   branch occurrence;
-    
--   duplicate-group identity;
-    
--   acquisition timestamp;
-    
--   backend metadata;
-    
--   parsing warnings.
-    
+- query and response IDs;
+- canonical URL;
+- original URL;
+- title;
+- snippet;
+- description;
+- published-date signals;
+- rank;
+- search source;
+- provider request ID;
+- raw-response blob reference;
+- branch occurrence;
+- duplicate-group identity;
+- acquisition timestamp;
+- backend metadata;
+- parsing warnings.
 
 One logical candidate may have multiple occurrences across queries.
 
 ### Acceptance criteria
 
 1.  An unscripted candidate remains queryable after scratch deletion.
-    
 2.  Candidate recurrence across branches is retained.
-    
 3.  Candidate triage may be rerun without issuing a new search.
-    
 4.  Search-response payloads are content-addressed or otherwise immutably referenced.
-    
 5.  Candidate identity and source identity remain distinct until canonical source ingestion.
-    
 
 ## FR-008 — Multi-stage candidate ranking and triage
 
@@ -1184,67 +896,43 @@ Candidate selection shall use three layers:
 
 ### Layer 1 — Deterministic preprocessing
 
--   URL canonicalization;
-    
--   duplicate detection;
-    
--   invalid URL rejection;
-    
--   domain counts;
-    
--   branch recurrence;
-    
--   date-signal extraction;
-    
--   known source metadata;
-    
--   policy exclusions.
-    
+- URL canonicalization;
+- duplicate detection;
+- invalid URL rejection;
+- domain counts;
+- branch recurrence;
+- date-signal extraction;
+- known source metadata;
+- policy exclusions.
 
 ### Layer 2 — Learned retrieval scoring
 
 Where configured:
 
--   embedding similarity;
-    
--   cross-encoder reranking;
-    
--   source-type classifier;
-    
--   duplicate or similarity classifier.
-    
+- embedding similarity;
+- cross-encoder reranking;
+- source-type classifier;
+- duplicate or similarity classifier.
 
 ### Layer 3 — Semantic assessment
 
 The host agent or local LLM assesses:
 
--   relevance;
-    
--   source role;
-    
--   question and claim coverage;
-    
--   freshness;
-    
--   independence;
-    
--   extraction priority;
-    
--   uncertainty.
-    
+- relevance;
+- source role;
+- question and claim coverage;
+- freshness;
+- independence;
+- extraction priority;
+- uncertainty.
 
 ### Acceptance criteria
 
 1.  LLM triage is not required for candidates deterministically rejected as invalid.
-    
 2.  Learned prefiltering reduces but does not silently discard the durable candidate ledger.
-    
 3.  Every candidate selected for extraction has a recorded reason.
-    
 4.  Every rejected high-ranked candidate has either a deterministic rejection reason or semantic assessment.
-    
 5.  Triage coverage rate is reported.
-    
 
 ## FR-009 — Extraction planning and attempt provenance
 
@@ -1252,123 +940,75 @@ Extraction shall be modeled as explicit attempts, not as a single success field.
 
 Each attempt shall record:
 
--   candidate ID;
-    
--   extraction method;
-    
--   method version;
-    
--   requested format;
-    
--   start and end time;
-    
--   exit status;
-    
--   HTTP or backend status;
-    
--   raw payload blob;
-    
--   normalized payload;
-    
--   parser used;
-    
--   quality metrics;
-    
--   failure class;
-    
--   retry relationship;
-    
--   final disposition.
-    
+- candidate ID;
+- extraction method;
+- method version;
+- requested format;
+- start and end time;
+- exit status;
+- HTTP or backend status;
+- raw payload blob;
+- normalized payload;
+- parser used;
+- quality metrics;
+- failure class;
+- retry relationship;
+- final disposition.
 
 Recommended deterministic extraction order:
 
 1.  Firecrawl main-content extraction;
-    
 2.  Firecrawl full-page extraction;
-    
 3.  document-type-specific deterministic extractor;
-    
 4.  browser-capable or alternate acquisition adapter where configured;
-    
 5.  structured extraction where required;
-    
 6.  semantic quality adjudication for ambiguous cases.
-    
 
 Regex-only HTML-to-text conversion shall not remain the preferred fallback.
 
 ### Acceptance criteria
 
 1.  A source may have multiple extraction attempts.
-    
 2.  Raw output from every materially different attempt is retained or hashed.
-    
 3.  Extraction success is not determined solely by word count.
-    
 4.  The final normalized document identifies the attempt from which it was derived.
-    
 5.  Anti-bot, timeout, empty-content, parser, and schema failures are distinguishable.
-    
 
 ## FR-010 — Extraction-quality model
 
 The deterministic quality evaluator shall calculate, where applicable:
 
--   byte length;
-    
--   visible-text length;
-    
--   paragraph count;
-    
--   heading count;
-    
--   list and table count;
-    
--   link density;
-    
--   boilerplate ratio;
-    
--   title presence;
-    
--   language confidence;
-    
--   content-type consistency;
-    
--   anti-bot markers;
-    
--   duplicate-content similarity;
-    
--   query-term coverage;
-    
--   required structured-field coverage;
-    
--   parser warnings;
-    
--   code-to-prose ratio;
-    
--   extraction-method confidence.
-    
+- byte length;
+- visible-text length;
+- paragraph count;
+- heading count;
+- list and table count;
+- link density;
+- boilerplate ratio;
+- title presence;
+- language confidence;
+- content-type consistency;
+- anti-bot markers;
+- duplicate-content similarity;
+- query-term coverage;
+- required structured-field coverage;
+- parser warnings;
+- code-to-prose ratio;
+- extraction-method confidence.
 
 The result shall be:
 
--   `acceptable`;
-    
--   `poor`;
-    
--   `ambiguous`.
-    
+- `acceptable`;
+- `poor`;
+- `ambiguous`.
 
 Only `ambiguous` results should require semantic adjudication by default.
 
 ### Acceptance criteria
 
 1.  Short official notices can be accepted when structure and relevance are adequate.
-    
 2.  Long anti-bot pages can be rejected despite high word count.
-    
 3.  Quality metrics and final disposition are persisted separately.
-    
 
 ## FR-011 — Canonical parsing and chunking
 
@@ -1376,50 +1016,32 @@ Canonical text parsing shall remain deterministic.
 
 The parser subsystem shall support typed parsers or adapters for:
 
--   Markdown;
-    
--   HTML;
-    
--   JSON;
-    
--   plain text;
-    
--   source code;
-    
--   PDF-derived text where available;
-    
--   legal or legislative hierarchical text where detected.
-    
+- Markdown;
+- HTML;
+- JSON;
+- plain text;
+- source code;
+- PDF-derived text where available;
+- legal or legislative hierarchical text where detected.
 
 The initial implementation may prioritize Markdown, HTML, JSON, and plain text.
 
 Chunking shall:
 
--   use an actual tokenizer compatible with the embedding or retrieval configuration;
-    
--   prevent oversized single blocks;
-    
--   preserve heading hierarchy;
-    
--   preserve block offsets;
-    
--   preserve table and code boundaries where possible;
-    
--   support parent-child retrieval;
-    
--   version every parser, normalizer, and chunker.
-    
+- use an actual tokenizer compatible with the embedding or retrieval configuration;
+- prevent oversized single blocks;
+- preserve heading hierarchy;
+- preserve block offsets;
+- preserve table and code boundaries where possible;
+- support parent-child retrieval;
+- version every parser, normalizer, and chunker.
 
 ### Acceptance criteria
 
 1.  Re-parsing does not create a false new source snapshot.
-    
 2.  Parser and chunker upgrades create new derivations.
-    
 3.  Chunk IDs remain stable for identical derivation inputs and versions.
-    
 4.  Every passage can be traced to source offsets or structural blocks.
-    
 
 ## FR-012 — Coverage-led adaptive control
 
@@ -1429,99 +1051,63 @@ The semantic authority shall propose the next action based on unresolved coverag
 
 The deterministic policy engine shall authorize one of:
 
--   search;
-    
--   scrape;
-    
--   retrieve;
-    
--   synthesize;
-    
--   stop partial;
-    
--   stop failed.
-    
+- search;
+- scrape;
+- retrieve;
+- synthesize;
+- stop partial;
+- stop failed.
 
 ### Required stop rules
 
 The system shall stop and proceed to synthesis when:
 
 1.  all mandatory coverage items are satisfied; or
-    
 2.  remaining items are waived by the user or policy; or
-    
 3.  hard budgets are exhausted and partial reporting is permitted.
-    
 
 The system shall stop as failed when:
 
 1.  required evidence is unavailable;
-    
 2.  acquisition and extraction cannot produce usable evidence;
-    
 3.  the semantic authority cannot produce valid proposals within retry limits;
-    
 4.  persistence or workflow authority is unavailable;
-    
 5.  policy prohibits proceeding.
-    
 
 ### Acceptance criteria
 
 1.  Successful URL count cannot independently trigger completion.
-    
 2.  Every additional search branch identifies targeted coverage items.
-    
 3.  The ledger records support, contradiction, qualification, and blocked gaps.
-    
 4.  Iteration history can be replayed from coverage snapshots and strategy revisions.
-    
 
 ## FR-013 — Retrieval transparency
 
 Retrieval results shall expose:
 
--   requested retrieval mode;
-    
--   executed retrieval mode;
-    
--   active index fingerprint;
-    
--   lexical candidate count;
-    
--   semantic candidate count;
-    
--   fused candidate count;
-    
--   reranked candidate count;
-    
--   degraded components;
-    
--   component errors;
-    
--   filters applied;
-    
--   selected and rejected candidates;
-    
--   stage-specific scores;
-    
--   stage-specific ranks.
-    
+- requested retrieval mode;
+- executed retrieval mode;
+- active index fingerprint;
+- lexical candidate count;
+- semantic candidate count;
+- fused candidate count;
+- reranked candidate count;
+- degraded components;
+- component errors;
+- filters applied;
+- selected and rejected candidates;
+- stage-specific scores;
+- stage-specific ranks.
 
 Semantic retrieval failures shall not be silently converted into ordinary lexical-only success.
 
 ### Acceptance criteria
 
 1.  A Qdrant outage is visible in the result and event log.
-    
 2.  Alias or fingerprint mismatch is visible.
-    
 3.  Every selected evidence passage can be traced through retrieval stages.
-    
 4.  Rejected candidates may be logged with rejection reasons.
-    
 5.  Reranker unavailability produces a declared degraded mode.
-    
 
 ## FR-014 — Qdrant sparse-vector decision
 
@@ -1547,52 +1133,32 @@ The evidence builder shall produce a complete `EvidencePacket`.
 
 Deterministic responsibilities:
 
--   passage provenance;
-    
--   token budgeting;
-    
--   source version checks;
-    
--   exact IDs;
-    
--   duplicate grouping;
-    
--   temporal ordering;
-    
--   domain diversity;
-    
--   citation formatting;
-    
--   evidence-reference validation.
-    
+- passage provenance;
+- token budgeting;
+- source version checks;
+- exact IDs;
+- duplicate grouping;
+- temporal ordering;
+- domain diversity;
+- citation formatting;
+- evidence-reference validation.
 
 Semantic responsibilities:
 
--   claim-to-passage mapping;
-    
--   support, contradiction, qualification, and context labels;
-    
--   source-role assessment;
-    
--   unresolved uncertainty;
-    
--   concise evidence summaries;
-    
--   suggested additional retrieval where necessary.
-    
+- claim-to-passage mapping;
+- support, contradiction, qualification, and context labels;
+- source-role assessment;
+- unresolved uncertainty;
+- concise evidence summaries;
+- suggested additional retrieval where necessary.
 
 ### Acceptance criteria
 
 1.  Corroborating and contradicting groups are populated when evidence exists.
-    
 2.  Empty groups indicate evaluated absence, not unimplemented behavior.
-    
 3.  Every claim in the report plan has evidence or is marked unsupported.
-    
 4.  Near-duplicate sources do not inflate independent corroboration counts.
-    
 5.  Source independence reasoning is traceable.
-    
 
 ## FR-016 — Dual report-synthesis contract
 
@@ -1600,129 +1166,82 @@ Semantic responsibilities:
 
 The skill shall return:
 
--   the validated `ResearchSpec`;
-    
--   current coverage ledger;
-    
--   evidence packet;
-    
--   report outline proposal, where requested;
-    
--   citation-ready passage records;
-    
--   explicit limitations;
-    
--   unresolved claims.
-    
+- the validated `ResearchSpec`;
+- current coverage ledger;
+- evidence packet;
+- report outline proposal, where requested;
+- citation-ready passage records;
+- explicit limitations;
+- unresolved claims.
 
 ### Autonomous-local output
 
 The local synthesis pipeline shall:
 
 1.  generate a claim outline;
-    
 2.  bind each claim to passage IDs;
-    
 3.  draft the report;
-    
 4.  run a citation and entailment consistency pass;
-    
 5.  run a limitation and uncertainty pass;
-    
 6.  persist the report and claim manifest;
-    
 7.  return the final report with provenance.
-    
 
 ### Acceptance criteria
 
 1.  Report generation cannot cite unknown passage IDs.
-    
 2.  Unsupported claims are rejected or explicitly labeled.
-    
 3.  The final report stores its exact evidence-packet revision.
-    
 4.  The agent-led and autonomous-local modes use the same evidence schema.
-    
 5.  A report may be regenerated from the same evidence packet without repeating acquisition.
-    
 
 ## FR-017 — Semantic audit persistence
 
 Staged audits shall be stored in PostgreSQL and linked to:
 
--   run revision;
-    
--   evidence-packet hash;
-    
--   report hash;
-    
--   evaluator version;
-    
--   prompt version;
-    
--   model fingerprint;
-    
--   stage set.
-    
+- run revision;
+- evidence-packet hash;
+- report hash;
+- evaluator version;
+- prompt version;
+- model fingerprint;
+- stage set.
 
 Equivalent current audits shall be reused rather than executed twice.
 
 ### Acceptance criteria
 
 1.  Automatic audit scheduling is idempotent.
-    
 2.  Filesystem audit exports are derived from database records.
-    
 3.  Audit results become stale when their target evidence or report changes.
-    
 4.  Invented evidence references fail validation.
-    
 5.  Audit failure does not erase the completed operational trace.
-    
 
 ## FR-018 — Compatibility exports
 
 The system shall support deterministic generation of:
 
--   `_meta.json`;
-    
--   `_context.json`;
-    
--   `_candidates.json`;
-    
--   `_evidence.json`;
-    
--   `_corpus.json`;
-    
--   Markdown indexes;
-    
--   Catalog v5-compatible records where migration requires them.
-    
+- `_meta.json`;
+- `_context.json`;
+- `_candidates.json`;
+- `_evidence.json`;
+- `_corpus.json`;
+- Markdown indexes;
+- Catalog v5-compatible records where migration requires them.
 
 Each export shall include:
 
--   authoritative run or invocation ID;
-    
--   database revision or event cursor;
-    
--   export schema version;
-    
--   generated timestamp;
-    
--   source-state hash.
-    
+- authoritative run or invocation ID;
+- database revision or event cursor;
+- export schema version;
+- generated timestamp;
+- source-state hash.
 
 ### Acceptance criteria
 
 1.  Exports can be regenerated.
-    
 2.  Export deletion does not remove authoritative state.
-    
 3.  Export failure is reported separately from workflow failure.
-    
 4.  No routine retrieval operation scans scratch directories.
-    
 
 ## 14\. PostgreSQL Data Model Requirements
 
@@ -1732,34 +1251,20 @@ Each export shall include:
 
 Key fields:
 
--   `id`
-    
--   `external_run_id`
-    
--   `state`
-    
--   `lifecycle_revision`
-    
--   `execution_mode`
-    
--   `objective`
-    
--   `research_spec_id`
-    
--   `budget_policy_version`
-    
--   `current_coverage_revision`
-    
--   `declared_outcome`
-    
--   `started_at`
-    
--   `completed_at`
-    
--   `error`
-    
--   `metadata`
-    
+- `id`
+- `external_run_id`
+- `state`
+- `lifecycle_revision`
+- `execution_mode`
+- `objective`
+- `research_spec_id`
+- `budget_policy_version`
+- `current_coverage_revision`
+- `declared_outcome`
+- `started_at`
+- `completed_at`
+- `error`
+- `metadata`
 
 ### `research_run_transitions`
 
@@ -1844,44 +1349,27 @@ Staged audit records.
 ## 14.2 Referential invariants
 
 1.  Candidate occurrence must reference an existing query and response.
-    
 2.  Candidate assessment must reference a persisted candidate.
-    
 3.  Extraction attempt must reference a candidate.
-    
 4.  A corpus snapshot derived from extraction must reference the successful extraction attempt.
-    
 5.  Claim-evidence links must reference the exact source snapshot and passage derivation.
-    
 6.  Semantic artifacts must reference a semantic call.
-    
 7.  Strategy revisions must reference the coverage revision they evaluated.
-    
 8.  Report artifacts must reference an evidence packet and coverage revision.
-    
 9.  Audit assessments must reference an immutable target hash.
-    
-10.  Run transitions must be append-only.
-    
+10. Run transitions must be append-only.
 
 ## 14.3 Transaction boundaries
 
 The following must be atomic:
 
--   run state transition plus transition record;
-    
--   search response plus all parsed candidates and occurrences;
-    
--   extraction-attempt completion plus normalized artifact registration;
-    
--   corpus-ingestion rows plus indexing outbox jobs;
-    
--   coverage update plus strategy-revision authorization;
-    
--   report registration plus claim manifest;
-    
--   audit registration plus audit-stage outputs.
-    
+- run state transition plus transition record;
+- search response plus all parsed candidates and occurrences;
+- extraction-attempt completion plus normalized artifact registration;
+- corpus-ingestion rows plus indexing outbox jobs;
+- coverage update plus strategy-revision authorization;
+- report registration plus claim manifest;
+- audit registration plus audit-stage outputs.
 
 Blob writes that precede rolled-back transactions shall be reportable orphans, not corpus records.
 
@@ -1893,173 +1381,117 @@ The codebase shall be reorganized into explicit services.
 
 Responsibilities:
 
--   create, transition, reopen, complete, and fail runs;
-    
--   enforce lifecycle rules;
-    
--   manage idempotency;
-    
--   expose run status.
-    
+- create, transition, reopen, complete, and fail runs;
+- enforce lifecycle rules;
+- manage idempotency;
+- expose run status.
 
 ## 15.2 `ResearchPlanningService`
 
 Responsibilities:
 
--   accept host-agent or local-model proposals;
-    
--   validate `ResearchSpec`;
-    
--   validate search plans;
-    
--   invoke budget policy.
-    
+- accept host-agent or local-model proposals;
+- validate `ResearchSpec`;
+- validate search plans;
+- invoke budget policy.
 
 ## 15.3 `AcquisitionService`
 
 Responsibilities:
 
--   execute search;
-    
--   persist raw response;
-    
--   parse and persist candidates;
-    
--   classify mechanical failures;
-    
--   execute approved search revisions.
-    
+- execute search;
+- persist raw response;
+- parse and persist candidates;
+- classify mechanical failures;
+- execute approved search revisions.
 
 ## 15.4 `CandidateService`
 
 Responsibilities:
 
--   canonical candidate identity;
-    
--   occurrence aggregation;
-    
--   deterministic signals;
-    
--   learned scoring;
-    
--   semantic assessment storage.
-    
+- canonical candidate identity;
+- occurrence aggregation;
+- deterministic signals;
+- learned scoring;
+- semantic assessment storage.
 
 ## 15.5 `ExtractionService`
 
 Responsibilities:
 
--   plan and execute attempts;
-    
--   preserve raw output;
-    
--   evaluate quality;
-    
--   choose final normalized derivation;
-    
--   submit successful content to `CorpusService`.
-    
+- plan and execute attempts;
+- preserve raw output;
+- evaluate quality;
+- choose final normalized derivation;
+- submit successful content to `CorpusService`.
 
 ## 15.6 `CoverageService`
 
 Responsibilities:
 
--   create coverage items from `ResearchSpec`;
-    
--   apply evidence and candidate events;
-    
--   calculate current projection;
-    
--   request semantic coverage assessment;
-    
--   validate next-action proposals.
-    
+- create coverage items from `ResearchSpec`;
+- apply evidence and candidate events;
+- calculate current projection;
+- request semantic coverage assessment;
+- validate next-action proposals.
 
 ## 15.7 `CorpusService`
 
 Preserve current responsibilities for:
 
--   canonical sources;
-    
--   immutable snapshots;
-    
--   documents;
-    
--   blocks;
-    
--   chunks;
-    
--   derivation versioning;
-    
--   transactional indexing jobs.
-    
+- canonical sources;
+- immutable snapshots;
+- documents;
+- blocks;
+- chunks;
+- derivation versioning;
+- transactional indexing jobs.
 
 ## 15.8 `RetrievalService`
 
 Responsibilities:
 
--   lexical retrieval;
-    
--   dense retrieval;
-    
--   fusion;
-    
--   reranking;
-    
--   degraded-mode reporting;
-    
--   retrieval-event logging;
-    
--   bounded passage expansion.
-    
+- lexical retrieval;
+- dense retrieval;
+- fusion;
+- reranking;
+- degraded-mode reporting;
+- retrieval-event logging;
+- bounded passage expansion.
 
 ## 15.9 `EvidenceService`
 
 Responsibilities:
 
--   construct evidence packets;
-    
--   perform deterministic grouping;
-    
--   invoke semantic binding;
-    
--   validate references.
-    
+- construct evidence packets;
+- perform deterministic grouping;
+- invoke semantic binding;
+- validate references.
 
 ## 15.10 `ReportService`
 
 Responsibilities:
 
--   produce agent-led evidence exports;
-    
--   invoke autonomous-local synthesis;
-    
--   persist reports;
-    
--   validate claim bindings.
-    
+- produce agent-led evidence exports;
+- invoke autonomous-local synthesis;
+- persist reports;
+- validate claim bindings.
 
 ## 15.11 `AuditService`
 
 Responsibilities:
 
--   staged semantic audit;
-    
--   idempotent audit reuse;
-    
--   target-hash freshness;
-    
--   audit export.
-    
+- staged semantic audit;
+- idempotent audit reuse;
+- target-hash freshness;
+- audit export.
 
 ## 15.12 `CompatibilityExportService`
 
 Responsibilities:
 
--   generate scratch and Catalog-compatible artifacts;
-    
--   never mutate authoritative state.
-    
+- generate scratch and Catalog-compatible artifacts;
+- never mutate authoritative state.
 
 ## 16\. CLI and API Surface
 
@@ -2109,112 +1541,69 @@ All commands shall support:
 
 Machine-readable results must include:
 
--   operation ID;
-    
--   run ID;
-    
--   prior and resulting state;
-    
--   authoritative record IDs;
-    
--   degraded components;
-    
--   warnings;
-    
--   next permitted actions.
-    
+- operation ID;
+- run ID;
+- prior and resulting state;
+- authoritative record IDs;
+- degraded components;
+- warnings;
+- next permitted actions.
 
 ## 16.2 Legacy wrapper mapping
 
 During migration:
 
--   `frun` delegates to `research run`;
-    
--   `fsearch_smart` delegates to planning, acquisition, coverage, and extraction services;
-    
--   `fsearch` delegates to a single-query acquisition operation;
-    
--   `fscrape` delegates to extraction operations;
-    
--   `research-db` remains the corpus and infrastructure administration interface until consolidated.
-    
+- `frun` delegates to `research run`;
+- `fsearch_smart` delegates to planning, acquisition, coverage, and extraction services;
+- `fsearch` delegates to a single-query acquisition operation;
+- `fscrape` delegates to extraction operations;
+- `research-db` remains the corpus and infrastructure administration interface until consolidated.
 
 ## 17\. Semantic Gateway Requirements
 
 ## 17.1 Supported semantic authorities
 
--   host-agent supplied structured output;
-    
--   local OpenAI-compatible model;
-    
--   explicit OpenAI provider;
-    
--   explicit Gemini provider;
-    
--   deterministic-debug fixture.
-    
+- host-agent supplied structured output;
+- local OpenAI-compatible model;
+- explicit OpenAI provider;
+- explicit Gemini provider;
+- deterministic-debug fixture.
 
 ## 17.2 Required provenance
 
 Every semantic call shall record:
 
--   semantic-call ID;
-    
--   run and invocation IDs;
-    
--   stage;
-    
--   provider;
-    
--   endpoint alias;
-    
--   requested model;
-    
--   returned model;
-    
--   model revision or fingerprint where available;
-    
--   prompt-template version;
-    
--   prompt hash;
-    
--   schema version;
-    
--   input artifact IDs;
-    
--   input token estimate;
-    
--   output token usage;
-    
--   latency;
-    
--   retry attempts;
-    
--   structured-output mode;
-    
--   validation errors;
-    
--   fallback use;
-    
--   final status.
-    
+- semantic-call ID;
+- run and invocation IDs;
+- stage;
+- provider;
+- endpoint alias;
+- requested model;
+- returned model;
+- model revision or fingerprint where available;
+- prompt-template version;
+- prompt hash;
+- schema version;
+- input artifact IDs;
+- input token estimate;
+- output token usage;
+- latency;
+- retry attempts;
+- structured-output mode;
+- validation errors;
+- fallback use;
+- final status.
 
 ## 17.3 Caching
 
 Semantic outputs may be reused only when all of the following match:
 
--   stage;
-    
--   prompt-template version;
-    
--   schema version;
-    
--   provider and model fingerprint;
-    
--   normalized input hash;
-    
--   applicable policy version.
-    
+- stage;
+- prompt-template version;
+- schema version;
+- provider and model fingerprint;
+- normalized input hash;
+- applicable policy version.
 
 Cached semantic outputs still require deterministic validation against current state.
 
@@ -2224,24 +1613,15 @@ The autonomous-local workflow shall be designed for bounded execution on a singl
 
 ## 18.1 Required controls
 
--   configurable maximum concurrent generative calls;
-    
--   configurable maximum model input tokens;
-    
--   candidate-card batching;
-    
--   bounded reranker candidate set;
-    
--   embedding microbatching;
-    
--   backpressure through PostgreSQL jobs;
-    
--   model-endpoint health checks;
-    
--   no implicit simultaneous loading of incompatible large models;
-    
--   resumable stages after endpoint restart.
-    
+- configurable maximum concurrent generative calls;
+- configurable maximum model input tokens;
+- candidate-card batching;
+- bounded reranker candidate set;
+- embedding microbatching;
+- backpressure through PostgreSQL jobs;
+- model-endpoint health checks;
+- no implicit simultaneous loading of incompatible large models;
+- resumable stages after endpoint restart.
 
 ## 18.2 Embedding optimization
 
@@ -2249,8 +1629,7 @@ The worker shall support microbatch embedding while preserving per-manifest leas
 
 UNVERIFIED performance target:
 
--   demonstrate materially higher throughput than one HTTP request per chunk without increasing incorrect completion, lease loss, or dimension mismatch rates.
-    
+- demonstrate materially higher throughput than one HTTP request per chunk without increasing incorrect completion, lease loss, or dimension mismatch rates.
 
 ## 18.3 Memory constraints
 
@@ -2260,105 +1639,65 @@ Tests shall verify behavior under constrained system RAM and VRAM. The implement
 
 ## NFR-001 — Correctness
 
--   No authoritative state may be inferred from Qdrant, Valkey, or scratch exports.
-    
--   Every state mutation must be transactionally valid.
-    
--   Semantic output must be schema-valid and referentially valid.
-    
--   Claims must not acquire stronger support labels than the evidence permits.
-    
+- No authoritative state may be inferred from Qdrant, Valkey, or scratch exports.
+- Every state mutation must be transactionally valid.
+- Semantic output must be schema-valid and referentially valid.
+- Claims must not acquire stronger support labels than the evidence permits.
 
 ## NFR-002 — Auditability
 
 A maintainer must be able to determine:
 
--   what the system knew at each decision point;
-    
--   which model or rule made each proposal;
-    
--   why each action was permitted;
-    
--   which sources informed each claim;
-    
--   how the final report relates to exact source snapshots.
-    
+- what the system knew at each decision point;
+- which model or rule made each proposal;
+- why each action was permitted;
+- which sources informed each claim;
+- how the final report relates to exact source snapshots.
 
 ## NFR-003 — Resilience
 
--   Lost Valkey notifications must not strand work.
-    
--   Qdrant may be rebuilt from PostgreSQL and blobs.
-    
--   Model endpoint failure must not corrupt run state.
-    
--   Search or extraction retries must be idempotent.
-    
--   A crash after external execution but before acknowledgment must be reconcilable.
-    
+- Lost Valkey notifications must not strand work.
+- Qdrant may be rebuilt from PostgreSQL and blobs.
+- Model endpoint failure must not corrupt run state.
+- Search or extraction retries must be idempotent.
+- A crash after external execution but before acknowledgment must be reconcilable.
 
 ## NFR-004 — Security
 
--   credentials must not enter prompts, logs, exports, or model-visible metadata;
-    
--   scraped content must be treated as untrusted data;
-    
--   model outputs must not directly execute shell commands or SQL;
-    
--   URL canonicalization must remove or redact sensitive parameters;
-    
--   destructive operations require explicit scope and confirmation flags;
-    
--   report rendering must not execute source content.
-    
+- credentials must not enter prompts, logs, exports, or model-visible metadata;
+- scraped content must be treated as untrusted data;
+- model outputs must not directly execute shell commands or SQL;
+- URL canonicalization must remove or redact sensitive parameters;
+- destructive operations require explicit scope and confirmation flags;
+- report rendering must not execute source content.
 
 ## NFR-005 — Observability
 
 Metrics shall include:
 
--   runs by state and outcome;
-    
--   state-transition latency;
-    
--   search response counts;
-    
--   candidate counts;
-    
--   candidate triage coverage;
-    
--   extraction success by method;
-    
--   extraction-quality dispositions;
-    
--   coverage changes per iteration;
-    
--   search revisions per run;
-    
--   retrieval degradation;
-    
--   embedding queue age;
-    
--   lease loss and dead jobs;
-    
--   report validation failures;
-    
--   audit reuse and failure rates.
-    
+- runs by state and outcome;
+- state-transition latency;
+- search response counts;
+- candidate counts;
+- candidate triage coverage;
+- extraction success by method;
+- extraction-quality dispositions;
+- coverage changes per iteration;
+- search revisions per run;
+- retrieval degradation;
+- embedding queue age;
+- lease loss and dead jobs;
+- report validation failures;
+- audit reuse and failure rates.
 
 ## NFR-006 — Maintainability
 
--   orchestration logic shall not remain concentrated in a single thousand-line script;
-    
--   Bash shall be limited to thin launch adapters;
-    
--   embedded Python heredocs shall be removed from core workflows;
-    
--   domain logic shall have typed interfaces;
-    
--   migrations shall be reversible where safe;
-    
--   service modules shall be independently testable.
-    
+- orchestration logic shall not remain concentrated in a single thousand-line script;
+- Bash shall be limited to thin launch adapters;
+- embedded Python heredocs shall be removed from core workflows;
+- domain logic shall have typed interfaces;
+- migrations shall be reversible where safe;
+- service modules shall be independently testable.
 
 ## 20\. Migration and Refactor Sequence
 
@@ -2366,202 +1705,131 @@ Metrics shall include:
 
 ### Scope
 
--   add `ResearchSpec`, `SearchPlan`, `CoverageLedger`, `StrategyRevisionProposal`, and `EvidencePacket` models;
-    
--   add run-state machine;
-    
--   add execution mode;
-    
--   add deterministic budget policy;
-    
--   add semantic-call persistence;
-    
--   retain existing acquisition behavior behind adapters.
-    
+- add `ResearchSpec`, `SearchPlan`, `CoverageLedger`, `StrategyRevisionProposal`, and `EvidencePacket` models;
+- add run-state machine;
+- add execution mode;
+- add deterministic budget policy;
+- add semantic-call persistence;
+- retain existing acquisition behavior behind adapters.
 
 ### Required code changes
 
--   introduce typed domain modules;
-    
--   create initial database migrations;
-    
--   add transition service;
-    
--   add host-agent structured-input path;
-    
--   replace legacy automatic profile and complexity selection in the new path;
-    
--   retain legacy values only for comparison telemetry.
-    
+- introduce typed domain modules;
+- create initial database migrations;
+- add transition service;
+- add host-agent structured-input path;
+- replace legacy automatic profile and complexity selection in the new path;
+- retain legacy values only for comparison telemetry.
 
 ### Exit criteria
 
--   a run can be created in either execution mode;
-    
--   a valid `ResearchSpec` can be proposed, validated, persisted, and versioned;
-    
--   invalid state transitions are rejected;
-    
--   the old workflow can be invoked through an adapter without losing current functionality.
-    
+- a run can be created in either execution mode;
+- a valid `ResearchSpec` can be proposed, validated, persisted, and versioned;
+- invalid state transitions are rejected;
+- the old workflow can be invoked through an adapter without losing current functionality.
 
 ## Phase 2 — Complete acquisition-corpus persistence
 
 ### Scope
 
--   add search plans, queries, responses, candidates, and occurrences;
-    
--   persist every candidate before triage;
-    
--   store raw search response blobs;
-    
--   support replay of triage and extraction selection.
-    
+- add search plans, queries, responses, candidates, and occurrences;
+- persist every candidate before triage;
+- store raw search response blobs;
+- support replay of triage and extraction selection.
 
 ### Exit criteria
 
--   deleting scratch data does not remove candidate history;
-    
--   a candidate can be traced to every query branch where it appeared;
-    
--   triage can be rerun without another live search;
-    
--   search-response ingestion is transactional and idempotent.
-    
+- deleting scratch data does not remove candidate history;
+- a candidate can be traced to every query branch where it appeared;
+- triage can be rerun without another live search;
+- search-response ingestion is transactional and idempotent.
 
 ## Phase 3 — Coverage-led adaptive workflow
 
 ### Scope
 
--   create coverage items from `ResearchSpec`;
-    
--   update coverage after acquisition and extraction;
-    
--   implement strategy-revision proposals;
-    
--   remove page-count-led stopping from the new path;
-    
--   require gap-targeted additional actions.
-    
+- create coverage items from `ResearchSpec`;
+- update coverage after acquisition and extraction;
+- implement strategy-revision proposals;
+- remove page-count-led stopping from the new path;
+- require gap-targeted additional actions.
 
 ### Exit criteria
 
--   every additional query or extraction wave references unresolved coverage items;
-    
--   a sufficient run can stop without reaching nominal page targets;
-    
--   an insufficient run cannot claim completion merely because enough pages succeeded;
-    
--   full iteration history is persisted.
-    
+- every additional query or extraction wave references unresolved coverage items;
+- a sufficient run can stop without reaching nominal page targets;
+- an insufficient run cannot claim completion merely because enough pages succeeded;
+- full iteration history is persisted.
 
 ## Phase 4 — PostgreSQL authority consolidation
 
 ### Scope
 
--   migrate Catalog run state, events, annotations, assessments, and claim manifests into PostgreSQL;
-    
--   make filesystem Catalog output derived;
-    
--   make audit scheduling idempotent;
-    
--   consolidate run lifecycle operations.
-    
+- migrate Catalog run state, events, annotations, assessments, and claim manifests into PostgreSQL;
+- make filesystem Catalog output derived;
+- make audit scheduling idempotent;
+- consolidate run lifecycle operations.
 
 ### Exit criteria
 
--   PostgreSQL alone reconstructs the complete run;
-    
--   Catalog exports regenerate from committed state;
-    
--   no split-brain lifecycle is possible;
-    
--   equivalent audit requests reuse current assessments.
-    
+- PostgreSQL alone reconstructs the complete run;
+- Catalog exports regenerate from committed state;
+- no split-brain lifecycle is possible;
+- equivalent audit requests reuse current assessments.
 
 ## Phase 5 — Extraction and parsing refactor
 
 ### Scope
 
--   introduce extraction-attempt records;
-    
--   implement deterministic quality metrics;
-    
--   replace regex-first HTML fallback;
-    
--   modularize parser and chunker interfaces;
-    
--   add real tokenization;
-    
--   preserve raw and normalized derivations.
-    
+- introduce extraction-attempt records;
+- implement deterministic quality metrics;
+- replace regex-first HTML fallback;
+- modularize parser and chunker interfaces;
+- add real tokenization;
+- preserve raw and normalized derivations.
 
 ### Exit criteria
 
--   short but valid sources are not rejected solely for length;
-    
--   long blocked pages are not accepted solely for length;
-    
--   every normalized document references its extraction attempt;
-    
--   parser and chunker upgrades produce versioned derivations.
-    
+- short but valid sources are not rejected solely for length;
+- long blocked pages are not accepted solely for length;
+- every normalized document references its extraction attempt;
+- parser and chunker upgrades produce versioned derivations.
 
 ## Phase 6 — Retrieval and evidence completion
 
 ### Scope
 
--   make degraded retrieval explicit;
-    
--   log all retrieval stages;
-    
--   remove unused Qdrant sparse configuration unless implemented;
-    
--   build corroboration, contradiction, qualification, and duplicate groups;
-    
--   add claim-evidence bindings;
-    
--   implement complete evidence packet.
-    
+- make degraded retrieval explicit;
+- log all retrieval stages;
+- remove unused Qdrant sparse configuration unless implemented;
+- build corroboration, contradiction, qualification, and duplicate groups;
+- add claim-evidence bindings;
+- implement complete evidence packet.
 
 ### Exit criteria
 
--   retrieval mode and degradation are observable;
-    
--   evidence packet fields are substantively implemented;
-    
--   each report claim can be traced to passages;
-    
--   duplicate sources do not inflate corroboration.
-    
+- retrieval mode and degradation are observable;
+- evidence packet fields are substantively implemented;
+- each report claim can be traced to passages;
+- duplicate sources do not inflate corroboration.
 
 ## Phase 7 — Synthesis, optimization, and legacy retirement
 
 ### Scope
 
--   implement autonomous-local synthesis;
-    
--   batch embeddings;
-    
--   add semantic caching;
-    
--   benchmark local and host-agent modes;
-    
--   deprecate or remove dead legacy planner and classifier paths;
-    
--   simplify wrappers.
-    
+- implement autonomous-local synthesis;
+- batch embeddings;
+- add semantic caching;
+- benchmark local and host-agent modes;
+- deprecate or remove dead legacy planner and classifier paths;
+- simplify wrappers.
 
 ### Exit criteria
 
--   autonomous-local mode produces validated reports;
-    
--   agent-led mode produces complete bounded evidence packets;
-    
--   embedding throughput and resource use are benchmarked;
-    
--   legacy behavior is either removed or explicitly compatibility-only.
-    
+- autonomous-local mode produces validated reports;
+- agent-led mode produces complete bounded evidence packets;
+- embedding throughput and resource use are benchmarked;
+- legacy behavior is either removed or explicitly compatibility-only.
 
 ## 21\. Test Strategy
 
@@ -2569,30 +1837,18 @@ Metrics shall include:
 
 Required coverage:
 
--   schema validation;
-    
--   state transitions;
-    
--   budget policy;
-    
--   query validation;
-    
--   candidate identity;
-    
--   occurrence aggregation;
-    
--   extraction-quality metrics;
-    
--   coverage-state updates;
-    
--   strategy-revision authorization;
-    
--   evidence-reference validation;
-    
--   audit cache identity;
-    
--   export generation.
-    
+- schema validation;
+- state transitions;
+- budget policy;
+- query validation;
+- candidate identity;
+- occurrence aggregation;
+- extraction-quality metrics;
+- coverage-state updates;
+- strategy-revision authorization;
+- evidence-reference validation;
+- audit cache identity;
+- export generation.
 
 ## 21.2 PostgreSQL integration tests
 
@@ -2600,68 +1856,42 @@ Use an explicitly disposable test database.
 
 Test:
 
--   migrations;
-    
--   transaction rollback;
-    
--   idempotent run creation;
-    
--   transition concurrency;
-    
--   duplicate search-response ingestion;
-    
--   candidate occurrence preservation;
-    
--   extraction savepoints;
-    
--   coverage revisions;
-    
--   report persistence;
-    
--   audit invalidation;
-    
--   compatibility export regeneration.
-    
+- migrations;
+- transaction rollback;
+- idempotent run creation;
+- transition concurrency;
+- duplicate search-response ingestion;
+- candidate occurrence preservation;
+- extraction savepoints;
+- coverage revisions;
+- report persistence;
+- audit invalidation;
+- compatibility export regeneration.
 
 ## 21.3 Qdrant integration tests
 
 Test:
 
--   index fingerprint creation;
-    
--   collection schema;
-    
--   alias activation;
-    
--   degraded-mode reporting;
-    
--   missing collection;
-    
--   point reconciliation;
-    
--   reindexing;
-    
--   rollback;
-    
--   candidate retrieval.
-    
+- index fingerprint creation;
+- collection schema;
+- alias activation;
+- degraded-mode reporting;
+- missing collection;
+- point reconciliation;
+- reindexing;
+- rollback;
+- candidate retrieval.
 
 ## 21.4 Valkey tests
 
 Test:
 
--   lost notification;
-    
--   expired notification;
-    
--   unavailable Valkey;
-    
--   finite wait;
-    
--   PostgreSQL polling recovery;
-    
--   cache pruning.
-    
+- lost notification;
+- expired notification;
+- unavailable Valkey;
+- finite wait;
+- PostgreSQL polling recovery;
+- cache pruning.
 
 ## 21.5 Semantic contract tests
 
@@ -2669,135 +1899,86 @@ Use recorded model outputs and deterministic fixtures.
 
 Test:
 
--   valid proposals;
-    
--   malformed JSON;
-    
--   missing fields;
-    
--   invented IDs;
-    
--   stale run revision;
-    
--   unauthorized scope expansion;
-    
--   unsupported execution-mode changes;
-    
--   contradictory coverage decisions;
-    
--   invalid claim-evidence bindings.
-    
+- valid proposals;
+- malformed JSON;
+- missing fields;
+- invented IDs;
+- stale run revision;
+- unauthorized scope expansion;
+- unsupported execution-mode changes;
+- contradictory coverage decisions;
+- invalid claim-evidence bindings.
 
 ## 21.6 End-to-end scenarios
 
 At minimum:
 
 1.  Simple current fact lookup.
-    
 2.  Complex technical troubleshooting.
-    
 3.  Legislative or legal research.
-    
 4.  Breaking-news research.
-    
 5.  Academic debate with conflicting evidence.
-    
 6.  Retained-corpus-only answer.
-    
 7.  Search returns many irrelevant candidates.
-    
 8.  Search returns no candidates.
-    
 9.  Scrapes fail but metadata remains useful.
-    
-10.  Qdrant unavailable.
-    
-11.  Local LLM unavailable mid-run.
-    
-12.  Run resumes after process crash.
-    
-13.  Run stops partial after budget exhaustion.
-    
-14.  Agent-led and autonomous-local runs use the same objective.
-    
-15.  Scratch and Catalog exports are deleted and regenerated.
-    
+10. Qdrant unavailable.
+
+11. Local LLM unavailable mid-run.
+
+12. Run resumes after process crash.
+
+13. Run stops partial after budget exhaustion.
+
+14. Agent-led and autonomous-local runs use the same objective.
+
+15. Scratch and Catalog exports are deleted and regenerated.
 
 ## 21.7 Fault-injection tests
 
 Inject failures:
 
--   after search response but before candidate commit;
-    
--   after candidate commit but before acknowledgment;
-    
--   after raw blob write but before transaction commit;
-    
--   after Qdrant upsert but before manifest completion;
-    
--   after report generation but before report registration;
-    
--   during audit stage persistence;
-    
--   during compatibility export.
-    
+- after search response but before candidate commit;
+- after candidate commit but before acknowledgment;
+- after raw blob write but before transaction commit;
+- after Qdrant upsert but before manifest completion;
+- after report generation but before report registration;
+- during audit stage persistence;
+- during compatibility export.
 
 ## 21.8 Evaluation campaign
 
 Create a fixed benchmark suite containing:
 
--   research objectives;
-    
--   expected question decomposition;
-    
--   expected source classes;
-    
--   known relevant sources;
-    
--   known distractor sources;
-    
--   expected unresolved controversies;
-    
--   citation-support labels.
-    
+- research objectives;
+- expected question decomposition;
+- expected source classes;
+- known relevant sources;
+- known distractor sources;
+- expected unresolved controversies;
+- citation-support labels.
 
 Compare:
 
--   legacy workflow;
-    
--   new agent-led workflow;
-    
--   new autonomous-local workflow;
-    
--   deterministic-debug baseline.
-    
+- legacy workflow;
+- new agent-led workflow;
+- new autonomous-local workflow;
+- deterministic-debug baseline.
 
 Metrics:
 
--   candidate recall;
-    
--   relevant-source precision;
-    
--   primary-source recall;
-    
--   coverage completeness;
-    
--   unsupported-claim rate;
-    
--   citation correctness;
-    
--   contradiction detection;
-    
--   acquisition cost;
-    
--   LLM call count;
-    
--   total latency;
-    
--   extraction success;
-    
--   report quality under blinded review.
-    
+- candidate recall;
+- relevant-source precision;
+- primary-source recall;
+- coverage completeness;
+- unsupported-claim rate;
+- citation correctness;
+- contradiction detection;
+- acquisition cost;
+- LLM call count;
+- total latency;
+- extraction success;
+- report quality under blinded review.
 
 All quality targets remain **UNVERIFIED** until benchmark baselines are collected.
 
@@ -2806,45 +1987,35 @@ All quality targets remain **UNVERIFIED** until benchmark baselines are collecte
 The priority refactor is complete only when all of the following are true:
 
 1.  PostgreSQL is the sole authoritative source for run and invocation state.
-    
 2.  A complete run can be reconstructed without scratch or Catalog files.
-    
 3.  `agent_led` and `autonomous_local` are explicit and tested.
-    
 4.  Every search candidate is persisted regardless of scrape selection.
-    
 5.  Every adaptive action references a persisted coverage gap.
-    
 6.  Page counts no longer independently determine completion.
-    
 7.  Search recovery requires a structured proposal and deterministic validation.
-    
 8.  Extraction attempts and quality metrics are persisted.
-    
 9.  Raw and normalized source data remain distinguishable.
-    
-10.  Retrieval degradation is explicit.
-    
-11.  Every retrieval stage is traceable.
-    
-12.  Evidence packets contain implemented corroboration, contradiction, qualification, and duplicate analysis.
-    
-13.  Reports bind claims to evidence IDs.
-    
-14.  Semantic audits are persisted and idempotent.
-    
-15.  Compatibility artifacts are regenerable exports.
-    
-16.  Qdrant remains rebuildable.
-    
-17.  Valkey loss cannot strand durable work.
-    
-18.  Existing snapshot, derivation, index-manifest, and lease-safety guarantees do not regress.
-    
-19.  The test and evaluation campaigns pass their defined release gates.
-    
-20.  Legacy code paths are either removed or clearly marked compatibility-only.
-    
+10. Retrieval degradation is explicit.
+
+11. Every retrieval stage is traceable.
+
+12. Evidence packets contain implemented corroboration, contradiction, qualification, and duplicate analysis.
+
+13. Reports bind claims to evidence IDs.
+
+14. Semantic audits are persisted and idempotent.
+
+15. Compatibility artifacts are regenerable exports.
+
+16. Qdrant remains rebuildable.
+
+17. Valkey loss cannot strand durable work.
+
+18. Existing snapshot, derivation, index-manifest, and lease-safety guarantees do not regress.
+
+19. The test and evaluation campaigns pass their defined release gates.
+
+20. Legacy code paths are either removed or clearly marked compatibility-only.
 
 ## 23\. Rollout Strategy
 
@@ -2852,44 +2023,30 @@ The priority refactor is complete only when all of the following are true:
 
 Introduce flags for:
 
--   authoritative workflow service;
-    
--   complete candidate persistence;
-    
--   coverage-led gating;
-    
--   new extraction pipeline;
-    
--   new evidence builder;
-    
--   PostgreSQL-backed audits;
-    
--   autonomous-local synthesis.
-    
+- authoritative workflow service;
+- complete candidate persistence;
+- coverage-led gating;
+- new extraction pipeline;
+- new evidence builder;
+- PostgreSQL-backed audits;
+- autonomous-local synthesis.
 
 ## 23.2 Shadow mode
 
 Before changing default behavior:
 
 1.  run the new planning and coverage components in shadow mode;
-    
 2.  preserve existing execution decisions;
-    
 3.  compare proposed actions with legacy actions;
-    
 4.  record divergences;
-    
 5.  evaluate on fixed benchmark objectives.
-    
 
 ## 23.3 Dual-write period
 
 A temporary dual-write period may write:
 
--   authoritative PostgreSQL state;
-    
--   legacy compatibility artifacts.
-    
+- authoritative PostgreSQL state;
+- legacy compatibility artifacts.
 
 PostgreSQL must be treated as authoritative from the point the feature flag is enabled. Dual-write disagreement must be surfaced.
 
@@ -2898,19 +2055,12 @@ PostgreSQL must be treated as authoritative from the point the feature flag is e
 Recommended order:
 
 1.  new state machine;
-    
 2.  full candidate persistence;
-    
 3.  coverage-led gating;
-    
 4.  PostgreSQL audit authority;
-    
 5.  extraction refactor;
-    
 6.  evidence and synthesis;
-    
 7.  legacy removal.
-    
 
 ## 23.5 Rollback
 
@@ -2922,22 +2072,22 @@ Schema rollback shall not be used when it would destroy valid research history. 
 
 # Product Requirements Document
 
-| Risk | Impact | Mitigation |
-|-----------------------------------------------|--------|-------------------------------------------------------------------|
-| Overlarge refactor creates regressions | High | Phase gates, adapters, shadow mode, fixed benchmarks |
-| PostgreSQL schema becomes overly coupled | High | Typed service boundaries and append-only event records |
-| Local LLM produces unstable structured output | High | Strict schemas, retries, bounded stages, deterministic validation |
-| Coverage model becomes too subjective | High | Separate objective metrics from semantic assessments |
-| Candidate corpus grows rapidly | Medium | Retention policy, compressed raw blobs, indexed metadata |
-| Too many LLM calls increase latency | Medium | Learned prefilters, semantic caching, bounded calls |
-| Dual-write state diverges | High | PostgreSQL authority and disagreement alerts |
-| Parser changes alter retrieval behavior | Medium | Versioned derivations and benchmark comparison |
-| Search-provider metadata changes | Medium | Raw-response retention and versioned adapters |
-| Agent-led and local modes drift | High | Shared schemas and identical deterministic services |
-| Audit model validates its own mistakes | Medium | Deterministic reference checks and optional independent evaluator |
-| Coverage gate loops indefinitely | High | Hard budgets, maximum revisions, loop detection |
-| Source duplicates inflate confidence | High | Candidate and content similarity grouping |
-| Retrieval silently degrades | High | Required degradation metadata and health state |
+| Risk                                          | Impact | Mitigation                                                        |
+| --------------------------------------------- | ------ | ----------------------------------------------------------------- |
+| Overlarge refactor creates regressions        | High   | Phase gates, adapters, shadow mode, fixed benchmarks              |
+| PostgreSQL schema becomes overly coupled      | High   | Typed service boundaries and append-only event records            |
+| Local LLM produces unstable structured output | High   | Strict schemas, retries, bounded stages, deterministic validation |
+| Coverage model becomes too subjective         | High   | Separate objective metrics from semantic assessments              |
+| Candidate corpus grows rapidly                | Medium | Retention policy, compressed raw blobs, indexed metadata          |
+| Too many LLM calls increase latency           | Medium | Learned prefilters, semantic caching, bounded calls               |
+| Dual-write state diverges                     | High   | PostgreSQL authority and disagreement alerts                      |
+| Parser changes alter retrieval behavior       | Medium | Versioned derivations and benchmark comparison                    |
+| Search-provider metadata changes              | Medium | Raw-response retention and versioned adapters                     |
+| Agent-led and local modes drift               | High   | Shared schemas and identical deterministic services               |
+| Audit model validates its own mistakes        | Medium | Deterministic reference checks and optional independent evaluator |
+| Coverage gate loops indefinitely              | High   | Hard budgets, maximum revisions, loop detection                   |
+| Source duplicates inflate confidence          | High   | Candidate and content similarity grouping                         |
+| Retrieval silently degrades                   | High   | Required degradation metadata and health state                    |
 
 ## 25\. Coding AI Agent Implementation Rules
 
@@ -2946,80 +2096,50 @@ The coding agent shall follow these constraints.
 ## 25.1 Repository discipline
 
 1.  Inspect the current implementation before modifying a subsystem.
-    
 2.  Preserve existing invariants unless this PRD explicitly changes them.
-    
 3.  Prefer small, reviewable commits grouped by one requirement.
-    
 4.  Do not combine schema migration, orchestration rewrite, and unrelated cleanup in one commit.
-    
 5.  Do not delete legacy behavior until the replacement has passing integration tests.
-    
 6.  Do not add dependencies without documenting purpose and operational impact.
-    
 7.  Do not place new core logic in Bash or embedded Python heredocs.
-    
 8.  Do not hard-code the user’s local endpoint addresses in domain logic.
-    
 
 ## 25.2 Source-of-truth discipline
 
 Before each implementation phase, identify:
 
--   applicable GSP decisions;
-    
--   functional requirements being implemented;
-    
--   existing invariants being preserved;
-    
--   migration consequences;
-    
--   tests required before completion.
-    
+- applicable GSP decisions;
+- functional requirements being implemented;
+- existing invariants being preserved;
+- migration consequences;
+- tests required before completion.
 
 ## 25.3 Change format
 
 For each implementation task, the coding agent shall provide:
 
--   affected requirements;
-    
--   files changed;
-    
--   before and after behavior;
-    
--   schema changes;
-    
--   migration behavior;
-    
--   backward-compatibility impact;
-    
--   tests added;
-    
--   known limitations;
-    
--   rollback or repair procedure.
-    
+- affected requirements;
+- files changed;
+- before and after behavior;
+- schema changes;
+- migration behavior;
+- backward-compatibility impact;
+- tests added;
+- known limitations;
+- rollback or repair procedure.
 
 ## 25.4 Safety rules
 
 The coding agent shall not:
 
--   infer successful persistence from file creation;
-    
--   mark semantic proposals accepted without policy validation;
-    
--   silently catch authoritative-state errors;
-    
--   silently suppress retrieval degradation;
-    
--   invent source or evidence IDs;
-    
--   weaken lease, snapshot, or content-hash guarantees;
-    
--   permit a model response to execute arbitrary code;
-    
--   make destructive migration behavior the default.
-    
+- infer successful persistence from file creation;
+- mark semantic proposals accepted without policy validation;
+- silently catch authoritative-state errors;
+- silently suppress retrieval degradation;
+- invent source or evidence IDs;
+- weaken lease, snapshot, or content-hash guarantees;
+- permit a model response to execute arbitrary code;
+- make destructive migration behavior the default.
 
 ## 25.5 Completion rule
 
@@ -3027,166 +2147,103 @@ A task is not complete because code compiles.
 
 A task is complete only when:
 
--   the relevant requirements are implemented;
-    
--   unit tests pass;
-    
--   integration tests pass where applicable;
-    
--   failure paths are tested;
-    
--   migrations are documented;
-    
--   observability is present;
-    
--   compatibility effects are recorded.
-    
+- the relevant requirements are implemented;
+- unit tests pass;
+- integration tests pass where applicable;
+- failure paths are tested;
+- migrations are documented;
+- observability is present;
+- compatibility effects are recorded.
 
 ## 26\. Recommended Initial Issue Hierarchy
 
 ## Epic 1 — Authoritative research state
 
--   Define state-machine enums and transitions.
-    
--   Add research-run transition table.
-    
--   Add invocation and event tables.
-    
--   Implement `ResearchRunService`.
-    
--   Add idempotency and concurrency tests.
-    
--   Route `frun` through the service.
-    
+- Define state-machine enums and transitions.
+- Add research-run transition table.
+- Add invocation and event tables.
+- Implement `ResearchRunService`.
+- Add idempotency and concurrency tests.
+- Route `frun` through the service.
 
 ## Epic 2 — Semantic contracts
 
--   Define `ResearchSpec`.
-    
--   Define `SearchPlan`.
-    
--   Define `CandidateAssessment`.
-    
--   Define `CoverageLedger`.
-    
--   Define `StrategyRevisionProposal`.
-    
--   Define `EvidencePacket`.
-    
--   Extend model gateway provenance.
-    
+- Define `ResearchSpec`.
+- Define `SearchPlan`.
+- Define `CandidateAssessment`.
+- Define `CoverageLedger`.
+- Define `StrategyRevisionProposal`.
+- Define `EvidencePacket`.
+- Extend model gateway provenance.
 
 ## Epic 3 — Complete acquisition persistence
 
--   Add query and response tables.
-    
--   Add candidate and occurrence tables.
-    
--   Persist raw search responses.
-    
--   Add candidate replay APIs.
-    
--   Update `fsearch` adapter.
-    
+- Add query and response tables.
+- Add candidate and occurrence tables.
+- Persist raw search responses.
+- Add candidate replay APIs.
+- Update `fsearch` adapter.
 
 ## Epic 4 — Coverage-led orchestration
 
--   Generate initial coverage items.
-    
--   Apply candidate and evidence events.
-    
--   Implement coverage projection.
-    
--   Implement next-action proposal validation.
-    
--   Replace successful-page stopping.
-    
+- Generate initial coverage items.
+- Apply candidate and evidence events.
+- Implement coverage projection.
+- Implement next-action proposal validation.
+- Replace successful-page stopping.
 
 ## Epic 5 — Catalog consolidation
 
--   Add database-backed annotations.
-    
--   Add claim manifest tables.
-    
--   Add database-backed staged audits.
-    
--   Add compatibility export.
-    
--   Remove duplicate audit scheduling.
-    
+- Add database-backed annotations.
+- Add claim manifest tables.
+- Add database-backed staged audits.
+- Add compatibility export.
+- Remove duplicate audit scheduling.
 
 ## Epic 6 — Extraction modernization
 
--   Add extraction-attempt table.
-    
--   Add quality metrics.
-    
--   Add DOM-aware HTML extraction.
-    
--   Add parser interfaces.
-    
--   Add tokenizer-backed chunks.
-    
--   Preserve derivation lineage.
-    
+- Add extraction-attempt table.
+- Add quality metrics.
+- Add DOM-aware HTML extraction.
+- Add parser interfaces.
+- Add tokenizer-backed chunks.
+- Preserve derivation lineage.
 
 ## Epic 7 — Retrieval and evidence
 
--   Add retrieval degradation contract.
-    
--   Log all retrieval stages.
-    
--   remove or implement Qdrant sparse vectors;
-    
--   implement evidence grouping;
-    
--   implement claim-evidence binding.
-    
+- Add retrieval degradation contract.
+- Log all retrieval stages.
+- remove or implement Qdrant sparse vectors;
+- implement evidence grouping;
+- implement claim-evidence binding.
 
 ## Epic 8 — Synthesis and optimization
 
--   Implement autonomous-local synthesis.
-    
--   Implement report validation.
-    
--   Implement embedding batches.
-    
--   Add semantic cache.
-    
--   Run benchmark campaign.
-    
--   retire obsolete legacy paths.
-    
+- Implement autonomous-local synthesis.
+- Implement report validation.
+- Implement embedding batches.
+- Add semantic cache.
+- Run benchmark campaign.
+- retire obsolete legacy paths.
 
 ## 27\. Definition of Done
 
 The project is done when the implementation satisfies the complete acceptance criteria in Section 22 and the benchmark campaign demonstrates that the new architecture:
 
--   does not regress deterministic corpus integrity;
-    
--   improves workflow traceability;
-    
--   preserves more of the acquired candidate corpus;
-    
--   makes adaptive decisions explainable;
-    
--   reduces unsupported report claims;
-    
--   operates successfully in both approved execution modes.
-    
+- does not regress deterministic corpus integrity;
+- improves workflow traceability;
+- preserves more of the acquired candidate corpus;
+- makes adaptive decisions explainable;
+- reduces unsupported report claims;
+- operates successfully in both approved execution modes.
 
 No benchmark result should be represented as established until measured. Any unmeasured quality or performance claim must remain labeled **UNVERIFIED**.
 
 ## 28\. Deliverable Self-Check
 
--   **No fabrication:** Repository behavior cited in the current-state sections is grounded in inspected source.
-    
--   **Approved decisions preserved:** GSP-A1, GSP-A2, and GSP-A3 govern all requirements.
-    
--   **Claim strength:** Performance and quality improvements are specified as targets or evaluation requirements, not established results.
-    
--   **Scope control:** The PRD preserves the existing deterministic corpus and index guarantees and focuses refactoring on workflow authority, acquisition persistence, coverage, extraction, evidence, and synthesis.
-    
--   **Traceability:** Functional requirements, acceptance criteria, migration phases, service boundaries, and coding-agent rules are explicitly mapped.
-    
--   **Limitations:** Runtime behavior and performance remain UNVERIFIED pending the prescribed tests and benchmark campaign.
+- **No fabrication:** Repository behavior cited in the current-state sections is grounded in inspected source.
+- **Approved decisions preserved:** GSP-A1, GSP-A2, and GSP-A3 govern all requirements.
+- **Claim strength:** Performance and quality improvements are specified as targets or evaluation requirements, not established results.
+- **Scope control:** The PRD preserves the existing deterministic corpus and index guarantees and focuses refactoring on workflow authority, acquisition persistence, coverage, extraction, evidence, and synthesis.
+- **Traceability:** Functional requirements, acceptance criteria, migration phases, service boundaries, and coding-agent rules are explicitly mapped.
+- **Limitations:** Runtime behavior and performance remain UNVERIFIED pending the prescribed tests and benchmark campaign.

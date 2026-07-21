@@ -45,6 +45,70 @@ class ChunkRepository(Protocol):
 
 class ResearchRunRepository(Protocol):
     def start_run(self, original_request: str, metadata: dict[str, Any]) -> UUID: ...
+    def append_run_transition(
+        self,
+        run_id: UUID,
+        lifecycle_revision: int,
+        prior_state: str,
+        next_state: str,
+        idempotency_key: str,
+        actor_type: str,
+        policy_version: str,
+        **metadata: Any,
+    ) -> dict[str, Any]: ...
+    def record_invocation(
+        self, run_id: UUID, operation: str, idempotency_key: str, **metadata: Any
+    ) -> UUID: ...
+    def append_event(
+        self,
+        run_id: UUID,
+        event_type: str,
+        actor_type: str,
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+    def record_research_spec(
+        self,
+        run_id: UUID,
+        spec_revision: int,
+        schema_name: str,
+        schema_version: int,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+    def record_semantic_call(
+        self,
+        run_id: UUID,
+        stage: str,
+        provider: str,
+        model: str,
+        prompt_version: str,
+        request: dict[str, Any],
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+    def record_semantic_artifact(
+        self,
+        run_id: UUID,
+        semantic_call_id: UUID,
+        artifact_type: str,
+        schema_name: str,
+        schema_version: int,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+    def record_compatibility_export(
+        self,
+        run_id: UUID,
+        export_type: str,
+        export_schema_version: int,
+        source_state_sha256: str,
+        status: str,
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
     def link_run_asset(
         self, external_run_id: str, snapshot_id: UUID, role: str = "acquired"
     ) -> None: ...
