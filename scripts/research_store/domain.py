@@ -147,3 +147,14 @@ class CandidateOccurrence:
 
 def new_id() -> UUID:
     return uuid4()
+
+
+@dataclass(frozen=True)
+class SearchAdapterResult:
+    raw_payload: bytes
+    http_status: int | None = None
+    provider_request_id: str | None = None
+    transport_error: str | None = None
+    transport_metadata: dict[str, Any] = field(default_factory=dict)
+    requested_at: datetime = field(default_factory=utcnow)
+    responded_at: datetime = field(default_factory=utcnow)

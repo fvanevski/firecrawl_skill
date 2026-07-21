@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import partial
 
+from .acquisition_service import AcquisitionService
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
 from .postgres import PostgresUnitOfWork
@@ -101,9 +102,32 @@ def build_semantic_service(config: StoreConfig | None = None) -> SemanticCallSer
     )
 
 
+def build_acquisition_service(
+    config: StoreConfig | None = None, search_adapter=None
+) -> AcquisitionService:
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    return AcquisitionService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        ),
+        blob_store=ContentAddressedBlobStore(config.blob_root),
+        search_adapter=search_adapter,
+    )
+
+
 def build_legacy_adapter(
     mode: AdapterMode, config: StoreConfig | None = None
 ) -> LegacyEntryPointAdapter:
+
     if mode == AdapterMode.COMPATIBILITY:
         return LegacyEntryPointAdapter(None, mode)
     config = config or StoreConfig.from_env()

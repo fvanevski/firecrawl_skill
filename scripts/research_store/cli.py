@@ -209,6 +209,21 @@ def parser():
     cand_grp.add_argument("candidate_ids", nargs="+")
     cand_grp.add_argument("--group-id")
 
+    acq_search = sub.add_parser("acquisition-search")
+    acq_search.add_argument("external_id")
+    acq_search.add_argument("query_text")
+    acq_search.add_argument("--backend", default="firecrawl")
+    acq_search.add_argument("--limit", type=int, default=20)
+    acq_search.add_argument("--sources", default="web")
+    acq_search.add_argument("--tbs")
+    acq_search.add_argument("--plan-id")
+    acq_search.add_argument("--plan-query-id")
+    acq_search.add_argument("--idempotency-key")
+    acq_search.add_argument("--scratch-dir")
+
+    acq_recon = sub.add_parser("acquisition-reconcile")
+    acq_recon.add_argument("external_id")
+
 
 
 
@@ -1350,10 +1365,50 @@ def main(argv=None):
         return 0
     if args.command == "candidate-assign-group":
         run_svc = build_run_service(config)
-        cand_ids = [UUID(cid) for cid in args.candidate_ids]
         group_id = UUID(args.group_id) if args.group_id else None
-        res_group_id = run_svc.assign_duplicate_group(cand_ids, group_id=group_id)
-        print(dumps({"group_id": res_group_id}))
+        res_group_id = run_svc.assign_duplicate_group(
+            [UUID(cid) for cid in args.candidate_ids], group_id=group_id
+        )
+        print(dumps({"duplicate_group_id": res_group_id}))
+        return 0
+    if args.command == "acquisition-search":
+        from .container import build_acquisition_service
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        acq_svc = build_acquisition_service(config)
+        result = acq_svc.execute_search(
+            status.id,
+            args.query_text,
+            backend=args.backend,
+            plan_id=UUID(args.plan_id) if args.plan_id else None,
+            plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
+            idempotency_key=args.idempotency_key,
+            limit=args.limit,
+            sources=args.sources,
+            tbs=args.tbs,
+            scratch_dir=args.scratch_dir,
+            export_scratch=bool(args.scratch_dir),
+        )
+        print(dumps({
+            "search_response_id": str(result.search_response_id),
+            "run_id": str(result.run_id),
+            "query_text": result.query_text,
+            "backend": result.backend,
+            "status": result.status,
+            "candidate_count": result.candidate_count,
+            "postgres_committed": result.postgres_committed,
+            "scratch_exported": result.scratch_exported,
+            "event_id": str(result.event_id) if result.event_id else None,
+            "scratch_error": result.scratch_error,
+        }))
+        return 0
+    if args.command == "acquisition-reconcile":
+        from .container import build_acquisition_service
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        acq_svc = build_acquisition_service(config)
+        reconciled = acq_svc.reconcile_pending_searches(status.id)
+        print(dumps(reconciled))
         return 0
 
 

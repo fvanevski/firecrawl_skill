@@ -4,7 +4,7 @@ from contextlib import AbstractContextManager
 from typing import Any, BinaryIO, Protocol
 from uuid import UUID
 
-from .domain import BlobReference, IngestRequest, IngestResult
+from .domain import BlobReference, IngestRequest, IngestResult, SearchAdapterResult
 
 
 class SourceRepository(Protocol):
@@ -317,6 +317,19 @@ class RetrievalIndex(Protocol):
 
 class QueueBackend(Protocol):
     def notify(self, job_id: UUID, ttl_seconds: int = 3600) -> None: ...
+
+
+class SearchAdapter(Protocol):
+    def search(
+        self,
+        query_text: str,
+        *,
+        backend: str = "firecrawl",
+        limit: int = 20,
+        sources: str = "web",
+        tbs: str | None = None,
+        **kwargs: Any,
+    ) -> SearchAdapterResult: ...
 
 
 class UnitOfWork(AbstractContextManager, Protocol):
