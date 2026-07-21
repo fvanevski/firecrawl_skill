@@ -25,6 +25,12 @@ from research_store.retrieval import (
     reciprocal_rank_fusion,
     validate_relation,
 )
+from research_store.run_service import (
+    PERMITTED_TRANSITIONS,
+    RUN_STATES,
+    TERMINAL_STATES,
+    is_transition_permitted,
+)
 from research_store.service import CorpusService
 from research_store.url import canonicalize_url
 import persist_results
@@ -60,6 +66,49 @@ def test_run_finish_parser_rejects_nonterminal_status():
                 "running",
             ]
         )
+
+
+def test_research_run_transition_matrix_is_exact():
+    expected = {
+        ("created", "planning"),
+        ("planning", "corpus_review"),
+        ("planning", "failed"),
+        ("corpus_review", "acquiring"),
+        ("corpus_review", "retrieving"),
+        ("corpus_review", "failed"),
+        ("acquiring", "coverage_review"),
+        ("acquiring", "extracting"),
+        ("acquiring", "failed"),
+        ("extracting", "indexing"),
+        ("extracting", "coverage_review"),
+        ("extracting", "failed"),
+        ("indexing", "coverage_review"),
+        ("indexing", "partial"),
+        ("indexing", "failed"),
+        ("coverage_review", "acquiring"),
+        ("coverage_review", "extracting"),
+        ("coverage_review", "retrieving"),
+        ("coverage_review", "synthesizing"),
+        ("coverage_review", "partial"),
+        ("coverage_review", "failed"),
+        ("retrieving", "coverage_review"),
+        ("retrieving", "synthesizing"),
+        ("retrieving", "failed"),
+        ("synthesizing", "validating"),
+        ("synthesizing", "failed"),
+        ("validating", "completed"),
+        ("validating", "partial"),
+        ("validating", "failed"),
+    }
+    actual = {
+        (prior, following)
+        for prior in RUN_STATES
+        for following in RUN_STATES
+        if is_transition_permitted(prior, following)
+    }
+    assert actual == expected
+    assert set(PERMITTED_TRANSITIONS) == set(RUN_STATES)
+    assert all(not PERMITTED_TRANSITIONS[state] for state in TERMINAL_STATES)
 
 
 def test_url_canonicalization():
@@ -226,9 +275,7 @@ def test_wrapper_persistence_writes_failure_export_when_store_is_unavailable(
     assert exported["assets"][0]["requested_url"].endswith("fail-closed")
 
 
-def test_wrapper_empty_raw_path_falls_back_to_normalized_scratch(
-    tmp_path, monkeypatch
-):
+def test_wrapper_empty_raw_path_falls_back_to_normalized_scratch(tmp_path, monkeypatch):
     asset = tmp_path / "smart-result.md"
     asset.write_text("# Consolidated parent\n\nRetained exactly once.\n")
     meta = tmp_path / "_meta.json"
@@ -263,9 +310,10 @@ def test_wrapper_empty_raw_path_falls_back_to_normalized_scratch(
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
     monkeypatch.setattr(persist_results, "build_service", CapturingService)
-    assert persist_results.main(
-        [str(meta), "--output", str(tmp_path / "_corpus.json")]
-    ) == 0
+    assert (
+        persist_results.main([str(meta), "--output", str(tmp_path / "_corpus.json")])
+        == 0
+    )
 
 
 def test_search_skips_semantic_embedding_when_active_alias_has_other_model():

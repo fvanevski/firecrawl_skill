@@ -9,6 +9,7 @@ from .indexing import OpenAICompatibleEmbedder
 from .qdrant import QdrantIndex
 from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
+from .run_service import ResearchRunService
 from .service import CorpusService
 
 
@@ -57,4 +58,22 @@ def build_service(config: StoreConfig | None = None) -> CorpusService:
         embedder=embedder,
         reranker=reranker,
         queue=ValkeyQueue(config.valkey_url),
+    )
+
+
+def build_run_service(config: StoreConfig | None = None) -> ResearchRunService:
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    return ResearchRunService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
     )

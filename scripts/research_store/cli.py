@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 from .blob import ContentAddressedBlobStore
 from .compat import export_json, import_scratch
 from .config import StoreConfig
-from .container import build_service
+from .container import build_run_service, build_service
 from .domain import IngestRequest
 from .indexing import IndexWorker, OpenAICompatibleEmbedder
 from .postgres import PostgresUnitOfWork, connect
@@ -89,15 +89,48 @@ def parser():
     run_start.add_argument("external_id")
     run_start.add_argument("objective")
     run_start.add_argument("--catalog-pointer")
+    run_start.add_argument(
+        "--mode",
+        choices=("agent_led", "autonomous_local", "deterministic_debug"),
+        default="agent_led",
+    )
+    run_start.add_argument("--idempotency-key")
+    run_start.add_argument("--actor", default="cli")
+    run_status = sub.add_parser("run-status")
+    run_status.add_argument("external_id")
+    run_transition = sub.add_parser("run-transition")
+    run_transition.add_argument("external_id")
+    run_transition.add_argument("next_state")
+    run_transition.add_argument("--expected-revision", type=int, required=True)
+    run_transition.add_argument("--idempotency-key", required=True)
+    run_transition.add_argument("--actor", default="cli")
+    run_transition.add_argument("--actor-identifier")
+    run_transition.add_argument("--semantic-proposal-id")
+    run_transition.add_argument("--reason")
     run_finish = sub.add_parser("run-finish")
     run_finish.add_argument("external_id")
     run_finish.add_argument("--outcome", required=True)
-    run_finish.add_argument("--status", choices=("complete", "failed"), default="complete")
+    run_finish.add_argument(
+        "--status", choices=("complete", "failed"), default="complete"
+    )
     run_finish.add_argument("--catalog-pointer")
     run_finish.add_argument("--source-manifest-sha256")
     run_finish.add_argument("--answer-sha256")
+    run_finish.add_argument("--expected-revision", type=int)
+    run_finish.add_argument("--idempotency-key")
+    run_finish.add_argument("--actor", default="cli")
     run_reopen = sub.add_parser("run-reopen")
     run_reopen.add_argument("external_id")
+    run_reopen.add_argument("--reason", default="legacy compatibility reopen")
+    run_reopen.add_argument("--expected-revision", type=int)
+    run_reopen.add_argument("--idempotency-key")
+    run_reopen.add_argument("--actor", default="cli")
+    run_cancel = sub.add_parser("run-cancel")
+    run_cancel.add_argument("external_id")
+    run_cancel.add_argument("--reason", default="cancelled by operator")
+    run_cancel.add_argument("--expected-revision", type=int)
+    run_cancel.add_argument("--idempotency-key")
+    run_cancel.add_argument("--actor", default="cli")
     budget_record = sub.add_parser("budget-record")
     budget_record.add_argument("external_id")
     budget_record.add_argument("--research-spec", required=True)
@@ -196,7 +229,8 @@ def _resolve_run_id(config, external_id):
         return None
     with _db(config) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id,status FROM research_runs WHERE external_run_id=%s", (external_id,)
+            "SELECT id,status FROM research_runs WHERE external_run_id=%s",
+            (external_id,),
         )
         row = cur.fetchone()
     if not row:
@@ -433,7 +467,7 @@ def _activate_index(config, identifier, action):
     chunk_ids = {str(value) for value in active_chunk_ids}
     if point_ids != chunk_ids:
         raise SystemExit(
-            f"Qdrant coverage mismatch: missing={len(chunk_ids-point_ids)} orphaned={len(point_ids-chunk_ids)}"
+            f"Qdrant coverage mismatch: missing={len(chunk_ids - point_ids)} orphaned={len(point_ids - chunk_ids)}"
         )
     if total_chunks:
         index.search([1.0] + [0.0] * (dimension - 1), {}, 1)
@@ -526,7 +560,9 @@ def _doctor(config):
             workers = checks["worker"]["workers"]
             threshold = max(90, config.worker_poll_seconds * 4)
             age = (
-                (datetime.now(timezone.utc) - workers[0]["heartbeat_at"]).total_seconds()
+                (
+                    datetime.now(timezone.utc) - workers[0]["heartbeat_at"]
+                ).total_seconds()
                 if workers
                 else None
             )
@@ -535,9 +571,8 @@ def _doctor(config):
             )
             checks["worker"]["heartbeat_freshness_threshold_seconds"] = threshold
             checks["worker"]["current_worker_available"] = (
-                (age is not None and age <= threshold)
-                or checks["worker"]["active_leases"] > 0
-            )
+                age is not None and age <= threshold
+            ) or checks["worker"]["active_leases"] > 0
             if checks["worker"]["dead_jobs"] or checks["worker"]["stale_leases"]:
                 failed = True
             if not checks["worker"]["current_worker_available"]:
@@ -569,7 +604,11 @@ def _doctor(config):
                 checks["qdrant"] = qdrant
                 active = None
         if active:
-            rows = [row for row in _index_rows(config) if row["physical_collection"] == active]
+            rows = [
+                row
+                for row in _index_rows(config)
+                if row["physical_collection"] == active
+            ]
             if not rows:
                 raise RuntimeError("active alias is not backed by an index definition")
             row = rows[0]
@@ -592,9 +631,7 @@ def _doctor(config):
                     page = active_index.point_ids(
                         offset, filters=_derivation_filter(config)
                     )
-                    point_ids.update(
-                        str(item["id"]) for item in page.get("points", [])
-                    )
+                    point_ids.update(str(item["id"]) for item in page.get("points", []))
                     offset = page.get("next_page_offset")
                     if not offset:
                         break
@@ -681,7 +718,9 @@ def main(argv=None):
             cur.execute("SELECT status,count(*) FROM index_jobs GROUP BY status")
             jobs = dict(cur.fetchall())
             if schema["at_head"]:
-                cur.execute("SELECT status,count(*) FROM ingestion_batches GROUP BY status")
+                cur.execute(
+                    "SELECT status,count(*) FROM ingestion_batches GROUP BY status"
+                )
                 batches = dict(cur.fetchall())
             else:
                 batches = {"available": False, "reason": "migration required"}
@@ -778,7 +817,9 @@ def main(argv=None):
             IngestRequest(
                 requested_url=args.url,
                 content=path.read_bytes(),
-                mime_type="application/json" if path.suffix == ".json" else "text/markdown",
+                mime_type="application/json"
+                if path.suffix == ".json"
+                else "text/markdown",
                 title=args.title,
                 metadata=json.loads(args.metadata_json),
             )
@@ -862,10 +903,16 @@ def main(argv=None):
         collection = aliases.get(config.qdrant_alias)
         if not collection:
             raise SystemExit(f"Qdrant alias is not configured: {config.qdrant_alias}")
-        rows = [row for row in _index_rows(config) if row["physical_collection"] == collection]
+        rows = [
+            row
+            for row in _index_rows(config)
+            if row["physical_collection"] == collection
+        ]
         if not rows:
             raise SystemExit("active collection has no PostgreSQL index definition")
-        index = _qdrant(config, collection, rows[0]["dimension"], rows[0]["distance_metric"])
+        index = _qdrant(
+            config, collection, rows[0]["dimension"], rows[0]["distance_metric"]
+        )
         qdrant_ids, offset = set(), None
         while True:
             page = index.point_ids(offset, filters=_derivation_filter(config))
@@ -937,7 +984,10 @@ def main(argv=None):
         with _db(config) as conn, conn.cursor() as cur:
             try:
                 internal_id = UUID(args.id)
-                cur.execute("SELECT row_to_json(r) FROM research_runs r WHERE id=%s", (internal_id,))
+                cur.execute(
+                    "SELECT row_to_json(r) FROM research_runs r WHERE id=%s",
+                    (internal_id,),
+                )
             except ValueError:
                 cur.execute(
                     "SELECT row_to_json(r) FROM research_runs r WHERE external_run_id=%s",
@@ -955,76 +1005,98 @@ def main(argv=None):
         export_json(Path(args.output), {"run": run[0], "retrieval_events": events})
         return 0
     if args.command == "run-start":
-        with _uow_factory(config)() as uow:
-            internal_id = uow.start_run(
-                args.objective,
-                {
-                    "external_run_id": args.external_id,
-                    "catalog_pointer": args.catalog_pointer,
-                    "skill_version": "research-store-v3",
-                },
-            )
-        print(dumps({"id": internal_id, "external_run_id": args.external_id}))
+        status = build_run_service(config).create(
+            args.objective,
+            args.external_id,
+            execution_mode=args.mode,
+            idempotency_key=args.idempotency_key,
+            actor_type=args.actor,
+            catalog_pointer=args.catalog_pointer,
+            skill_version="research-store-v3",
+        )
+        print(dumps(status.to_dict()))
+        return 0
+    if args.command in {
+        "run-status",
+        "run-transition",
+        "run-finish",
+        "run-reopen",
+        "run-cancel",
+    }:
+        run_service = build_run_service(config)
+        status = run_service.status(external_id=args.external_id)
+        if args.command == "run-status":
+            print(dumps(status.to_dict()))
+            return 0
+        expected_revision = (
+            args.expected_revision
+            if args.expected_revision is not None
+            else status.lifecycle_revision
+        )
+    if args.command == "run-transition":
+        result = run_service.transition(
+            status.id,
+            args.next_state,
+            expected_revision=expected_revision,
+            idempotency_key=args.idempotency_key,
+            actor_type=args.actor,
+            actor_identifier=args.actor_identifier,
+            semantic_proposal_id=(
+                UUID(args.semantic_proposal_id) if args.semantic_proposal_id else None
+            ),
+            reason=args.reason,
+        )
+        print(dumps(result.to_dict()))
         return 0
     if args.command == "run-finish":
-        with _db(config) as conn, conn.cursor() as cur:
-            cur.execute(
-                """UPDATE research_runs SET status=%s,outcome=%s,completed_at=now(),
-                catalog_pointer=coalesce(%s,catalog_pointer),
-                source_manifest_sha256=%s,answer_sha256=%s
-                WHERE external_run_id=%s AND status='running' RETURNING id""",
-                (
-                    args.status,
-                    args.outcome,
-                    args.catalog_pointer,
-                    args.source_manifest_sha256,
-                    args.answer_sha256,
-                    args.external_id,
-                ),
-            )
-            row = cur.fetchone()
-            if not row:
-                cur.execute(
-                    """SELECT id,status,outcome,source_manifest_sha256,answer_sha256
-                    FROM research_runs
-                    WHERE external_run_id=%s""",
-                    (args.external_id,),
-                )
-                existing = cur.fetchone()
-                if not existing:
-                    raise SystemExit("research run not found")
-                if existing[1:3] != (args.status, args.outcome):
-                    raise SystemExit(
-                        "research run is already finished with a different status or outcome"
-                    )
-                for name, supplied, stored in (
-                    (
-                        "source manifest hash",
-                        args.source_manifest_sha256,
-                        existing[3],
-                    ),
-                    ("answer hash", args.answer_sha256, existing[4]),
-                ):
-                    if supplied is not None and supplied != stored:
-                        raise SystemExit(
-                            f"research run is already finished with a different {name}"
-                        )
-                row = (existing[0],)
-        print(dumps({"id": row[0], "external_run_id": args.external_id}))
+        next_state = (
+            "failed"
+            if args.status == "failed"
+            else "partial"
+            if args.outcome == "partial"
+            else "completed"
+        )
+        idempotency_key = args.idempotency_key or (
+            f"run:finish:{args.status}:{args.outcome}:"
+            f"{args.source_manifest_sha256 or ''}:{args.answer_sha256 or ''}"
+        )
+        result = run_service.transition(
+            status.id,
+            next_state,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            actor_type=args.actor,
+            outcome=args.outcome,
+            error=args.outcome if next_state == "failed" else None,
+            completion={
+                "catalog_pointer": args.catalog_pointer,
+                "source_manifest_sha256": args.source_manifest_sha256,
+                "answer_sha256": args.answer_sha256,
+            },
+        )
+        print(dumps(result.to_dict()))
         return 0
     if args.command == "run-reopen":
-        with _db(config) as conn, conn.cursor() as cur:
-            cur.execute(
-                """UPDATE research_runs SET status='running',outcome=NULL,
-                completed_at=NULL,error=NULL,source_manifest_sha256=NULL,
-                answer_sha256=NULL
-                WHERE external_run_id=%s AND status IN ('complete','failed') RETURNING id""",
-                (args.external_id,),
-            )
-            row = cur.fetchone()
-        if not row:
-            raise SystemExit("research run not found")
-        print(dumps({"id": row[0], "external_run_id": args.external_id}))
+        result = run_service.reopen(
+            status.id,
+            expected_revision=expected_revision,
+            idempotency_key=args.idempotency_key
+            or f"run:reopen:{args.external_id}:{args.reason}",
+            actor_type=args.actor,
+            reason=args.reason,
+        )
+        print(dumps(result.to_dict()))
+        return 0
+    if args.command == "run-cancel":
+        result = run_service.cancel(
+            status.id,
+            expected_revision=expected_revision,
+            idempotency_key=args.idempotency_key
+            or f"run:cancel:{args.external_id}:{args.reason}",
+            actor_type=args.actor,
+            reason=args.reason,
+        )
+        print(dumps(result.to_dict()))
         return 0
     if args.command == "budget-record":
         from research_domain import load_model, serialize_model
@@ -1034,9 +1106,7 @@ def main(argv=None):
         spec = load_model(spec_payload)
         if not isinstance(spec, ResearchSpec):
             raise SystemExit("--research-spec must contain research-spec-v1")
-        snapshot = json.loads(
-            Path(args.budget_snapshot).read_text(encoding="utf-8")
-        )
+        snapshot = json.loads(Path(args.budget_snapshot).read_text(encoding="utf-8"))
         required = {
             "snapshot_version",
             "policy_version",

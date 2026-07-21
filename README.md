@@ -97,9 +97,20 @@ rtk proxy "<skill-root>/scripts/frun" annotate "$RUN_ID" --type pivot --reason "
 rtk proxy "<skill-root>/scripts/frun" audit "$RUN_ID" --llm local
 rtk proxy "<skill-root>/scripts/frun" compare "$RUN_ID" "$OTHER_RUN_ID"
 rtk proxy "<skill-root>/scripts/frun" purge --keep-last 10
+
+# Inspect and mutate the authoritative PostgreSQL state machine
+rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
+rtk proxy "<skill-root>/scripts/research-db" run-transition "$RUN_ID" planning \
+  --expected-revision 0 --idempotency-key 'planning-command-id'
+rtk proxy "<skill-root>/scripts/research-db" run-cancel "$RUN_ID" \
+  --expected-revision 1 --idempotency-key 'cancel-command-id' \
+  --reason 'operator request'
 ```
 
 The shared `fr_<uuid>` links catalog chronology, acquisition batches, retained assets, retrieval events, selected evidence, the source manifest, and the delivered-answer hash. Explicit research runs enforce lifecycle terminal invariants (`running`, `finished`, `cancelled`).
+PostgreSQL transitions use the PRD Section 10 matrix and compare-and-swap
+revisions. Retry the same command with the same idempotency key; after a stale
+revision, inspect status before issuing a genuinely new command.
 
 ## Validation
 
