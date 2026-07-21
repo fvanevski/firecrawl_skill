@@ -8,7 +8,8 @@ This Codex skill combines Firecrawl web acquisition with a persistent, auditable
 
 - Query retained research through compact manifests, bounded passages, relationship expansion, and structured evidence packets.
 - Combine PostgreSQL lexical candidates, the active Qdrant dense index, reciprocal-rank fusion, and local reranking.
-- Acquire new evidence with `fsearch_smart`, `fsearch`, and `fscrape` while preserving raw responses and provenance (utilizing parallelized branch scraping and fast-failing 15s fallback timeouts).
+- Acquire new evidence with `fsearch_smart`, `fsearch`, and `fscrape` while preserving raw responses and provenance (utilizing parallelized branch scraping, fast-failing 15s fallback timeouts, early termination on low candidate yield, and dynamic `site:` filter stripping for zero-result recovery).
+- Pre-classify web targets using expanded semantic profiles (`breaking_news`, `legislative_legal`, `ecommerce`, `forum`, `news_article`, `media_release`, `academic_debate`) to trigger structured schema extraction and bypass raw anti-bot markdown limitations.
 - Persist source, immutable snapshot, versioned derivation, chunk, run, batch, and retrieval-event identities.
 - Rebuild, activate, roll back, or prune fingerprinted Qdrant vector indexes without modifying authoritative corpus data.
 - Manage multi-step research runs (`fr_<uuid>`) with explicit lifecycle states, automatic semantic audits (`--auto-audit`), pivots, and Catalog v5 provenance.

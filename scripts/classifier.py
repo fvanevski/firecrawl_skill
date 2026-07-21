@@ -129,6 +129,87 @@ PROFILES = {
             "required": ["headline", "summary"]
         }
     },
+    "breaking_news": {
+        "url_patterns": [
+            "/news/", "/article/", "/world/", "/politics/", "/story/", 
+            "/press-release/", "/blog/", "reuters.com", "apnews.com", 
+            "bloomberg.com", "bbc.com/news", "pbs.org/newshour"
+        ],
+        "keywords": [
+            "published on", "written by", "reported by", "associated press", 
+            "reuters", "news desk", "byline", "reporting from"
+        ],
+        "target_schema": {
+            "type": "object",
+            "properties": {
+                "headline": {
+                    "type": ["string", "null"],
+                    "description": "The main headline or title of the news article. Return null if missing."
+                },
+                "byline": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                    "description": "List of authors, reporters, or agencies credited. Return null if absent."
+                },
+                "published_date": {
+                    "type": ["string", "null"],
+                    "description": "The date and/or time when the article was published or last updated. Return null if missing."
+                },
+                "source_outlet": {
+                    "type": ["string", "null"],
+                    "description": "The news outlet or publisher name. Return null if unknown."
+                },
+                "summary": {
+                    "type": ["string", "null"],
+                    "description": "A 2-3 sentence summary of the news reported. Return null if missing."
+                },
+                "substantive_content": {
+                    "type": ["string", "null"],
+                    "description": "The main substantive body text of the article. Return null if missing."
+                },
+                "key_entities": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                    "description": "Important people, organizations, or nations involved. Return null if empty."
+                }
+            },
+            "required": ["headline", "summary"]
+        }
+    },
+    "legislative_legal": {
+        "url_patterns": [
+            "leginfo.legislature", "congress.gov", "supremecourt.gov", "/bill/", "/law/", "/code/"
+        ],
+        "keywords": [
+            "bill text", "statute", "section", "amended", "chapter", "opinion", "court"
+        ],
+        "target_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": ["string", "null"],
+                    "description": "The title of the bill, law, or legal opinion. Return null if missing."
+                },
+                "bill_number_or_citation": {
+                    "type": ["string", "null"],
+                    "description": "The formal bill number or legal citation. Return null if missing."
+                },
+                "status": {
+                    "type": ["string", "null"],
+                    "description": "The current status of the bill or case. Return null if missing."
+                },
+                "substantive_text": {
+                    "type": ["string", "null"],
+                    "description": "The full substantive text of the legislation or legal opinion. Return null if missing."
+                },
+                "legal_context": {
+                    "type": ["string", "null"],
+                    "description": "Contextual details such as legislative history, summary, or digest. Return null if missing."
+                }
+            },
+            "required": ["title", "substantive_text"]
+        }
+    },
     "media_release": {
         "url_patterns": [
             "/releases/", "/events/", "/programs/", "/movies/", 

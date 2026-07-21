@@ -737,6 +737,8 @@ def main():
         failure_context = "All candidates were rejected as irrelevant or unsuitable. Representative titles: " + "; ".join(rejected_titles)
         recovery_plan, recovery_provenance = workflow.plan_queries(args.topic, research_brief, 1, args.llm, args.model, args.commercial_fallback, args.fallback_model, failure_context)
         recovery_query = recovery_plan[0]["query"] if recovery_plan else " ".join(args.topic.split())
+        import re
+        recovery_query = re.sub(r'\bsite:\S+', '', recovery_query).strip()
         if recovery_query in active_queries:
             recovery_query = " ".join(args.topic.split())
         if recovery_query not in active_queries:
@@ -857,6 +859,11 @@ def main():
         catalog.add_event(invocation_id, "scrape_wave_finished", {"wave": wave, "attempted": len(wave_candidates), "successful": wave_successes, "cumulative_successful": len(successful_urls)})
         if wave_successes < len(wave_candidates) and remaining and args.research_run_id:
             catalog.annotate_run(args.research_run_id, "pivot", f"Scrape wave {wave} had {len(wave_candidates)-wave_successes} failed extraction(s); advanced to replacement candidates", from_invocation=invocation_id)
+        if wave > 1 and wave_successes == 0 and len(successful_urls) < max(1, required_successes // 3):
+            catalog.add_event(invocation_id, "scrape_wave_early_termination", {"wave": wave, "cumulative_successful": len(successful_urls)})
+            if args.research_run_id:
+                catalog.annotate_run(args.research_run_id, "pivot", f"Scrape wave {wave} yielded 0 successes; terminating extraction pipeline early to preserve budget.", from_invocation=invocation_id)
+            break
 
     selected_candidates = attempted
     for candidate in all_candidates:
