@@ -23,10 +23,24 @@ research_urlencode() {
   "$research_python" -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip(), safe=""))'
 }
 
+research_replace_database() {
+  "$research_python" -c 'import sys, urllib.parse; url=urllib.parse.urlsplit(sys.stdin.read().strip()); database=urllib.parse.quote(sys.argv[1], safe=""); print(urllib.parse.urlunsplit(url._replace(path="/" + database)))' "$1"
+}
+
 if [[ -z "${DATABASE_URL:-}" && -r "$research_postgres_dir/secrets/research_postgres_password.txt" ]]; then
   research_pg_password="$(research_urlencode < "$research_postgres_dir/secrets/research_postgres_password.txt")"
   export DATABASE_URL="postgresql://${RESEARCH_POSTGRES_USER:-research_app}:${research_pg_password}@127.0.0.1:${RESEARCH_POSTGRES_PORT:-55432}/${RESEARCH_POSTGRES_DB:-research_assets}"
   unset research_pg_password
+fi
+
+# Integration tests are destructive by design. Derive a distinct guarded DSN
+# from the resolved PostgreSQL endpoint, while preserving explicit overrides.
+research_test_database="${RESEARCH_STORE_TEST_DATABASE:-research_assets_test_codex}"
+if [[ -z "${RESEARCH_STORE_TEST_DATABASE_URL:-}" && -n "${DATABASE_URL:-}" ]]; then
+  export RESEARCH_STORE_TEST_DATABASE_URL="$(printf '%s\n' "$DATABASE_URL" | research_replace_database "$research_test_database")"
+fi
+if [[ -z "${RESEARCH_STORE_TEST_ALLOW_RESET:-}" ]]; then
+  export RESEARCH_STORE_TEST_ALLOW_RESET="$research_test_database"
 fi
 
 if [[ -z "${QDRANT_API_KEY:-}" && -r "$research_qdrant_dir/secrets/research_qdrant_api_key.txt" ]]; then
@@ -55,5 +69,5 @@ export NORMALIZATION_VERSION="${NORMALIZATION_VERSION:-cleanup-v1}"
 export FIRECRAWL_RESEARCH_PERSIST="${FIRECRAWL_RESEARCH_PERSIST:-auto}"
 export FIRECRAWL_RESEARCH_PYTHON="$research_python"
 
-unset research_skill_root research_python research_postgres_dir research_qdrant_dir research_valkey_dir
-unset -f research_urlencode
+unset research_skill_root research_python research_postgres_dir research_qdrant_dir research_valkey_dir research_test_database
+unset -f research_urlencode research_replace_database
