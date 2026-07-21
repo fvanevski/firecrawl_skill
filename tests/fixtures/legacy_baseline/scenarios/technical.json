@@ -1,0 +1,19 @@
+{
+  "schema_version": "firecrawl-legacy-replay-v1",
+  "scenario": "technical",
+  "search": {
+    "query": "python asyncio timeout debugging",
+    "response": {"id": "fixture-technical", "data": {"web": [
+      {"url": "https://docs.python.org/3/library/asyncio-task.html", "title": "Coroutines and Tasks", "description": "Official asyncio timeout and cancellation documentation."},
+      {"url": "https://bugs.python.org/issue-example", "title": "Asyncio timeout issue", "description": "Maintainer discussion of timeout behavior."}
+    ]}}
+  },
+  "scrapes": [
+    {"url": "https://docs.python.org/3/library/asyncio-task.html", "content": "# Coroutines and Tasks\n\nThe asyncio timeout context manager cancels an overdue task and converts cancellation into TimeoutError.\n\n## Cancellation\n\nCleanup belongs in finally blocks.\n"},
+    {"url": "https://bugs.python.org/issue-example", "content": "# Asyncio timeout issue\n\nMaintainers discuss cancellation propagation and nested timeouts.\n"}
+  ],
+  "semantic_outputs": {
+    "brief": {"research_type": "technical_troubleshooting", "risk_level": "medium", "questions": ["How do asyncio timeouts propagate cancellation?"], "jurisdiction": "unspecified", "entities": ["Python", "asyncio"], "time_window": "current documentation", "required_source_classes": ["official documentation", "maintainer discussion"], "corroboration_requirements": ["confirm behavior in primary documentation"], "claims_to_validate": ["Timeout converts cancellation to TimeoutError"], "excluded_interpretations": [], "completion_criteria": ["explain timeout and cleanup behavior"]},
+    "query_plan": {"queries": [{"query": "python asyncio timeout debugging", "facet": "official behavior", "subquestion": "How do timeouts propagate?", "intended_source_class": "official documentation", "expected_organizations": ["Python Software Foundation"], "freshness_requirement": "current", "domain_neutral": true, "expected_contribution": "establish timeout semantics"}]}
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": "firecrawl-legacy-replay-v1",
+  "scenario": "breaking_news",
+  "search": {
+    "query": "breaking port closure July 21 2026",
+    "response": {"id": "fixture-news", "data": {"web": [
+      {"url": "https://www.reuters.com/world/fixture-port-closure", "title": "Authorities close port", "description": "Officials announced a temporary closure on July 21, 2026.", "publishedDate": "2026-07-21T15:00:00Z"},
+      {"url": "https://apnews.com/article/fixture-port-closure", "title": "Port operations halted", "description": "Independent reporting confirms the closure.", "publishedDate": "2026-07-21T15:15:00Z"}
+    ]}}
+  },
+  "scrapes": [
+    {"url": "https://www.reuters.com/world/fixture-port-closure", "content": "# Authorities close port\n\nOfficials said operations were temporarily halted on July 21, 2026.\n"},
+    {"url": "https://apnews.com/article/fixture-port-closure", "content": "# Port operations halted\n\nA second report confirmed the closure while its duration remained uncertain.\n"}
+  ],
+  "semantic_outputs": {"brief": {"research_type": "breaking_news", "risk_level": "high", "questions": ["What is confirmed about the closure?"], "jurisdiction": "unspecified", "entities": ["port"], "time_window": "July 21, 2026", "required_source_classes": ["official statement", "independent reporting"], "corroboration_requirements": ["two independent current sources"], "claims_to_validate": [], "excluded_interpretations": [], "completion_criteria": ["separate confirmed facts from uncertainty"]}}
+}
