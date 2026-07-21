@@ -38,6 +38,10 @@ from research_store.legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from research_store.semantic_service import SemanticCallService
 from research_domain import load_model, schema_registry, serialize_model
 
+ROOT = SCRIPTS.parent
+FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
+VALID = json.loads((FIXTURES / "valid.json").read_text()) if (FIXTURES / "valid.json").exists() else {}
+
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -67,12 +71,13 @@ def prepared_database():
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN) == 8
+    assert migrate(TEST_DSN) == 9
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT to_regclass('research_run_transitions'),
             to_regclass('research_events'),to_regclass('semantic_artifacts'),
-            to_regclass('research_budget_snapshots')"""
+            to_regclass('research_budget_snapshots'),to_regclass('search_plans'),
+            to_regclass('search_plan_queries')"""
         )
         assert all(cursor.fetchone())
 
@@ -158,7 +163,7 @@ def prepared_database():
         cursor.execute("SELECT to_regclass('interrupted_v6_probe')")
         assert cursor.fetchone()[0] is None
 
-    assert migrate(TEST_DSN) == 8
+    assert migrate(TEST_DSN) == 9
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT state,lifecycle_revision,execution_mode,objective
@@ -1584,3 +1589,137 @@ def test_job_manifest_definition_mismatch_is_rejected(service):
                 (other_definition, manifest_id),
             )
         assert "index_jobs_manifest_definition_fk" in str(error.value)
+
+
+def test_search_plan_persistence_and_queries(service):
+    run_svc = ResearchRunService(service.uow_factory)
+    status = run_svc.create("Search Plan persistence integration test", f"plan-run-{uuid4()}")
+
+    spec_id_uuid = uuid4()
+    spec_payload = deepcopy(VALID["research-spec-v1"])
+    spec_payload["research_spec_id"] = str(spec_id_uuid)
+
+    with service.uow_factory() as uow:
+        db_spec_id = uow.record_research_spec(
+            status.id,
+            1,
+            "research-spec-v1",
+            1,
+            spec_payload,
+            f"spec-key-{uuid4()}",
+        )
+
+    plan_payload = deepcopy(VALID["search-plan-v1"])
+    plan_payload["research_spec_id"] = str(spec_id_uuid)
+    plan_payload["queries"][0]["target_question_ids"] = [spec_payload["questions"][0]["question_id"]]
+    plan_payload["queries"][0]["target_claim_ids"] = [spec_payload["claims_to_validate"][0]["claim_id"]]
+    plan_payload["revision"] = 1
+
+    # 1. Normal success path
+    plan_id = run_svc.record_search_plan(
+        status.id,
+        db_spec_id,
+        1,
+        plan_payload,
+        "plan-idempotency-rev1",
+    )
+    assert plan_id is not None
+
+    # Fetch plan
+    stored_plan = run_svc.get_search_plan(status.id, plan_id=plan_id)
+    assert stored_plan["id"] == plan_id
+    assert stored_plan["revision"] == 1
+    assert stored_plan["status"] == "active"
+    assert len(stored_plan["queries"]) == 1
+    query = stored_plan["queries"][0]
+    assert query["query_text"] == plan_payload["queries"][0]["query"]
+    assert query["facet"] == plan_payload["queries"][0]["facet"]
+
+    # Fetch query by ID
+    query_id = UUID(plan_payload["queries"][0]["query_id"])
+    query_row = run_svc.get_plan_query(query_id)
+    assert query_row["id"] == query_id
+    assert query_row["plan_id"] == plan_id
+    assert query_row["run_id"] == status.id
+
+    # List queries for plan
+    with service.uow_factory() as uow:
+        plan_queries = uow.list_plan_queries(plan_id)
+        assert len(plan_queries) == 1
+        assert plan_queries[0]["id"] == query_id
+
+        all_plans = uow.list_search_plans(status.id)
+        assert len(all_plans) == 1
+        assert all_plans[0]["id"] == plan_id
+
+    # 2. Idempotent retry
+    retry_id = run_svc.record_search_plan(
+        status.id,
+        db_spec_id,
+        1,
+        plan_payload,
+        "plan-idempotency-rev1",
+    )
+    assert retry_id == plan_id
+
+    # 3. Conflicting idempotency use
+    conflicting = deepcopy(plan_payload)
+    conflicting["queries"][0]["query"] = "Different query text entirely"
+    with pytest.raises(ValueError, match="idempotency key was used"):
+        run_svc.record_search_plan(
+            status.id,
+            db_spec_id,
+            1,
+            conflicting,
+            "plan-idempotency-rev1",
+        )
+
+    # 4. Overwriting revision 1 with new idempotency key fails (immutable plan revisions)
+    plan_v1_other = deepcopy(plan_payload)
+    plan_v1_other["queries"][0]["query"] = "Another search query text"
+    with pytest.raises(ValueError, match="already exists"):
+        run_svc.record_search_plan(
+            status.id,
+            db_spec_id,
+            1,
+            plan_v1_other,
+            "plan-idempotency-rev1-alt",
+        )
+
+    # 5. Revision 2 succeeds and supersedes revision 1
+    plan_v2 = deepcopy(plan_payload)
+    plan_v2["revision"] = 2
+    plan_v2["queries"][0]["query_id"] = str(uuid4())
+    plan_v2["queries"][0]["query"] = "Fixture Engine v2 behavior documentation"
+    plan_id_v2 = run_svc.record_search_plan(
+        status.id,
+        db_spec_id,
+        2,
+        plan_v2,
+        "plan-idempotency-rev2",
+    )
+    assert plan_id_v2 != plan_id
+
+    stored_v1 = run_svc.get_search_plan(status.id, plan_id=plan_id)
+    assert stored_v1["status"] == "superseded"
+
+    latest = run_svc.get_search_plan(status.id)
+    assert latest["id"] == plan_id_v2
+    assert latest["revision"] == 2
+    assert latest["status"] == "active"
+
+    # 6. Unknown coverage target ID rejection
+    plan_invalid_target = deepcopy(plan_payload)
+    plan_invalid_target["revision"] = 3
+    plan_invalid_target["queries"][0]["target_question_ids"] = [
+        "00000000-0000-0000-0000-000000009999"
+    ]
+    with pytest.raises(Exception, match="unknown question IDs"):
+        run_svc.record_search_plan(
+            status.id,
+            db_spec_id,
+            3,
+            plan_invalid_target,
+            "plan-idempotency-rev3-invalid",
+        )
+

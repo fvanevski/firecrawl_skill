@@ -9,6 +9,19 @@ from uuid import UUID
 
 from .domain import BlobReference, IngestRequest, IngestResult
 
+try:
+    from research_domain import load_model, serialize_model
+    from research_domain.codec import to_dict
+    from research_domain.models import SearchPlan
+    from research_domain.validation import ValidationContext, validate_references
+except ImportError:
+    import sys
+    sys.path.insert(0, str(Path(__file__).parents[1]))
+    from research_domain import load_model, serialize_model
+    from research_domain.codec import to_dict
+    from research_domain.models import SearchPlan
+    from research_domain.validation import ValidationContext, validate_references
+
 
 def _canonical_json(value) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -1347,6 +1360,344 @@ class PostgresUnitOfWork:
                 (row[0], policy_version, run_id),
             )
             return row[0]
+
+    def record_search_plan(
+        self,
+        run_id,
+        research_spec_id,
+        revision,
+        search_plan,
+        idempotency_key,
+        **metadata,
+    ):
+        """Persist one versioned search plan and its queries transactionally."""
+        if revision <= 0:
+            raise ValueError("search plan revision must be positive")
+        if not idempotency_key.strip():
+            raise ValueError("idempotency_key is required")
+
+        if isinstance(search_plan, dict):
+            plan_payload = dict(search_plan)
+            plan_model = load_model(plan_payload)
+        else:
+            plan_model = search_plan
+            plan_payload = serialize_model(plan_model)
+
+        if not isinstance(plan_model, SearchPlan):
+            raise ValueError("provided payload is not a valid SearchPlan")
+
+        if plan_model.revision != revision:
+            raise ValueError("search plan revision does not match parameter")
+
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+
+            cur.execute(
+                """SELECT id, payload FROM research_specs
+                WHERE run_id=%s AND (id=%s OR payload->>'research_spec_id'=%s)
+                ORDER BY spec_revision DESC LIMIT 1""",
+                (run_id, research_spec_id, str(research_spec_id)),
+            )
+            spec_row = cur.fetchone()
+            if spec_row is None:
+                raise ValueError("search plan references an unknown research spec")
+
+            db_spec_id, spec_payload = spec_row
+            spec_model = load_model(spec_payload)
+
+            if plan_model.research_spec_id != spec_model.research_spec_id:
+                raise ValueError("search plan research_spec_id does not match research spec")
+
+            validate_references(plan_model, ValidationContext(research_spec=spec_model))
+
+            digest = _json_sha256(plan_payload)
+
+            cur.execute(
+                """SELECT id, research_spec_id, revision, content_sha256
+                FROM search_plans
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            idempotent = cur.fetchone()
+            if idempotent is not None:
+                stored_id, stored_spec_id, stored_revision, stored_digest = idempotent
+                if (stored_spec_id, stored_revision, stored_digest) != (
+                    db_spec_id,
+                    revision,
+                    digest,
+                ):
+                    raise ValueError("idempotency key was used for another search plan")
+                return stored_id
+
+            cur.execute(
+                """SELECT id FROM search_plans WHERE run_id=%s AND revision=%s""",
+                (run_id, revision),
+            )
+            existing_rev = cur.fetchone()
+            if existing_rev is not None:
+                raise ValueError(
+                    f"search plan revision {revision} already exists for run"
+                )
+
+            cur.execute(
+                """UPDATE search_plans SET status='superseded'
+                WHERE run_id=%s AND status='active'""",
+                (run_id,),
+            )
+
+            cur.execute(
+                """INSERT INTO search_plans(
+                run_id, research_spec_id, revision, schema_name, schema_version,
+                status, payload, content_sha256, idempotency_key)
+                VALUES(%s, %s, %s, %s, %s, 'active', %s, %s, %s)
+                RETURNING id""",
+                (
+                    run_id,
+                    db_spec_id,
+                    revision,
+                    plan_model.SCHEMA_VERSION,
+                    1,
+                    _canonical_json(plan_payload),
+                    digest,
+                    idempotency_key,
+                ),
+            )
+            plan_id = cur.fetchone()[0]
+
+            for idx, query in enumerate(plan_model.queries):
+                query_payload = to_dict(query)
+                freshness_dict = to_dict(query.freshness_requirement)
+                cur.execute(
+                    """INSERT INTO search_plan_queries(
+                    id, plan_id, run_id, query_index, query_text, facet,
+                    target_question_ids, target_claim_ids, intended_source_classes,
+                    expected_organizations, freshness_requirement, expected_contribution,
+                    domain_restrictions, negative_terms, priority, status, payload)
+                    VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)""",
+                    (
+                        query.query_id,
+                        plan_id,
+                        run_id,
+                        idx,
+                        query.query,
+                        query.facet,
+                        json.dumps([str(qid) for qid in query.target_question_ids]),
+                        json.dumps([str(cid) for cid in query.target_claim_ids]),
+                        json.dumps(list(query.intended_source_classes)),
+                        json.dumps(list(query.expected_organizations)),
+                        _canonical_json(freshness_dict),
+                        query.expected_contribution,
+                        json.dumps(list(query.domain_restrictions)),
+                        json.dumps(list(query.negative_terms)),
+                        query.priority,
+                        _canonical_json(query_payload),
+                    ),
+                )
+
+            cur.execute(
+                """UPDATE research_runs SET search_plan_id=%s WHERE id=%s""",
+                (plan_id, run_id),
+            )
+
+            return plan_id
+
+    def get_search_plan(
+        self, run_id, plan_id=None, revision=None
+    ):
+        with self.connection.cursor() as cur:
+            if plan_id is not None:
+                cur.execute(
+                    """SELECT id, run_id, research_spec_id, revision, schema_name,
+                    schema_version, status, payload, content_sha256, idempotency_key, created_at
+                    FROM search_plans WHERE id=%s AND run_id=%s""",
+                    (plan_id, run_id),
+                )
+            elif revision is not None:
+                cur.execute(
+                    """SELECT id, run_id, research_spec_id, revision, schema_name,
+                    schema_version, status, payload, content_sha256, idempotency_key, created_at
+                    FROM search_plans WHERE run_id=%s AND revision=%s""",
+                    (run_id, revision),
+                )
+            else:
+                cur.execute(
+                    """SELECT id, run_id, research_spec_id, revision, schema_name,
+                    schema_version, status, payload, content_sha256, idempotency_key, created_at
+                    FROM search_plans WHERE run_id=%s ORDER BY revision DESC LIMIT 1""",
+                    (run_id,),
+                )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("search plan not found")
+
+            (
+                stored_id,
+                stored_run_id,
+                spec_id,
+                rev,
+                s_name,
+                s_ver,
+                status,
+                payload,
+                sha256,
+                key,
+                created_at,
+            ) = row
+
+            cur.execute(
+                """SELECT id, plan_id, run_id, query_index, query_text, facet,
+                target_question_ids, target_claim_ids, intended_source_classes,
+                expected_organizations, freshness_requirement, expected_contribution,
+                domain_restrictions, negative_terms, priority, status, payload, created_at
+                FROM search_plan_queries WHERE plan_id=%s ORDER BY query_index ASC""",
+                (stored_id,),
+            )
+            query_rows = cur.fetchall()
+            queries = [
+                {
+                    "id": q_row[0],
+                    "plan_id": q_row[1],
+                    "run_id": q_row[2],
+                    "query_index": q_row[3],
+                    "query_text": q_row[4],
+                    "facet": q_row[5],
+                    "target_question_ids": q_row[6],
+                    "target_claim_ids": q_row[7],
+                    "intended_source_classes": q_row[8],
+                    "expected_organizations": q_row[9],
+                    "freshness_requirement": q_row[10],
+                    "expected_contribution": q_row[11],
+                    "domain_restrictions": q_row[12],
+                    "negative_terms": q_row[13],
+                    "priority": q_row[14],
+                    "status": q_row[15],
+                    "payload": q_row[16],
+                    "created_at": q_row[17],
+                }
+                for q_row in query_rows
+            ]
+
+            return {
+                "id": stored_id,
+                "run_id": stored_run_id,
+                "research_spec_id": spec_id,
+                "revision": rev,
+                "schema_name": s_name,
+                "schema_version": s_ver,
+                "status": status,
+                "payload": payload,
+                "content_sha256": sha256,
+                "idempotency_key": key,
+                "created_at": created_at,
+                "queries": queries,
+            }
+
+    def list_search_plans(self, run_id):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, research_spec_id, revision, schema_name,
+                schema_version, status, content_sha256, idempotency_key, created_at
+                FROM search_plans WHERE run_id=%s ORDER BY revision ASC""",
+                (run_id,),
+            )
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "run_id": r[1],
+                    "research_spec_id": r[2],
+                    "revision": r[3],
+                    "schema_name": r[4],
+                    "schema_version": r[5],
+                    "status": r[6],
+                    "content_sha256": r[7],
+                    "idempotency_key": r[8],
+                    "created_at": r[9],
+                }
+                for r in rows
+            ]
+
+    def get_plan_query(
+        self, query_id, run_id=None
+    ):
+        with self.connection.cursor() as cur:
+            if run_id is not None:
+                cur.execute(
+                    """SELECT id, plan_id, run_id, query_index, query_text, facet,
+                    target_question_ids, target_claim_ids, intended_source_classes,
+                    expected_organizations, freshness_requirement, expected_contribution,
+                    domain_restrictions, negative_terms, priority, status, payload, created_at
+                    FROM search_plan_queries WHERE id=%s AND run_id=%s""",
+                    (query_id, run_id),
+                )
+            else:
+                cur.execute(
+                    """SELECT id, plan_id, run_id, query_index, query_text, facet,
+                    target_question_ids, target_claim_ids, intended_source_classes,
+                    expected_organizations, freshness_requirement, expected_contribution,
+                    domain_restrictions, negative_terms, priority, status, payload, created_at
+                    FROM search_plan_queries WHERE id=%s""",
+                    (query_id,),
+                )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("search plan query not found")
+
+            return {
+                "id": row[0],
+                "plan_id": row[1],
+                "run_id": row[2],
+                "query_index": row[3],
+                "query_text": row[4],
+                "facet": row[5],
+                "target_question_ids": row[6],
+                "target_claim_ids": row[7],
+                "intended_source_classes": row[8],
+                "expected_organizations": row[9],
+                "freshness_requirement": row[10],
+                "expected_contribution": row[11],
+                "domain_restrictions": row[12],
+                "negative_terms": row[13],
+                "priority": row[14],
+                "status": row[15],
+                "payload": row[16],
+                "created_at": row[17],
+            }
+
+    def list_plan_queries(self, plan_id):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, plan_id, run_id, query_index, query_text, facet,
+                target_question_ids, target_claim_ids, intended_source_classes,
+                expected_organizations, freshness_requirement, expected_contribution,
+                domain_restrictions, negative_terms, priority, status, payload, created_at
+                FROM search_plan_queries WHERE plan_id=%s ORDER BY query_index ASC""",
+                (plan_id,),
+            )
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "plan_id": row[1],
+                    "run_id": row[2],
+                    "query_index": row[3],
+                    "query_text": row[4],
+                    "facet": row[5],
+                    "target_question_ids": row[6],
+                    "target_claim_ids": row[7],
+                    "intended_source_classes": row[8],
+                    "expected_organizations": row[9],
+                    "freshness_requirement": row[10],
+                    "expected_contribution": row[11],
+                    "domain_restrictions": row[12],
+                    "negative_terms": row[13],
+                    "priority": row[14],
+                    "status": row[15],
+                    "payload": row[16],
+                    "created_at": row[17],
+                }
+                for row in rows
+            ]
 
     def record_semantic_call(
         self,
