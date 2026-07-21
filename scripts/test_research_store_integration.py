@@ -16,7 +16,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -33,6 +33,7 @@ from research_store.run_service import (
     RunStateError,
     StaleRunRevisionError,
 )
+from research_store.semantic_service import SemanticCallService
 
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
@@ -683,6 +684,54 @@ def test_reopen_increments_revision_and_invalidates_semantic_artifacts(service):
         assert validation_status == "invalid"
         assert errors[-1]["code"] == "stale_after_reopen"
         assert errors[-1]["invalidated_by_revision"] == 3
+
+
+def test_semantic_call_service_retains_failures_and_host_provenance(service):
+    runs = ResearchRunService(service.uow_factory)
+    semantic = SemanticCallService(service.uow_factory)
+    created = runs.create(
+        "semantic persistence", f"fr_semantic_{uuid4().hex}", execution_mode="agent_led"
+    )
+    schema = {
+        "type": "object", "additionalProperties": False,
+        "properties": {"result": {"type": "string"}}, "required": ["result"],
+    }
+    failed_context = {
+        "run_id": created.id, "stage": "planning", "schema_name": "test-result",
+        "schema_version": 1, "artifact_type": "test_result",
+        "idempotency_key": "semantic:model:timeout",
+    }
+    call_id = semantic.start_model_call(
+        failed_context, provider="local", requested_model="chat", model_revision="rev-1",
+        endpoint_alias="local", prompt_version="test-v1", prompt_hash="a" * 64,
+        schema=schema, input_token_estimate=12,
+    )
+    semantic.finish_model_call(
+        failed_context, call_id, status="failed",
+        provenance={"provider": "local", "requested_model": "chat"},
+        attempts=[{"attempt": 1, "latency_ms": 50, "error": "TimeoutError"}],
+        artifacts=[], error="TimeoutError",
+    )
+    failed = semantic.inspect(created.id, call_id)
+    assert failed["status"] == "failed"
+    assert failed["response_metadata"]["attempts"][0]["error"] == "TimeoutError"
+    assert failed["artifacts"] == []
+
+    host_context = {
+        **failed_context,
+        "idempotency_key": "semantic:host:accepted",
+        "input_artifact_ids": [uuid4()],
+    }
+    accepted = semantic.ingest_host_artifact(
+        host_context, {"result": "accepted"}, schema, actor_identifier="codex"
+    )
+    stored = semantic.inspect(created.id, UUID(accepted.provenance["semantic_call_id"]))
+    assert stored["provider"] == "host-agent"
+    assert stored["model"] == ""
+    assert stored["request"]["authority"] == "host-agent"
+    assert "endpoint_alias" not in stored["request"]
+    assert stored["response_metadata"]["transport_attempts"] == []
+    assert stored["artifacts"][0]["validation_status"] == "valid"
 
 
 def test_stale_revision_terminal_mutation_and_cancel_fail_closed(service):

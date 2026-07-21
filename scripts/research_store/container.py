@@ -10,6 +10,7 @@ from .qdrant import QdrantIndex
 from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
 from .run_service import ResearchRunService
+from .semantic_service import SemanticCallService
 from .service import CorpusService
 
 
@@ -65,6 +66,24 @@ def build_run_service(config: StoreConfig | None = None) -> ResearchRunService:
     config = config or StoreConfig.from_env()
     config.require_database()
     return ResearchRunService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
+    )
+
+
+def build_semantic_service(config: StoreConfig | None = None) -> SemanticCallService:
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    return SemanticCallService(
         partial(
             PostgresUnitOfWork,
             config.database_url,

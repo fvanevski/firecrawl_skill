@@ -1243,11 +1243,13 @@ class PostgresUnitOfWork:
             cur.execute(
                 """INSERT INTO semantic_calls(
                 run_id,invocation_id,stage,provider,model,model_revision,prompt_version,
-                input_sha256,request,status,idempotency_key)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                input_sha256,request,status,idempotency_key,started_at)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                  CASE WHEN %s IN ('running','complete','failed','cancelled') THEN now() END)
                 ON CONFLICT(run_id,idempotency_key) DO UPDATE
                   SET idempotency_key=excluded.idempotency_key
-                RETURNING id,stage,input_sha256""",
+                RETURNING id,invocation_id,stage,provider,model,model_revision,
+                  prompt_version,input_sha256,status""",
                 (
                     run_id,
                     invocation_id,
@@ -1260,12 +1262,99 @@ class PostgresUnitOfWork:
                     _canonical_json(request),
                     status,
                     idempotency_key,
+                    status,
                 ),
             )
-            call_id, stored_stage, stored_digest = cur.fetchone()
-            if (stored_stage, stored_digest) != (stage, digest):
+            row = cur.fetchone()
+            expected = (
+                invocation_id,
+                stage,
+                provider,
+                model,
+                model_revision,
+                prompt_version,
+                digest,
+                status,
+            )
+            if row[1:] != expected:
                 raise ValueError("idempotency key was used for another semantic call")
-            return call_id
+            return row[0]
+
+    def finalize_semantic_call(
+        self, run_id, call_id, status, response_metadata, error=None
+    ):
+        if status not in {"complete", "failed", "cancelled"}:
+            raise ValueError("semantic call final status must be complete, failed, or cancelled")
+        response_json = _canonical_json(response_metadata or {})
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+            cur.execute(
+                """SELECT status,response_metadata,error FROM semantic_calls
+                WHERE id=%s AND run_id=%s FOR UPDATE""",
+                (call_id, run_id),
+            )
+            existing = cur.fetchone()
+            if existing is None:
+                raise ValueError("semantic call does not belong to the research run")
+            expected = (status, json.loads(response_json), error)
+            if existing[0] in {"complete", "failed", "cancelled"}:
+                if existing != expected:
+                    raise ValueError("semantic call was already finalized differently")
+                return call_id
+            cur.execute(
+                """UPDATE semantic_calls SET status=%s,response_metadata=%s,error=%s,
+                completed_at=now(),started_at=COALESCE(started_at,created_at)
+                WHERE id=%s AND run_id=%s RETURNING id""",
+                (status, response_json, error, call_id, run_id),
+            )
+            return cur.fetchone()[0]
+
+    def annotate_semantic_call(self, run_id, call_id, metadata):
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+            cur.execute(
+                """UPDATE semantic_calls
+                SET response_metadata=response_metadata || %s::jsonb
+                WHERE id=%s AND run_id=%s RETURNING id""",
+                (_canonical_json(metadata or {}), call_id, run_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("semantic call does not belong to the research run")
+            return row[0]
+
+    def get_semantic_call(self, run_id, call_id):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id,run_id,invocation_id,stage,provider,model,model_revision,
+                prompt_version,input_sha256,request,response_metadata,status,error,
+                started_at,completed_at,created_at FROM semantic_calls
+                WHERE id=%s AND run_id=%s""",
+                (call_id, run_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("semantic call does not belong to the research run")
+            keys = (
+                "id", "run_id", "invocation_id", "stage", "provider", "model",
+                "model_revision", "prompt_version", "input_sha256", "request",
+                "response_metadata", "status", "error", "started_at", "completed_at",
+                "created_at",
+            )
+            result = dict(zip(keys, row))
+            cur.execute(
+                """SELECT id,artifact_type,schema_name,schema_version,payload,
+                content_sha256,validation_status,validation_errors,created_at
+                FROM semantic_artifacts WHERE semantic_call_id=%s AND run_id=%s
+                ORDER BY created_at,id""",
+                (call_id, run_id),
+            )
+            artifact_keys = (
+                "id", "artifact_type", "schema_name", "schema_version", "payload",
+                "content_sha256", "validation_status", "validation_errors", "created_at",
+            )
+            result["artifacts"] = [dict(zip(artifact_keys, item)) for item in cur.fetchall()]
+            return result
 
     def record_semantic_artifact(
         self,
@@ -1290,7 +1379,8 @@ class PostgresUnitOfWork:
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT(semantic_call_id,idempotency_key) DO UPDATE
                   SET idempotency_key=excluded.idempotency_key
-                RETURNING id,artifact_type,content_sha256""",
+                RETURNING id,artifact_type,schema_name,schema_version,content_sha256,
+                  validation_status,validation_errors""",
                 (
                     run_id,
                     semantic_call_id,
@@ -1304,12 +1394,20 @@ class PostgresUnitOfWork:
                     idempotency_key,
                 ),
             )
-            artifact_id, stored_type, stored_digest = cur.fetchone()
-            if (stored_type, stored_digest) != (artifact_type, digest):
+            row = cur.fetchone()
+            expected = (
+                artifact_type,
+                schema_name,
+                schema_version,
+                digest,
+                validation_status,
+                validation_errors or [],
+            )
+            if row[1:] != expected:
                 raise ValueError(
                     "idempotency key was used for another semantic artifact"
                 )
-            return artifact_id
+            return row[0]
 
     def record_compatibility_export(
         self,

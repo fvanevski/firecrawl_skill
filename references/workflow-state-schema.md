@@ -57,6 +57,22 @@ prior valid semantic artifacts invalid without deleting their provenance.
 Semantic proposals used for a transition must be valid, belong to the same
 run, and carry a `run_revision` equal to the command's expected revision.
 
+`SemanticCallService` creates a `running` call before model transport, then
+finalizes it with prompt/schema/model provenance, sanitized attempt telemetry,
+usage, latency, validation failures, and explicit fallback lineage. Parsed
+outputs are stored as separate `semantic_artifacts` rows, including invalid
+schema outputs; invalid JSON and timeouts remain queryable on the failed call
+without fabricating an artifact. Persistence is fail-closed when a semantic
+context is supplied: a model result is not returned as accepted until its call
+and artifact transaction commits.
+
+Host-agent proposals use `ingest_host_artifact`, which applies the same
+deterministic schema validator and artifact persistence path. Their call rows
+identify `provider=host-agent` but deliberately omit endpoint, model, prompt,
+usage, and transport-attempt claims that did not occur. Credential-bearing
+keys, bearer values, and sensitive URL parameters are redacted before request,
+response, error, or artifact values are hashed and persisted.
+
 The CLI exposes `run-status`, `run-transition`, `run-finish`, `run-cancel`, and
 `run-reopen` as machine-readable service adapters. Callers proposing semantic
 or concurrent work should always supply `--expected-revision` and a stable
@@ -73,11 +89,14 @@ DDL and leaves Alembic at `0005_run_lifecycle`; rerun `research-db migrate`.
 If Alembic reports v6 but required objects are absent, do not hand-create them:
 restore the pre-migration PostgreSQL backup and rerun the forward migration.
 
-No migration is added by the run service. To repair an interrupted command,
+No migration is added by the run or semantic-call service. To repair an interrupted command,
 read `run-status` and the event/transition ledgers first. Retry an uncertain
 commit with the same idempotency key; use a new key only for a new command
 against the reported current revision. Reopen is the supported recovery path
-for intentional work after a terminal state. Never edit append-only ledgers.
+for intentional work after a terminal state. A semantic call left `running`
+after process loss may be finalized as failed by forward repair or retried with
+the same call idempotency key; never delete its attempt or artifact provenance.
+Never edit append-only ledgers.
 
 Rollback is restore-based because later workflow records may depend on the new
 tables. Restoring PostgreSQL does not require changing blobs, Qdrant, or Valkey

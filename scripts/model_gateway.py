@@ -15,6 +15,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+try:
+    from research_store.semantic_service import redact_sensitive, validate_structured_payload
+except ModuleNotFoundError:  # Loaded as scripts.model_gateway from the repository root.
+    from scripts.research_store.semantic_service import redact_sensitive, validate_structured_payload
+
 
 DEFAULT_LOCAL_URL = "http://192.168.4.115:8002/v1"
 MAX_RAW_EXCERPT = 4096
@@ -27,14 +32,7 @@ def estimate_tokens(value) -> int:
 
 
 def _redact(value):
-    text = str(value or "")
-    for marker in ("Bearer ", "api_key=", "token=", "key="):
-        start = text.lower().find(marker.lower())
-        if start >= 0:
-            end = text.find(" ", start + len(marker))
-            end = len(text) if end < 0 else end
-            text = text[: start + len(marker)] + "[REDACTED]" + text[end:]
-    return text
+    return redact_sensitive(str(value or ""))
 
 
 def _json_content(raw):
@@ -72,37 +70,8 @@ def _gemini_content(raw):
 
 
 def schema_errors(value, schema, path="$"):
-    """Validate the JSON-Schema subset used by Firecrawl contracts."""
-    errors = []
-    expected = schema.get("type")
-    types = tuple(expected) if isinstance(expected, list) else (expected,) if expected else ()
-    matches = (
-        ("object" in types and isinstance(value, dict)) or
-        ("array" in types and isinstance(value, list)) or
-        ("string" in types and isinstance(value, str)) or
-        ("boolean" in types and isinstance(value, bool)) or
-        ("integer" in types and isinstance(value, int) and not isinstance(value, bool)) or
-        ("number" in types and isinstance(value, (int, float)) and not isinstance(value, bool)) or
-        ("null" in types and value is None)
-    )
-    if types and not matches:
-        return [f"{path}: expected {'|'.join(types)}"]
-    if "enum" in schema and value not in schema["enum"]:
-        errors.append(f"{path}: value is not in enum")
-    if isinstance(value, dict):
-        properties = schema.get("properties", {})
-        for key in schema.get("required", []):
-            if key not in value: errors.append(f"{path}: missing required field {key}")
-        if schema.get("additionalProperties") is False:
-            for key in set(value) - set(properties): errors.append(f"{path}: unexpected field {key}")
-        for key, item in value.items():
-            if key in properties: errors.extend(schema_errors(item, properties[key], f"{path}.{key}"))
-    if isinstance(value, list) and schema.get("items"):
-        for index, item in enumerate(value): errors.extend(schema_errors(item, schema["items"], f"{path}[{index}]"))
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if "minimum" in schema and value < schema["minimum"]: errors.append(f"{path}: below minimum")
-        if "maximum" in schema and value > schema["maximum"]: errors.append(f"{path}: above maximum")
-    return errors
+    """Compatibility wrapper around the shared deterministic validator."""
+    return validate_structured_payload(value, schema, path)
 
 
 def provider_config(provider, model=None):
@@ -148,11 +117,13 @@ def probe_local(base_url, api_key=""):
 
 
 class StructuredResult:
-    def __init__(self, value, provenance, attempts, error=""):
+    def __init__(self, value, provenance, attempts, error="", *, semantic_call_id=None, artifact_ids=()):
         self.value = value
         self.provenance = provenance
         self.attempts = attempts
         self.error = error
+        self.semantic_call_id = semantic_call_id
+        self.artifact_ids = tuple(artifact_ids)
 
 
 def _request_json(url, payload, headers, timeout):
@@ -168,13 +139,32 @@ def _request_json(url, payload, headers, timeout):
 
 def call_structured(provider, model, system_prompt, user_prompt, schema, *,
                     max_output_tokens=16384, timeout=120, max_attempts=3,
-                    prompt_version="unversioned"):
+                    prompt_version="unversioned", semantic_persistence=None,
+                    semantic_context=None):
+    system_prompt = _redact(system_prompt)
+    user_prompt = _redact(user_prompt)
     config = provider_config(provider, model)
+    context = semantic_context or {}
+    prompt_hash = hashlib.sha256((system_prompt + "\n" + user_prompt).encode()).hexdigest()
     headers = {"Content-Type": "application/json"}
     if config["api_key"]:
         headers["Authorization"] = f"Bearer {config['api_key']}"
+    call_id = None
+    if semantic_persistence is not None:
+        call_id = semantic_persistence.start_model_call(
+            context,
+            provider=provider,
+            requested_model=config["model"],
+            model_revision=str(context.get("model_revision") or ""),
+            endpoint_alias="local" if provider == "local" else provider,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            schema=schema,
+            input_token_estimate=estimate_tokens(system_prompt + user_prompt),
+        )
     capability = probe_local(config["base_url"], config["api_key"]) if provider == "local" else {"status": "not_probed"}
     attempts = []
+    artifacts = []
     output_budget = max_output_tokens
     last_error = ""
     for attempt_number in range(1, max_attempts + 1):
@@ -213,7 +203,22 @@ def call_structured(provider, model, system_prompt, user_prompt, schema, *,
         try:
             raw, request_id, http_status = _request_json(url, payload, headers, timeout)
             content, envelope = _gemini_content(raw) if provider == "gemini" else _json_content(raw)
-            parsed = json.loads(content) if content else None
+            try:
+                parsed = json.loads(content) if content else None
+            except json.JSONDecodeError as exc:
+                last_error = f"JSONDecodeError: {exc}"
+                attempts.append({
+                    "attempt": attempt_number, "api_surface": config["api_surface"],
+                    "structured_mode": structured_mode,
+                    "latency_ms": int((time.monotonic() - started) * 1000),
+                    "http_status": http_status, "request_id": request_id or raw.get("id"),
+                    "requested_model": config["model"], "returned_model": raw.get("model"),
+                    "usage": raw.get("usage") or raw.get("usageMetadata") or {},
+                    "content_present": True, "content_excerpt": _redact(content)[:MAX_RAW_EXCERPT],
+                    "schema_valid": False, "validation_errors": [_redact(last_error)], **envelope,
+                })
+                continue
+            parsed = redact_sensitive(parsed)
             validation_errors = schema_errors(parsed, schema) if parsed is not None else ["empty content"]
             valid = not validation_errors
             attempt = {
@@ -225,28 +230,66 @@ def call_structured(provider, model, system_prompt, user_prompt, schema, *,
                 "schema_errors": validation_errors[:20], **envelope,
             }
             attempts.append(attempt)
+            if parsed is not None:
+                artifacts.append({
+                    "attempt": attempt_number,
+                    "payload": parsed,
+                    "validation_errors": validation_errors,
+                })
             if valid:
-                return StructuredResult(parsed, {
+                provenance = {
                     "provider": provider, "endpoint_alias": "local" if provider == "local" else provider,
                     "requested_model": config["model"], "returned_model": raw.get("model"),
                     "api_surface": config["api_surface"], "prompt_version": prompt_version,
-                    "prompt_hash": hashlib.sha256((system_prompt + "\n" + user_prompt).encode()).hexdigest(),
+                    "prompt_hash": prompt_hash,
                     "input_token_estimate": estimate_tokens(system_prompt + user_prompt),
                     "capability_probe": capability, "attempt_count": attempt_number,
                     "usage": attempt["usage"], "finish_reason": envelope.get("finish_reason"),
-                }, attempts)
+                    "fallback": {
+                        "used": bool(context.get("fallback_from_call_id")),
+                        "from_call_id": context.get("fallback_from_call_id"),
+                    },
+                }
+                if call_id is not None:
+                    provenance["semantic_call_id"] = str(call_id)
+                artifact_ids = semantic_persistence.finish_model_call(
+                    context, call_id, status="complete", provenance=provenance,
+                    attempts=attempts, artifacts=artifacts,
+                ) if semantic_persistence is not None else ()
+                if artifact_ids:
+                    provenance["semantic_artifact_id"] = str(artifact_ids[-1])
+                return StructuredResult(
+                    parsed, provenance, attempts, semantic_call_id=call_id,
+                    artifact_ids=artifact_ids,
+                )
             last_error = "model returned empty content" if not content else "model output failed schema validation: " + "; ".join(validation_errors[:5])
             if envelope.get("finish_reason") in {"length", "max_tokens", "MAX_TOKENS"} or (not content and envelope.get("reasoning_excerpt")):
                 output_budget = min(output_budget * 2, 32768)
-        except (RuntimeError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        except (RuntimeError, URLError, TimeoutError, ValueError) as exc:
             last_error = f"{type(exc).__name__}: {exc}"
             attempts.append({
                 "attempt": attempt_number, "api_surface": config["api_surface"], "structured_mode": structured_mode,
                 "latency_ms": int((time.monotonic() - started) * 1000), "error": _redact(last_error)[:MAX_RAW_EXCERPT],
             })
-    return StructuredResult(None, {
+    provenance = {
         "provider": provider, "endpoint_alias": "local" if provider == "local" else provider,
         "requested_model": config["model"], "api_surface": config["api_surface"],
-        "prompt_version": prompt_version, "capability_probe": capability,
+        "prompt_version": prompt_version, "prompt_hash": prompt_hash,
+        "capability_probe": capability,
         "input_token_estimate": estimate_tokens(system_prompt + user_prompt), "attempt_count": len(attempts),
-    }, attempts, last_error or "structured-output call failed")
+        "fallback": {
+            "used": bool(context.get("fallback_from_call_id")),
+            "from_call_id": context.get("fallback_from_call_id"),
+        },
+    }
+    if call_id is not None:
+        provenance["semantic_call_id"] = str(call_id)
+    final_error = last_error or "structured-output call failed"
+    artifact_ids = semantic_persistence.finish_model_call(
+        context, call_id, status="failed", provenance=provenance,
+        attempts=attempts, artifacts=artifacts, error=final_error,
+    ) if semantic_persistence is not None else ()
+    return StructuredResult(
+        None, provenance, attempts, final_error, semantic_call_id=call_id,
+        artifact_ids=artifact_ids,
+    )

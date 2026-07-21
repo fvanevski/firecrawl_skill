@@ -43,7 +43,44 @@ class ChunkRepository(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
-class ResearchRunRepository(Protocol):
+class SemanticCallRepository(Protocol):
+    def record_semantic_call(
+        self,
+        run_id: UUID,
+        stage: str,
+        provider: str,
+        model: str,
+        prompt_version: str,
+        request: dict[str, Any],
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+    def finalize_semantic_call(
+        self,
+        run_id: UUID,
+        call_id: UUID,
+        status: str,
+        response_metadata: dict[str, Any],
+        error: str | None,
+    ) -> UUID: ...
+    def annotate_semantic_call(
+        self, run_id: UUID, call_id: UUID, metadata: dict[str, Any]
+    ) -> UUID: ...
+    def get_semantic_call(self, run_id: UUID, call_id: UUID) -> dict[str, Any]: ...
+    def record_semantic_artifact(
+        self,
+        run_id: UUID,
+        semantic_call_id: UUID,
+        artifact_type: str,
+        schema_name: str,
+        schema_version: int,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+
+
+class ResearchRunRepository(SemanticCallRepository, Protocol):
     def start_run(self, original_request: str, metadata: dict[str, Any]) -> UUID: ...
     def get_run_status(
         self, *, run_id: UUID | None = None, external_id: str | None = None
@@ -100,28 +137,6 @@ class ResearchRunRepository(Protocol):
         policy_config_sha256: str,
         snapshot: dict[str, Any],
         idempotency_key: str,
-    ) -> UUID: ...
-    def record_semantic_call(
-        self,
-        run_id: UUID,
-        stage: str,
-        provider: str,
-        model: str,
-        prompt_version: str,
-        request: dict[str, Any],
-        idempotency_key: str,
-        **metadata: Any,
-    ) -> UUID: ...
-    def record_semantic_artifact(
-        self,
-        run_id: UUID,
-        semantic_call_id: UUID,
-        artifact_type: str,
-        schema_name: str,
-        schema_version: int,
-        payload: dict[str, Any],
-        idempotency_key: str,
-        **metadata: Any,
     ) -> UUID: ...
     def record_compatibility_export(
         self,
