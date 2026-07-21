@@ -45,6 +45,19 @@ class ChunkRepository(Protocol):
 
 class ResearchRunRepository(Protocol):
     def start_run(self, original_request: str, metadata: dict[str, Any]) -> UUID: ...
+    def get_run_status(
+        self, *, run_id: UUID | None = None, external_id: str | None = None
+    ) -> dict[str, Any]: ...
+    def apply_run_transition(
+        self,
+        run_id: UUID,
+        next_state: str,
+        expected_revision: int,
+        idempotency_key: str,
+        actor_type: str,
+        policy_version: str,
+        **metadata: Any,
+    ) -> dict[str, Any]: ...
     def append_run_transition(
         self,
         run_id: UUID,

@@ -79,9 +79,11 @@ case "${1:-}" in
     preflight_database
     "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-reopen "$@"
     if [[ "$DB_ACTIVE" == "1" ]]; then
-      if ! "$SCRIPT_DIR/research-db" run-reopen "$run_id" >/dev/null; then
+      if ! "$SCRIPT_DIR/research-db" run-reopen "$@" >/dev/null; then
         printf '%s\n' "ERROR: Catalog run $run_id reopened but PostgreSQL mirroring failed." >&2
-        printf '%s\n' "RECOVER: $SCRIPT_DIR/research-db run-reopen $run_id" >&2
+        printf 'RECOVER:' >&2
+        printf ' %q' "$SCRIPT_DIR/research-db" run-reopen "$@" >&2
+        printf '\n' >&2
         exit 1
       fi
     fi

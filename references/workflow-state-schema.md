@@ -41,15 +41,27 @@ replace schema validation.
 
 `PostgresUnitOfWork` exposes bounded, idempotent record methods for every v6
 table. Concurrent retries with one idempotency key converge on one stored
-record, while conflicting reuse is rejected. `append_run_transition` is a
-low-level ledger write and deliberately does not mutate `research_runs` or
-enforce the Section 10 transition matrix.
+record, while conflicting reuse is rejected. `append_run_transition` remains a
+low-level migration/repair primitive and deliberately does not mutate
+`research_runs`. Normal callers use `ResearchRunService`, which supplies the
+Section 10 transition policy to `apply_run_transition`.
 
-The v6 migration does not implement `ResearchRunService`, permitted-transition
-policy, stale-proposal rejection, reopen behavior, atomic state/event mutation,
-or CLI status routing; those belong to issue #7. It also does not integrate the
-model gateway or implement later Phase 1 search-plan, candidate, coverage,
-claim, report, or audit tables.
+`apply_run_transition` locks the current run row, checks command replay before
+revision validation, rejects stale revisions and semantic proposals, inserts
+one event and one transition, and updates the authoritative run in the same
+transaction. Concurrent commands against one revision therefore cannot both
+commit. Terminal states reject ordinary transitions. Explicit cancellation is
+allowed from nonterminal states; explicit reopen moves a terminal run to
+`created`, increments the revision, records `reopened_from_revision`, and marks
+prior valid semantic artifacts invalid without deleting their provenance.
+Semantic proposals used for a transition must be valid, belong to the same
+run, and carry a `run_revision` equal to the command's expected revision.
+
+The CLI exposes `run-status`, `run-transition`, `run-finish`, `run-cancel`, and
+`run-reopen` as machine-readable service adapters. Callers proposing semantic
+or concurrent work should always supply `--expected-revision` and a stable
+`--idempotency-key`. This phase does not integrate later planning, acquisition,
+coverage, report, or audit services.
 
 ## Migration and repair
 
@@ -60,6 +72,12 @@ transaction. If the process is interrupted, PostgreSQL rolls back the partial
 DDL and leaves Alembic at `0005_run_lifecycle`; rerun `research-db migrate`.
 If Alembic reports v6 but required objects are absent, do not hand-create them:
 restore the pre-migration PostgreSQL backup and rerun the forward migration.
+
+No migration is added by the run service. To repair an interrupted command,
+read `run-status` and the event/transition ledgers first. Retry an uncertain
+commit with the same idempotency key; use a new key only for a new command
+against the reported current revision. Reopen is the supported recovery path
+for intentional work after a terminal state. Never edit append-only ledgers.
 
 Rollback is restore-based because later workflow records may depend on the new
 tables. Restoring PostgreSQL does not require changing blobs, Qdrant, or Valkey

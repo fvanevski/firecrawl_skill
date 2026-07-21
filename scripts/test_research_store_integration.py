@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 from pathlib import Path
 import sys
@@ -27,6 +28,11 @@ from research_store import cli as store_cli
 from research_store.container import build_service
 from research_store.domain import IngestRequest
 from research_store.postgres import connect, migrate, require_disposable_database_reset
+from research_store.run_service import (
+    ResearchRunService,
+    RunStateError,
+    StaleRunRevisionError,
+)
 
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
@@ -480,6 +486,313 @@ def test_transition_and_event_ledgers_are_append_only(service):
             assert "append-only" in str(error.value)
 
 
+def test_research_run_service_records_exactly_one_event_per_transition(service):
+    runs = ResearchRunService(service.uow_factory)
+    external_id = f"fr_service_{uuid4().hex}"
+    created = runs.create("transactional state machine", external_id)
+    commands = (
+        ("planning", "transition:planning"),
+        ("corpus_review", "transition:corpus-review"),
+        ("retrieving", "transition:retrieving"),
+        ("synthesizing", "transition:synthesizing"),
+        ("validating", "transition:validating"),
+        ("completed", "transition:completed"),
+    )
+    revision = 0
+    for state, key in commands:
+        result = runs.transition(
+            created.id,
+            state,
+            expected_revision=revision,
+            idempotency_key=key,
+            actor_type="integration-test",
+            outcome="satisfied" if state == "completed" else None,
+        )
+        revision += 1
+        assert result.lifecycle_revision == revision
+        assert result.next_state == state
+        assert not result.reused
+
+    status = runs.status(run_id=created.id)
+    assert status.state == "completed"
+    assert status.lifecycle_revision == len(commands)
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT count(*),count(DISTINCT triggering_event_id)
+            FROM research_run_transitions WHERE run_id=%s""",
+            (created.id,),
+        )
+        assert cursor.fetchone() == (len(commands), len(commands))
+        cursor.execute(
+            """SELECT count(*) FROM research_events
+            WHERE run_id=%s AND event_type <> 'run.created'""",
+            (created.id,),
+        )
+        assert cursor.fetchone()[0] == len(commands)
+
+
+def test_research_run_service_idempotent_retry_and_conflicting_reuse(service):
+    runs = ResearchRunService(service.uow_factory)
+    created = runs.create("idempotent transition", f"fr_idempotent_{uuid4().hex}")
+    command = {
+        "expected_revision": 0,
+        "idempotency_key": "transition:planning",
+        "actor_type": "integration-test",
+    }
+    first = runs.transition(created.id, "planning", **command)
+    second = runs.transition(created.id, "planning", **command)
+    assert second.transition_id == first.transition_id
+    assert second.event_id == first.event_id
+    assert second.reused
+
+    with pytest.raises(ValueError, match="another run command"):
+        runs.transition(
+            created.id,
+            "planning",
+            expected_revision=0,
+            idempotency_key="transition:planning",
+            actor_type="different-actor",
+        )
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT count(t.id),count(e.id)
+            FROM research_runs r
+            LEFT JOIN research_run_transitions t ON t.run_id=r.id
+            LEFT JOIN research_events e ON e.run_id=r.id
+              AND e.event_type <> 'run.created'
+            WHERE r.id=%s""",
+            (created.id,),
+        )
+        assert cursor.fetchone() == (1, 1)
+
+
+def test_research_run_service_serializes_conflicting_transitions(service):
+    runs = ResearchRunService(service.uow_factory)
+    created = runs.create(
+        "concurrent transition", f"fr_concurrent_transition_{uuid4().hex}"
+    )
+    runs.transition(
+        created.id,
+        "planning",
+        expected_revision=0,
+        idempotency_key="transition:planning",
+        actor_type="integration-test",
+    )
+
+    def transition(candidate):
+        try:
+            return runs.transition(
+                created.id,
+                candidate,
+                expected_revision=1,
+                idempotency_key=f"transition:{candidate}",
+                actor_type="integration-test",
+            )
+        except Exception as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(transition, ("corpus_review", "failed")))
+    assert sum(not isinstance(result, Exception) for result in results) == 1
+    rejected = next(result for result in results if isinstance(result, Exception))
+    assert isinstance(rejected, StaleRunRevisionError)
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT lifecycle_revision,count(*) FROM research_run_transitions
+            WHERE run_id=%s GROUP BY lifecycle_revision ORDER BY lifecycle_revision""",
+            (created.id,),
+        )
+        assert cursor.fetchall() == [(1, 1), (2, 1)]
+
+
+def test_reopen_increments_revision_and_invalidates_semantic_artifacts(service):
+    runs = ResearchRunService(service.uow_factory)
+    created = runs.create("reopen semantics", f"fr_reopen_service_{uuid4().hex}")
+    with service.uow_factory() as uow:
+        call_id = uow.record_semantic_call(
+            created.id,
+            "planning",
+            "host-agent",
+            "host",
+            "planning-v1",
+            {"proposal": "planning"},
+            "semantic-call:planning",
+        )
+        artifact_id = uow.record_semantic_artifact(
+            created.id,
+            call_id,
+            "state_transition",
+            "transition-proposal",
+            1,
+            {"next_state": "planning", "run_revision": 0},
+            "semantic-artifact:planning",
+        )
+    runs.transition(
+        created.id,
+        "planning",
+        expected_revision=0,
+        idempotency_key="transition:planning",
+        actor_type="host-agent",
+        semantic_proposal_id=artifact_id,
+    )
+    with pytest.raises(ValueError, match="stale"):
+        runs.transition(
+            created.id,
+            "corpus_review",
+            expected_revision=1,
+            idempotency_key="transition:stale-before-reopen",
+            actor_type="host-agent",
+            semantic_proposal_id=artifact_id,
+        )
+    runs.fail(
+        created.id,
+        expected_revision=1,
+        idempotency_key="transition:failed",
+        actor_type="system",
+        error="synthetic failure",
+    )
+    reopened = runs.reopen(
+        created.id,
+        expected_revision=2,
+        idempotency_key="transition:reopen",
+        actor_type="operator",
+        reason="new evidence",
+    )
+    assert reopened.lifecycle_revision == 3
+    status = runs.status(run_id=created.id)
+    assert status.state == "created"
+    assert status.reopened_from_revision == 2
+
+    with pytest.raises(ValueError, match="stale"):
+        runs.transition(
+            created.id,
+            "planning",
+            expected_revision=3,
+            idempotency_key="transition:stale-proposal",
+            actor_type="host-agent",
+            semantic_proposal_id=artifact_id,
+        )
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT validation_status,validation_errors
+            FROM semantic_artifacts WHERE id=%s""",
+            (artifact_id,),
+        )
+        validation_status, errors = cursor.fetchone()
+        assert validation_status == "invalid"
+        assert errors[-1]["code"] == "stale_after_reopen"
+        assert errors[-1]["invalidated_by_revision"] == 3
+
+
+def test_stale_revision_terminal_mutation_and_cancel_fail_closed(service):
+    runs = ResearchRunService(service.uow_factory)
+    created = runs.create("failure paths", f"fr_failure_paths_{uuid4().hex}")
+    runs.transition(
+        created.id,
+        "planning",
+        expected_revision=0,
+        idempotency_key="transition:planning",
+        actor_type="integration-test",
+    )
+    with pytest.raises(StaleRunRevisionError):
+        runs.transition(
+            created.id,
+            "corpus_review",
+            expected_revision=0,
+            idempotency_key="transition:stale",
+            actor_type="integration-test",
+        )
+    runs.fail(
+        created.id,
+        expected_revision=1,
+        idempotency_key="transition:failed",
+        actor_type="integration-test",
+        error="synthetic failure",
+    )
+    with pytest.raises(RunStateError, match="not permitted"):
+        runs.transition(
+            created.id,
+            "corpus_review",
+            expected_revision=2,
+            idempotency_key="transition:terminal-mutation",
+            actor_type="integration-test",
+        )
+
+    other = runs.create("cancel path", f"fr_cancel_{uuid4().hex}")
+    cancelled = runs.cancel(
+        other.id,
+        expected_revision=0,
+        idempotency_key="transition:cancel",
+        actor_type="operator",
+        reason="operator request",
+    )
+    assert cancelled.next_state == "cancelled"
+    assert runs.status(run_id=other.id).state == "cancelled"
+
+
+def test_run_cli_exposes_machine_readable_status_and_transitions(monkeypatch, capsys):
+    external_id = f"fr_cli_state_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "CLI state representation",
+                "--mode",
+                "agent_led",
+            ]
+        )
+        == 0
+    )
+    started = json.loads(capsys.readouterr().out)
+    assert started["state"] == "created"
+    assert started["lifecycle_revision"] == 0
+    assert started["terminal"] is False
+
+    assert store_cli.main(["run-status", external_id]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["id"] == started["id"]
+    assert status["state"] == "created"
+
+    assert (
+        store_cli.main(
+            [
+                "run-transition",
+                external_id,
+                "planning",
+                "--expected-revision",
+                "0",
+                "--idempotency-key",
+                "cli:planning",
+            ]
+        )
+        == 0
+    )
+    transitioned = json.loads(capsys.readouterr().out)
+    assert transitioned["next_state"] == "planning"
+    assert transitioned["lifecycle_revision"] == 1
+
+    assert (
+        store_cli.main(
+            [
+                "run-cancel",
+                external_id,
+                "--expected-revision",
+                "1",
+                "--idempotency-key",
+                "cli:cancel",
+                "--reason",
+                "integration test",
+            ]
+        )
+        == 0
+    )
+    cancelled = json.loads(capsys.readouterr().out)
+    assert cancelled["next_state"] == "cancelled"
+
+
 def test_workflow_constraints_reject_cross_run_and_invalid_hash(service):
     with service.uow_factory() as uow:
         first_run = uow.start_run(
@@ -581,7 +894,9 @@ def test_concurrent_same_source_ingest_has_stable_identity(service):
 def test_lexical_search_selects_only_configured_derivation(service):
     marker = f"derivationmarker{uuid4().hex}"
     url = f"https://integration.example/derivation/{uuid4()}"
-    request = IngestRequest(url, f"# Derivation\n\n{marker} retained evidence.".encode())
+    request = IngestRequest(
+        url, f"# Derivation\n\n{marker} retained evidence.".encode()
+    )
     active = service.ingest(request)
     alternate_config = replace(
         service.config,
@@ -600,9 +915,7 @@ def test_lexical_search_selects_only_configured_derivation(service):
     with alternate_service.uow_factory() as uow:
         alternate_hits = uow.search_lexical(marker, 10, {})
     assert {row["candidate_id"] for row in active_hits} == set(active.chunk_ids)
-    assert {row["candidate_id"] for row in alternate_hits} == set(
-        alternate.chunk_ids
-    )
+    assert {row["candidate_id"] for row in alternate_hits} == set(alternate.chunk_ids)
 
 
 def test_batch_records_acquisition_failure_without_losing_success(service):
@@ -715,9 +1028,7 @@ def test_finished_run_is_immutable_and_rejects_new_evidence(service):
         )
     )
     with service.uow_factory() as uow:
-        run_id = uow.start_run(
-            "original request", {"external_run_id": external_id}
-        )
+        run_id = uow.start_run("original request", {"external_run_id": external_id})
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """UPDATE research_runs SET status='complete',outcome='test-complete',
@@ -725,10 +1036,8 @@ def test_finished_run_is_immutable_and_rejects_new_evidence(service):
             (run_id,),
         )
     with service.uow_factory() as uow:
-        repeated = uow.start_run(
-            "mutated request", {"external_run_id": external_id}
-        )
-        assert repeated == run_id
+        with pytest.raises(ValueError, match="another run"):
+            uow.start_run("mutated request", {"external_run_id": external_id})
         with pytest.raises(KeyError):
             uow.link_run_asset(external_id, asset.snapshot_id)
         with pytest.raises(KeyError):
@@ -754,6 +1063,28 @@ def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
     external_id = f"fr_reopen_{uuid4().hex}"
     with service.uow_factory() as uow:
         run_id = uow.start_run("reopen lifecycle", {"external_run_id": external_id})
+    runs = ResearchRunService(service.uow_factory)
+
+    def advance_to_validating(start_revision):
+        revision = start_revision
+        for state in (
+            "planning",
+            "corpus_review",
+            "retrieving",
+            "synthesizing",
+            "validating",
+        ):
+            runs.transition(
+                run_id,
+                state,
+                expected_revision=revision,
+                idempotency_key=f"advance:{start_revision}:{state}",
+                actor_type="integration-test",
+            )
+            revision += 1
+        return revision
+
+    first_terminal_revision = advance_to_validating(0)
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
     assert (
         store_cli.main(
@@ -773,29 +1104,43 @@ def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
     assert store_cli.main(["run-reopen", external_id]) == 0
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """SELECT status,outcome,completed_at,source_manifest_sha256,answer_sha256
+            """SELECT status,outcome,completed_at,source_manifest_sha256,answer_sha256,
+            state,lifecycle_revision,reopened_from_revision
             FROM research_runs WHERE id=%s""",
             (run_id,),
         )
-        assert cursor.fetchone() == ("running", None, None, None, None)
+        assert cursor.fetchone() == (
+            "running",
+            None,
+            None,
+            None,
+            None,
+            "created",
+            first_terminal_revision + 2,
+            first_terminal_revision + 1,
+        )
         with pytest.raises(Exception) as error:
             cursor.execute(
                 "UPDATE research_runs SET status='unexpected' WHERE id=%s", (run_id,)
             )
         assert "research_runs_lifecycle_check" in str(error.value)
-    assert (
-        store_cli.main(
-            ["run-finish", external_id, "--outcome", "satisfied"]
-        )
-        == 0
-    )
+    second_terminal_revision = advance_to_validating(first_terminal_revision + 2)
+    assert store_cli.main(["run-finish", external_id, "--outcome", "satisfied"]) == 0
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """SELECT status,outcome,source_manifest_sha256,answer_sha256
+            """SELECT status,outcome,source_manifest_sha256,answer_sha256,
+            state,lifecycle_revision
             FROM research_runs WHERE id=%s""",
             (run_id,),
         )
-        assert cursor.fetchone() == ("complete", "satisfied", None, None)
+        assert cursor.fetchone() == (
+            "complete",
+            "satisfied",
+            None,
+            None,
+            "completed",
+            second_terminal_revision + 1,
+        )
 
 
 def test_expired_final_attempt_becomes_dead_and_manifest_failed(service):

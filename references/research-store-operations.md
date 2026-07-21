@@ -113,6 +113,23 @@ rtk proxy scripts/frun finish "$RUN_ID" --outcome satisfied --source-manifest so
 
 Start with compact manifests. Expand only selected candidates into bounded passages. Treat exports as non-authoritative debugging/audit copies.
 
+The PostgreSQL workflow state machine is stricter than the compatibility
+Catalog lifecycle. Advance only through permitted states and use the current
+revision as compare-and-swap input:
+
+```bash
+rtk proxy scripts/research-db run-status "$RUN_ID"
+rtk proxy scripts/research-db run-transition "$RUN_ID" planning \
+  --expected-revision 0 --idempotency-key 'planning-command-id'
+rtk proxy scripts/research-db run-cancel "$RUN_ID" \
+  --expected-revision 1 --idempotency-key 'cancel-command-id' \
+  --reason 'operator request'
+```
+
+Retried commands must reuse their original key. After a stale-revision error,
+read status and decide whether a genuinely new command is still valid; do not
+blindly rewrite the expected revision.
+
 ## Back up and recover
 
 Back up PostgreSQL and the blob root at one consistent recovery point. Qdrant and Valkey do not require authoritative backups. Restore PostgreSQL and blobs first, verify all referenced hashes, rebuild the configured index, drain the worker, reconcile coverage, then activate it.
