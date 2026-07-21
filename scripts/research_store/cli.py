@@ -98,6 +98,10 @@ def parser():
     run_finish.add_argument("--answer-sha256")
     run_reopen = sub.add_parser("run-reopen")
     run_reopen.add_argument("external_id")
+    budget_record = sub.add_parser("budget-record")
+    budget_record.add_argument("external_id")
+    budget_record.add_argument("--research-spec", required=True)
+    budget_record.add_argument("--budget-snapshot", required=True)
 
     sub.add_parser("corpus-overview")
     search = sub.add_parser("search-assets")
@@ -1021,6 +1025,55 @@ def main(argv=None):
         if not row:
             raise SystemExit("research run not found")
         print(dumps({"id": row[0], "external_run_id": args.external_id}))
+        return 0
+    if args.command == "budget-record":
+        from research_domain import load_model, serialize_model
+        from research_domain.models import ResearchSpec
+
+        spec_payload = json.loads(Path(args.research_spec).read_text(encoding="utf-8"))
+        spec = load_model(spec_payload)
+        if not isinstance(spec, ResearchSpec):
+            raise SystemExit("--research-spec must contain research-spec-v1")
+        snapshot = json.loads(
+            Path(args.budget_snapshot).read_text(encoding="utf-8")
+        )
+        required = {
+            "snapshot_version",
+            "policy_version",
+            "policy_config_sha256",
+            "research_spec_id",
+            "spec_revision",
+            "run_revision",
+            "effective_caps",
+        }
+        missing = sorted(required - set(snapshot))
+        if missing:
+            raise SystemExit(f"budget snapshot missing required fields: {missing}")
+        if snapshot["research_spec_id"] != str(spec.research_spec_id):
+            raise SystemExit("budget snapshot references another ResearchSpec")
+        run_id = _resolve_run_id(config, args.external_id)
+        with _uow_factory(config)() as uow:
+            spec_id = uow.record_research_spec(
+                run_id,
+                snapshot["spec_revision"],
+                "research-spec",
+                1,
+                serialize_model(spec),
+                f"research-spec:{spec.research_spec_id}:r{snapshot['spec_revision']}",
+            )
+            budget_id = uow.record_budget_snapshot(
+                run_id,
+                spec_id,
+                snapshot["spec_revision"],
+                snapshot["run_revision"],
+                snapshot["policy_version"],
+                snapshot["policy_config_sha256"],
+                snapshot,
+                "budget:"
+                f"{snapshot['policy_version']}:r{snapshot['run_revision']}:"
+                f"{spec.research_spec_id}",
+            )
+        print(dumps({"id": budget_id, "external_run_id": args.external_id}))
         return 0
 
     service = build_service(config)

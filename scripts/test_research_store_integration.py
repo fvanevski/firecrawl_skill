@@ -57,11 +57,12 @@ def prepared_database():
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN) == 6
+    assert migrate(TEST_DSN) == 7
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT to_regclass('research_run_transitions'),
-            to_regclass('research_events'),to_regclass('semantic_artifacts')"""
+            to_regclass('research_events'),to_regclass('semantic_artifacts'),
+            to_regclass('research_budget_snapshots')"""
         )
         assert all(cursor.fetchone())
 
@@ -137,7 +138,7 @@ def prepared_database():
         )
         legacy_partial_run_id = cursor.fetchone()[0]
 
-    # PostgreSQL transactional DDL leaves no partial v6 objects after an
+    # PostgreSQL transactional DDL leaves no partial workflow objects after an
     # interrupted attempt, so the supported repair is a normal forward retry.
     with pytest.raises(RuntimeError, match="synthetic interruption"):
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
@@ -147,7 +148,7 @@ def prepared_database():
         cursor.execute("SELECT to_regclass('interrupted_v6_probe')")
         assert cursor.fetchone()[0] is None
 
-    assert migrate(TEST_DSN) == 6
+    assert migrate(TEST_DSN) == 7
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT state,lifecycle_revision,execution_mode,objective
@@ -243,6 +244,34 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             {"schema_version": 1, "objective": "workflow schema"},
             "spec:v1",
         )
+        budget_payload = {
+            "snapshot_version": 1,
+            "policy_version": "budget-policy-v1",
+            "policy_config_sha256": "b" * 64,
+            "spec_revision": 1,
+            "run_revision": 0,
+            "effective_caps": {"max_search_branches": 3},
+        }
+        budget_id = uow.record_budget_snapshot(
+            run_id,
+            spec_id,
+            1,
+            0,
+            "budget-policy-v1",
+            "b" * 64,
+            budget_payload,
+            "budget:v1:r0",
+        )
+        assert budget_id == uow.record_budget_snapshot(
+            run_id,
+            spec_id,
+            1,
+            0,
+            "budget-policy-v1",
+            "b" * 64,
+            budget_payload,
+            "budget:v1:r0",
+        )
         call_id = uow.record_semantic_call(
             run_id,
             "planning",
@@ -275,7 +304,8 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """SELECT r.research_spec_id,count(DISTINCT i.id),count(DISTINCT e.id),
+            """SELECT r.research_spec_id,r.budget_snapshot_id,r.budget_policy_version,
+            count(DISTINCT i.id),count(DISTINCT e.id),
             count(DISTINCT c.id),count(DISTINCT a.id),count(DISTINCT x.id)
             FROM research_runs r
             LEFT JOIN research_invocations i ON i.run_id=r.id
@@ -283,11 +313,90 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             LEFT JOIN semantic_calls c ON c.run_id=r.id
             LEFT JOIN semantic_artifacts a ON a.run_id=r.id
             LEFT JOIN compatibility_exports x ON x.run_id=r.id
-            WHERE r.id=%s GROUP BY r.research_spec_id""",
+            WHERE r.id=%s GROUP BY r.research_spec_id,r.budget_snapshot_id,
+            r.budget_policy_version""",
             (run_id,),
         )
-        assert cursor.fetchone() == (spec_id, 1, 1, 1, 1, 1)
+        assert cursor.fetchone() == (
+            spec_id,
+            budget_id,
+            "budget-policy-v1",
+            1,
+            1,
+            1,
+            1,
+            1,
+        )
         assert artifact_id is not None and export_id is not None
+
+
+def test_budget_snapshot_changes_require_policy_or_run_revision(service):
+    with service.uow_factory() as uow:
+        run_id = uow.start_run(
+            "budget revision", {"external_run_id": f"fr_budget_{uuid4().hex}"}
+        )
+        spec_id = uow.record_research_spec(
+            run_id,
+            1,
+            "research-spec",
+            1,
+            {"schema_version": 1, "objective": "budget revision"},
+            "spec:v1",
+        )
+        first = uow.record_budget_snapshot(
+            run_id,
+            spec_id,
+            1,
+            0,
+            "budget-policy-v1",
+            "c" * 64,
+            {
+                "policy_version": "budget-policy-v1",
+                "policy_config_sha256": "c" * 64,
+                "spec_revision": 1,
+                "run_revision": 0,
+                "effective_caps": {"max_search_branches": 2},
+            },
+            "budget:first",
+        )
+        assert first is not None
+        with pytest.raises(
+            ValueError,
+            match="new policy version or explicit run revision",
+        ):
+            uow.record_budget_snapshot(
+                run_id,
+                spec_id,
+                1,
+                0,
+                "budget-policy-v1",
+                "c" * 64,
+                {
+                    "policy_version": "budget-policy-v1",
+                    "policy_config_sha256": "c" * 64,
+                    "spec_revision": 1,
+                    "run_revision": 0,
+                    "effective_caps": {"max_search_branches": 3},
+                },
+                "budget:changed",
+            )
+        second = uow.record_budget_snapshot(
+            run_id,
+            spec_id,
+            1,
+            0,
+            "budget-policy-v2",
+            "d" * 64,
+            {
+                "policy_version": "budget-policy-v2",
+                "policy_config_sha256": "d" * 64,
+                "spec_revision": 1,
+                "run_revision": 0,
+                "effective_caps": {"max_search_branches": 3},
+            },
+            "budget:v2",
+        )
+        assert second != first
 
 
 def test_concurrent_event_idempotency_and_conflicting_reuse_rejection(service):

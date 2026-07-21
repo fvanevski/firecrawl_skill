@@ -16,6 +16,7 @@ import urllib.error
 import tempfile
 import re
 import time
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from concurrent.futures import ThreadPoolExecutor
 
@@ -24,6 +25,9 @@ sys.path.insert(0, SCRIPT_DIR)
 from invocation_id import resolve_invocation_id
 import invocation_catalog as catalog
 import research_workflow as workflow
+from budget_policy import BudgetPolicyError, DEFAULT_POLICY, conservative_research_spec
+from research_domain import load_model, serialize_model
+from research_domain.models import ResearchSpec
 
 
 def resolved_research_environment():
@@ -412,7 +416,7 @@ def main():
         "-c", "--complexity", 
         choices=["simple", "moderate", "complex", "auto"], 
         default="auto",
-        help="Complexity level. Default 'auto' performs first-pass decision."
+        help="Legacy diagnostic label only; budgets come from BudgetPolicy."
     )
     parser.add_argument(
         "-p", "--profile",
@@ -428,11 +432,13 @@ def main():
     parser.add_argument("--research-profile", choices=["auto", "general", "breaking_news", "legislative_legal", "technical_docs"], default="auto")
     parser.add_argument("--max-searches", type=int, help="Hard cap on search branches")
     parser.add_argument("--max-scrapes", type=int, help="Hard cap on attempted page scrapes")
-    parser.add_argument("--max-iterations", type=int, default=3, help="Maximum adaptive scrape waves")
+    parser.add_argument("--max-iterations", type=int, help="Stricter maximum adaptive scrape waves")
     parser.add_argument("--no-llm-triage", action="store_true", help="Disable semantic candidate triage for diagnostics")
     parser.add_argument("--results-per-query", type=int, help="Override metadata candidates acquired per query (1-100)")
     parser.add_argument("--total-scrapes", type=int, help="Override the global post-deduplication scrape budget")
+    parser.add_argument("--max-successful-extractions", type=int, help="Stricter cap on successful page extractions")
     parser.add_argument("--per-domain-cap", type=int, help="Maximum selected pages per domain before relaxed backfill")
+    parser.add_argument("--research-spec", help="Validated research-spec-v1 JSON file")
     parser.add_argument("--invocation-id", help="Reuse an existing fc_<uuid> ID instead of generating one")
     parser.add_argument("--research-run-id", default=os.environ.get("FIRECRAWL_RESEARCH_RUN_ID", ""), help="Link this operation to an explicit fr_<uuid> research run")
     parser.add_argument("--dry-run", action="store_true", help="Generate and print the query plan without running Firecrawl")
@@ -469,6 +475,64 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
 
+    try:
+        if args.research_spec:
+            spec = load_model(
+                json.loads(Path(args.research_spec).read_text(encoding="utf-8"))
+            )
+            if not isinstance(spec, ResearchSpec):
+                parser.error("--research-spec must contain research-spec-v1")
+            spec_provenance = "explicit"
+        else:
+            run = catalog.read_run(args.research_run_id) if args.research_run_id else None
+            policy_objective = run.get("objective") if run else args.topic
+            if run:
+                selected_profile = run.get("profile", {}).get("selected", "general")
+                profile_reason = "explicit research-run objective and profile"
+            else:
+                selected_profile, profile_reason = catalog.detect_profile(
+                    args.topic, args.research_profile
+                )
+            spec = conservative_research_spec(policy_objective, selected_profile)
+            spec_provenance = (
+                f"deterministic conservative fallback: {profile_reason}"
+            )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        parser.error(f"invalid ResearchSpec: {exc}")
+
+    user_limits = {}
+    if args.max_searches is not None:
+        user_limits["max_search_branches"] = args.max_searches
+    if args.results_per_query is not None:
+        user_limits["results_per_branch"] = args.results_per_query
+    extraction_limits = [
+        value for value in (args.max_scrapes, args.total_scrapes) if value is not None
+    ]
+    if extraction_limits:
+        user_limits["max_extraction_attempts"] = min(extraction_limits)
+    if args.max_successful_extractions is not None:
+        user_limits["max_successful_extractions"] = args.max_successful_extractions
+    if args.max_iterations is not None:
+        user_limits["max_adaptive_cycles"] = args.max_iterations
+    try:
+        budget_snapshot = DEFAULT_POLICY.evaluate(
+            spec,
+            spec_revision=1,
+            run_revision=0,
+            user_limits=user_limits,
+        )
+    except BudgetPolicyError as exc:
+        parser.error(
+            json.dumps(
+                {
+                    "error": "budget_rejected",
+                    "rejections": [item.to_dict() for item in exc.rejections],
+                },
+                sort_keys=True,
+            )
+        )
+    effective_caps = budget_snapshot.effective_caps
+
     catalog.begin(invocation_id, "smart_search", {
         "topic": args.topic,
         "requested_complexity": args.complexity,
@@ -484,6 +548,8 @@ def main():
         "max_searches": args.max_searches,
         "max_scrapes": args.max_scrapes,
         "max_iterations": args.max_iterations,
+        "budget_policy_version": budget_snapshot.policy_version,
+        "budget_snapshot": budget_snapshot.to_dict(),
         "llm_triage": not args.no_llm_triage,
         "dry_run": args.dry_run,
     }, args.research_run_id or None)
@@ -503,7 +569,7 @@ def main():
 
     atexit.register(fail_incomplete_catalog)
     
-    # 1. Extract keywords and make decision on complexity
+    # 1. Compute a legacy diagnostic label. It never selects resource budgets.
     keywords = extract_keywords(args.topic)
     
     if args.complexity == "auto":
@@ -512,19 +578,19 @@ def main():
         complexity = args.complexity
         reasons = ["manually specified by user"]
         
-    tier = COMPLEXITY_TIERS[complexity]
-    num_queries = tier["queries"]
-    search_cap = args.max_searches or (num_queries + 2)
-    if args.max_searches is not None:
-        if args.max_searches < 1:
-            parser.error("--max-searches must be positive")
-        num_queries = min(num_queries, args.max_searches)
-    results_per_query = args.results_per_query or tier["results_per_query"]
-    total_scrapes = args.total_scrapes if args.total_scrapes is not None else tier["total_scrapes"]
-    if args.max_scrapes is not None:
-        if args.max_scrapes < 0:
-            parser.error("--max-scrapes must be non-negative")
-        total_scrapes = min(total_scrapes, args.max_scrapes)
+    num_queries = effective_caps.max_search_branches
+    search_cap = effective_caps.max_search_branches
+    results_per_query = effective_caps.results_per_branch
+    total_scrapes = effective_caps.max_extraction_attempts
+    successful_extraction_budget = effective_caps.max_successful_extractions
+    args.max_iterations = effective_caps.max_adaptive_cycles
+    planning_complexity = {
+        "focused": "simple",
+        "standard": "moderate",
+        "intensive": "complex",
+    }[budget_snapshot.selected_tier]
+    if num_queries < 1:
+        parser.error("effective max_search_branches must be positive")
     if args.max_iterations < 1:
         parser.error("--max-iterations must be positive")
     if args.commercial_fallback and not args.fallback_model:
@@ -543,6 +609,7 @@ def main():
     print(f"{BOLD}Keywords:{RESET}    {', '.join(keywords)}")
     print(f"{BOLD}Complexity:{RESET}  {color}{complexity.upper()}{RESET}")
     print(f"{BOLD}Decision:{RESET}    Based on {', '.join(reasons)}")
+    print(f"{BOLD}Budget:{RESET}      {budget_snapshot.policy_version} / {budget_snapshot.selected_tier} ({spec_provenance})")
     print(f"{BOLD}Strategy:{RESET}    acquire {num_queries} x {results_per_query} metadata candidates first; then scrape {total_scrapes} globally selected pages.")
     print("")
     
@@ -562,7 +629,9 @@ def main():
         query_plan = structured_plan
         queries = [entry["query"] for entry in query_plan]
     elif args.planner == "heuristic":
-        queries = normalize_queries(None, args.topic, keywords, complexity)[:num_queries]
+        queries = normalize_queries(
+            None, args.topic, keywords, planning_complexity
+        )[:num_queries]
         query_plan = build_query_plan(queries)
         planner_provenance = {"provider": "deterministic", "status": "explicit_legacy_mode", "requested_model": None}
     else:
@@ -584,6 +653,8 @@ def main():
             "topic": args.topic,
             "invocation_id": invocation_id,
             "complexity": complexity,
+            "research_spec": serialize_model(spec),
+            "budget_snapshot": budget_snapshot.to_dict(),
             "planner": planner_used,
             "planner_provenance": planner_provenance,
             "research_brief": research_brief,
@@ -593,6 +664,7 @@ def main():
                 "results_per_query": results_per_query,
                 "candidate_capacity": num_queries * results_per_query,
                 "total_scrape_budget": total_scrapes,
+                "max_successful_extractions": successful_extraction_budget,
                 "acquisition_mode": "metadata_first_single_pass",
             },
             "queries": query_plan,
@@ -605,6 +677,34 @@ def main():
     invocation_dir = os.path.join(tmp_base, "firecrawl_scratch", invocation_id)
     base_dir = os.path.join(invocation_dir, "smart")
     os.makedirs(base_dir, exist_ok=True)
+
+    spec_path = os.path.join(base_dir, "_research_spec.json")
+    budget_path = os.path.join(base_dir, "_budget.json")
+    with open(spec_path, "w", encoding="utf-8") as handle:
+        json.dump(serialize_model(spec), handle, indent=2, sort_keys=True)
+    with open(budget_path, "w", encoding="utf-8") as handle:
+        json.dump(budget_snapshot.to_dict(), handle, indent=2, sort_keys=True)
+    if research_active and args.research_run_id:
+        recorded = subprocess.run(
+            [
+                os.path.join(SCRIPT_DIR, "research-db"),
+                "budget-record",
+                args.research_run_id,
+                "--research-spec",
+                spec_path,
+                "--budget-snapshot",
+                budget_path,
+            ],
+            env=research_env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if recorded.returncode:
+            parser.error(
+                "authoritative budget snapshot persistence failed: "
+                + (recorded.stderr.strip() or recorded.stdout.strip())
+            )
     
     print(f"Aggregating results to: {GREEN}{base_dir}{RESET}\n")
     
@@ -772,14 +872,18 @@ def main():
                 ordered_candidates, triage_provenance = workflow.triage_candidates(args.topic, research_brief, all_candidates, args.llm, args.model, fallback_provider=args.commercial_fallback, fallback_model=args.fallback_model)
                 triage_provenance["status"] = "succeeded" if ordered_candidates else "failed"
 
-    required_successes = min(total_scrapes, max(2, len(research_brief.get("questions", [])) * 2)) if total_scrapes else 0
+    required_successes = min(
+        successful_extraction_budget,
+        max(2, len(research_brief.get("questions", [])) * 2),
+    ) if successful_extraction_budget else 0
     attempted, successful_urls, scrape_results_by_url = [], set(), {}
     remaining = list(ordered_candidates)
     for wave in range(1, args.max_iterations + 1):
         if not remaining or len(attempted) >= total_scrapes or len(successful_urls) >= required_successes:
             break
         remaining_budget = total_scrapes - len(attempted)
-        wave_size = max(1, min(remaining_budget, (total_scrapes + args.max_iterations - 1) // args.max_iterations))
+        remaining_success_budget = successful_extraction_budget - len(successful_urls)
+        wave_size = max(1, min(remaining_budget, remaining_success_budget, (total_scrapes + args.max_iterations - 1) // args.max_iterations))
         wave_candidates, remaining = remaining[:wave_size], remaining[wave_size:]
         selected_by_branch = {}
         for candidate in wave_candidates:
@@ -891,6 +995,8 @@ def main():
         "operation": "smart_search",
         "topic": args.topic,
         "complexity": complexity,
+        "research_spec": serialize_model(spec),
+        "budget_snapshot": budget_snapshot.to_dict(),
         "planner": planner_used,
         "planner_provenance": planner_provenance,
         "research_brief": research_brief,
@@ -903,6 +1009,7 @@ def main():
             "results_per_query": results_per_query,
             "candidate_capacity": num_queries * results_per_query,
             "total_scrape_budget": total_scrapes,
+            "max_successful_extractions": successful_extraction_budget,
             "per_domain_cap": args.per_domain_cap,
             "max_iterations": args.max_iterations,
             "required_successes": required_successes,
@@ -965,6 +1072,8 @@ def main():
             "context_manifest": "_context.json",
             "candidate_ledger": "_candidates.json",
             "full_metadata": "_meta.json",
+            "research_spec": "_research_spec.json",
+            "budget_snapshot": "_budget.json",
             "raw_searches": "query_*/_search.json",
             "scraped_content": "query_*/result_*",
         },
@@ -985,10 +1094,12 @@ def main():
         mif.write(f"- **Invocation ID**: `{invocation_id}`\n")
         mif.write(f"- **Topic**: `{args.topic}`\n")
         mif.write(f"- **Topic Complexity**: `{complexity.upper()}`\n")
+        mif.write(f"- **Budget Policy**: `{budget_snapshot.policy_version}` (`{budget_snapshot.selected_tier}`)\n")
         mif.write(f"- **Consolidated Directory**: `{base_dir}`\n")
         mif.write(f"- **Total Search Branches**: {len(master_results)}\n")
         mif.write(f"- **Unique Candidates Acquired**: {len(master_candidates)}\n")
         mif.write(f"- **Global Scrape Budget**: {total_scrapes}\n")
+        mif.write(f"- **Successful Extraction Cap**: {successful_extraction_budget}\n")
         mif.write(f"- **Total Pages Scraped**: {total_scraped_pages}\n")
         mif.write(f"- **Total Estimated Words**: {total_est_words} words\n\n")
         mif.write(f"- **Research Packet**: `_evidence.json`\n")
