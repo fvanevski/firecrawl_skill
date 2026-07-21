@@ -156,6 +156,22 @@ def parser():
     comparisons.add_argument("--divergent-only", action="store_true")
     comparisons.add_argument("--limit", type=int, default=100)
 
+    search_plan_rec = sub.add_parser("search-plan-record")
+    search_plan_rec.add_argument("external_id")
+    search_plan_rec.add_argument("--research-spec-id", required=True)
+    search_plan_rec.add_argument("--revision", type=int, required=True)
+    search_plan_rec.add_argument("--search-plan", required=True)
+    search_plan_rec.add_argument("--idempotency-key", required=True)
+
+    search_plan_get = sub.add_parser("search-plan-get")
+    search_plan_get.add_argument("external_id")
+    search_plan_get.add_argument("--plan-id")
+    search_plan_get.add_argument("--revision", type=int)
+
+    plan_query_get = sub.add_parser("search-plan-query-get")
+    plan_query_get.add_argument("query_id")
+
+
     sub.add_parser("corpus-overview")
     search = sub.add_parser("search-assets")
     search.add_argument("query")
@@ -1191,6 +1207,33 @@ def main(argv=None):
             )
         print(dumps({"comparisons": rows, "count": len(rows)}))
         return 0
+    if args.command == "search-plan-record":
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        with open(args.search_plan, "r", encoding="utf-8") as f:
+            plan_payload = json.load(f)
+        plan_id = run_svc.record_search_plan(
+            status.id,
+            UUID(args.research_spec_id),
+            args.revision,
+            plan_payload,
+            args.idempotency_key,
+        )
+        print(dumps({"id": plan_id, "external_run_id": args.external_id}))
+        return 0
+    if args.command == "search-plan-get":
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        plan_id = UUID(args.plan_id) if args.plan_id else None
+        plan = run_svc.get_search_plan(status.id, plan_id=plan_id, revision=args.revision)
+        print(dumps(plan))
+        return 0
+    if args.command == "search-plan-query-get":
+        run_svc = build_run_service(config)
+        query = run_svc.get_plan_query(UUID(args.query_id))
+        print(dumps(query))
+        return 0
+
 
     service = build_service(config)
     if args.command == "corpus-overview":

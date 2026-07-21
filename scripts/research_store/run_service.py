@@ -405,3 +405,43 @@ class ResearchRunService:
                     raise RunStateError(str(exc)) from exc
                 raise
         return TransitionResult.from_mapping(result)
+
+    def record_search_plan(
+        self,
+        run_id: UUID,
+        research_spec_id: UUID,
+        revision: int,
+        search_plan: dict[str, Any] | Any,
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID:
+        with self.uow_factory() as uow:
+            return uow.runs.record_search_plan(
+                run_id,
+                research_spec_id,
+                revision,
+                search_plan,
+                idempotency_key,
+                **metadata,
+            )
+
+    def get_search_plan(
+        self, run_id: UUID, plan_id: UUID | None = None, revision: int | None = None
+    ) -> dict[str, Any]:
+        with self.uow_factory() as uow:
+            return uow.runs.get_search_plan(run_id, plan_id=plan_id, revision=revision)
+
+    def list_search_plans(self, run_id: UUID) -> list[dict[str, Any]]:
+        with self.uow_factory() as uow:
+            return uow.runs.list_search_plans(run_id)
+
+    def get_plan_query(
+        self, query_id: UUID, run_id: UUID | None = None
+    ) -> dict[str, Any]:
+        with self.uow_factory() as uow:
+            return uow.runs.get_plan_query(query_id, run_id=run_id)
+
+    def list_plan_queries(self, plan_id: UUID) -> list[dict[str, Any]]:
+        with self.uow_factory() as uow:
+            return uow.runs.list_plan_queries(plan_id)
+

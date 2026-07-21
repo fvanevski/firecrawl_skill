@@ -148,6 +148,27 @@ class ResearchRunRepository(SemanticCallRepository, Protocol):
         snapshot: dict[str, Any],
         idempotency_key: str,
     ) -> UUID: ...
+    def record_search_plan(
+        self,
+        run_id: UUID,
+        research_spec_id: UUID,
+        revision: int,
+        search_plan: dict[str, Any],
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+    def get_search_plan(
+        self, run_id: UUID, plan_id: UUID | None = None, revision: int | None = None
+    ) -> dict[str, Any]: ...
+    def list_search_plans(
+        self, run_id: UUID
+    ) -> list[dict[str, Any]]: ...
+    def get_plan_query(
+        self, query_id: UUID, run_id: UUID | None = None
+    ) -> dict[str, Any]: ...
+    def list_plan_queries(
+        self, plan_id: UUID
+    ) -> list[dict[str, Any]]: ...
     def record_compatibility_export(
         self,
         run_id: UUID,
