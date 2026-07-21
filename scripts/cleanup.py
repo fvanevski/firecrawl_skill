@@ -25,13 +25,15 @@ def clean_markdown(content):
     ]
 
     navigation_patterns = [
-        re.compile(r'^skip to (main )?content$', re.I),
-        re.compile(r'^toggle navigation$', re.I),
-        re.compile(r'^menu$', re.I),
-        re.compile(r'^navigation$', re.I),
-        re.compile(r'^back to top$', re.I),
-        re.compile(r'^go to home$', re.I),
-        re.compile(r'^site map$', re.I),
+        re.compile(r'^\*?\s*\[?skip to (main )?content\b', re.I),
+        re.compile(r'^\*?\s*\[?toggle navigation\b', re.I),
+        re.compile(r'^\*?\s*\[?menu\b', re.I),
+        re.compile(r'^\*?\s*\[?navigation\b', re.I),
+        re.compile(r'^\*?\s*\[?back to top\b', re.I),
+        re.compile(r'^\*?\s*\[?go to home\b', re.I),
+        re.compile(r'^\*?\s*\[?site map\b', re.I),
+        re.compile(r'^\*?\s*\[?accessibility( link)?\b', re.I),
+        re.compile(r'^\*?\s*\[?live\b', re.I),
     ]
 
     social_patterns = [
@@ -100,10 +102,11 @@ def clean_markdown(content):
                         "home", "about", "contact", "pricing", "blog", "careers", "features", 
                         "privacy", "terms", "cookies", "login", "register", "sign in", "sign up",
                         "facebook", "twitter", "linkedin", "instagram", "youtube", "github",
-                        "next", "previous", "prev", "search", "subscribe", "newsletter", "terms of use"
+                        "next", "previous", "prev", "search", "subscribe", "newsletter", "terms of use",
+                        "skip to content", "skip to main content", "accessibility", "live"
                     }
                     link_texts = [l[0].lower().strip() for l in links]
-                    if any(lt in nav_keywords or not lt for lt in link_texts) or len(links) >= 3:
+                    if any(lt in nav_keywords or not lt for lt in link_texts) or len(links) >= 2:
                         is_boilerplate = True
 
         if not is_boilerplate:

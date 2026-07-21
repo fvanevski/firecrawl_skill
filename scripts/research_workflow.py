@@ -76,7 +76,7 @@ def build_research_brief(objective, research_profile="auto", provider="local", m
 
 
 def plan_queries(objective, brief, query_count, provider="local", model=None, fallback_provider=None, fallback_model=None, failure_context=None):
-    system = "You create precise web-search query plans. Return only schema-valid JSON. Preserve distinctive entities. Use complementary facets, include at least one domain-neutral query, and do not answer the topic."
+    system = "You create precise web-search query plans. Return only schema-valid JSON. Preserve distinctive entities. Use complementary facets, include at least one domain-neutral query, and do not answer the topic. Avoid overly constraining queries with multiple site: operators; prioritize broad, natural-language queries."
     prompt = f"Create exactly {query_count} queries.\nObjective: {objective}\nResearch brief: {json.dumps(brief, sort_keys=True)}"
     if failure_context:
         prompt += "\nPrior acquisition problem: " + failure_context + "\nProduce a shorter, less restrictive recovery query while preserving the distinctive subject and requested constraints."

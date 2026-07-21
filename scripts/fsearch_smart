@@ -151,8 +151,8 @@ def generate_queries_via_llm(topic, complexity, failed_context=None):
             f"Complexity level: {complexity}.\n"
             f"Optimize these queries for broad one-batch coverage. The first query must be domain-neutral. "
             f"Use distinct facets such as overview, primary evidence, failure modes or counterevidence, current developments, "
-            f"and implementation details. At most two queries may use site: constraints. Avoid near-duplicates. "
-            f"You can use operators like AND, OR, exclusions, and quoted phrases. "
+            f"and implementation details. Avoid chaining multiple site: operators and prioritize broad, natural-language queries for the first wave. At most one query may use site: constraints. Avoid near-duplicates. "
+            f"You can use operators like AND, OR, exclusions, but avoid overly restrictive quoted phrases. "
             f"For simple complexity, return 2 queries. For moderate, return 3. For complex, return 5. "
             f"Return the list of queries in JSON format."
         )
@@ -690,9 +690,11 @@ def main():
             print(f"  ⚠️ {YELLOW}Poor search result detected (0 candidates acquired).{RESET}")
             failed_queries.append(q)
             
-            if args.planner == "heuristic" and len(failed_queries) <= 2 and len(active_queries) < (args.max_searches or num_queries + 2):
+            if len(failed_queries) <= 2 and len(active_queries) < (args.max_searches or num_queries + 2):
                 print(f"  Adapting search strategy... Broadening the failed query deterministically.")
-                new_q = adaptive_retry_query(keywords, len(failed_queries), args.topic)
+                new_q = ""
+                if args.planner == "heuristic":
+                    new_q = adaptive_retry_query(keywords, len(failed_queries), args.topic)
                 if not new_q or new_q in active_queries:
                     new_q = broaden_query(q)
                 if new_q and not retains_anchors(args.topic, new_q):
@@ -703,7 +705,7 @@ def main():
                     active_queries.append(new_q)
                     retry_query_plan.append({"query": new_q, "facet": "adaptive_broadening", "domain_restricted": False, "retries": q})
             elif args.research_run_id:
-                catalog.annotate_run(args.research_run_id, "pivot", f"Search branch returned no candidates and was not broadened automatically: {q}", from_invocation=invocation_id)
+                catalog.annotate_run(args.research_run_id, "pivot", f"Search branch returned no candidates and could not be broadened: {q}", from_invocation=invocation_id)
                     
         print("")
         idx += 1
