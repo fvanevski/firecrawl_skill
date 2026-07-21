@@ -83,5 +83,29 @@ class IndexDefinition:
     instruction_template_hash: str = ""
 
 
+@dataclass(frozen=True)
+class RawSearchResponse:
+    id: UUID
+    run_id: UUID
+    query_text: str
+    backend: str
+    status: str
+    parser_version: str
+    raw_blob: BlobReference
+    content_sha256: str
+    idempotency_key: str
+    plan_id: UUID | None = None
+    plan_query_id: UUID | None = None
+    provider_request_id: str | None = None
+    http_status: int | None = None
+    result_count: int = 0
+    error_message: str | None = None
+    transport_metadata: dict[str, Any] = field(default_factory=dict)
+    payload_summary: dict[str, Any] = field(default_factory=dict)
+    requested_at: datetime = field(default_factory=utcnow)
+    responded_at: datetime = field(default_factory=utcnow)
+    created_at: datetime = field(default_factory=utcnow)
+
+
 def new_id() -> UUID:
     return uuid4()

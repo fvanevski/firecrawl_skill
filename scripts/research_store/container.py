@@ -77,8 +77,10 @@ def build_run_service(config: StoreConfig | None = None) -> ResearchRunService:
             config.parser_version,
             config.normalization_version,
             config.chunker_version,
-        )
+        ),
+        blob_store=ContentAddressedBlobStore(config.blob_root),
     )
+
 
 
 def build_semantic_service(config: StoreConfig | None = None) -> SemanticCallService:

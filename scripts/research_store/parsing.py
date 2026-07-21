@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+from typing import Any
 
 from .domain import Block, Chunk
+
 
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
@@ -138,3 +141,110 @@ def deterministic_chunks(blocks: list[Block], max_chars: int = 3000) -> list[Chu
         length += added
     emit()
     return chunks
+
+
+def parse_raw_search_response(
+    raw_payload: bytes | str,
+    http_status: int | None = None,
+    parser_version: str = "firecrawl-search-v1",
+) -> tuple[str, int, dict[str, Any], str | None]:
+    """Parse raw search response payload and classify response status.
+
+    Returns:
+        (status, result_count, payload_summary, error_message)
+
+    Statuses:
+        - 'succeeded': Valid response containing one or more candidates
+        - 'empty': Valid response containing zero candidates
+        - 'provider_error': Provider returned HTTP error status or failure status in payload
+        - 'parse_error': Payload was non-JSON or corrupted structure
+    """
+    if isinstance(raw_payload, str):
+        text_content = raw_payload
+    else:
+        try:
+            text_content = raw_payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return (
+                "parse_error",
+                0,
+                {"raw_length": len(raw_payload)},
+                f"Failed to decode search response as UTF-8: {exc}",
+            )
+
+    try:
+        data = json.loads(text_content)
+    except json.JSONDecodeError as exc:
+        sample = text_content[:200]
+        return (
+            "parse_error",
+            0,
+            {"raw_sample": sample},
+            f"Failed to parse search response as JSON: {exc}",
+        )
+
+    if not isinstance(data, (dict, list)):
+        return (
+            "parse_error",
+            0,
+            {"type": type(data).__name__},
+            "Search response JSON root must be an object or array",
+        )
+
+    if http_status is not None and http_status >= 400:
+        error_msg = None
+        if isinstance(data, dict):
+            error_msg = data.get("error") or data.get("message") or data.get("detail")
+        error_msg = error_msg or f"Provider HTTP {http_status}"
+        return (
+            "provider_error",
+            0,
+            {"http_status": http_status, "error": error_msg},
+            str(error_msg),
+        )
+
+    if isinstance(data, dict):
+        if data.get("success") is False or "error" in data:
+            error_msg = data.get("error") or data.get("message") or "Provider reported failure"
+            return (
+                "provider_error",
+                0,
+                {"error": error_msg},
+                str(error_msg),
+            )
+
+    items = []
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        if isinstance(data.get("data"), list):
+            items = data["data"]
+        elif isinstance(data.get("results"), list):
+            items = data["results"]
+        elif isinstance(data.get("candidates"), list):
+            items = data["candidates"]
+        elif isinstance(data.get("items"), list):
+            items = data["items"]
+
+    result_count = len(items)
+    status = "succeeded" if result_count > 0 else "empty"
+
+    summary_items = []
+    for item in items[:50]:
+        if isinstance(item, dict):
+            summary_items.append(
+                {
+                    "url": item.get("url"),
+                    "title": item.get("title"),
+                    "description": item.get("description"),
+                }
+            )
+        elif isinstance(item, str):
+            summary_items.append({"url": item})
+
+    payload_summary = {
+        "result_count": result_count,
+        "sample_candidates": summary_items,
+    }
+
+    return (status, result_count, payload_summary, None)

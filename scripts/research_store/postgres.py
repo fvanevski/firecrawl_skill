@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
-from .domain import BlobReference, IngestRequest, IngestResult
+from .domain import BlobReference, IngestRequest, IngestResult, RawSearchResponse, utcnow
+from .parsing import parse_raw_search_response
+
 
 try:
     from research_domain import load_model, serialize_model
@@ -111,7 +114,8 @@ class PostgresUnitOfWork:
         self.connection = connect(self.database_url)
         self.sources = self.snapshots = self.documents = self.chunks = self.runs = (
             self.retrieval_events
-        ) = self.index_jobs = self
+        ) = self.index_jobs = self.search_responses = self
+
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -1698,6 +1702,322 @@ class PostgresUnitOfWork:
                 }
                 for row in rows
             ]
+
+    def record_search_response(
+        self,
+        run_id,
+        query_text,
+        backend,
+        raw_payload,
+        idempotency_key,
+        blob_store,
+        *,
+        plan_id=None,
+        plan_query_id=None,
+        provider_request_id=None,
+        parser_version="firecrawl-search-v1",
+        http_status=None,
+        error_message=None,
+        requested_at=None,
+        responded_at=None,
+        transport_metadata=None,
+        **metadata,
+    ):
+        """Persist an immutable raw search response and store raw payload in blob_store."""
+        run_id = UUID(str(run_id))
+        if plan_id is not None:
+            plan_id = UUID(str(plan_id))
+        if plan_query_id is not None:
+            plan_query_id = UUID(str(plan_query_id))
+
+        if not isinstance(query_text, str) or not query_text.strip():
+            raise ValueError("query_text must be non-empty")
+        if not isinstance(backend, str) or not backend.strip():
+            raise ValueError("backend must be non-empty")
+        if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+            raise ValueError("idempotency_key must be non-empty")
+
+        raw_bytes = (
+            raw_payload.encode("utf-8")
+            if isinstance(raw_payload, str)
+            else raw_payload
+        )
+
+        content_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+
+            cur.execute(
+                """SELECT id, content_sha256, query_text, backend, status, result_count,
+                          raw_blob_sha256, raw_blob_bytes, mime_type, error_message,
+                          payload_summary, transport_metadata, provider_request_id,
+                          http_status, parser_version, plan_id, plan_query_id,
+                          requested_at, responded_at, created_at
+                FROM search_responses
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                (
+                    ex_id,
+                    ex_sha,
+                    ex_query,
+                    ex_backend,
+                    ex_status,
+                    ex_count,
+                    ex_blob_sha,
+                    ex_blob_bytes,
+                    ex_mime,
+                    ex_err,
+                    ex_summary,
+                    ex_transport,
+                    ex_req_id,
+                    ex_http_status,
+                    ex_parser_ver,
+                    ex_plan_id,
+                    ex_plan_q_id,
+                    ex_req_at,
+                    ex_resp_at,
+                    ex_created_at,
+                ) = existing
+                if ex_sha != content_sha256:
+                    raise ValueError(
+                        f"idempotency_key conflict: key '{idempotency_key}' already recorded with different content SHA-256"
+                    )
+                return {
+                    "id": ex_id,
+                    "run_id": run_id,
+                    "plan_id": ex_plan_id,
+                    "plan_query_id": ex_plan_q_id,
+                    "query_text": ex_query,
+                    "backend": ex_backend,
+                    "provider_request_id": ex_req_id,
+                    "status": ex_status,
+                    "http_status": ex_http_status,
+                    "parser_version": ex_parser_ver,
+                    "raw_blob_sha256": ex_blob_sha,
+                    "raw_blob_bytes": ex_blob_bytes,
+                    "mime_type": ex_mime,
+                    "content_sha256": ex_sha,
+                    "result_count": ex_count,
+                    "error_message": ex_err,
+                    "transport_metadata": ex_transport,
+                    "payload_summary": ex_summary,
+                    "idempotency_key": idempotency_key,
+                    "requested_at": ex_req_at,
+                    "responded_at": ex_resp_at,
+                    "created_at": ex_created_at,
+                }
+
+            if plan_id is not None:
+                cur.execute(
+                    "SELECT id FROM search_plans WHERE id=%s AND run_id=%s",
+                    (plan_id, run_id),
+                )
+                if cur.fetchone() is None:
+                    raise ValueError(f"search plan {plan_id} not found for run {run_id}")
+
+            if plan_query_id is not None:
+                cur.execute(
+                    "SELECT id, plan_id FROM search_plan_queries WHERE id=%s AND run_id=%s",
+                    (plan_query_id, run_id),
+                )
+                pq_row = cur.fetchone()
+                if pq_row is None:
+                    raise ValueError(f"search plan query {plan_query_id} not found for run {run_id}")
+                if plan_id is not None and pq_row[1] != plan_id:
+                    raise ValueError(f"search plan query {plan_query_id} does not belong to plan {plan_id}")
+                if plan_id is None:
+                    plan_id = pq_row[1]
+
+            blob_ref = blob_store.put(io.BytesIO(raw_bytes), mime_type="application/json")
+
+            parsed_status, parsed_result_count, parsed_summary, parsed_error = parse_raw_search_response(
+                raw_bytes, http_status=http_status, parser_version=parser_version
+            )
+
+            final_error = error_message or parsed_error
+
+            now_dt = utcnow()
+            req_at = requested_at or now_dt
+            resp_at = responded_at or now_dt
+            t_meta = dict(transport_metadata) if transport_metadata else {}
+            if metadata:
+                t_meta.update(metadata)
+
+            cur.execute(
+                """INSERT INTO search_responses(
+                    run_id, plan_id, plan_query_id, query_text, backend,
+                    provider_request_id, status, http_status, parser_version,
+                    raw_blob_sha256, raw_blob_bytes, mime_type, content_sha256,
+                    result_count, error_message, transport_metadata, payload_summary,
+                    idempotency_key, requested_at, responded_at, created_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                ) RETURNING id, created_at""",
+                (
+                    run_id,
+                    plan_id,
+                    plan_query_id,
+                    query_text,
+                    backend,
+                    provider_request_id,
+                    parsed_status,
+                    http_status,
+                    parser_version,
+                    blob_ref.sha256,
+                    blob_ref.byte_length,
+                    blob_ref.mime_type or "application/json",
+                    content_sha256,
+                    parsed_result_count,
+                    final_error,
+                    json.dumps(t_meta),
+                    json.dumps(parsed_summary),
+                    idempotency_key,
+                    req_at,
+                    resp_at,
+                    now_dt,
+                ),
+            )
+            row = cur.fetchone()
+            resp_id, created_at = row[0], row[1]
+
+            return {
+                "id": resp_id,
+                "run_id": run_id,
+                "plan_id": plan_id,
+                "plan_query_id": plan_query_id,
+                "query_text": query_text,
+                "backend": backend,
+                "provider_request_id": provider_request_id,
+                "status": parsed_status,
+                "http_status": http_status,
+                "parser_version": parser_version,
+                "raw_blob_sha256": blob_ref.sha256,
+                "raw_blob_bytes": blob_ref.byte_length,
+                "mime_type": blob_ref.mime_type or "application/json",
+                "content_sha256": content_sha256,
+                "result_count": parsed_result_count,
+                "error_message": final_error,
+                "transport_metadata": t_meta,
+                "payload_summary": parsed_summary,
+                "idempotency_key": idempotency_key,
+                "requested_at": req_at,
+                "responded_at": resp_at,
+                "created_at": created_at,
+            }
+
+    def get_search_response(self, response_id, run_id=None):
+        response_id = UUID(str(response_id))
+        with self.connection.cursor() as cur:
+            query = """SELECT id, run_id, plan_id, plan_query_id, query_text, backend,
+                              provider_request_id, status, http_status, parser_version,
+                              raw_blob_sha256, raw_blob_bytes, mime_type, content_sha256,
+                              result_count, error_message, transport_metadata, payload_summary,
+                              idempotency_key, requested_at, responded_at, created_at
+                       FROM search_responses WHERE id=%s"""
+            params = [response_id]
+            if run_id is not None:
+                query += " AND run_id=%s"
+                params.append(UUID(str(run_id)))
+
+            cur.execute(query, tuple(params))
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"search response {response_id} not found")
+
+            return {
+                "id": row[0],
+                "run_id": row[1],
+                "plan_id": row[2],
+                "plan_query_id": row[3],
+                "query_text": row[4],
+                "backend": row[5],
+                "provider_request_id": row[6],
+                "status": row[7],
+                "http_status": row[8],
+                "parser_version": row[9],
+                "raw_blob_sha256": row[10],
+                "raw_blob_bytes": row[11],
+                "mime_type": row[12],
+                "content_sha256": row[13],
+                "result_count": row[14],
+                "error_message": row[15],
+                "transport_metadata": row[16],
+                "payload_summary": row[17],
+                "idempotency_key": row[18],
+                "requested_at": row[19],
+                "responded_at": row[20],
+                "created_at": row[21],
+            }
+
+    def list_search_responses(
+        self, run_id, *, plan_id=None, plan_query_id=None, status=None
+    ):
+        run_id = UUID(str(run_id))
+        with self.connection.cursor() as cur:
+            query = """SELECT id, run_id, plan_id, plan_query_id, query_text, backend,
+                              provider_request_id, status, http_status, parser_version,
+                              raw_blob_sha256, raw_blob_bytes, mime_type, content_sha256,
+                              result_count, error_message, transport_metadata, payload_summary,
+                              idempotency_key, requested_at, responded_at, created_at
+                       FROM search_responses WHERE run_id=%s"""
+            params = [run_id]
+
+            if plan_id is not None:
+                query += " AND plan_id=%s"
+                params.append(UUID(str(plan_id)))
+            if plan_query_id is not None:
+                query += " AND plan_query_id=%s"
+                params.append(UUID(str(plan_query_id)))
+            if status is not None:
+                query += " AND status=%s"
+                params.append(status)
+
+            query += " ORDER BY created_at ASC, id ASC"
+
+            cur.execute(query, tuple(params))
+            results = []
+            for row in cur.fetchall():
+                results.append(
+                    {
+                        "id": row[0],
+                        "run_id": row[1],
+                        "plan_id": row[2],
+                        "plan_query_id": row[3],
+                        "query_text": row[4],
+                        "backend": row[5],
+                        "provider_request_id": row[6],
+                        "status": row[7],
+                        "http_status": row[8],
+                        "parser_version": row[9],
+                        "raw_blob_sha256": row[10],
+                        "raw_blob_bytes": row[11],
+                        "mime_type": row[12],
+                        "content_sha256": row[13],
+                        "result_count": row[14],
+                        "error_message": row[15],
+                        "transport_metadata": row[16],
+                        "payload_summary": row[17],
+                        "idempotency_key": row[18],
+                        "requested_at": row[19],
+                        "responded_at": row[20],
+                        "created_at": row[21],
+                    }
+                )
+            return results
+
+    def open_raw_search_response_blob(self, response_id, blob_store, run_id=None):
+        resp = self.get_search_response(response_id, run_id=run_id)
+        sha256_digest = resp["raw_blob_sha256"]
+        return blob_store.open(sha256_digest)
+
 
     def record_semantic_call(
         self,

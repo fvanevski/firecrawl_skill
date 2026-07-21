@@ -80,7 +80,46 @@ class SemanticCallRepository(Protocol):
     ) -> UUID: ...
 
 
-class ResearchRunRepository(SemanticCallRepository, Protocol):
+class SearchResponseRepository(Protocol):
+    def record_search_response(
+        self,
+        run_id: UUID,
+        query_text: str,
+        backend: str,
+        raw_payload: bytes | str,
+        idempotency_key: str,
+        blob_store: BlobStore,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+        provider_request_id: str | None = None,
+        parser_version: str = "firecrawl-search-v1",
+        http_status: int | None = None,
+        error_message: str | None = None,
+        requested_at: Any | None = None,
+        responded_at: Any | None = None,
+        transport_metadata: dict[str, Any] | None = None,
+        **metadata: Any,
+    ) -> dict[str, Any]: ...
+    def get_search_response(
+        self, response_id: UUID, run_id: UUID | None = None
+    ) -> dict[str, Any]: ...
+    def list_search_responses(
+        self,
+        run_id: UUID,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]: ...
+    def open_raw_search_response_blob(
+        self, response_id: UUID, blob_store: BlobStore, run_id: UUID | None = None
+    ) -> BinaryIO: ...
+
+
+class ResearchRunRepository(SemanticCallRepository, SearchResponseRepository, Protocol):
+
+
     def start_run(self, original_request: str, metadata: dict[str, Any]) -> UUID: ...
     def get_run_status(
         self, *, run_id: UUID | None = None, external_id: str | None = None
@@ -241,6 +280,9 @@ class RetrievalIndex(Protocol):
     def delete(self, ids: list[UUID]) -> None: ...
 
 
+
+
+
 class QueueBackend(Protocol):
     def notify(self, job_id: UUID, ttl_seconds: int = 3600) -> None: ...
 
@@ -251,6 +293,7 @@ class UnitOfWork(AbstractContextManager, Protocol):
     documents: DocumentRepository
     chunks: ChunkRepository
     runs: ResearchRunRepository
+    search_responses: SearchResponseRepository
     retrieval_events: RetrievalEventRepository
     index_jobs: IndexJobRepository
 
