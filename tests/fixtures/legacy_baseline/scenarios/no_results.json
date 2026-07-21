@@ -1,0 +1,7 @@
+{
+  "schema_version": "firecrawl-legacy-replay-v1",
+  "scenario": "no_results",
+  "search": {"query": "nonexistent fixture subject qzxw", "response": {"id": "fixture-empty", "data": {"web": []}}},
+  "scrapes": [],
+  "semantic_outputs": {"brief": {"research_type": "general", "risk_level": "medium", "questions": ["Is evidence available?"], "jurisdiction": "unspecified", "entities": [], "time_window": "unspecified", "required_source_classes": ["primary source"], "corroboration_requirements": [], "claims_to_validate": [], "excluded_interpretations": [], "completion_criteria": ["report absence of candidates without fabricating evidence"]}}
+}

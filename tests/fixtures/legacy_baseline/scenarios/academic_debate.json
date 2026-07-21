@@ -1,0 +1,16 @@
+{
+  "schema_version": "firecrawl-legacy-replay-v1",
+  "scenario": "academic_debate",
+  "search": {
+    "query": "replication crisis preregistration debate",
+    "response": {"id": "fixture-academic", "data": {"web": [
+      {"url": "https://www.nature.com/articles/fixture-replication", "title": "Replication and reform", "description": "Review of evidence for preregistration and replication reforms."},
+      {"url": "https://plato.stanford.edu/entries/scientific-reproducibility/", "title": "Scientific Reproducibility", "description": "Competing interpretations of reproducibility evidence."}
+    ]}}
+  },
+  "scrapes": [
+    {"url": "https://www.nature.com/articles/fixture-replication", "content": "# Replication and reform\n\nEvidence supports some reforms, while effect sizes and disciplinary variation remain disputed.\n"},
+    {"url": "https://plato.stanford.edu/entries/scientific-reproducibility/", "content": "# Scientific Reproducibility\n\nThe debate distinguishes reproducibility, replicability, and robustness.\n"}
+  ],
+  "semantic_outputs": {"brief": {"research_type": "academic_debate", "risk_level": "medium", "questions": ["What evidence supports and challenges preregistration?"], "jurisdiction": "unspecified", "entities": ["preregistration", "replication crisis"], "time_window": "current literature", "required_source_classes": ["peer-reviewed research", "scholarly synthesis"], "corroboration_requirements": ["represent conflicting evidence"], "claims_to_validate": [], "excluded_interpretations": [], "completion_criteria": ["preserve material disagreement"]}}
+}

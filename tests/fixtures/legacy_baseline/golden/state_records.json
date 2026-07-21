@@ -1,0 +1,20 @@
+{
+  "schema_version": "research-store-row-baseline-v1",
+  "database_rows": {
+    "sources": [{"id": "00000000-0000-0000-0000-000000000001", "canonical_url": "https://fixture.invalid/source"}],
+    "asset_snapshots": [{"id": "00000000-0000-0000-0000-000000000002", "source_id": "00000000-0000-0000-0000-000000000001", "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "raw_blob_uri": "sha256/aa/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "parent_snapshot_id": null}],
+    "documents": [{"id": "00000000-0000-0000-0000-000000000003", "snapshot_id": "00000000-0000-0000-0000-000000000002", "document_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "parser_version": "markdown-v1", "normalization_version": "cleanup-v1"}],
+    "document_blocks": [{"id": "00000000-0000-0000-0000-000000000011", "document_id": "00000000-0000-0000-0000-000000000003", "ordinal": 0, "char_start": 0, "char_end": 16}],
+    "chunks": [{"id": "00000000-0000-0000-0000-000000000004", "document_id": "00000000-0000-0000-0000-000000000003", "ordinal": 0, "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "first_block_id": "00000000-0000-0000-0000-000000000011", "last_block_id": "00000000-0000-0000-0000-000000000011", "chunker_version": "structural-v1"}],
+    "embedding_manifests": [{"id": "00000000-0000-0000-0000-000000000005", "chunk_id": "00000000-0000-0000-0000-000000000004", "index_definition_id": "00000000-0000-0000-0000-000000000006", "index_status": "pending"}],
+    "index_jobs": [{"id": "00000000-0000-0000-0000-000000000007", "manifest_id": "00000000-0000-0000-0000-000000000005", "index_definition_id": "00000000-0000-0000-0000-000000000006", "lease_token": "00000000-0000-0000-0000-000000000008", "status": "running"}],
+    "ingestion_batches": [{"id": "00000000-0000-0000-0000-000000000009", "invocation_id": "fc_11111111111111111111111111111111", "operation": "search", "status": "complete"}],
+    "ingestion_batch_assets": [{"batch_id": "00000000-0000-0000-0000-000000000009", "ordinal": 0, "snapshot_id": "00000000-0000-0000-0000-000000000002", "status": "complete"}],
+    "retrieval_events": [{"run_id": "00000000-0000-0000-0000-000000000010", "stage": "hybrid", "candidate_id": "00000000-0000-0000-0000-000000000004", "selected": true, "rank": 1}]
+  },
+  "event_records": [
+    {"surface": "catalog-v5", "type": "invocation_finished", "invocation_id": "fc_11111111111111111111111111111111", "status": "succeeded"},
+    {"surface": "postgresql-index-job", "type": "lease_claimed", "job_id": "00000000-0000-0000-0000-000000000007", "manifest_id": "00000000-0000-0000-0000-000000000005", "lease_token": "00000000-0000-0000-0000-000000000008"},
+    {"surface": "postgresql-retrieval", "type": "candidate_selected", "run_id": "00000000-0000-0000-0000-000000000010", "candidate_id": "00000000-0000-0000-0000-000000000004"}
+  ]
+}

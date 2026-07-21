@@ -1,0 +1,16 @@
+{
+  "schema_version": "firecrawl-legacy-replay-v1",
+  "scenario": "legal",
+  "search": {
+    "query": "California AB 2017 school holidays",
+    "response": {"id": "fixture-legal", "data": {"web": [
+      {"url": "https://leginfo.legislature.ca.gov/faces/billTextClient.xhtml?bill_id=202520260AB2017", "title": "AB 2017 Bill Text", "description": "Official California legislative text and status."},
+      {"url": "https://leginfo.legislature.ca.gov/faces/billAnalysisClient.xhtml?bill_id=202520260AB2017", "title": "AB 2017 Analysis", "description": "Official committee analysis."}
+    ]}}
+  },
+  "scrapes": [
+    {"url": "https://leginfo.legislature.ca.gov/faces/billTextClient.xhtml?bill_id=202520260AB2017", "content": "# AB 2017\n\nOfficial bill text concerning school holidays and pupil attendance.\n"},
+    {"url": "https://leginfo.legislature.ca.gov/faces/billAnalysisClient.xhtml?bill_id=202520260AB2017", "content": "# Committee Analysis\n\nThis analysis records the proposal, fiscal effects, support, and opposition.\n"}
+  ],
+  "semantic_outputs": {"brief": {"research_type": "legal", "risk_level": "high", "questions": ["What does AB 2017 require?"], "jurisdiction": "California", "entities": ["AB 2017"], "time_window": "2025-2026 session", "required_source_classes": ["official bill text", "official analysis"], "corroboration_requirements": ["compare text and analysis"], "claims_to_validate": [], "excluded_interpretations": [], "completion_criteria": ["state scope and status"]}}
+}

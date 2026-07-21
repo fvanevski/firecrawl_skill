@@ -1,0 +1,16 @@
+{
+  "schema_version": "firecrawl-fixture-manifest-v1",
+  "sha256": {
+    "scenarios/academic_debate.json": "c32ad2156b1fbeddbf3e7253bd25fb43000ff85f341c962a268540cff7af0846",
+    "scenarios/breaking_news.json": "8a961d8d6b532f2eaac7c867538df52ace9902251fc6ad47f72de24076e1d71f",
+    "scenarios/legal.json": "7f9e4f1aa6781387da389439b168d5da8159768357739f8b2f6de4c858071671",
+    "scenarios/no_results.json": "e6f5c10cf9141fb79620c260c5a17f93e12885d09d9db8b93b03fc5241bebcda",
+    "scenarios/technical.json": "f404a65d57007f2b15876a996c6bf54a7ade5042fc275adb2897cb8b279c444f",
+    "golden/academic_debate.json": "4b5f5430ff37646cf496720511b829f24a86f34726cac181ef3e391c352d33ac",
+    "golden/breaking_news.json": "00c2ba204b711d512cf818d988770dac47955e925a407839e53e822276acdaf5",
+    "golden/legal.json": "6f8c473edbf375d0bbfb17fcf13476ee82963f4b5d6269e4cc1ba990cbb82422",
+    "golden/no_results.json": "ca9131b1ff517cf7a101e2e4b973b18d46a95029b2cec244d4cb7981d2869a73",
+    "golden/state_records.json": "d1c331aa988a928aaa5df5f2b594545402961f8e3c4b34a5ef29ddd45e10d194",
+    "golden/technical.json": "f04d4df0017daca937b4ad0dbe221f25d0e4e3097b220dd34c76446a6d3dd0c1"
+  }
+}
