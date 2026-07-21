@@ -1,0 +1,343 @@
+{
+  "$defs": {
+    "CompletionCriterion": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "mandatory": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "description",
+        "mandatory"
+      ],
+      "type": "object"
+    },
+    "EvidenceRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "required_independent_source_count": {
+          "type": "integer"
+        },
+        "requirement_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "description",
+        "required_independent_source_count"
+      ],
+      "type": "object"
+    },
+    "FreshnessRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "max_age_days": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requirement_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "description",
+        "max_age_days"
+      ],
+      "type": "object"
+    },
+    "ResearchClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "statement"
+      ],
+      "type": "object"
+    },
+    "ResearchQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "question_id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "SourceRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "minimum_count": {
+          "type": "integer"
+        },
+        "requirement_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "source_class": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "source_class",
+        "minimum_count"
+      ],
+      "type": "object"
+    },
+    "StructuredDataRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "required_fields": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "requirement_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "description",
+        "required_fields"
+      ],
+      "type": "object"
+    },
+    "TimeWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uncertainty": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "description",
+        "uncertainty"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/research-spec-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "ambiguities": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "claims_to_validate": {
+      "items": {
+        "$ref": "#/$defs/ResearchClaim"
+      },
+      "type": "array"
+    },
+    "completion_criteria": {
+      "items": {
+        "$ref": "#/$defs/CompletionCriterion"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "contradiction_requirements": {
+      "items": {
+        "$ref": "#/$defs/EvidenceRequirement"
+      },
+      "type": "array"
+    },
+    "corroboration_requirements": {
+      "items": {
+        "$ref": "#/$defs/EvidenceRequirement"
+      },
+      "type": "array"
+    },
+    "entities": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "excluded_interpretations": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "execution_mode": {
+      "enum": [
+        "agent_led",
+        "autonomous_local",
+        "deterministic_debug"
+      ],
+      "type": "string"
+    },
+    "freshness_requirements": {
+      "items": {
+        "$ref": "#/$defs/FreshnessRequirement"
+      },
+      "type": "array"
+    },
+    "jurisdictions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "objective": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/ResearchQuestion"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "required_source_classes": {
+      "items": {
+        "$ref": "#/$defs/SourceRequirement"
+      },
+      "type": "array"
+    },
+    "research_archetype": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "research_spec_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "risk_level": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "research-spec-v1",
+      "type": "string"
+    },
+    "structured_data_requirements": {
+      "items": {
+        "$ref": "#/$defs/StructuredDataRequirement"
+      },
+      "type": "array"
+    },
+    "time_window": {
+      "$ref": "#/$defs/TimeWindow"
+    },
+    "user_constraints": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "research_spec_id",
+    "objective",
+    "research_archetype",
+    "risk_level",
+    "execution_mode",
+    "questions",
+    "claims_to_validate",
+    "entities",
+    "jurisdictions",
+    "time_window",
+    "freshness_requirements",
+    "required_source_classes",
+    "corroboration_requirements",
+    "contradiction_requirements",
+    "excluded_interpretations",
+    "structured_data_requirements",
+    "completion_criteria",
+    "user_constraints",
+    "ambiguities",
+    "assumptions"
+  ],
+  "title": "ResearchSpec",
+  "type": "object"
+}

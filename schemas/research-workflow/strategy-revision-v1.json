@@ -1,0 +1,247 @@
+{
+  "$defs": {
+    "EstimatedCost": {
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": {
+          "type": "integer"
+        },
+        "llm_calls": {
+          "type": "integer"
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "retrievals": {
+          "type": "integer"
+        },
+        "scrapes": {
+          "type": "integer"
+        },
+        "searches": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "searches",
+        "scrapes",
+        "retrievals",
+        "llm_calls",
+        "input_tokens",
+        "output_tokens"
+      ],
+      "type": "object"
+    },
+    "SearchQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "domain_restrictions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "expected_contribution": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expected_organizations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "facet": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "freshness_requirement": {
+          "$ref": "#/$defs/TimeWindow"
+        },
+        "intended_source_classes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "negative_terms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "query_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "target_claim_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target_question_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "query_id",
+        "query",
+        "facet",
+        "target_question_ids",
+        "target_claim_ids",
+        "intended_source_classes",
+        "expected_organizations",
+        "freshness_requirement",
+        "expected_contribution",
+        "domain_restrictions",
+        "negative_terms",
+        "priority"
+      ],
+      "type": "object"
+    },
+    "TimeWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uncertainty": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "description",
+        "uncertainty"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/strategy-revision-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+    },
+    "coverage_revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "decision": {
+      "enum": [
+        "search",
+        "scrape",
+        "retrieve",
+        "synthesize",
+        "stop_partial",
+        "stop_failed"
+      ],
+      "type": "string"
+    },
+    "estimated_cost": {
+      "$ref": "#/$defs/EstimatedCost"
+    },
+    "expected_contribution": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "proposal_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "proposed_candidate_ids": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "proposed_queries": {
+      "items": {
+        "$ref": "#/$defs/SearchQuery"
+      },
+      "type": "array"
+    },
+    "proposed_retrieval_queries": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "rationale": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "run_revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "strategy-revision-v1",
+      "type": "string"
+    },
+    "target_coverage_item_ids": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "proposal_id",
+    "run_revision",
+    "coverage_revision",
+    "decision",
+    "target_coverage_item_ids",
+    "proposed_queries",
+    "proposed_candidate_ids",
+    "proposed_retrieval_queries",
+    "expected_contribution",
+    "estimated_cost",
+    "rationale",
+    "confidence"
+  ],
+  "title": "StrategyRevisionProposal",
+  "type": "object"
+}

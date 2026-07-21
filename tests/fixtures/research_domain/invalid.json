@@ -1,0 +1,11 @@
+{
+  "research-spec-v1": [
+    {"path": ["risk_level"], "value": "critical", "reason": "unsupported risk enum"},
+    {"path": ["time_window", "start"], "value": "not-a-date", "reason": "invalid time-window syntax"}
+  ],
+  "search-plan-v1": [{"path": ["queries", 0, "query"], "value": "", "reason": "empty query"}],
+  "candidate-assessment-v1": [{"path": ["relevance"], "value": "maybe", "reason": "unsupported relevance enum"}],
+  "coverage-ledger-v1": [{"path": ["items", 0, "status"], "value": "failed", "reason": "mechanical failure is not semantic coverage"}],
+  "strategy-revision-v1": [{"path": ["run_revision"], "value": 0, "reason": "invalid run revision"}],
+  "evidence-packet-v1": [{"path": ["retrieval_provenance", 0, "mechanical_status"], "value": "uncertain", "reason": "semantic uncertainty is not mechanical status"}]
+}

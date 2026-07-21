@@ -1,0 +1,155 @@
+{
+  "$defs": {
+    "SearchQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "domain_restrictions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "expected_contribution": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expected_organizations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "facet": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "freshness_requirement": {
+          "$ref": "#/$defs/TimeWindow"
+        },
+        "intended_source_classes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "negative_terms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "query_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "target_claim_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target_question_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "query_id",
+        "query",
+        "facet",
+        "target_question_ids",
+        "target_claim_ids",
+        "intended_source_classes",
+        "expected_organizations",
+        "freshness_requirement",
+        "expected_contribution",
+        "domain_restrictions",
+        "negative_terms",
+        "priority"
+      ],
+      "type": "object"
+    },
+    "TimeWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uncertainty": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "description",
+        "uncertainty"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/search-plan-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "queries": {
+      "items": {
+        "$ref": "#/$defs/SearchQuery"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "research_spec_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "search-plan-v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "research_spec_id",
+    "revision",
+    "queries"
+  ],
+  "title": "SearchPlan",
+  "type": "object"
+}
