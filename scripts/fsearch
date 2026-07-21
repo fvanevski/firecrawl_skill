@@ -346,17 +346,17 @@ def process_item(item_index_tuple):
     else:
         # --- Progressive scrape strategy ---
         content_res, content_text = scrape_once(
-            url, ["--format", "markdown", "--only-main-content"], outfile, timeout=25
+            url, ["--format", "markdown", "--only-main-content"], outfile, timeout=15
         )
 
         if content_res < 200:
             content_res, content_text = scrape_once(
-                url, ["--format", "markdown"], outfile, timeout=30
+                url, ["--format", "markdown"], outfile, timeout=15
             )
 
         if 0 < content_res < 500:
             content_res, content_text = scrape_once(
-                url, ["--summary"], outfile, timeout=30
+                url, ["--summary"], outfile, timeout=15
             )
 
     status = "ok"
@@ -450,7 +450,7 @@ total_words = 0
 scratch_files = []
 
 if items_to_process:
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(items_to_process))) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(15, len(items_to_process))) as executor:
         results_list = list(executor.map(process_item, items_to_process))
 else:
     results_list = []

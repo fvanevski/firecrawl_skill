@@ -784,10 +784,10 @@ def main():
             attempted.append(candidate)
         catalog.add_event(invocation_id, "scrape_wave_started", {"wave": wave, "candidate_ids": [item.get("triage_candidate_id") for item in wave_candidates], "attempted_before": len(attempted) - len(wave_candidates), "remaining_budget": remaining_budget})
         wave_successes = 0
-        for result in master_results:
+        def run_branch_scrape(result):
             ranks = selected_by_branch.get(result["query_index"], [])
             if not ranks:
-                continue
+                return None
             print(f"  Wave {wave}: scraping branch {result['query_index']} stored ranks: {','.join(map(str, ranks))}")
             cmd = [
                 os.path.join(SCRIPT_DIR, "fsearch"),
@@ -808,9 +808,24 @@ def main():
                 child_env["FIRECRAWL_RESEARCH_RUN_ID"] = args.research_run_id
             scrape_started = time.monotonic()
             scrape_result = subprocess.run(cmd, check=False, env=child_env)
+            return {
+                "result": result,
+                "ranks": ranks,
+                "exit_code": scrape_result.returncode,
+                "duration_ms": int((time.monotonic() - scrape_started) * 1000)
+            }
+
+        with ThreadPoolExecutor(max_workers=len(master_results) or 1) as executor:
+            branch_outcomes = list(executor.map(run_branch_scrape, master_results))
+
+        for outcome in branch_outcomes:
+            if not outcome:
+                continue
+            result = outcome["result"]
+            ranks = outcome["ranks"]
             catalog.add_event(invocation_id, "branch_scrape_finished", {
-                "wave": wave, "branch": result["query_index"], "ranks": ranks, "exit_code": scrape_result.returncode,
-                "scratch_dir": result["sub_dir"], "duration_ms": int((time.monotonic() - scrape_started) * 1000),
+                "wave": wave, "branch": result["query_index"], "ranks": ranks, "exit_code": outcome["exit_code"],
+                "scratch_dir": result["sub_dir"], "duration_ms": outcome["duration_ms"],
             })
             sub_meta_file = os.path.join(result["sub_dir"], "_meta.json")
             if os.path.exists(sub_meta_file):

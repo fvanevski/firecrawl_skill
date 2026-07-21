@@ -44,13 +44,20 @@ case "${1:-}" in
     source_manifest=""
     answer_file=""
     previous=""
+    auto_audit=0
+    catalog_args=()
     for argument in "$@"; do
+      if [[ "$argument" == "--auto-audit" ]]; then
+        auto_audit=1
+        continue
+      fi
       [[ "$previous" == "--outcome" ]] && outcome="$argument"
       [[ "$previous" == "--source-manifest" ]] && source_manifest="$argument"
       [[ "$previous" == "--answer-file" ]] && answer_file="$argument"
+      catalog_args+=("$argument")
       previous="$argument"
     done
-    output="$("$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-finish "$@")"
+    output="$("$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-finish "${catalog_args[@]}")"
     if [[ "$DB_ACTIVE" == "1" ]]; then
       db_args=(run-finish "$run_id" --outcome "$outcome")
       if [[ -n "$source_manifest" ]]; then
@@ -62,6 +69,9 @@ case "${1:-}" in
       "$SCRIPT_DIR/research-db" "${db_args[@]}" >/dev/null
     fi
     printf '%s\n' "$output"
+    if [[ "$auto_audit" == "1" ]]; then
+      "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" audit "$run_id"
+    fi
     ;;
   reopen)
     shift
@@ -86,5 +96,5 @@ case "${1:-}" in
   migrate) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" migrate "$@" ;;
   compare) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" compare "$@" ;;
   purge) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" purge "$@" ;;
-  *) echo "Usage: frun {start <objective> [--profile PROFILE]|finish <fr_id> --outcome OUTCOME [--source-manifest FILE] [--answer-file FILE]|reopen <fr_id> --reason TEXT|annotate <fr_id> --type TYPE --reason TEXT|status <fr_id>|verify <id>|audit <id> [--llm PROVIDER] [--stages LIST]|audit-status <id>|aggregate|recompute <id>|migrate [--apply]|compare <fr_id>...|purge [filters] [--force]}" >&2; exit 2 ;;
+  *) echo "Usage: frun {start <objective> [--profile PROFILE]|finish <fr_id> --outcome OUTCOME [--source-manifest FILE] [--answer-file FILE] [--auto-audit]|reopen <fr_id> --reason TEXT|annotate <fr_id> --type TYPE --reason TEXT|status <fr_id>|verify <id>|audit <id> [--llm PROVIDER] [--stages LIST]|audit-status <id>|aggregate|recompute <id>|migrate [--apply]|compare <fr_id>...|purge [filters] [--force]}" >&2; exit 2 ;;
 esac

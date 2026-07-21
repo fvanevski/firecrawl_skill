@@ -181,7 +181,7 @@ def process_url(idx_url_tuple):
     print(f"  Scraping [{i+1}/{len(urls)}]: {url[:80]}...", file=sys.stderr)
 
     try:
-        result = subprocess.run(flags, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(flags, capture_output=True, text=True, timeout=30)
     except (subprocess.TimeoutExpired, OSError) as exc:
         message = f"{type(exc).__name__}: {exc}"
         print(f"    ❌ Error [{i+1}/{len(urls)}]: {message}", file=sys.stderr)
@@ -331,7 +331,7 @@ def process_url(idx_url_tuple):
 
 items_to_process = list(enumerate(urls))
 
-with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(items_to_process))) as executor:
+with concurrent.futures.ThreadPoolExecutor(max_workers=min(15, len(items_to_process))) as executor:
     results_list = list(executor.map(process_url, items_to_process))
 
 results_list.sort(key=lambda x: x["index"])

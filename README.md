@@ -8,10 +8,10 @@ This Codex skill combines Firecrawl web acquisition with a persistent, auditable
 
 - Query retained research through compact manifests, bounded passages, relationship expansion, and structured evidence packets.
 - Combine PostgreSQL lexical candidates, the active Qdrant dense index, reciprocal-rank fusion, and local reranking.
-- Acquire new evidence with `fsearch_smart`, `fsearch`, and `fscrape` while preserving raw responses and provenance.
+- Acquire new evidence with `fsearch_smart`, `fsearch`, and `fscrape` while preserving raw responses and provenance (utilizing parallelized branch scraping and fast-failing 15s fallback timeouts).
 - Persist source, immutable snapshot, versioned derivation, chunk, run, batch, and retrieval-event identities.
 - Rebuild, activate, roll back, or prune fingerprinted Qdrant vector indexes without modifying authoritative corpus data.
-- Manage multi-step research runs (`fr_<uuid>`) with explicit lifecycle states, audits, pivots, and Catalog v5 provenance.
+- Manage multi-step research runs (`fr_<uuid>`) with explicit lifecycle states, automatic semantic audits (`--auto-audit`), pivots, and Catalog v5 provenance.
 
 ## First use
 
@@ -85,7 +85,7 @@ RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start "<research objective>" --p
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-run-id "$RUN_ID"
 rtk proxy "<skill-root>/scripts/research-db" search-assets "<query>" --research-run-id "$RUN_ID" --limit 20
 rtk proxy "<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --research-run-id "$RUN_ID" --max-tokens 2000
-rtk proxy "<skill-root>/scripts/frun" finish "$RUN_ID" --outcome satisfied --source-manifest sources.json --answer-file final.md
+rtk proxy "<skill-root>/scripts/frun" finish "$RUN_ID" --outcome satisfied --source-manifest sources.json --answer-file final.md --auto-audit
 
 # Manage run lifecycle, pivots, and audits
 rtk proxy "<skill-root>/scripts/frun" reopen "$RUN_ID" --reason "acquire official whitepaper"
