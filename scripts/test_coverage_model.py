@@ -818,3 +818,322 @@ class TestContentHashing:
         h = _json_sha256(ledger)
         assert len(h) == 64
         assert h == _json_sha256(ledger)
+
+
+# ---------------------------------------------------------------------------
+# Issue #23 — ResearchSpec-to-ledger mapping tests
+# ---------------------------------------------------------------------------
+
+
+class TestResearchSpecLedgerMapping:
+    """Verify that every mandatory ResearchSpec requirement produces a
+    coverage ledger item, with no silent waivers.
+
+    PRD mapping: FR-012, Section 12.1, Section 12.4
+    """
+
+    def test_all_six_item_types_created(self):
+        """Every mandatory ResearchSpec field produces a ledger item."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {
+            "questions": [
+                {"question_id": uuid4(), "text": "What caused the outage?"},
+            ],
+            "claims_to_validate": [
+                {"claim_id": uuid4(), "statement": "The CDN was down"},
+            ],
+            "freshness_requirements": [
+                {"requirement_id": uuid4(), "description": "Last 24 hours"},
+            ],
+            "required_source_classes": [
+                {"requirement_id": uuid4(), "source_class": "primary"},
+            ],
+            "corroboration_requirements": [
+                {"requirement_id": uuid4(), "description": "Two independent sources"},
+            ],
+            "contradiction_requirements": [
+                {"requirement_id": uuid4(), "description": "Contradictory views"},
+            ],
+        }
+        items = service.create_items_from_spec(run_id, spec)
+        assert len(items) == 6
+        types = {item.item_type for item in items}
+        assert types == {
+            CoverageItemType.QUESTION,
+            CoverageItemType.CLAIM,
+            CoverageItemType.FRESHNESS_REQUIREMENT,
+            CoverageItemType.SOURCE_REQUIREMENT,
+            CoverageItemType.CORROBORATION_REQUIREMENT,
+            CoverageItemType.CONTRADICTION_REQUIREMENT,
+        }
+
+    def test_multiple_questions_each_get_item(self):
+        spec = {
+            "questions": [
+                {"question_id": uuid4(), "text": "Q1"},
+                {"question_id": uuid4(), "text": "Q2"},
+                {"question_id": uuid4(), "text": "Q3"},
+            ],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        items = service.create_items_from_spec(run_id, spec)
+        assert len(items) == 3
+        assert all(item.item_type == CoverageItemType.QUESTION for item in items)
+
+    def test_multiple_claims_each_get_item(self):
+        spec = {
+            "claims_to_validate": [
+                {"claim_id": uuid4(), "statement": "C1"},
+                {"claim_id": uuid4(), "statement": "C2"},
+            ],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        items = service.create_items_from_spec(run_id, spec)
+        assert len(items) == 2
+        assert all(item.item_type == CoverageItemType.CLAIM for item in items)
+
+    def test_all_requirement_types_represented(self):
+        """Freshness, source, corroboration, and contradiction requirements
+        each produce coverage items with the correct type."""
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+            "freshness_requirements": [
+                {"requirement_id": uuid4(), "description": "D1"},
+                {"requirement_id": uuid4(), "description": "D2"},
+            ],
+            "required_source_classes": [
+                {"requirement_id": uuid4(), "source_class": "S1"},
+            ],
+            "corroboration_requirements": [
+                {"requirement_id": uuid4(), "description": "C1"},
+            ],
+            "contradiction_requirements": [
+                {"requirement_id": uuid4(), "description": "CD1"},
+            ],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        items = service.create_items_from_spec(run_id, spec)
+        assert len(items) == 6
+        type_counts = {}
+        for item in items:
+            type_counts[item.item_type.value] = (
+                type_counts.get(item.item_type.value, 0) + 1
+            )
+        assert type_counts["freshness_requirement"] == 2
+        assert type_counts["source_requirement"] == 1
+        assert type_counts["corroboration_requirement"] == 1
+        assert type_counts["contradiction_requirement"] == 1
+
+    def test_no_item_is_silently_waived(self):
+        """Every item starts as unassessed, not waived."""
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+            "claims_to_validate": [{"claim_id": uuid4(), "statement": "C1"}],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        items = service.create_items_from_spec(run_id, spec)
+        for item in items:
+            assert item.status == CoverageStatus.UNASSESSED
+            assert item.status != CoverageStatus.WAIVED
+
+    def test_subject_id_preserved_from_spec(self):
+        """Stable subject references are preserved."""
+        spec = {
+            "questions": [{"question_id": "a1b2c3", "text": "Q1"}],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        items = service.create_items_from_spec(run_id, spec)
+        assert items[0].subject_id == "a1b2c3"
+
+    def test_execution_mode_passed_to_payload(self):
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(run_id, spec, execution_mode="autonomous_local")
+        event = service.list_events(run_id)[0]
+        assert event.payload["execution_mode"] == "autonomous_local"
+
+
+class TestIdempotencyEdgeCases:
+    """Repeated initialization must be idempotent."""
+
+    def test_repeated_init_same_run(self):
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        first = service.create_items_from_spec(run_id, spec)
+        second = service.create_items_from_spec(run_id, spec)
+        assert len(first) == len(second)
+
+    def test_repeated_init_with_all_types(self):
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+            "claims_to_validate": [{"claim_id": uuid4(), "statement": "C1"}],
+            "freshness_requirements": [
+                {"requirement_id": uuid4(), "description": "F1"}
+            ],
+            "required_source_classes": [
+                {"requirement_id": uuid4(), "source_class": "S1"}
+            ],
+            "corroboration_requirements": [
+                {"requirement_id": uuid4(), "description": "CR1"}
+            ],
+            "contradiction_requirements": [
+                {"requirement_id": uuid4(), "description": "CD1"}
+            ],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        first = service.create_items_from_spec(run_id, spec)
+        second = service.create_items_from_spec(run_id, spec)
+        assert len(first) == len(second) == 6
+        assert all(item.status == CoverageStatus.UNASSESSED for item in second)
+
+    def test_different_runs_get_independent_items(self):
+        spec = {"questions": [{"question_id": uuid4(), "text": "Q1"}]}
+        repo, service = coverage_fixture()
+        run_a = uuid4()
+        run_b = uuid4()
+        items_a = service.create_items_from_spec(run_a, spec)
+        items_b = service.create_items_from_spec(run_b, spec)
+        assert len(items_a) == 1
+        assert len(items_b) == 1
+        # Different runs should have different events
+        events_a = service.list_events(run_a)
+        events_b = service.list_events(run_b)
+        assert len(events_a) == 1
+        assert len(events_b) == 1
+        event_ids_a = {str(e.id) for e in events_a}
+        event_ids_b = {str(e.id) for e in events_b}
+        assert event_ids_a.isdisjoint(event_ids_b)
+
+
+class TestInvalidInput:
+    """Invalid input must be rejected with clear errors."""
+
+    def test_none_spec(self):
+        _, service = coverage_fixture()
+        run_id = uuid4()
+        with pytest.raises(CoverageError, match="spec is required"):
+            service.create_items_from_spec(run_id, None)
+
+    def test_empty_spec_dict(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        with pytest.raises(CoverageError, match="at least one question"):
+            service.create_items_from_spec(run_id, {})
+
+    def test_spec_with_only_empty_lists(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {
+            "questions": [],
+            "claims_to_validate": [],
+            "freshness_requirements": [],
+            "required_source_classes": [],
+            "corroboration_requirements": [],
+            "contradiction_requirements": [],
+        }
+        with pytest.raises(CoverageError, match="at least one question"):
+            service.create_items_from_spec(run_id, spec)
+
+    def test_none_run_id(self):
+        _, service = coverage_fixture()
+        spec = {"questions": [{"question_id": uuid4(), "text": "Q1"}]}
+        with pytest.raises(CoverageError, match="run_id is required"):
+            service.create_items_from_spec(None, spec)
+
+    def test_empty_string_idempotency_key(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        # Whitespace-only key is rejected; empty string is auto-generated.
+        with pytest.raises(CoverageError, match="nonempty"):
+            service.apply_event(
+                run_id,
+                "item_status_changed",
+                idempotency_key="   ",
+            )
+
+
+class TestCoverageSummary:
+    """Test the coverage_summary() convenience API."""
+
+    def test_summary_after_initialization(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {
+            "questions": [
+                {"question_id": uuid4(), "text": "Q1"},
+                {"question_id": uuid4(), "text": "Q2"},
+            ],
+            "claims_to_validate": [{"claim_id": uuid4(), "statement": "C1"}],
+        }
+        service.create_items_from_spec(run_id, spec)
+        summary = service.coverage_summary(run_id)
+        assert summary["total_items"] == 3
+        assert summary["type_counts"]["question"] == 2
+        assert summary["type_counts"]["claim"] == 1
+        # Memory repo projection: all-unassessed → "insufficient"
+        assert summary["overall_status"] == "insufficient"
+        assert summary["status_counts"]["unassessed"] == 3
+
+    def test_summary_after_status_changes(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {
+            "questions": [
+                {"question_id": uuid4(), "text": "Q1"},
+                {"question_id": uuid4(), "text": "Q2"},
+            ],
+        }
+        service.create_items_from_spec(run_id, spec)
+        item_id = list(repo.items.keys())[0]
+        service.apply_event(
+            run_id,
+            "item_status_changed",
+            item_id=UUID(item_id),
+            new_status="supported",
+            idempotency_key="evt:1",
+        )
+        summary = service.coverage_summary(run_id)
+        assert summary["status_counts"]["unassessed"] == 1
+        assert summary["status_counts"]["supported"] == 1
+        # Memory repo only counts "satisfied"/"waived" as resolved,
+        # so "supported" does not make the run "partial".
+        assert summary["overall_status"] == "insufficient"
+
+    def test_summary_empty_run(self):
+        """A run with no items returns zero counts."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        summary = service.coverage_summary(run_id)
+        assert summary["total_items"] == 0
+        assert summary["overall_status"] == "unassessed"
+        assert summary["status_counts"] == {}
+        assert summary["type_counts"] == {}
+
+    def test_summary_contains_schema_version(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        summary = service.coverage_summary(run_id)
+        assert summary["schema_version"] == "coverage-ledger-v1"
+        assert summary["run_id"] == str(run_id)
+        assert summary["coverage_revision"] >= 1

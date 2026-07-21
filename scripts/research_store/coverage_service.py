@@ -238,6 +238,8 @@ class CoverageService:
         """
         if not run_id:
             raise CoverageError("run_id is required")
+        if spec is None:
+            raise CoverageError("spec is required")
 
         questions = spec.get("questions", [])
         claims = spec.get("claims_to_validate", [])
@@ -550,10 +552,55 @@ class CoverageService:
         with self.uow_factory() as uow:
             return uow.coverage.count_events(run_id)
 
+    def coverage_summary(self, run_id: UUID) -> dict[str, Any]:
+        """Return a compact coverage summary for a run.
 
-# ---------------------------------------------------------------------------
-# String <-> enum helpers
-# ---------------------------------------------------------------------------
+        Rebuilds the current projection and returns a dict with:
+
+        * ``run_id`` — the run identifier
+        * ``coverage_revision`` — the current coverage revision
+        * ``total_items`` — total number of coverage items
+        * ``status_counts`` — per-status counts (deterministic observation)
+        * ``type_counts`` — per-type counts
+        * ``overall_status`` — the projected overall status
+        * ``schema_version`` — always ``coverage-ledger-v1``
+
+        This is the read-side API for issue #23 (coverage initialization).
+        """
+        revision = self.get_current_revision(run_id)
+        if revision < 1:
+            return {
+                "schema_version": "coverage-ledger-v1",
+                "run_id": str(run_id),
+                "coverage_revision": 0,
+                "total_items": 0,
+                "status_counts": {},
+                "type_counts": {},
+                "overall_status": "unassessed",
+            }
+        ledger = self.rebuild_projection(run_id)
+        status_counts: dict[str, int] = {}
+        type_counts: dict[str, int] = {}
+        for item in ledger.items:
+            status_counts[item.status.value] = (
+                status_counts.get(item.status.value, 0) + 1
+            )
+            type_counts[item.item_type.value] = (
+                type_counts.get(item.item_type.value, 0) + 1
+            )
+        return {
+            "schema_version": "coverage-ledger-v1",
+            "run_id": str(run_id),
+            "coverage_revision": ledger.revision,
+            "total_items": len(ledger.items),
+            "status_counts": dict(sorted(status_counts.items())),
+            "type_counts": dict(sorted(type_counts.items())),
+            "overall_status": ledger.overall_status.value,
+        }
+
+    # ------------------------------------------------------------------
+    # String <-> enum helpers
+    # ------------------------------------------------------------------
 
 
 def _str_to_item_type(value: str) -> CoverageItemType:
