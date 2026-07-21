@@ -155,10 +155,17 @@ def is_transition_permitted(prior_state: str, next_state: str) -> bool:
 class ResearchRunService:
     """Authoritative run lifecycle policy over a transactional repository."""
 
-    def __init__(self, uow_factory: Callable, policy_version: str = "run-state-v1"):
+    def __init__(
+        self,
+        uow_factory: Callable,
+        policy_version: str = "run-state-v1",
+        blob_store: Any | None = None,
+    ):
         self.uow_factory = uow_factory
         self.policy_version = policy_version
+        self.blob_store = blob_store
         self.execution_policy = ExecutionModePolicy()
+
 
     def create(
         self,
@@ -444,4 +451,93 @@ class ResearchRunService:
     def list_plan_queries(self, plan_id: UUID) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
             return uow.runs.list_plan_queries(plan_id)
+
+    def record_search_response(
+        self,
+        run_id: UUID,
+        query_text: str,
+        backend: str,
+        raw_payload: bytes | str,
+        idempotency_key: str,
+        blob_store: Any | None = None,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+        provider_request_id: str | None = None,
+        parser_version: str = "firecrawl-search-v1",
+        http_status: int | None = None,
+        error_message: str | None = None,
+        requested_at: Any | None = None,
+        responded_at: Any | None = None,
+        transport_metadata: dict[str, Any] | None = None,
+        **metadata: Any,
+    ) -> dict[str, Any]:
+        store = blob_store or self.blob_store
+        if store is None:
+            import os
+            from pathlib import Path
+            from .blob import ContentAddressedBlobStore
+
+            store = ContentAddressedBlobStore(
+                Path(os.environ.get("BLOB_ROOT", "data/blobs"))
+            )
+        with self.uow_factory() as uow:
+            return uow.runs.record_search_response(
+                run_id,
+                query_text,
+                backend,
+                raw_payload,
+                idempotency_key,
+                store,
+                plan_id=plan_id,
+                plan_query_id=plan_query_id,
+                provider_request_id=provider_request_id,
+                parser_version=parser_version,
+                http_status=http_status,
+                error_message=error_message,
+                requested_at=requested_at,
+                responded_at=responded_at,
+                transport_metadata=transport_metadata,
+                **metadata,
+            )
+
+    def get_search_response(
+        self, response_id: UUID, run_id: UUID | None = None
+    ) -> dict[str, Any]:
+        with self.uow_factory() as uow:
+            return uow.runs.get_search_response(response_id, run_id=run_id)
+
+    def list_search_responses(
+        self,
+        run_id: UUID,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self.uow_factory() as uow:
+            return uow.runs.list_search_responses(
+                run_id, plan_id=plan_id, plan_query_id=plan_query_id, status=status
+            )
+
+    def replay_search_response(
+        self,
+        response_id: UUID,
+        run_id: UUID | None = None,
+        blob_store: Any | None = None,
+    ) -> Any:
+        from .replay import SearchResponseReplayReader
+
+        store = blob_store or self.blob_store
+        if store is None:
+            import os
+            from pathlib import Path
+            from .blob import ContentAddressedBlobStore
+
+            store = ContentAddressedBlobStore(
+                Path(os.environ.get("BLOB_ROOT", "data/blobs"))
+            )
+        with self.uow_factory() as uow:
+            reader = SearchResponseReplayReader(uow.runs, store)
+            return reader.replay_search_response(response_id, run_id=run_id)
 

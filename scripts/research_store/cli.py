@@ -171,6 +171,25 @@ def parser():
     plan_query_get = sub.add_parser("search-plan-query-get")
     plan_query_get.add_argument("query_id")
 
+    search_resp_rec = sub.add_parser("search-response-record")
+    search_resp_rec.add_argument("external_id")
+    search_resp_rec.add_argument("--query-text", required=True)
+    search_resp_rec.add_argument("--backend", default="firecrawl")
+    search_resp_rec.add_argument("--payload-file", help="Path to raw payload file (reads stdin if omitted)")
+    search_resp_rec.add_argument("--idempotency-key", required=True)
+    search_resp_rec.add_argument("--plan-id")
+    search_resp_rec.add_argument("--plan-query-id")
+    search_resp_rec.add_argument("--provider-request-id")
+    search_resp_rec.add_argument("--parser-version", default="firecrawl-search-v1")
+    search_resp_rec.add_argument("--http-status", type=int)
+
+    search_resp_get = sub.add_parser("search-response-get")
+    search_resp_get.add_argument("response_id")
+
+    search_resp_replay = sub.add_parser("search-response-replay")
+    search_resp_replay.add_argument("response_id")
+
+
 
     sub.add_parser("corpus-overview")
     search = sub.add_parser("search-assets")
@@ -1233,6 +1252,53 @@ def main(argv=None):
         query = run_svc.get_plan_query(UUID(args.query_id))
         print(dumps(query))
         return 0
+    if args.command == "search-response-record":
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        if args.payload_file:
+            with open(args.payload_file, "rb") as f:
+                raw_payload = f.read()
+        else:
+            raw_payload = sys.stdin.buffer.read()
+        resp = run_svc.record_search_response(
+            status.id,
+            args.query_text,
+            args.backend,
+            raw_payload,
+            args.idempotency_key,
+            plan_id=UUID(args.plan_id) if args.plan_id else None,
+            plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
+            provider_request_id=args.provider_request_id,
+            parser_version=args.parser_version,
+            http_status=args.http_status,
+        )
+        print(dumps(resp))
+        return 0
+    if args.command == "search-response-get":
+        run_svc = build_run_service(config)
+        resp = run_svc.get_search_response(UUID(args.response_id))
+        print(dumps(resp))
+        return 0
+    if args.command == "search-response-replay":
+        run_svc = build_run_service(config)
+        replay = run_svc.replay_search_response(UUID(args.response_id))
+        out = {
+            "id": str(replay.id),
+            "run_id": str(replay.run_id),
+            "query_text": replay.query_text,
+            "backend": replay.backend,
+            "status": replay.status,
+            "parser_version": replay.parser_version,
+            "raw_blob_sha256": replay.raw_blob_sha256,
+            "content_sha256": replay.content_sha256,
+            "raw_bytes_len": len(replay.raw_bytes),
+            "integrity_verified": replay.verify_integrity(),
+            "result_count": replay.result_count,
+            "parsed_json": replay.parsed_json,
+        }
+        print(dumps(out))
+        return 0
+
 
 
     service = build_service(config)
