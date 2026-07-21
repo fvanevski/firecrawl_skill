@@ -260,6 +260,17 @@ def parser():
     cand_replay.add_argument("--limit", type=int, default=100)
     cand_replay.add_argument("--offset", type=int, default=0)
 
+    exp_search_compat = sub.add_parser("export-search-compat")
+    exp_search_compat.add_argument("external_id")
+    exp_search_compat.add_argument("search_response_id")
+    exp_search_compat.add_argument("--target-dir", required=True)
+    exp_search_compat.add_argument("--idempotency-key")
+
+    regen_search_exp = sub.add_parser("regenerate-search-exports")
+    regen_search_exp.add_argument("external_id")
+    regen_search_exp.add_argument("--target-dir", required=True)
+
+
 
 
 
@@ -1506,6 +1517,57 @@ def main(argv=None):
         )
         print(dumps(replayed))
         return 0
+    if args.command == "export-search-compat":
+        from .container import build_compatibility_export_service
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        exporter = build_compatibility_export_service(config)
+        res = exporter.export_search(
+            status.id,
+            UUID(args.search_response_id),
+            args.target_dir,
+            idempotency_key=args.idempotency_key,
+        )
+        print(
+            dumps(
+                {
+                    "export_id": str(res.export_id) if res.export_id else None,
+                    "run_id": str(res.run_id),
+                    "search_response_id": str(res.search_response_id),
+                    "target_dir": str(res.target_dir),
+                    "source_state_sha256": res.source_state_sha256,
+                    "status": res.status,
+                    "files_created": [str(f) for f in res.files_created],
+                    "error": res.error,
+                }
+            )
+        )
+        return 0
+    if args.command == "regenerate-search-exports":
+        from .container import build_compatibility_export_service
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        exporter = build_compatibility_export_service(config)
+        results = exporter.regenerate_search_exports(status.id, args.target_dir)
+        print(
+            dumps(
+                [
+                    {
+                        "export_id": str(res.export_id) if res.export_id else None,
+                        "run_id": str(res.run_id),
+                        "search_response_id": str(res.search_response_id),
+                        "target_dir": str(res.target_dir),
+                        "source_state_sha256": res.source_state_sha256,
+                        "status": res.status,
+                        "files_created": [str(f) for f in res.files_created],
+                        "error": res.error,
+                    }
+                    for res in results
+                ]
+            )
+        )
+        return 0
+
 
 
 

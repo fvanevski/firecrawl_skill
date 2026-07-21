@@ -124,6 +124,29 @@ def build_acquisition_service(
     )
 
 
+def build_compatibility_export_service(
+    config: StoreConfig | None = None
+):
+    from .compat_export import SearchCompatibilityExporter
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    return SearchCompatibilityExporter(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        ),
+        blob_store=ContentAddressedBlobStore(config.blob_root),
+    )
+
+
+
 def build_legacy_adapter(
     mode: AdapterMode, config: StoreConfig | None = None
 ) -> LegacyEntryPointAdapter:
