@@ -71,13 +71,14 @@ def prepared_database():
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN) == 10
+    assert migrate(TEST_DSN) == 11
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT to_regclass('research_run_transitions'),
             to_regclass('research_events'),to_regclass('semantic_artifacts'),
             to_regclass('research_budget_snapshots'),to_regclass('search_plans'),
-            to_regclass('search_plan_queries'),to_regclass('search_responses')"""
+            to_regclass('search_plan_queries'),to_regclass('search_responses'),
+            to_regclass('search_candidates'),to_regclass('candidate_occurrences')"""
         )
         assert all(cursor.fetchone())
 
@@ -163,7 +164,7 @@ def prepared_database():
         cursor.execute("SELECT to_regclass('interrupted_v6_probe')")
         assert cursor.fetchone()[0] is None
 
-    assert migrate(TEST_DSN) == 10
+    assert migrate(TEST_DSN) == 11
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT state,lifecycle_revision,execution_mode,objective

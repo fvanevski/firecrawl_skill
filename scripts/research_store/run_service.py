@@ -541,3 +541,66 @@ class ResearchRunService:
             reader = SearchResponseReplayReader(uow.runs, store)
             return reader.replay_search_response(response_id, run_id=run_id)
 
+    def record_response_candidates(
+        self,
+        run_id: UUID,
+        search_response_id: UUID,
+        blob_store: Any | None = None,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+    ) -> list[dict[str, Any]]:
+        store = blob_store or self.blob_store
+        if store is None:
+            import os
+            from pathlib import Path
+            from .blob import ContentAddressedBlobStore
+
+            store = ContentAddressedBlobStore(
+                Path(os.environ.get("BLOB_ROOT", "data/blobs"))
+            )
+        with self.uow_factory() as uow:
+            return uow.runs.record_response_candidates(
+                run_id,
+                search_response_id,
+                store,
+                plan_id=plan_id,
+                plan_query_id=plan_query_id,
+            )
+
+    def get_candidate(
+        self, candidate_id: UUID, run_id: UUID | None = None
+    ) -> dict[str, Any]:
+        with self.uow_factory() as uow:
+            return uow.runs.get_candidate(candidate_id, run_id=run_id)
+
+    def list_candidates(
+        self,
+        run_id: UUID,
+        *,
+        domain: str | None = None,
+        min_recurrence: int | None = None,
+        duplicate_group_id: UUID | None = None,
+    ) -> list[dict[str, Any]]:
+        with self.uow_factory() as uow:
+            return uow.runs.list_candidates(
+                run_id,
+                domain=domain,
+                min_recurrence=min_recurrence,
+                duplicate_group_id=duplicate_group_id,
+            )
+
+    def list_candidate_occurrences(
+        self, candidate_id: UUID, run_id: UUID | None = None
+    ) -> list[dict[str, Any]]:
+        with self.uow_factory() as uow:
+            return uow.runs.list_candidate_occurrences(candidate_id, run_id=run_id)
+
+    def assign_duplicate_group(
+        self, candidate_ids: list[UUID], group_id: UUID | None = None, run_id: UUID | None = None
+    ) -> UUID:
+        with self.uow_factory() as uow:
+            return uow.runs.assign_duplicate_group(
+                candidate_ids, group_id=group_id, run_id=run_id
+            )
+

@@ -189,6 +189,27 @@ def parser():
     search_resp_replay = sub.add_parser("search-response-replay")
     search_resp_replay.add_argument("response_id")
 
+    cand_rec_resp = sub.add_parser("candidate-record-response")
+    cand_rec_resp.add_argument("external_id")
+    cand_rec_resp.add_argument("--search-response-id", required=True)
+
+    cand_get = sub.add_parser("candidate-get")
+    cand_get.add_argument("candidate_id")
+
+    cand_list = sub.add_parser("candidate-list")
+    cand_list.add_argument("external_id")
+    cand_list.add_argument("--domain")
+    cand_list.add_argument("--min-recurrence", type=int)
+    cand_list.add_argument("--duplicate-group-id")
+
+    cand_occ_list = sub.add_parser("candidate-occurrences-list")
+    cand_occ_list.add_argument("candidate_id")
+
+    cand_grp = sub.add_parser("candidate-assign-group")
+    cand_grp.add_argument("candidate_ids", nargs="+")
+    cand_grp.add_argument("--group-id")
+
+
 
 
     sub.add_parser("corpus-overview")
@@ -1298,6 +1319,43 @@ def main(argv=None):
         }
         print(dumps(out))
         return 0
+    if args.command == "candidate-record-response":
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        occs = run_svc.record_response_candidates(
+            status.id, UUID(args.search_response_id)
+        )
+        print(dumps(occs))
+        return 0
+    if args.command == "candidate-get":
+        run_svc = build_run_service(config)
+        cand = run_svc.get_candidate(UUID(args.candidate_id))
+        print(dumps(cand))
+        return 0
+    if args.command == "candidate-list":
+        run_svc = build_run_service(config)
+        status = run_svc.status(external_id=args.external_id)
+        cands = run_svc.list_candidates(
+            status.id,
+            domain=args.domain,
+            min_recurrence=args.min_recurrence,
+            duplicate_group_id=UUID(args.duplicate_group_id) if args.duplicate_group_id else None,
+        )
+        print(dumps(cands))
+        return 0
+    if args.command == "candidate-occurrences-list":
+        run_svc = build_run_service(config)
+        occs = run_svc.list_candidate_occurrences(UUID(args.candidate_id))
+        print(dumps(occs))
+        return 0
+    if args.command == "candidate-assign-group":
+        run_svc = build_run_service(config)
+        cand_ids = [UUID(cid) for cid in args.candidate_ids]
+        group_id = UUID(args.group_id) if args.group_id else None
+        res_group_id = run_svc.assign_duplicate_group(cand_ids, group_id=group_id)
+        print(dumps({"group_id": res_group_id}))
+        return 0
+
 
 
 

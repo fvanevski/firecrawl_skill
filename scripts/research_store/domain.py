@@ -107,5 +107,43 @@ class RawSearchResponse:
     created_at: datetime = field(default_factory=utcnow)
 
 
+@dataclass(frozen=True)
+class SearchCandidate:
+    id: UUID
+    run_id: UUID
+    canonical_url: str
+    canonical_url_sha256: str
+    original_url: str
+    domain: str
+    backend: str
+    title: str | None = None
+    snippet: str | None = None
+    published_at: datetime | None = None
+    date_signals: dict[str, Any] = field(default_factory=dict)
+    backend_metadata: dict[str, Any] = field(default_factory=dict)
+    recurrence_count: int = 1
+    duplicate_group_id: UUID | None = None
+    first_seen_at: datetime = field(default_factory=utcnow)
+    last_seen_at: datetime = field(default_factory=utcnow)
+    created_at: datetime = field(default_factory=utcnow)
+
+
+@dataclass(frozen=True)
+class CandidateOccurrence:
+    id: UUID
+    candidate_id: UUID
+    run_id: UUID
+    search_response_id: UUID
+    rank: int
+    query_text: str
+    original_url: str
+    plan_id: UUID | None = None
+    plan_query_id: UUID | None = None
+    title: str | None = None
+    snippet: str | None = None
+    raw_item: dict[str, Any] = field(default_factory=dict)
+    discovered_at: datetime = field(default_factory=utcnow)
+
+
 def new_id() -> UUID:
     return uuid4()
