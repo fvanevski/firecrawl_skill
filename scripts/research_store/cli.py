@@ -147,6 +147,14 @@ def parser():
     budget_record.add_argument("external_id")
     budget_record.add_argument("--research-spec", required=True)
     budget_record.add_argument("--budget-snapshot", required=True)
+    comparisons = sub.add_parser("legacy-comparisons")
+    comparisons.add_argument("--research-run-id")
+    comparisons.add_argument("--invocation-id")
+    comparisons.add_argument(
+        "--entry-point", choices=("frun", "fsearch_smart", "fsearch", "fscrape")
+    )
+    comparisons.add_argument("--divergent-only", action="store_true")
+    comparisons.add_argument("--limit", type=int, default=100)
 
     sub.add_parser("corpus-overview")
     search = sub.add_parser("search-assets")
@@ -1172,6 +1180,17 @@ def main(argv=None):
             )
         print(dumps({"id": budget_id, "external_run_id": args.external_id}))
         return 0
+    if args.command == "legacy-comparisons":
+        with _uow_factory(config)() as uow:
+            rows = uow.runs.list_legacy_adapter_comparisons(
+                external_run_id=args.research_run_id,
+                external_invocation_id=args.invocation_id,
+                entry_point=args.entry_point,
+                divergent_only=args.divergent_only,
+                limit=args.limit,
+            )
+        print(dumps({"comparisons": rows, "count": len(rows)}))
+        return 0
 
     service = build_service(config)
     if args.command == "corpus-overview":
@@ -1228,8 +1247,8 @@ def main(argv=None):
         )
     else:
         raise AssertionError(args.command)
-    print(dumps(result))
-    return 0
+        print(dumps(result))
+        return 0
 
 
 if __name__ == "__main__":

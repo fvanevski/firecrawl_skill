@@ -92,6 +92,15 @@ semantic artifacts without deleting provenance. Terminal runs must be reopened
 before changing mode. The host-facing service defaults to `agent_led`; the
 standalone `run-start` CLI defaults to `autonomous_local`.
 
+Legacy wrappers pass completed decisions through the Phase 1 adapter described
+in `legacy-adapters.md`. Shadow mode appends an idempotent
+`legacy_adapter_comparisons` row but does not create a workflow invocation,
+append an event, transition a run, or increment its revision. Authoritative
+mode records search and scrape wrapper invocations through the existing
+repository boundary. Comparison rows are append-only and queryable with
+`research-db legacy-comparisons`; they are operational evidence, not a second
+source of run state.
+
 The CLI exposes `run-status`, `run-mode-change`, `run-transition`, `run-finish`,
 `run-cancel`, and `run-reopen` as machine-readable service adapters. Callers
 proposing semantic or concurrent work should always supply

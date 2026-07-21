@@ -466,6 +466,29 @@ def main():
     research_active = persistence_mode == "on" or (
         persistence_mode == "auto" and bool(research_env.get("DATABASE_URL"))
     )
+    adapter_mode = research_env.get(
+        "FIRECRAWL_LEGACY_ADAPTER_MODE", "compatibility"
+    )
+    if adapter_mode not in {"compatibility", "shadow", "authoritative"}:
+        parser.error(
+            "FIRECRAWL_LEGACY_ADAPTER_MODE must be compatibility, shadow, "
+            "or authoritative"
+        )
+    if adapter_mode != "compatibility":
+        if not research_env.get("DATABASE_URL"):
+            parser.error(f"{adapter_mode} adapter mode requires DATABASE_URL")
+        ready = subprocess.run(
+            [os.path.join(SCRIPT_DIR, "research-db"), "ingest-ready"],
+            env=research_env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if ready.returncode:
+            parser.error(
+                "legacy adapter database is not ready: "
+                + (ready.stderr.strip() or ready.stdout.strip())
+            )
     if args.planner == "gemini":
         args.llm = "gemini"
         if not args.model:
@@ -474,6 +497,33 @@ def main():
         invocation_id = resolve_invocation_id(args.invocation_id)
     except ValueError as exc:
         parser.error(str(exc))
+
+    def route_legacy_adapter(action, status, metadata_path=None):
+        command = [
+            research_env.get("FIRECRAWL_RESEARCH_PYTHON", sys.executable),
+            os.path.join(SCRIPT_DIR, "legacy_adapter.py"),
+            "--entry-point",
+            "fsearch_smart",
+            "--action",
+            action,
+            "--status",
+            status,
+            "--invocation-id",
+            invocation_id,
+            "--idempotency-key",
+            f"legacy-adapter:{invocation_id}:fsearch_smart:{action}:{status}",
+        ]
+        if metadata_path:
+            command += ["--metadata", metadata_path]
+        if args.research_run_id:
+            command += ["--research-run-id", args.research_run_id]
+        return subprocess.run(
+            command,
+            env=research_env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
     try:
         if args.research_spec:
@@ -669,6 +719,16 @@ def main():
             },
             "queries": query_plan,
         }, indent=2))
+        adapted = route_legacy_adapter("plan", "complete")
+        if adapted.returncode:
+            complete_catalog(
+                invocation_id,
+                "failed",
+                error="legacy adapter routing failed: "
+                + (adapted.stderr.strip() or adapted.stdout.strip()),
+                exit_code=adapted.returncode,
+            )
+            raise SystemExit(adapted.returncode)
         complete_catalog(invocation_id, "completed")
         return
     
@@ -742,6 +802,7 @@ def main():
             child_env = os.environ.copy()
             child_env["FIRECRAWL_CATALOG_CHILD"] = "1"
             child_env["FIRECRAWL_RESEARCH_PERSIST"] = "off"
+            child_env["FIRECRAWL_LEGACY_ADAPTER_MODE"] = "compatibility"
             child_env["FIRECRAWL_CAPTURE_RAW"] = "1"
             if args.research_run_id:
                 child_env["FIRECRAWL_RESEARCH_RUN_ID"] = args.research_run_id
@@ -853,6 +914,7 @@ def main():
                 cmd += ["--tbs", args.tbs]
             child_env = os.environ.copy(); child_env["FIRECRAWL_CATALOG_CHILD"] = "1"
             child_env["FIRECRAWL_RESEARCH_PERSIST"] = "off"
+            child_env["FIRECRAWL_LEGACY_ADAPTER_MODE"] = "compatibility"
             child_env["FIRECRAWL_CAPTURE_RAW"] = "1"
             if args.research_run_id:
                 child_env["FIRECRAWL_RESEARCH_RUN_ID"] = args.research_run_id
@@ -911,6 +973,7 @@ def main():
             child_env = os.environ.copy()
             child_env["FIRECRAWL_CATALOG_CHILD"] = "1"
             child_env["FIRECRAWL_RESEARCH_PERSIST"] = "off"
+            child_env["FIRECRAWL_LEGACY_ADAPTER_MODE"] = "compatibility"
             child_env["FIRECRAWL_CAPTURE_RAW"] = "1"
             if args.research_run_id:
                 child_env["FIRECRAWL_RESEARCH_RUN_ID"] = args.research_run_id
@@ -1168,6 +1231,17 @@ def main():
                 exit_code=persisted.returncode,
             )
             raise SystemExit(persisted.returncode)
+    adapted = route_legacy_adapter("orchestrate", "complete", master_meta_path)
+    if adapted.returncode:
+        complete_catalog(
+            invocation_id,
+            "failed",
+            master_meta_path,
+            error="legacy adapter routing failed: "
+            + (adapted.stderr.strip() or adapted.stdout.strip()),
+            exit_code=adapted.returncode,
+        )
+        raise SystemExit(adapted.returncode)
     complete_catalog(invocation_id, "completed", master_meta_path)
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
 from .postgres import PostgresUnitOfWork
 from .indexing import OpenAICompatibleEmbedder
+from .legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from .qdrant import QdrantIndex
 from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
@@ -95,4 +96,27 @@ def build_semantic_service(config: StoreConfig | None = None) -> SemanticCallSer
             config.normalization_version,
             config.chunker_version,
         )
+    )
+
+
+def build_legacy_adapter(
+    mode: AdapterMode, config: StoreConfig | None = None
+) -> LegacyEntryPointAdapter:
+    if mode == AdapterMode.COMPATIBILITY:
+        return LegacyEntryPointAdapter(None, mode)
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    return LegacyEntryPointAdapter(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        ),
+        mode,
     )

@@ -158,6 +158,22 @@ class ResearchRunRepository(SemanticCallRepository, Protocol):
         idempotency_key: str,
         **metadata: Any,
     ) -> UUID: ...
+    def record_legacy_adapter_comparison(
+        self,
+        entry_point: str,
+        adapter_mode: str,
+        legacy_decision: dict[str, Any],
+        service_proposal: dict[str, Any],
+        legacy_sha256: str,
+        proposal_sha256: str,
+        divergent: bool,
+        divergence_reasons: list[str],
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+    def list_legacy_adapter_comparisons(
+        self, **filters: Any
+    ) -> list[dict[str, Any]]: ...
     def link_run_asset(
         self, external_run_id: str, snapshot_id: UUID, role: str = "acquired"
     ) -> None: ...
