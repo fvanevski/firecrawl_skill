@@ -119,6 +119,13 @@ Execution mode is authoritative run state: host integrations default to
 `agent_led`, standalone `run-start` defaults to `autonomous_local`, and any
 change requires a revision match plus recorded requester, approver, and reason.
 
+Legacy entry points default to compatibility mode. Set
+`FIRECRAWL_LEGACY_ADAPTER_MODE=shadow` to retain legacy decisions while
+recording non-mutating service proposals, or `authoritative` to record routed
+wrapper invocations against an existing research run. Inspect the comparison
+ledger with `research-db legacy-comparisons --divergent-only`. See
+`references/legacy-adapters.md` for the deprecation map and repair procedure.
+
 ## Validation
 
 Run the full deterministic suite without network access:

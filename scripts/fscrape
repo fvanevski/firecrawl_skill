@@ -33,6 +33,18 @@ case "${FIRECRAWL_RESEARCH_PERSIST:-auto}" in
   off) export FIRECRAWL_RESEARCH_ACTIVE=0 ;;
   *) echo "ERROR: FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off" >&2; exit 2 ;;
 esac
+ADAPTER_MODE="${FIRECRAWL_LEGACY_ADAPTER_MODE:-compatibility}"
+case "$ADAPTER_MODE" in
+  compatibility) ;;
+  shadow|authoritative)
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+      echo "ERROR: $ADAPTER_MODE adapter mode requires DATABASE_URL" >&2
+      exit 1
+    fi
+    "$SCRIPT_DIR/research-db" ingest-ready >/dev/null
+    ;;
+  *) echo "ERROR: FIRECRAWL_LEGACY_ADAPTER_MODE must be compatibility, shadow, or authoritative" >&2; exit 2 ;;
+esac
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 FORMAT="markdown"
@@ -386,3 +398,11 @@ if [[ "${FIRECRAWL_RESEARCH_ACTIVE:-0}" == "1" ]]; then
   "${FIRECRAWL_RESEARCH_PYTHON:-python3}" "$SCRIPT_DIR/persist_results.py" "${persist_args[@]}" >/dev/null
   echo "  Corpus IDs: $OUTPUT_DIR/_corpus.json" >&2
 fi
+
+adapter_args=(
+  --entry-point fscrape --action scrape --status complete
+  --metadata "$OUTPUT_DIR/_meta.json" --invocation-id "$INVOCATION_ID"
+  --idempotency-key "legacy-adapter:$INVOCATION_ID:fscrape:complete"
+)
+[[ -n "$RESEARCH_RUN_ID" ]] && adapter_args+=(--research-run-id "$RESEARCH_RUN_ID")
+"${FIRECRAWL_RESEARCH_PYTHON:-python3}" "$SCRIPT_DIR/legacy_adapter.py" "${adapter_args[@]}" >/dev/null

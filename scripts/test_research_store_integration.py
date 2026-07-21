@@ -33,6 +33,7 @@ from research_store.run_service import (
     RunStateError,
     StaleRunRevisionError,
 )
+from research_store.legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from research_store.semantic_service import SemanticCallService
 
 
@@ -64,7 +65,7 @@ def prepared_database():
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN) == 7
+    assert migrate(TEST_DSN) == 8
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT to_regclass('research_run_transitions'),
@@ -155,7 +156,7 @@ def prepared_database():
         cursor.execute("SELECT to_regclass('interrupted_v6_probe')")
         assert cursor.fetchone()[0] is None
 
-    assert migrate(TEST_DSN) == 7
+    assert migrate(TEST_DSN) == 8
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT state,lifecycle_revision,execution_mode,objective
@@ -335,6 +336,61 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             1,
         )
         assert artifact_id is not None and export_id is not None
+
+
+def test_shadow_comparisons_are_queryable_append_only_and_do_not_mutate_run(service):
+    runs = ResearchRunService(service.uow_factory)
+    created = runs.create(
+        "shadow adapter",
+        f"fr_shadow_{uuid4().hex}",
+        execution_mode="agent_led",
+    )
+    adapter = LegacyEntryPointAdapter(service.uow_factory, AdapterMode.SHADOW)
+    decision = {
+        "action": "search",
+        "status": "complete",
+        "input": {"query": "adapter comparison"},
+    }
+    external_invocation_id = f"fc_{uuid4().hex}"
+    first = adapter.route(
+        "fsearch",
+        decision,
+        service_proposal={"action": "retrieve"},
+        external_run_id=created.external_id,
+        external_invocation_id=external_invocation_id,
+        idempotency_key="shadow:comparison:one",
+    )
+    replay = adapter.route(
+        "fsearch",
+        decision,
+        service_proposal={"action": "retrieve"},
+        external_run_id=created.external_id,
+        external_invocation_id=external_invocation_id,
+        idempotency_key="shadow:comparison:one",
+    )
+    assert replay.comparison_id == first.comparison_id
+    status = runs.status(run_id=created.id)
+    assert status.state == "created"
+    assert status.lifecycle_revision == 0
+    with service.uow_factory() as uow:
+        rows = uow.runs.list_legacy_adapter_comparisons(
+            external_run_id=created.external_id
+        )
+    assert len(rows) == 1
+    assert rows[0]["adapter_mode"] == "shadow"
+    assert rows[0]["workflow_revision"] == 0
+    assert rows[0]["divergent"] is True
+    with service.uow_factory() as uow:
+        divergent = uow.runs.list_legacy_adapter_comparisons(
+            external_run_id=created.external_id, divergent_only=True
+        )
+    assert [row["id"] for row in divergent] == [first.comparison_id]
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        with pytest.raises(Exception, match="append-only"):
+            cursor.execute(
+                "UPDATE legacy_adapter_comparisons SET divergent=true WHERE id=%s",
+                (first.comparison_id,),
+            )
 
 
 def test_budget_snapshot_changes_require_policy_or_run_revision(service):

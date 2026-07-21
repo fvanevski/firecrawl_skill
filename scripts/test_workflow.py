@@ -423,6 +423,17 @@ def test_fscrape_rejects_undocumented_format(fake_cli):
     assert "unsupported format" in result.stderr
 
 
+def test_legacy_wrapper_propagates_adapter_configuration_failure_before_acquisition(
+    fake_cli,
+):
+    env, _ = fake_cli
+    env["FIRECRAWL_LEGACY_ADAPTER_MODE"] = "invalid"
+    result = run_script("fsearch", "must not execute", env=env)
+    assert result.returncode == 2
+    assert "FIRECRAWL_LEGACY_ADAPTER_MODE" in result.stderr
+    assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
+
+
 def test_fread_history_grep_slice_and_invalid_regex(fake_cli):
     env, tmp_path = fake_cli
     root = tmp_path / "termux tmp" / "firecrawl_scratch" / "session O'Brien"

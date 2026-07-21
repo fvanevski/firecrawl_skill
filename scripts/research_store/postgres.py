@@ -1604,6 +1604,132 @@ class PostgresUnitOfWork:
                 raise ValueError("idempotency key was used for another export")
             return export_id
 
+    def record_legacy_adapter_comparison(
+        self,
+        entry_point,
+        adapter_mode,
+        legacy_decision,
+        service_proposal,
+        legacy_sha256,
+        proposal_sha256,
+        divergent,
+        divergence_reasons,
+        idempotency_key,
+        *,
+        run_id=None,
+        external_run_id=None,
+        external_invocation_id=None,
+        workflow_revision=None,
+    ):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO legacy_adapter_comparisons(
+                run_id,external_run_id,external_invocation_id,entry_point,
+                adapter_mode,legacy_decision,service_proposal,legacy_sha256,
+                proposal_sha256,divergent,divergence_reasons,workflow_revision,
+                idempotency_key)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT(idempotency_key) DO NOTHING
+                RETURNING id,run_id,external_run_id,external_invocation_id,
+                  entry_point,adapter_mode,legacy_sha256,proposal_sha256,divergent,
+                  divergence_reasons,workflow_revision""",
+                (
+                    run_id,
+                    external_run_id,
+                    external_invocation_id,
+                    entry_point,
+                    adapter_mode,
+                    _canonical_json(legacy_decision),
+                    _canonical_json(service_proposal),
+                    legacy_sha256,
+                    proposal_sha256,
+                    divergent,
+                    _canonical_json(divergence_reasons),
+                    workflow_revision,
+                    idempotency_key,
+                ),
+            )
+            row = cur.fetchone()
+            if row is None:
+                cur.execute(
+                    """SELECT id,run_id,external_run_id,external_invocation_id,
+                    entry_point,adapter_mode,legacy_sha256,proposal_sha256,divergent,
+                    divergence_reasons,workflow_revision
+                    FROM legacy_adapter_comparisons WHERE idempotency_key=%s""",
+                    (idempotency_key,),
+                )
+                row = cur.fetchone()
+            expected = (
+                run_id,
+                external_run_id,
+                external_invocation_id,
+                entry_point,
+                adapter_mode,
+                legacy_sha256,
+                proposal_sha256,
+                divergent,
+                divergence_reasons,
+                workflow_revision,
+            )
+            if row[1:] != expected:
+                raise ValueError(
+                    "idempotency key was used for another legacy adapter comparison"
+                )
+            return row[0]
+
+    def list_legacy_adapter_comparisons(
+        self,
+        *,
+        external_run_id=None,
+        external_invocation_id=None,
+        entry_point=None,
+        divergent_only=False,
+        limit=100,
+    ):
+        if not 1 <= limit <= 1000:
+            raise ValueError("comparison query limit must be 1..1000")
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id,run_id,external_run_id,external_invocation_id,
+                entry_point,adapter_mode,legacy_decision,service_proposal,
+                legacy_sha256,proposal_sha256,divergent,divergence_reasons,
+                workflow_revision,idempotency_key,created_at
+                FROM legacy_adapter_comparisons
+                WHERE (%s::text IS NULL OR external_run_id=%s)
+                  AND (%s::text IS NULL OR external_invocation_id=%s)
+                  AND (%s::text IS NULL OR entry_point=%s)
+                  AND (NOT %s OR divergent)
+                ORDER BY created_at,id LIMIT %s""",
+                (
+                    external_run_id,
+                    external_run_id,
+                    external_invocation_id,
+                    external_invocation_id,
+                    entry_point,
+                    entry_point,
+                    divergent_only,
+                    limit,
+                ),
+            )
+            keys = (
+                "id",
+                "run_id",
+                "external_run_id",
+                "external_invocation_id",
+                "entry_point",
+                "adapter_mode",
+                "legacy_decision",
+                "service_proposal",
+                "legacy_sha256",
+                "proposal_sha256",
+                "divergent",
+                "divergence_reasons",
+                "workflow_revision",
+                "idempotency_key",
+                "created_at",
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
     def link_run_asset(
         self, external_run_id, snapshot_id, role="acquired", metadata=None
     ):

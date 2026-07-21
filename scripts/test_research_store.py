@@ -23,6 +23,11 @@ from research_store.execution_policy import (
     ExecutionModePolicy,
     SemanticAuthority,
 )
+from research_store.legacy_adapter import (
+    AdapterMode,
+    LegacyAdapterError,
+    LegacyEntryPointAdapter,
+)
 from research_store.parsing import deterministic_chunks, structural_blocks
 from research_store.postgres import require_disposable_database_reset
 from research_store.retrieval import (
@@ -78,6 +83,129 @@ def test_standalone_cli_defaults_to_autonomous_local_mode():
         ["run-start", "fr_test", "explicit mode default"]
     )
     assert args.mode == "autonomous_local"
+
+
+def test_legacy_adapter_compatibility_mode_preserves_cli_without_uow():
+    result = LegacyEntryPointAdapter(None, AdapterMode.COMPATIBILITY).route(
+        "fsearch",
+        {"action": "search", "status": "complete", "input": {"query": "x"}},
+        external_invocation_id="fc_test",
+        idempotency_key="compat:test",
+    )
+    assert result.recorded is False
+    assert result.authoritative_write is False
+    assert result.service_operation == "acquisition.single_query"
+
+
+class AdapterRepository:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.comparisons = []
+        self.invocations = []
+        self.events = []
+
+    def get_run_status(self, *, external_id=None, run_id=None):
+        return {
+            "id": "run-id",
+            "external_id": external_id,
+            "lifecycle_revision": 7,
+        }
+
+    def record_legacy_adapter_comparison(self, *args, **kwargs):
+        if self.fail:
+            raise RuntimeError("database unavailable")
+        self.comparisons.append((args, kwargs))
+        return "comparison-id"
+
+    def record_invocation(self, *args, **kwargs):
+        self.invocations.append((args, kwargs))
+        return "invocation-id"
+
+    def append_event(self, *args, **kwargs):
+        self.events.append((args, kwargs))
+        return "event-id"
+
+
+class AdapterUnitOfWork:
+    def __init__(self, repository):
+        self.runs = repository
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
+def test_shadow_adapter_records_comparison_without_workflow_side_effects():
+    repository = AdapterRepository()
+    adapter = LegacyEntryPointAdapter(
+        lambda: AdapterUnitOfWork(repository), AdapterMode.SHADOW
+    )
+    result = adapter.route(
+        "fsearch_smart",
+        {"action": "orchestrate", "status": "complete", "input": {"topic": "x"}},
+        external_run_id="fr_test",
+        external_invocation_id="fc_test",
+        idempotency_key="shadow:test",
+    )
+    assert result.recorded is True
+    assert result.authoritative_write is False
+    assert len(repository.comparisons) == 1
+    assert repository.invocations == []
+    assert repository.events == []
+
+
+def test_shadow_adapter_marks_service_behavior_divergence_queryably():
+    repository = AdapterRepository()
+    adapter = LegacyEntryPointAdapter(
+        lambda: AdapterUnitOfWork(repository), AdapterMode.SHADOW
+    )
+    result = adapter.route(
+        "fsearch",
+        {"action": "search", "status": "complete", "input": {"query": "x"}},
+        service_proposal={"action": "retrieve"},
+        external_run_id="fr_test",
+        external_invocation_id="fc_test",
+        idempotency_key="shadow:divergent",
+    )
+    assert result.divergent is True
+    assert result.divergence_reasons == ("action",)
+
+
+def test_authoritative_adapter_routes_to_invocation_service_boundary():
+    repository = AdapterRepository()
+    adapter = LegacyEntryPointAdapter(
+        lambda: AdapterUnitOfWork(repository), AdapterMode.AUTHORITATIVE
+    )
+    result = adapter.route(
+        "fscrape",
+        {"action": "scrape", "status": "complete", "input": {"urls": ["x"]}},
+        external_run_id="fr_test",
+        external_invocation_id="fc_test",
+        idempotency_key="authoritative:test",
+    )
+    assert result.authoritative_write is True
+    assert len(repository.invocations) == 1
+    assert len(repository.events) == 1
+    assert len(repository.comparisons) == 1
+
+
+def test_adapter_failure_propagates_without_silent_compatibility_fallback():
+    repository = AdapterRepository(fail=True)
+    adapter = LegacyEntryPointAdapter(
+        lambda: AdapterUnitOfWork(repository), AdapterMode.SHADOW
+    )
+    with pytest.raises(LegacyAdapterError, match="database unavailable"):
+        adapter.route(
+            "fsearch",
+            {"action": "search", "status": "complete", "input": {}},
+            external_run_id="fr_test",
+            external_invocation_id="fc_test",
+            idempotency_key="failure:test",
+        )
+    assert repository.invocations == []
+    assert repository.events == []
 
 
 @pytest.mark.parametrize(

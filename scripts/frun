@@ -13,6 +13,15 @@ case "$PERSIST_MODE" in
   *) echo "ERROR: FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off" >&2; exit 2 ;;
 esac
 PYTHON="${FIRECRAWL_RESEARCH_PYTHON:-python3}"
+ADAPTER_MODE="${FIRECRAWL_LEGACY_ADAPTER_MODE:-compatibility}"
+case "$ADAPTER_MODE" in
+  compatibility) ;;
+  shadow|authoritative)
+    [[ -n "${DATABASE_URL:-}" ]] || { echo "ERROR: $ADAPTER_MODE adapter mode requires DATABASE_URL" >&2; exit 1; }
+    DB_ACTIVE=1
+    ;;
+  *) echo "ERROR: FIRECRAWL_LEGACY_ADAPTER_MODE must be compatibility, shadow, or authoritative" >&2; exit 2 ;;
+esac
 preflight_database() {
   if [[ "$DB_ACTIVE" == "1" ]]; then
     "$SCRIPT_DIR/research-db" ingest-ready >/dev/null
@@ -35,6 +44,10 @@ case "${1:-}" in
         exit 1
       fi
     fi
+    "$PYTHON" "$SCRIPT_DIR/legacy_adapter.py" \
+      --entry-point frun --action start --status complete \
+      --research-run-id "$run_id" \
+      --idempotency-key "legacy-adapter:$run_id:frun:start:{workflow_revision}" >/dev/null
     printf '%s\n' "$output"
     ;;
   finish)
@@ -68,6 +81,10 @@ case "${1:-}" in
       fi
       "$SCRIPT_DIR/research-db" "${db_args[@]}" >/dev/null
     fi
+    "$PYTHON" "$SCRIPT_DIR/legacy_adapter.py" \
+      --entry-point frun --action finish --status complete \
+      --research-run-id "$run_id" \
+      --idempotency-key "legacy-adapter:$run_id:frun:finish:$outcome:{workflow_revision}" >/dev/null
     printf '%s\n' "$output"
     if [[ "$auto_audit" == "1" ]]; then
       "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" audit "$run_id"
@@ -87,6 +104,10 @@ case "${1:-}" in
         exit 1
       fi
     fi
+    "$PYTHON" "$SCRIPT_DIR/legacy_adapter.py" \
+      --entry-point frun --action reopen --status complete \
+      --research-run-id "$run_id" \
+      --idempotency-key "legacy-adapter:$run_id:frun:reopen:{workflow_revision}" >/dev/null
     ;;
   annotate) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-annotate "$@" ;;
   status|show) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-show "$@" ;;
