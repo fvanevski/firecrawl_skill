@@ -100,10 +100,14 @@ rtk proxy "<skill-root>/scripts/frun" purge --keep-last 10
 
 # Inspect and mutate the authoritative PostgreSQL state machine
 rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
+rtk proxy "<skill-root>/scripts/research-db" run-mode-change "$RUN_ID" autonomous_local \
+  --expected-revision 0 --idempotency-key 'mode-change-command-id' \
+  --requested-by 'operator' --approved-by 'reviewer' \
+  --reason 'continue with the configured local model'
 rtk proxy "<skill-root>/scripts/research-db" run-transition "$RUN_ID" planning \
-  --expected-revision 0 --idempotency-key 'planning-command-id'
+  --expected-revision 1 --idempotency-key 'planning-command-id'
 rtk proxy "<skill-root>/scripts/research-db" run-cancel "$RUN_ID" \
-  --expected-revision 1 --idempotency-key 'cancel-command-id' \
+  --expected-revision 2 --idempotency-key 'cancel-command-id' \
   --reason 'operator request'
 ```
 
@@ -111,6 +115,9 @@ The shared `fr_<uuid>` links catalog chronology, acquisition batches, retained a
 PostgreSQL transitions use the PRD Section 10 matrix and compare-and-swap
 revisions. Retry the same command with the same idempotency key; after a stale
 revision, inspect status before issuing a genuinely new command.
+Execution mode is authoritative run state: host integrations default to
+`agent_led`, standalone `run-start` defaults to `autonomous_local`, and any
+change requires a revision match plus recorded requester, approver, and reason.
 
 ## Validation
 

@@ -690,7 +690,9 @@ def test_semantic_call_service_retains_failures_and_host_provenance(service):
     runs = ResearchRunService(service.uow_factory)
     semantic = SemanticCallService(service.uow_factory)
     created = runs.create(
-        "semantic persistence", f"fr_semantic_{uuid4().hex}", execution_mode="agent_led"
+        "semantic persistence",
+        f"fr_semantic_{uuid4().hex}",
+        execution_mode="autonomous_local",
     )
     schema = {
         "type": "object", "additionalProperties": False,
@@ -699,6 +701,7 @@ def test_semantic_call_service_retains_failures_and_host_provenance(service):
     failed_context = {
         "run_id": created.id, "stage": "planning", "schema_name": "test-result",
         "schema_version": 1, "artifact_type": "test_result",
+        "run_revision": 0,
         "idempotency_key": "semantic:model:timeout",
     }
     call_id = semantic.start_model_call(
@@ -717,21 +720,128 @@ def test_semantic_call_service_retains_failures_and_host_provenance(service):
     assert failed["response_metadata"]["attempts"][0]["error"] == "TimeoutError"
     assert failed["artifacts"] == []
 
+    host_run = runs.create(
+        "host semantic persistence",
+        f"fr_host_semantic_{uuid4().hex}",
+        execution_mode="agent_led",
+    )
     host_context = {
         **failed_context,
+        "run_id": host_run.id,
         "idempotency_key": "semantic:host:accepted",
         "input_artifact_ids": [uuid4()],
     }
     accepted = semantic.ingest_host_artifact(
         host_context, {"result": "accepted"}, schema, actor_identifier="codex"
     )
-    stored = semantic.inspect(created.id, UUID(accepted.provenance["semantic_call_id"]))
+    stored = semantic.inspect(host_run.id, UUID(accepted.provenance["semantic_call_id"]))
     assert stored["provider"] == "host-agent"
     assert stored["model"] == ""
     assert stored["request"]["authority"] == "host-agent"
     assert "endpoint_alias" not in stored["request"]
     assert stored["response_metadata"]["transport_attempts"] == []
     assert stored["artifacts"][0]["validation_status"] == "valid"
+
+
+def test_explicit_mode_change_records_approval_and_invalidates_prior_authority(service):
+    runs = ResearchRunService(service.uow_factory)
+    semantic = SemanticCallService(service.uow_factory)
+    created = runs.create(
+        "mode revision",
+        f"fr_mode_revision_{uuid4().hex}",
+        execution_mode="agent_led",
+    )
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"result": {"type": "string"}},
+        "required": ["result"],
+    }
+    context = {
+        "run_id": created.id,
+        "run_revision": 0,
+        "stage": "planning",
+        "schema_name": "test-result",
+        "schema_version": 1,
+        "artifact_type": "test_result",
+        "idempotency_key": "semantic:host:before-mode-change",
+    }
+    supplied = semantic.ingest_host_artifact(
+        context, {"result": "host plan"}, schema, actor_identifier="codex"
+    )
+
+    command = {
+        "expected_revision": 0,
+        "idempotency_key": "mode-change:autonomous",
+        "requested_by": "operator-a",
+        "approved_by": "operator-b",
+        "reason": "switch to unattended local execution",
+        "actor_type": "operator",
+        "actor_identifier": "operator-b",
+    }
+    changed = runs.change_execution_mode(
+        created.id, "autonomous_local", **command
+    )
+    replay = runs.change_execution_mode(
+        created.id, "autonomous_local", **command
+    )
+    assert replay.event_id == changed.event_id
+    assert replay.reused is True
+    assert changed.lifecycle_revision == 1
+    status = runs.status(run_id=created.id)
+    assert status.execution_mode == "autonomous_local"
+    assert status.lifecycle_revision == 1
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT actor_type,actor_identifier,payload,run_revision
+            FROM research_events WHERE id=%s""",
+            (changed.event_id,),
+        )
+        actor_type, actor_identifier, payload, run_revision = cursor.fetchone()
+        assert actor_type == "operator"
+        assert actor_identifier == "operator-b"
+        assert payload["requested_by"] == "operator-a"
+        assert payload["approved_by"] == "operator-b"
+        assert payload["prior_mode"] == "agent_led"
+        assert payload["next_mode"] == "autonomous_local"
+        assert run_revision == 1
+        cursor.execute(
+            """SELECT validation_status,validation_errors
+            FROM semantic_artifacts WHERE id=%s""",
+            (UUID(supplied.provenance["semantic_artifact_id"]),),
+        )
+        validation_status, errors = cursor.fetchone()
+        assert validation_status == "invalid"
+        assert errors[-1]["code"] == "stale_after_mode_change"
+
+    with pytest.raises(StaleRunRevisionError):
+        runs.change_execution_mode(
+            created.id,
+            "deterministic_debug",
+            expected_revision=0,
+            idempotency_key="mode-change:stale",
+            requested_by="operator-a",
+            approved_by="operator-b",
+            reason="stale proposal",
+        )
+    with pytest.raises(ValueError, match="mode-change approver is required"):
+        runs.change_execution_mode(
+            created.id,
+            "deterministic_debug",
+            expected_revision=1,
+            idempotency_key="mode-change:unapproved",
+            requested_by="operator-a",
+            approved_by="",
+            reason="missing approval",
+        )
+
+    with pytest.raises(ValueError, match="requires local-model"):
+        semantic.ingest_host_artifact(
+            {**context, "run_revision": 1, "idempotency_key": "semantic:host:stale-authority"},
+            {"result": "should be rejected"},
+            schema,
+        )
 
 
 def test_stale_revision_terminal_mutation_and_cancel_fail_closed(service):
@@ -808,11 +918,36 @@ def test_run_cli_exposes_machine_readable_status_and_transitions(monkeypatch, ca
     assert (
         store_cli.main(
             [
+                "run-mode-change",
+                external_id,
+                "autonomous_local",
+                "--expected-revision",
+                "0",
+                "--idempotency-key",
+                "cli:mode-change",
+                "--requested-by",
+                "cli-user",
+                "--approved-by",
+                "cli-approver",
+                "--reason",
+                "exercise explicit CLI mode revision",
+            ]
+        )
+        == 0
+    )
+    mode_changed = json.loads(capsys.readouterr().out)
+    assert mode_changed["prior_mode"] == "agent_led"
+    assert mode_changed["next_mode"] == "autonomous_local"
+    assert mode_changed["lifecycle_revision"] == 1
+
+    assert (
+        store_cli.main(
+            [
                 "run-transition",
                 external_id,
                 "planning",
                 "--expected-revision",
-                "0",
+                "1",
                 "--idempotency-key",
                 "cli:planning",
             ]
@@ -821,7 +956,7 @@ def test_run_cli_exposes_machine_readable_status_and_transitions(monkeypatch, ca
     )
     transitioned = json.loads(capsys.readouterr().out)
     assert transitioned["next_state"] == "planning"
-    assert transitioned["lifecycle_revision"] == 1
+    assert transitioned["lifecycle_revision"] == 2
 
     assert (
         store_cli.main(
@@ -829,7 +964,7 @@ def test_run_cli_exposes_machine_readable_status_and_transitions(monkeypatch, ca
                 "run-cancel",
                 external_id,
                 "--expected-revision",
-                "1",
+                "2",
                 "--idempotency-key",
                 "cli:cancel",
                 "--reason",

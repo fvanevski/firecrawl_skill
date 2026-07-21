@@ -18,6 +18,11 @@ from research_store.blob import ContentAddressedBlobStore
 from research_store.cli import parser as research_store_parser
 from research_store.compat import import_scratch
 from research_store.domain import IngestResult
+from research_store.execution_policy import (
+    ExecutionModeError,
+    ExecutionModePolicy,
+    SemanticAuthority,
+)
 from research_store.parsing import deterministic_chunks, structural_blocks
 from research_store.postgres import require_disposable_database_reset
 from research_store.retrieval import (
@@ -65,6 +70,57 @@ def test_run_finish_parser_rejects_nonterminal_status():
                 "--status",
                 "running",
             ]
+        )
+
+
+def test_standalone_cli_defaults_to_autonomous_local_mode():
+    args = research_store_parser().parse_args(
+        ["run-start", "fr_test", "explicit mode default"]
+    )
+    assert args.mode == "autonomous_local"
+
+
+@pytest.mark.parametrize(
+    ("mode", "host", "fixture", "authority"),
+    [
+        ("agent_led", True, False, SemanticAuthority.HOST_AGENT),
+        ("autonomous_local", False, False, SemanticAuthority.LOCAL_MODEL),
+        (
+            "deterministic_debug",
+            False,
+            True,
+            SemanticAuthority.DETERMINISTIC_FIXTURE,
+        ),
+    ],
+)
+def test_execution_mode_policy_routes_one_explicit_authority(
+    mode, host, fixture, authority
+):
+    policy = ExecutionModePolicy()
+    assert policy.route(
+        mode,
+        host_artifact_supplied=host,
+        deterministic_fixture_supplied=fixture,
+    ) == authority
+
+
+@pytest.mark.parametrize(
+    ("mode", "host", "fixture"),
+    [
+        ("agent_led", False, False),
+        ("autonomous_local", True, False),
+        ("autonomous_local", False, True),
+        ("deterministic_debug", False, False),
+    ],
+)
+def test_execution_mode_policy_rejects_implicit_authority_changes(
+    mode, host, fixture
+):
+    with pytest.raises(ExecutionModeError):
+        ExecutionModePolicy().route(
+            mode,
+            host_artifact_supplied=host,
+            deterministic_fixture_supplied=fixture,
         )
 
 

@@ -942,6 +942,131 @@ class PostgresUnitOfWork:
                 "reused": False,
             }
 
+    def revise_execution_mode(
+        self,
+        run_id,
+        next_mode,
+        expected_revision,
+        idempotency_key,
+        actor_type,
+        policy_version,
+        *,
+        requested_by,
+        approved_by,
+        reason,
+        actor_identifier=None,
+    ):
+        """Atomically revise semantic authority and append its approval event."""
+        with self.connection.cursor() as cur:
+            state, current_revision = self._lock_workflow_run(cur, run_id)
+            cur.execute(
+                "SELECT execution_mode FROM research_runs WHERE id=%s", (run_id,)
+            )
+            current_mode = cur.fetchone()[0]
+            cur.execute(
+                """SELECT id,run_revision,event_type,actor_type,actor_identifier,payload
+                FROM research_events
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                expected_payload = {
+                    "prior_mode": existing[5].get("prior_mode"),
+                    "next_mode": next_mode,
+                    "expected_revision": expected_revision,
+                    "requested_by": requested_by,
+                    "approved_by": approved_by,
+                    "reason": reason,
+                    "policy_version": policy_version,
+                    "semantic_artifacts_invalidated": True,
+                }
+                if existing[2:] != (
+                    "run.execution_mode_changed",
+                    actor_type,
+                    actor_identifier,
+                    expected_payload,
+                ):
+                    raise ValueError("idempotency key was used for another mode change")
+                return {
+                    "event_id": existing[0],
+                    "lifecycle_revision": existing[1],
+                    "prior_mode": existing[5]["prior_mode"],
+                    "next_mode": existing[5]["next_mode"],
+                    "reused": True,
+                }
+            if current_revision != expected_revision:
+                raise ValueError(
+                    "stale research run revision: "
+                    f"expected {expected_revision}, current {current_revision}"
+                )
+            if state in {"completed", "partial", "failed", "cancelled"}:
+                raise ValueError(
+                    "research run mode change rejected: terminal runs must be reopened"
+                )
+            if current_mode == next_mode:
+                raise ValueError(
+                    "research run mode change rejected: next mode equals current mode"
+                )
+            next_revision = current_revision + 1
+            payload = {
+                "prior_mode": current_mode,
+                "next_mode": next_mode,
+                "expected_revision": expected_revision,
+                "requested_by": requested_by,
+                "approved_by": approved_by,
+                "reason": reason,
+                "policy_version": policy_version,
+                "semantic_artifacts_invalidated": True,
+            }
+            cur.execute(
+                """INSERT INTO research_events(
+                run_id,event_type,actor_type,actor_identifier,payload,
+                run_revision,idempotency_key)
+                VALUES(%s,'run.execution_mode_changed',%s,%s,%s,%s,%s)
+                RETURNING id""",
+                (
+                    run_id,
+                    actor_type,
+                    actor_identifier,
+                    _canonical_json(payload),
+                    next_revision,
+                    idempotency_key,
+                ),
+            )
+            event_id = cur.fetchone()[0]
+            cur.execute(
+                """UPDATE research_runs SET execution_mode=%s,lifecycle_revision=%s
+                WHERE id=%s""",
+                (next_mode, next_revision, run_id),
+            )
+            cur.execute(
+                """UPDATE semantic_artifacts
+                SET validation_status='invalid',
+                validation_errors=validation_errors || %s::jsonb
+                WHERE run_id=%s AND validation_status='valid'""",
+                (
+                    _canonical_json(
+                        [
+                            {
+                                "code": "stale_after_mode_change",
+                                "invalidated_by_revision": next_revision,
+                                "prior_mode": current_mode,
+                                "next_mode": next_mode,
+                            }
+                        ]
+                    ),
+                    run_id,
+                ),
+            )
+            return {
+                "event_id": event_id,
+                "prior_mode": current_mode,
+                "next_mode": next_mode,
+                "lifecycle_revision": next_revision,
+                "reused": False,
+            }
+
     def record_invocation(
         self,
         run_id,
@@ -1236,9 +1361,28 @@ class PostgresUnitOfWork:
         invocation_id=None,
         model_revision="",
         status="pending",
+        expected_revision=None,
+        expected_execution_mode=None,
     ):
         with self.connection.cursor() as cur:
-            self._lock_workflow_run(cur, run_id)
+            _state, current_revision = self._lock_workflow_run(cur, run_id)
+            cur.execute(
+                "SELECT execution_mode FROM research_runs WHERE id=%s", (run_id,)
+            )
+            current_mode = cur.fetchone()[0]
+            if expected_revision is not None and current_revision != expected_revision:
+                raise ValueError(
+                    "stale semantic decision revision: "
+                    f"expected {expected_revision}, current {current_revision}"
+                )
+            if (
+                expected_execution_mode is not None
+                and current_mode != expected_execution_mode
+            ):
+                raise ValueError(
+                    "semantic authority changed before persistence: "
+                    f"expected {expected_execution_mode}, current {current_mode}"
+                )
             digest = _json_sha256(request)
             cur.execute(
                 """INSERT INTO semantic_calls(

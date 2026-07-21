@@ -7,6 +7,8 @@ import re
 from typing import Any, Callable, Mapping
 from uuid import UUID
 
+from .execution_policy import ExecutionModePolicy, SemanticAuthority
+
 
 _SENSITIVE_KEY = re.compile(
     r"^(?:authorization|proxy[-_]authorization|cookie|set[-_]cookie|password|passwd|secret|client[-_]secret|api[-_]?key|apikey|access[-_]token|refresh[-_]token|auth[-_]token|token)$",
@@ -101,6 +103,24 @@ class SemanticCallService:
 
     def __init__(self, uow_factory: Callable):
         self.uow_factory = uow_factory
+        self.execution_policy = ExecutionModePolicy()
+
+    def _authorize(
+        self, context: Mapping[str, Any], authority: SemanticAuthority
+    ) -> tuple[UUID, dict[str, Any]]:
+        run_id = UUID(str(context.get("run_id")))
+        if context.get("run_revision") is None:
+            raise ValueError("semantic call context is missing: run_revision")
+        with self.uow_factory() as uow:
+            status = uow.runs.get_run_status(run_id=run_id)
+        expected_revision = int(context["run_revision"])
+        if status["lifecycle_revision"] != expected_revision:
+            raise ValueError(
+                "stale semantic decision revision: "
+                f"expected {expected_revision}, current {status['lifecycle_revision']}"
+            )
+        self.execution_policy.authorize(status["execution_mode"], authority)
+        return run_id, status
 
     @staticmethod
     def _required_context(context: Mapping[str, Any]) -> tuple[UUID, str, str, int, str]:
@@ -133,6 +153,7 @@ class SemanticCallService:
         input_token_estimate: int,
     ) -> UUID:
         run_id, stage, schema_name, schema_version, idempotency_key = self._required_context(context)
+        _run_id, status = self._authorize(context, SemanticAuthority.LOCAL_MODEL)
         request = redact_sensitive(
             {
                 "authority": "model",
@@ -159,6 +180,8 @@ class SemanticCallService:
                 invocation_id=context.get("invocation_id"),
                 model_revision=model_revision,
                 status="running",
+                expected_revision=int(context["run_revision"]),
+                expected_execution_mode=status["execution_mode"],
             )
 
     def finish_model_call(
@@ -225,12 +248,47 @@ class SemanticCallService:
         *,
         actor_identifier: str | None = None,
     ) -> HostArtifactResult:
+        self._authorize(context, SemanticAuthority.HOST_AGENT)
+        return self._ingest_supplied_artifact(
+            context,
+            payload,
+            schema,
+            authority=SemanticAuthority.HOST_AGENT,
+            actor_identifier=actor_identifier,
+        )
+
+    def ingest_deterministic_fixture(
+        self,
+        context: Mapping[str, Any],
+        payload: dict[str, Any],
+        schema: Mapping[str, Any],
+        *,
+        actor_identifier: str | None = None,
+    ) -> HostArtifactResult:
+        self._authorize(context, SemanticAuthority.DETERMINISTIC_FIXTURE)
+        return self._ingest_supplied_artifact(
+            context,
+            payload,
+            schema,
+            authority=SemanticAuthority.DETERMINISTIC_FIXTURE,
+            actor_identifier=actor_identifier,
+        )
+
+    def _ingest_supplied_artifact(
+        self,
+        context: Mapping[str, Any],
+        payload: dict[str, Any],
+        schema: Mapping[str, Any],
+        *,
+        authority: SemanticAuthority,
+        actor_identifier: str | None,
+    ) -> HostArtifactResult:
         run_id, stage, schema_name, schema_version, idempotency_key = self._required_context(context)
         sanitized_payload = redact_sensitive(payload)
         validation_errors = validate_structured_payload(sanitized_payload, schema)
         request = redact_sensitive(
             {
-                "authority": "host-agent",
+                "authority": authority.value,
                 "schema_name": schema_name,
                 "schema_version": schema_version,
                 "input_artifact_ids": [str(item) for item in context.get("input_artifact_ids", ())],
@@ -243,13 +301,18 @@ class SemanticCallService:
             call_id = uow.runs.record_semantic_call(
                 run_id,
                 stage,
-                "host-agent",
+                authority.value,
                 "",
-                str(context.get("prompt_version") or "host-agent-supplied"),
+                str(context.get("prompt_version") or f"{authority.value}-supplied"),
                 request,
                 idempotency_key,
                 invocation_id=context.get("invocation_id"),
                 status="running",
+                expected_revision=int(context["run_revision"]),
+                expected_execution_mode={
+                    SemanticAuthority.HOST_AGENT: "agent_led",
+                    SemanticAuthority.DETERMINISTIC_FIXTURE: "deterministic_debug",
+                }[authority],
             )
             artifact_id = uow.runs.record_semantic_artifact(
                 run_id,
@@ -267,17 +330,22 @@ class SemanticCallService:
                 call_id,
                 "failed" if validation_errors else "complete",
                 {
-                    "authority": "host-agent",
+                    "authority": authority.value,
                     "actor_identifier": actor_identifier,
                     "validation_errors": redact_sensitive(validation_errors),
                     "transport_attempts": [],
+                    "semantic_coverage": (
+                        "unassessed"
+                        if authority == SemanticAuthority.DETERMINISTIC_FIXTURE
+                        else "assessed"
+                    ),
                 },
                 "; ".join(validation_errors) if validation_errors else None,
             )
         provenance = {
             "semantic_call_id": str(call_id),
             "semantic_artifact_id": str(artifact_id),
-            "authority": "host-agent",
+            "authority": authority.value,
             "schema_name": schema_name,
             "schema_version": schema_version,
         }
@@ -286,6 +354,43 @@ class SemanticCallService:
             provenance,
             (),
             "; ".join(validation_errors),
+        )
+
+    def decide(
+        self,
+        context: Mapping[str, Any],
+        schema: Mapping[str, Any],
+        *,
+        host_artifact: dict[str, Any] | None = None,
+        deterministic_fixture: dict[str, Any] | None = None,
+        local_decision: Callable[..., Any] | None = None,
+        actor_identifier: str | None = None,
+    ) -> Any:
+        """Route one decision without allowing silent semantic-authority fallback."""
+        run_id = UUID(str(context.get("run_id")))
+        with self.uow_factory() as uow:
+            status = uow.runs.get_run_status(run_id=run_id)
+        authority = self.execution_policy.route(
+            status["execution_mode"],
+            host_artifact_supplied=host_artifact is not None,
+            deterministic_fixture_supplied=deterministic_fixture is not None,
+        )
+        if authority == SemanticAuthority.HOST_AGENT:
+            return self.ingest_host_artifact(
+                context, host_artifact, schema, actor_identifier=actor_identifier
+            )
+        if authority == SemanticAuthority.DETERMINISTIC_FIXTURE:
+            return self.ingest_deterministic_fixture(
+                context,
+                deterministic_fixture,
+                schema,
+                actor_identifier=actor_identifier,
+            )
+        if local_decision is None:
+            raise ValueError("autonomous_local semantic decisions require a local model stage")
+        return local_decision(
+            semantic_persistence=self,
+            semantic_context=dict(context),
         )
 
     def inspect(self, run_id: UUID, call_id: UUID) -> dict[str, Any]:

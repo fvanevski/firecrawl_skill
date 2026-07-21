@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import Any, Callable
 from uuid import UUID
 
+from .execution_policy import ExecutionModePolicy
+
 
 RUN_STATES = frozenset(
     {
@@ -124,6 +126,28 @@ class TransitionResult:
         }
 
 
+@dataclass(frozen=True)
+class ModeChangeResult:
+    event_id: UUID
+    prior_mode: str
+    next_mode: str
+    lifecycle_revision: int
+    reused: bool
+
+    @classmethod
+    def from_mapping(cls, value: dict[str, Any]) -> "ModeChangeResult":
+        return cls(**{field: value[field] for field in cls.__dataclass_fields__})
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "prior_mode": self.prior_mode,
+            "next_mode": self.next_mode,
+            "lifecycle_revision": self.lifecycle_revision,
+            "reused": self.reused,
+        }
+
+
 def is_transition_permitted(prior_state: str, next_state: str) -> bool:
     return next_state in PERMITTED_TRANSITIONS.get(prior_state, ())
 
@@ -134,6 +158,7 @@ class ResearchRunService:
     def __init__(self, uow_factory: Callable, policy_version: str = "run-state-v1"):
         self.uow_factory = uow_factory
         self.policy_version = policy_version
+        self.execution_policy = ExecutionModePolicy()
 
     def create(
         self,
@@ -151,6 +176,7 @@ class ResearchRunService:
             raise ValueError("research objective is required")
         if not external_id.strip():
             raise ValueError("external run ID is required")
+        self.execution_policy.validate_mode(execution_mode)
         command_key = idempotency_key or f"run:create:{external_id}"
         run_metadata = dict(legacy_metadata)
         run_metadata.update(
@@ -175,6 +201,52 @@ class ResearchRunService:
                 },
             )
             return RunStatus.from_mapping(uow.runs.get_run_status(run_id=run_id))
+
+    def change_execution_mode(
+        self,
+        run_id: UUID,
+        next_mode: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+        requested_by: str,
+        approved_by: str,
+        reason: str,
+        actor_type: str = "operator",
+        actor_identifier: str | None = None,
+    ) -> ModeChangeResult:
+        self.execution_policy.validate_mode(next_mode)
+        if expected_revision < 0:
+            raise ValueError("expected revision must be non-negative")
+        for label, value in (
+            ("idempotency key", idempotency_key),
+            ("mode-change requester", requested_by),
+            ("mode-change approver", approved_by),
+            ("mode-change reason", reason),
+        ):
+            if not value.strip():
+                raise ValueError(f"{label} is required")
+        with self.uow_factory() as uow:
+            try:
+                result = uow.runs.revise_execution_mode(
+                    run_id,
+                    next_mode,
+                    expected_revision,
+                    idempotency_key,
+                    actor_type,
+                    self.execution_policy.version,
+                    requested_by=requested_by,
+                    approved_by=approved_by,
+                    reason=reason,
+                    actor_identifier=actor_identifier,
+                )
+            except ValueError as exc:
+                if str(exc).startswith("stale research run revision"):
+                    raise StaleRunRevisionError(str(exc)) from exc
+                if str(exc).startswith("research run mode change rejected"):
+                    raise RunStateError(str(exc)) from exc
+                raise
+        return ModeChangeResult.from_mapping(result)
 
     def status(
         self, *, run_id: UUID | None = None, external_id: str | None = None
