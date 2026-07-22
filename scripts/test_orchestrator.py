@@ -1332,6 +1332,7 @@ class TestStrategyAuthorization(unittest.TestCase):
         uow = MagicMock()
         uow.__enter__ = MagicMock(return_value=uow)
         uow.__exit__ = MagicMock(return_value=False)
+        uow.coverage.count_coverage_items.return_value = 1
 
         # Simulate proposal with run_revision=5 but current revision is 3
         uow.strategy_revisions.get_proposal.return_value = {
@@ -1364,8 +1365,6 @@ class TestStrategyAuthorization(unittest.TestCase):
             current_run_revision=3,  # Less than proposal's 5
             current_coverage_revision=1,
             run_state="coverage_review",
-            run_exists=True,
-            coverage_items_exist=True,
         )
 
         # Should be rejected due to stale run revision
@@ -1389,6 +1388,7 @@ class TestStrategyAuthorization(unittest.TestCase):
         uow = MagicMock()
         uow.__enter__ = MagicMock(return_value=uow)
         uow.__exit__ = MagicMock(return_value=False)
+        uow.coverage.count_coverage_items.return_value = 1
 
         uow.strategy_revisions.get_proposal.return_value = {
             "proposal_id": str(proposal_id),
@@ -1421,8 +1421,6 @@ class TestStrategyAuthorization(unittest.TestCase):
             current_coverage_revision=1,
             run_state="completed",  # Terminal state
             is_terminal=True,
-            run_exists=True,
-            coverage_items_exist=True,
         )
 
         # Should be rejected due to terminal run state
@@ -1446,6 +1444,7 @@ class TestStrategyAuthorization(unittest.TestCase):
         uow = MagicMock()
         uow.__enter__ = MagicMock(return_value=uow)
         uow.__exit__ = MagicMock(return_value=False)
+        uow.coverage.count_coverage_items.return_value = 1
 
         uow.strategy_revisions.get_proposal.return_value = {
             "proposal_id": str(proposal_id),
@@ -1486,8 +1485,6 @@ class TestStrategyAuthorization(unittest.TestCase):
             current_run_revision=1,
             current_coverage_revision=1,
             run_state="coverage_review",
-            run_exists=True,
-            coverage_items_exist=True,
             budget_snapshot=budget_snapshot,
         )
 

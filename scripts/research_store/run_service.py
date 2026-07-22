@@ -263,6 +263,14 @@ class ResearchRunService:
                 uow.runs.get_run_status(run_id=run_id, external_id=external_id)
             )
 
+    def run_exists(self, run_id: UUID) -> bool:
+        """Return True if a research run with the given ID exists."""
+        try:
+            self.status(run_id=run_id)
+            return True
+        except KeyError:
+            return False
+
     def transition(
         self,
         run_id: UUID,

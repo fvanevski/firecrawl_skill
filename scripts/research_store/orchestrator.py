@@ -425,13 +425,24 @@ class AcquisitionStage:
         # Apply candidate_identified events to coverage
         if coverage_revision is not None:
             try:
+                # Fetch coverage items from the current snapshot to map candidates
+                snapshot = self.coverage_service.current_snapshot(run_id)
+                target_items = []
+                if snapshot and snapshot.ledger and "items" in snapshot.ledger:
+                    target_items = [
+                        item["coverage_item_id"]
+                        for item in snapshot.ledger["items"]
+                    ]
+
                 # Apply one event per candidate to track individual discoveries
                 # Use cycle-scoped idempotency keys and actual candidate IDs
                 for i, cand_id in enumerate(candidate_ids[:5]):  # Limit to first 5
                     self.coverage_service.apply_event(
                         run_id,
                         "candidate_identified",
-                        item_id=target_items[i] if i < len(target_items) else None,
+                        item_id=UUID(target_items[i])
+                        if i < len(target_items)
+                        else None,
                         idempotency_key=f"acquire:cand:{run_id}:w{wave_count}:{i}",
                         payload={
                             "candidate_id": cand_id,
@@ -754,7 +765,7 @@ class CoverageReviewStage:
             self.run_service.transition(
                 run_id,
                 state_name,
-                expected_revision=run_revision + 1,
+                expected_revision=run_revision,
                 idempotency_key=f"stage:coverage_review:{run_id}:{uuid4()}",
                 actor_type="orchestrator",
                 actor_identifier="CoverageReviewStage",
@@ -890,8 +901,6 @@ class CoverageReviewStage:
                     STRATEGY_DECISION_PARTIAL,
                     STRATEGY_DECISION_FAIL,
                 ),
-                run_exists=True,
-                coverage_items_exist=True,
             )
 
             if decision.outcome != "accepted":
