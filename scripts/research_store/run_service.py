@@ -165,6 +165,16 @@ class ResearchRunService:
         self.policy_version = policy_version
         self.blob_store = blob_store
         self.execution_policy = ExecutionModePolicy()
+        # Lazily initialized event service to avoid circular imports
+        self._event_service = None
+
+    @property
+    def event_service(self):
+        """Lazily initialized EventService to avoid circular imports."""
+        if self._event_service is None:
+            from .invocation_events import EventService
+            self._event_service = EventService(self.uow_factory)
+        return self._event_service
 
 
     def create(

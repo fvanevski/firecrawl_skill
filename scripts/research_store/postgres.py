@@ -1148,6 +1148,113 @@ class PostgresUnitOfWork:
             )
             return cur.fetchone()[0]
 
+    def get_invocation_status(
+        self,
+        *,
+        run_id=None,
+        invocation_id=None,
+        external_invocation_id=None,
+    ):
+        """Retrieve an invocation record by ID, run, or external ID."""
+        with self.connection.cursor() as cur:
+            if invocation_id:
+                cur.execute(
+                    """SELECT id, run_id, parent_invocation_id, external_invocation_id,
+                            operation, status, lifecycle_revision, input, output,
+                            error, metadata, started_at, completed_at, created_at
+                     FROM research_invocations WHERE id = %s""",
+                    (invocation_id,),
+                )
+            elif external_invocation_id:
+                cur.execute(
+                    """SELECT id, run_id, parent_invocation_id, external_invocation_id,
+                            operation, status, lifecycle_revision, input, output,
+                            error, metadata, started_at, completed_at, created_at
+                     FROM research_invocations
+                     WHERE external_invocation_id = %s
+                     ORDER BY created_at DESC LIMIT 1""",
+                    (external_invocation_id,),
+                )
+            elif run_id:
+                cur.execute(
+                    """SELECT id, run_id, parent_invocation_id, external_invocation_id,
+                            operation, status, lifecycle_revision, input, output,
+                            error, metadata, started_at, completed_at, created_at
+                     FROM research_invocations
+                     WHERE run_id = %s
+                     ORDER BY created_at DESC LIMIT 1""",
+                    (run_id,),
+                )
+            else:
+                raise ValueError("must provide invocation_id, external_invocation_id, or run_id")
+            row = cur.fetchone()
+            if row is None:
+                raise KeyError(f"invocation not found")
+            keys = (
+                "id", "run_id", "parent_invocation_id", "external_invocation_id",
+                "operation", "status", "lifecycle_revision", "input", "output",
+                "error", "metadata", "started_at", "completed_at", "created_at",
+            )
+            return dict(zip(keys, row))
+
+    def list_invocations(
+        self,
+        run_id,
+        *,
+        operation=None,
+        status=None,
+        limit=100,
+        offset=0,
+    ):
+        """List invocations for a run with optional filters."""
+        with self.connection.cursor() as cur:
+            if operation and status:
+                cur.execute(
+                    """SELECT id, run_id, parent_invocation_id, external_invocation_id,
+                            operation, status, lifecycle_revision, input, output,
+                            error, metadata, started_at, completed_at, created_at
+                     FROM research_invocations
+                     WHERE run_id = %s AND operation = %s AND status = %s
+                     ORDER BY created_at ASC LIMIT %s OFFSET %s""",
+                    (run_id, operation, status, limit, offset),
+                )
+            elif operation:
+                cur.execute(
+                    """SELECT id, run_id, parent_invocation_id, external_invocation_id,
+                            operation, status, lifecycle_revision, input, output,
+                            error, metadata, started_at, completed_at, created_at
+                     FROM research_invocations
+                     WHERE run_id = %s AND operation = %s
+                     ORDER BY created_at ASC LIMIT %s OFFSET %s""",
+                    (run_id, operation, limit, offset),
+                )
+            elif status:
+                cur.execute(
+                    """SELECT id, run_id, parent_invocation_id, external_invocation_id,
+                            operation, status, lifecycle_revision, input, output,
+                            error, metadata, started_at, completed_at, created_at
+                     FROM research_invocations
+                     WHERE run_id = %s AND status = %s
+                     ORDER BY created_at ASC LIMIT %s OFFSET %s""",
+                    (run_id, status, limit, offset),
+                )
+            else:
+                cur.execute(
+                    """SELECT id, run_id, parent_invocation_id, external_invocation_id,
+                            operation, status, lifecycle_revision, input, output,
+                            error, metadata, started_at, completed_at, created_at
+                     FROM research_invocations
+                     WHERE run_id = %s
+                     ORDER BY created_at ASC LIMIT %s OFFSET %s""",
+                    (run_id, limit, offset),
+                )
+            keys = (
+                "id", "run_id", "parent_invocation_id", "external_invocation_id",
+                "operation", "status", "lifecycle_revision", "input", "output",
+                "error", "metadata", "started_at", "completed_at", "created_at",
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
     def append_event(
         self,
         run_id,
@@ -1201,6 +1308,107 @@ class PostgresUnitOfWork:
             if (stored_type, stored_revision) != (event_type, revision):
                 raise ValueError("idempotency key was used for another event")
             return event_id
+
+    def get_event_by_id(self, run_id, event_id):
+        """Retrieve a single event by ID for the given run.
+
+        Returns:
+            A dict with event columns, or ``None`` if not found.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, invocation_id, event_type, actor_type,
+                        actor_identifier, payload, sequence_number,
+                        run_revision, created_at
+                 FROM research_events
+                 WHERE id = %s AND run_id = %s""",
+                (event_id, run_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            keys = (
+                "id", "run_id", "invocation_id", "event_type",
+                "actor_type", "actor_identifier", "payload",
+                "sequence_number", "run_revision", "created_at",
+            )
+            return dict(zip(keys, row))
+
+    def list_events(
+        self,
+        run_id,
+        *,
+        invocation_id=None,
+        event_type=None,
+        limit=100,
+        offset=0,
+    ):
+        """List events for a run, ordered by sequence_number.
+
+        Returns:
+            List of dicts with event columns.
+        """
+        with self.connection.cursor() as cur:
+            if invocation_id and event_type:
+                cur.execute(
+                    """SELECT id, run_id, invocation_id, event_type, actor_type,
+                            actor_identifier, payload, sequence_number,
+                            run_revision, created_at
+                     FROM research_events
+                     WHERE run_id = %s AND invocation_id = %s
+                       AND event_type = %s
+                     ORDER BY sequence_number ASC
+                     LIMIT %s OFFSET %s""",
+                    (run_id, invocation_id, event_type, limit, offset),
+                )
+            elif invocation_id:
+                cur.execute(
+                    """SELECT id, run_id, invocation_id, event_type, actor_type,
+                            actor_identifier, payload, sequence_number,
+                            run_revision, created_at
+                     FROM research_events
+                     WHERE run_id = %s AND invocation_id = %s
+                     ORDER BY sequence_number ASC
+                     LIMIT %s OFFSET %s""",
+                    (run_id, invocation_id, limit, offset),
+                )
+            elif event_type:
+                cur.execute(
+                    """SELECT id, run_id, invocation_id, event_type, actor_type,
+                            actor_identifier, payload, sequence_number,
+                            run_revision, created_at
+                     FROM research_events
+                     WHERE run_id = %s AND event_type = %s
+                     ORDER BY sequence_number ASC
+                     LIMIT %s OFFSET %s""",
+                    (run_id, event_type, limit, offset),
+                )
+            else:
+                cur.execute(
+                    """SELECT id, run_id, invocation_id, event_type, actor_type,
+                            actor_identifier, payload, sequence_number,
+                            run_revision, created_at
+                     FROM research_events
+                     WHERE run_id = %s
+                     ORDER BY sequence_number ASC
+                     LIMIT %s OFFSET %s""",
+                    (run_id, limit, offset),
+                )
+            keys = (
+                "id", "run_id", "invocation_id", "event_type",
+                "actor_type", "actor_identifier", "payload",
+                "sequence_number", "run_revision", "created_at",
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    def next_event_sequence(self, run_id):
+        """Return the next available sequence number for a run."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(MAX(sequence_number), 0) FROM research_events WHERE run_id = %s",
+                (run_id,),
+            )
+            return cur.fetchone()[0] + 1
 
     def record_research_spec(
         self,

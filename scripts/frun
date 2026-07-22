@@ -32,23 +32,27 @@ case "${1:-}" in
     shift
     objective="${1:-}"
     preflight_database
-    output="$("$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-start "$@")"
-    run_id="$(printf '%s\n' "$output" | tail -n 1)"
     if [[ "$DB_ACTIVE" == "1" ]]; then
-      if ! "$SCRIPT_DIR/research-db" run-start "$run_id" "$objective" >/dev/null; then
-        printf '%s\n' "ERROR: Catalog run $run_id exists but PostgreSQL mirroring failed." >&2
-        printf 'RECOVER:' >&2
-        printf ' %q' "$SCRIPT_DIR/research-db" run-start "$run_id" "$objective" >&2
-        printf '\n' >&2
-        printf '%s\n' "$run_id" >&2
+      run_id="$("$SCRIPT_DIR/research-db" run-start "$objective")"
+      if [[ -z "$run_id" ]]; then
+        printf '%s\n' "ERROR: PostgreSQL run-start failed" >&2
         exit 1
       fi
+      # Derive filesystem catalog record from committed PostgreSQL state
+      if [[ "${FIRECRAWL_CATALOG_DISABLED:-}" != "1" ]]; then
+        "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-start "$run_id" "$objective" >/dev/null 2>&1 || true
+      fi
+    else
+      output="$("$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-start "$@")"
+      run_id="$(printf '%s\n' "$output" | tail -n 1)"
     fi
-    "$PYTHON" "$SCRIPT_DIR/legacy_adapter.py" \
-      --entry-point frun --action start --status complete \
-      --research-run-id "$run_id" \
-      --idempotency-key "legacy-adapter:$run_id:frun:start:{workflow_revision}" >/dev/null
-    printf '%s\n' "$output"
+    if [[ "$DB_ACTIVE" == "1" ]]; then
+      "$PYTHON" "$SCRIPT_DIR/legacy_adapter.py" \
+        --entry-point frun --action start --status complete \
+        --research-run-id "$run_id" \
+        --idempotency-key "legacy-adapter:$run_id:frun:start:{workflow_revision}" >/dev/null
+    fi
+    printf '%s\n' "${run_id:-$output}"
     ;;
   finish)
     shift
@@ -70,7 +74,6 @@ case "${1:-}" in
       catalog_args+=("$argument")
       previous="$argument"
     done
-    output="$("$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-finish "${catalog_args[@]}")"
     if [[ "$DB_ACTIVE" == "1" ]]; then
       db_args=(run-finish "$run_id" --outcome "$outcome")
       if [[ -n "$source_manifest" ]]; then
@@ -80,12 +83,18 @@ case "${1:-}" in
         db_args+=(--answer-sha256 "$(sha256sum "$answer_file" | awk '{print $1}')")
       fi
       "$SCRIPT_DIR/research-db" "${db_args[@]}" >/dev/null
+      # Derive filesystem catalog record from committed PostgreSQL state
+      if [[ "${FIRECRAWL_CATALOG_DISABLED:-}" != "1" ]]; then
+        "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-finish "$run_id" --outcome "$outcome" >/dev/null 2>&1 || true
+      fi
+    else
+      output="$("$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-finish "${catalog_args[@]}")"
     fi
     "$PYTHON" "$SCRIPT_DIR/legacy_adapter.py" \
       --entry-point frun --action finish --status complete \
       --research-run-id "$run_id" \
       --idempotency-key "legacy-adapter:$run_id:frun:finish:$outcome:{workflow_revision}" >/dev/null
-    printf '%s\n' "$output"
+    printf '%s\n' "${output:-}"
     if [[ "$auto_audit" == "1" ]]; then
       "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" audit "$run_id"
     fi
@@ -94,15 +103,14 @@ case "${1:-}" in
     shift
     run_id="${1:-}"
     preflight_database
-    "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-reopen "$@"
     if [[ "$DB_ACTIVE" == "1" ]]; then
-      if ! "$SCRIPT_DIR/research-db" run-reopen "$@" >/dev/null; then
-        printf '%s\n' "ERROR: Catalog run $run_id reopened but PostgreSQL mirroring failed." >&2
-        printf 'RECOVER:' >&2
-        printf ' %q' "$SCRIPT_DIR/research-db" run-reopen "$@" >&2
-        printf '\n' >&2
-        exit 1
+      "$SCRIPT_DIR/research-db" run-reopen "$@" >/dev/null
+      # Derive filesystem catalog record from committed PostgreSQL state
+      if [[ "${FIRECRAWL_CATALOG_DISABLED:-}" != "1" ]]; then
+        "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-reopen "$run_id" --reason "${*}" >/dev/null 2>&1 || true
       fi
+    else
+      "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-reopen "$@"
     fi
     "$PYTHON" "$SCRIPT_DIR/legacy_adapter.py" \
       --entry-point frun --action reopen --status complete \
