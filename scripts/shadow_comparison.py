@@ -233,6 +233,9 @@ class ComparisonResult:
         false_completion_legacy: Whether legacy completed with insufficient coverage.
         false_completion_coverage_led: Whether coverage-led completed with insufficient coverage.
         deterministic_integrity: Whether both policies produced idempotent results.
+            Placeholder — always True in dry-run mode. Computed by replaying
+            the same objective twice and comparing structural fields when
+            real policy integration is added.
     """
 
     objective_id: str
@@ -258,11 +261,13 @@ class ComparisonResult:
     def from_dict(cls, data: dict) -> "ComparisonResult":
         """Reconstruct a ``ComparisonResult`` from a serialized dict.
 
-        Uses ``.get()`` with safe defaults for every field so that
+        Uses ``.get()`` with safe defaults on every top-level field so that
         deserialization silently tolerates missing keys rather than
-        raising ``KeyError``.  This is important because ``to_dict``
-        may evolve independently — adding a top-level key to the output
-        without updating this method should not break round-trips.
+        raising ``KeyError``.  Nested ``LegacyResult`` and ``CoverageLedResult``
+        objects are reconstructed via their own ``from_dict`` methods, which
+        filter unknown keys against ``__dataclass_fields__``.  This design
+        allows ``to_dict`` to evolve independently — adding a top-level key
+        to the output without updating this method should not break round-trips.
         """
         return cls(
             objective_id=data.get("objective_id", ""),
@@ -453,25 +458,10 @@ class ShadowComparisonEngine:
                 )
             )
 
-        # 5. Candidate-set divergence (URL-level comparison)
+        # 5. Extraction-choice divergence (URL-level comparison)
         legacy_urls = set(legacy.extracted_urls)
         coverage_urls = set(coverage_led.extracted_urls)
         if legacy_urls != coverage_urls:
-            divergences.append(
-                Divergence(
-                    dimension="candidate_set",
-                    severity="P1",
-                    legacy_value=sorted(legacy_urls),
-                    coverage_led_value=sorted(coverage_urls),
-                    explanation=(
-                        "Candidate URL sets differ. P1 when scrape targets diverge "
-                        "across the two policies."
-                    ),
-                )
-            )
-
-        # 6. Extraction-choice divergence (set equality)
-        if legacy.extracted_urls != coverage_led.extracted_urls:
             divergences.append(
                 Divergence(
                     dimension="extraction_choices",
@@ -480,12 +470,13 @@ class ShadowComparisonEngine:
                     coverage_led_value=sorted(coverage_led.extracted_urls),
                     explanation=(
                         "Extraction choices differ — the two policies scraped "
-                        "different URLs."
+                        "different URL sets. This covers both candidate-set and "
+                        "extraction-choice divergence in a single finding."
                     ),
                 )
             )
 
-        # 7. Search-revision divergence (per-wave query plans)
+        # 6. Search-revision divergence (per-wave query plans)
         if legacy.search_revisions != coverage_led.search_revisions:
             divergences.append(
                 Divergence(
@@ -500,7 +491,7 @@ class ShadowComparisonEngine:
                 )
             )
 
-        # 8. False completion check
+        # 7. False completion check
         if legacy.final_state == "completed" and legacy.coverage_status != "sufficient":
             divergences.append(
                 Divergence(
@@ -532,7 +523,7 @@ class ShadowComparisonEngine:
                 )
             )
 
-        # 6. Strategy proposals (coverage-led only)
+        # 8. Strategy proposals (coverage-led only)
         if coverage_led.strategy_proposals > 0 and legacy.strategy_proposals == 0:
             divergences.append(
                 Divergence(
@@ -572,6 +563,10 @@ class ShadowComparisonEngine:
         per-wave adaptive revisions.  This is a known dry-run limitation —
         wave-count divergence cannot be detected without real policy
         execution.
+
+        Note: run_id uses uuid4() and changes on every invocation.  Replay
+        tests should not compare run_id values; compare structural fields
+        (stop_reason, coverage_status, query_plan) instead.
         """
         complexity_map = {"simple": 2, "moderate": 3, "complex": 5}
         n_queries = complexity_map.get(objective.expected_complexity, 3)
@@ -604,6 +599,10 @@ class ShadowComparisonEngine:
         Coverage-led may stop earlier if coverage is sufficient, but the
         synthetic result uses wave_count=1 for simplicity.  Real comparison
         will produce multi-wave revisions when coverage gaps persist.
+
+        Note: run_id uses uuid4() and changes on every invocation.  Replay
+        tests should not compare run_id values; compare structural fields
+        (stop_reason, coverage_status, query_plan) instead.
         """
         complexity_map = {"simple": 2, "moderate": 3, "complex": 5}
         n_queries = complexity_map.get(objective.expected_complexity, 3)
@@ -676,6 +675,8 @@ def generate_report(
         "p0_divergences": len(p0_divergences),
         "p1_divergences": len(p1_divergences),
         "false_completion_cases": len(false_completions),
+        # deterministic_integrity is a placeholder in dry-run mode;
+        # it is always True because no idempotency check is performed.
         "deterministic_integrity": all(r.deterministic_integrity for r in results),
         "objectives": [r.to_dict() for r in results],
         "recommendation": (

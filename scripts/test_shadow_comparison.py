@@ -412,7 +412,12 @@ class TestComparisonResults(unittest.TestCase):
         self.assertEqual(extraction_divs[0].severity, "P1")
 
     def test_candidate_set_divergence(self):
-        """Test candidate-set (URL-level) divergence detection."""
+        """Test that differing URL sets trigger extraction-choice divergence.
+
+        candidate_set and extraction_choices were merged into a single
+        extraction_choices divergence (P1) to avoid duplicate findings
+        for the same underlying fact.
+        """
         legacy = _make_legacy_result(
             extracted_urls=("https://a.com/1", "https://a.com/2"),
         )
@@ -421,9 +426,11 @@ class TestComparisonResults(unittest.TestCase):
         )
         engine = ShadowComparisonEngine()
         divergences = engine._compare_results(_make_objective(), legacy, coverage)
-        set_divs = [d for d in divergences if d.dimension == "candidate_set"]
-        self.assertGreater(len(set_divs), 0)
-        self.assertEqual(set_divs[0].severity, "P1")
+        extraction_divs = [
+            d for d in divergences if d.dimension == "extraction_choices"
+        ]
+        self.assertGreater(len(extraction_divs), 0)
+        self.assertEqual(extraction_divs[0].severity, "P1")
 
     def test_search_revision_divergence(self):
         """Test search-revision divergence detection."""
