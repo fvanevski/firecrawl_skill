@@ -38,6 +38,7 @@ from research_store.orchestrator import (  # noqa: E402
     PlanningStage,
     CorpusReviewStage,
     AcquisitionStage,
+    ExtractionStage,
     IndexingStage,
     CoverageReviewStage,
     TerminalStage,
@@ -1631,6 +1632,96 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         )
         self.assertEqual(action, STRATEGY_DECISION_SYNTHESIZE)
         self.assertEqual(reason, "budget_exhausted_sufficient")
+
+    def test_extraction_stage_deep_ingestion_and_events(self):
+        """Test that ExtractionStage processes raw ingest requests via corpus_service and emits events."""
+        run_svc = MockRunService(initial_state="extracting", revision=1)
+        coverage_svc = MockCoverageService(item_count=3)
+        corpus_svc = MagicMock()
+        corpus_svc.ingest_batch.return_value = {
+            "assets": [{"status": "complete"}, {"status": "complete"}]
+        }
+        config = MockConfig()
+
+        stage = ExtractionStage(
+            run_service=run_svc,
+            coverage_service=coverage_svc,
+            config=config,
+            corpus_service=corpus_svc,
+        )
+
+        ctx = {
+            "raw_ingest_requests": [
+                {"url": "https://example.com/a"},
+                {"url": "https://example.com/b"},
+            ],
+            ContextKeys.SUCCESSFUL_URLS: [
+                "https://example.com/a",
+                "https://example.com/b",
+            ],
+        }
+
+        run_id = uuid4()
+        result = stage.execute(run_id, 1, 1, "extracting", ctx)
+
+        self.assertEqual(result.outcome, StageOutcome.CONTINUE)
+        self.assertEqual(ctx[ContextKeys.EXTRACTION_SUCCESS_COUNT], 2)
+        corpus_svc.ingest_batch.assert_called_once()
+        self.assertTrue(len(coverage_svc.events_applied) > 0)
+
+    def test_indexing_stage_vector_worker(self):
+        """Test that IndexingStage populates index build details and fingerprint."""
+        run_svc = MockRunService(initial_state="indexing", revision=1)
+        corpus_svc = MagicMock()
+        corpus_svc.embedder = MagicMock(fingerprint="test_embedder_v1")
+        corpus_svc.index = MagicMock()
+        corpus_svc.uow_factory = MagicMock()
+
+        config = MockConfig()
+        stage = IndexingStage(
+            run_service=run_svc, config=config, corpus_service=corpus_svc
+        )
+
+        ctx = {}
+        run_id = uuid4()
+        result = stage.execute(run_id, 1, 1, "indexing", ctx)
+
+        self.assertEqual(result.outcome, StageOutcome.CONTINUE)
+        self.assertIn(ContextKeys.INDEX_BUILD_ID, ctx)
+        self.assertEqual(ctx[ContextKeys.INDEX_FINGERPRINT], "test_embedder_v1")
+        self.assertEqual(
+            result.details[ContextKeys.INDEX_FINGERPRINT], "test_embedder_v1"
+        )
+
+    def test_adaptive_query_generation_replaces_placeholder(self):
+        """Test that CoverageReviewStage generates adaptive gap queries instead of placeholders."""
+        run_svc = MockRunService(initial_state="coverage_review", revision=1)
+        coverage_svc = MockCoverageService(item_count=3)
+        strategy_svc = MockStrategyService()
+        config = MockConfig()
+
+        stage = CoverageReviewStage(
+            run_service=run_svc,
+            coverage_service=coverage_svc,
+            strategy_service=strategy_svc,
+            config=config,
+        )
+
+        mock_item = MagicMock()
+        mock_item.coverage_item_id = uuid4()
+        mock_item.remaining_gap = "vulkan driver setup guide"
+        mock_item.subject_id = "claim_vulkan_setup"
+        mock_item.item_type = MagicMock(value="claim")
+
+        queries = stage._generate_adaptive_queries(
+            objective="Vulkan Driver Research",
+            unresolved_items=[mock_item],
+        )
+
+        self.assertTrue(len(queries) > 0)
+        query_text = queries[0]["query"]
+        self.assertNotIn("coverage item ", query_text)
+        self.assertIn("vulkan driver setup guide", query_text)
 
 
 # ===================================================================

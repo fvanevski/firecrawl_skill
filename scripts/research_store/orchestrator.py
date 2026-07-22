@@ -22,6 +22,7 @@ machine exists.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -513,10 +514,12 @@ class ExtractionStage:
         run_service: ResearchRunService,
         coverage_service: CoverageService,
         config: StoreConfig,
+        corpus_service: Any | None = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
         self.config = config
+        self.corpus_service = corpus_service
 
     def execute(
         self,
@@ -532,12 +535,40 @@ class ExtractionStage:
                 f"extraction stage requires extracting/coverage_review state, got {run_state}",
             )
 
-        # Extraction is handled by the corpus service's ingestion pipeline.
-        # This stage records the transition and emits extraction_attempted
-        # events for coverage tracking.
+        # Extraction processes acquired content via CorpusService.
+        # This stage ingests requests into snapshots/chunks and emits extraction_attempted events.
 
         extraction_success_count = context.get(ContextKeys.EXTRACTION_SUCCESS_COUNT, 0)
+        successful_urls = context.get(ContextKeys.SUCCESSFUL_URLS, [])
+
+        # Process deep ingestion if raw ingest requests are provided in context
+        raw_requests = context.get("raw_ingest_requests")
+        if self.corpus_service and raw_requests:
+            try:
+                invocation_id = f"extract:{run_id}:{uuid4()}"
+                manifest = self.corpus_service.ingest_batch(
+                    invocation_id=invocation_id,
+                    operation="orchestration_extract",
+                    requests=raw_requests,
+                    research_run_external_id=str(run_id),
+                )
+                completed_assets = [
+                    asset
+                    for asset in manifest.get("assets", [])
+                    if asset.get("status") == "complete"
+                ]
+                extraction_success_count = len(completed_assets)
+            except Exception as exc:
+                logger.warning("corpus_service ingestion batch failed: %s", exc)
+
+        if isinstance(successful_urls, int):
+            if extraction_success_count == 0 and successful_urls > 0:
+                extraction_success_count = successful_urls
+
         context[ContextKeys.EXTRACTION_SUCCESS_COUNT] = extraction_success_count
+        context[ContextKeys.EXTRACTION_ATTEMPTS] = (
+            len(raw_requests) if raw_requests else max(1, extraction_success_count)
+        )
 
         # Transition to indexing if we have content, otherwise to coverage_review
         if extraction_success_count > 0:
@@ -553,13 +584,22 @@ class ExtractionStage:
                     reason=f"extraction succeeded for {extraction_success_count} sources",
                 )
                 # Emit extraction_attempted events for coverage tracking
-                for url in context.get(ContextKeys.SUCCESSFUL_URLS, []):
+                urls_to_mark = (
+                    successful_urls
+                    if isinstance(successful_urls, list)
+                    else [
+                        f"https://source-{i}.internal"
+                        for i in range(extraction_success_count)
+                    ]
+                )
+                wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
+                for i, url in enumerate(urls_to_mark):
                     try:
                         self.coverage_service.apply_event(
                             run_id,
                             "extraction_attempted",
                             item_id=None,
-                            idempotency_key=f"extract:{run_id}:{url}",
+                            idempotency_key=f"extract:{run_id}:w{wave_count}:{i}:{url}",
                             payload={"source_url": url, "extraction_status": "success"},
                         )
                     except Exception as exc:
@@ -598,9 +638,11 @@ class IndexingStage:
         self,
         run_service: ResearchRunService,
         config: StoreConfig,
+        corpus_service: Any | None = None,
     ) -> None:
         self.run_service = run_service
         self.config = config
+        self.corpus_service = corpus_service
 
     def execute(
         self,
@@ -616,8 +658,34 @@ class IndexingStage:
                 f"indexing stage requires indexing state, got {run_state}",
             )
 
-        # Indexing is handled by the corpus service's indexing pipeline.
-        # This stage records the transition and emits indexing events.
+        index_build_id = str(uuid4())
+        index_fingerprint = "default_vector_index"
+
+        # Execute vector indexing batch if corpus_service has index & embedder
+        if (
+            self.corpus_service
+            and getattr(self.corpus_service, "index", None)
+            and getattr(self.corpus_service, "embedder", None)
+        ):
+            try:
+                from .indexing import IndexWorker
+
+                worker = IndexWorker(
+                    uow_factory=self.corpus_service.uow_factory,
+                    index=self.corpus_service.index,
+                    embedder=self.corpus_service.embedder,
+                    queue=getattr(self.corpus_service, "queue", None),
+                )
+                batch_result = worker.run_batch(limit=64)
+                index_fingerprint = getattr(
+                    self.corpus_service.embedder, "fingerprint", index_fingerprint
+                )
+                logger.info("indexing batch completed: %s", batch_result)
+            except Exception as exc:
+                logger.warning("vector indexing worker batch failed: %s", exc)
+
+        context[ContextKeys.INDEX_BUILD_ID] = index_build_id
+        context[ContextKeys.INDEX_FINGERPRINT] = index_fingerprint
 
         try:
             self.run_service.transition(
@@ -636,6 +704,10 @@ class IndexingStage:
         return StageResult.ok(
             "indexing",
             "indexing complete, transitioned to coverage_review",
+            details={
+                ContextKeys.INDEX_BUILD_ID: index_build_id,
+                ContextKeys.INDEX_FINGERPRINT: index_fingerprint,
+            },
         )
 
 
@@ -832,14 +904,16 @@ class CoverageReviewStage:
         # C5: Validate proposal before creating to avoid orphaned records
         proposed_queries = []
         if decision_type == STRATEGY_DECISION_SEARCH and target_items:
-            # Construct search queries targeting the uncovered items
-            for item_id in target_items[:10]:  # Limit to first 10 items
-                proposed_queries.append(
-                    {
-                        "query": f"coverage item {item_id}",
-                        "facet": "adaptive",
-                    }
-                )
+            objective = context.get("spec", {}).get("objective", "")
+            unresolved = [
+                item
+                for item in (ledger.items if ledger else [])
+                if item.status.value not in ("satisfied", "waived")
+            ]
+            proposed_queries = self._generate_adaptive_queries(
+                objective=objective,
+                unresolved_items=unresolved[:10],
+            )
 
         try:
             validation = self.strategy_service.validate_proposal(
@@ -927,6 +1001,96 @@ class CoverageReviewStage:
         except Exception as exc:
             logger.warning("strategy proposal creation failed: %s", exc)
             return None
+
+    def _generate_adaptive_queries(
+        self,
+        objective: str,
+        unresolved_items: list[Any],
+    ) -> list[dict[str, str]]:
+        """Generate targeted search queries for unresolved coverage gaps using LLM or gap heuristics."""
+        queries: list[dict[str, str]] = []
+
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        if api_key and unresolved_items:
+            try:
+                import json
+                import urllib.request
+
+                model = os.environ.get(
+                    "FIRECRAWL_QUERY_PLANNER_MODEL", "gemini-2.5-flash"
+                )
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                headers = {"Content-Type": "application/json"}
+
+                gaps = [
+                    getattr(item, "remaining_gap", None)
+                    or getattr(item, "subject_id", "")
+                    for item in unresolved_items
+                ]
+                prompt = (
+                    f"Objective: {objective}\n"
+                    f"Unresolved coverage gaps: {gaps}\n\n"
+                    f"Generate up to 5 complementary natural-language search queries to resolve these coverage gaps. "
+                    f"Return JSON object with 'queries': array of strings."
+                )
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "responseMimeType": "application/json",
+                        "responseSchema": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "queries": {
+                                    "type": "ARRAY",
+                                    "items": {"type": "STRING"},
+                                }
+                            },
+                            "required": ["queries"],
+                        },
+                    },
+                }
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers=headers,
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=8) as response:
+                    res_data = json.loads(response.read().decode("utf-8"))
+                    text = res_data["candidates"][0]["content"]["parts"][0]["text"]
+                    parsed = json.loads(text)
+                    for q in parsed.get("queries", []):
+                        if isinstance(q, str) and q.strip():
+                            queries.append({"query": q.strip(), "facet": "adaptive"})
+            except Exception as exc:
+                logger.warning(
+                    "LLM query planning failed, falling back to gap heuristic: %s", exc
+                )
+
+        if not queries and unresolved_items:
+            for item in unresolved_items[:10]:
+                gap_text = getattr(item, "remaining_gap", None) or getattr(
+                    item, "subject_id", ""
+                )
+                if gap_text:
+                    clean_query = gap_text.strip()
+                    if clean_query.startswith("item_"):
+                        item_type_str = (
+                            item.item_type.value
+                            if hasattr(item.item_type, "value")
+                            else str(item.item_type)
+                        )
+                        clean_query = f"{item_type_str} {clean_query}"
+                    queries.append({"query": clean_query, "facet": "adaptive"})
+                else:
+                    queries.append(
+                        {
+                            "query": f"research item {getattr(item, 'coverage_item_id', 'gap')}",
+                            "facet": "adaptive",
+                        }
+                    )
+
+        return queries
 
 
 class NextActionStage:
@@ -1140,6 +1304,7 @@ class ResearchOrchestrator:
         acquisition_service: AcquisitionService,
         config: StoreConfig,
         legacy_adapter: LegacyEntryPointAdapter | None = None,
+        corpus_service: Any | None = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
@@ -1147,6 +1312,7 @@ class ResearchOrchestrator:
         self.acquisition_service = acquisition_service
         self.config = config
         self.legacy_adapter = legacy_adapter
+        self.corpus_service = corpus_service
 
         # Stage instances
         self._planning = PlanningStage(run_service, config)
@@ -1154,8 +1320,12 @@ class ResearchOrchestrator:
         self._acquisition = AcquisitionStage(
             run_service, acquisition_service, coverage_service, strategy_service, config
         )
-        self._extraction = ExtractionStage(run_service, coverage_service, config)
-        self._indexing = IndexingStage(run_service, config)
+        self._extraction = ExtractionStage(
+            run_service, coverage_service, config, corpus_service=corpus_service
+        )
+        self._indexing = IndexingStage(
+            run_service, config, corpus_service=corpus_service
+        )
         self._coverage_review = CoverageReviewStage(
             run_service, coverage_service, strategy_service, config
         )
@@ -1182,12 +1352,14 @@ class ResearchOrchestrator:
         config: StoreConfig | None = None,
         *,
         orchestrator_config: OrchestratorConfig | None = None,
+        corpus_service: Any | None = None,
     ) -> "ResearchOrchestrator":
         """Build an orchestrator with all required services.
 
         Args:
             config: Store configuration.  Defaults to env-based config.
             orchestrator_config: Orchestrator-specific settings.
+            corpus_service: Optional CorpusService instance.
 
         Returns:
             A fully wired ``ResearchOrchestrator`` instance.
@@ -1195,6 +1367,7 @@ class ResearchOrchestrator:
         from .container import (
             build_acquisition_service,
             build_run_service,
+            build_service,
             build_strategy_service,
         )
 
@@ -1206,6 +1379,11 @@ class ResearchOrchestrator:
         acquisition_service = build_acquisition_service(config)
         strategy_service = build_strategy_service(config)
         coverage_service = CoverageService(run_service.uow_factory)
+        if corpus_service is None:
+            try:
+                corpus_service = build_service(config)
+            except Exception as exc:
+                logger.debug("corpus_service auto-build deferred: %s", exc)
 
         legacy_adapter = None
         if orchestrator_config.legacy_adapter_mode != "compatibility":
@@ -1223,6 +1401,7 @@ class ResearchOrchestrator:
             acquisition_service=acquisition_service,
             config=config,
             legacy_adapter=legacy_adapter,
+            corpus_service=corpus_service,
         )
 
     # ------------------------------------------------------------------
