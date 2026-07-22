@@ -155,17 +155,16 @@ class CandidateRepository(Protocol):
         self, candidate_id: UUID, run_id: UUID | None = None
     ) -> list[dict[str, Any]]: ...
     def assign_duplicate_group(
-        self, candidate_ids: list[UUID], group_id: UUID | None = None, run_id: UUID | None = None
+        self,
+        candidate_ids: list[UUID],
+        group_id: UUID | None = None,
+        run_id: UUID | None = None,
     ) -> UUID: ...
-
 
 
 class ResearchRunRepository(
     SemanticCallRepository, SearchResponseRepository, CandidateRepository, Protocol
 ):
-
-
-
     def start_run(self, original_request: str, metadata: dict[str, Any]) -> UUID: ...
     def get_run_status(
         self, *, run_id: UUID | None = None, external_id: str | None = None
@@ -245,15 +244,11 @@ class ResearchRunRepository(
     def get_search_plan(
         self, run_id: UUID, plan_id: UUID | None = None, revision: int | None = None
     ) -> dict[str, Any]: ...
-    def list_search_plans(
-        self, run_id: UUID
-    ) -> list[dict[str, Any]]: ...
+    def list_search_plans(self, run_id: UUID) -> list[dict[str, Any]]: ...
     def get_plan_query(
         self, query_id: UUID, run_id: UUID | None = None
     ) -> dict[str, Any]: ...
-    def list_plan_queries(
-        self, plan_id: UUID
-    ) -> list[dict[str, Any]]: ...
+    def list_plan_queries(self, plan_id: UUID) -> list[dict[str, Any]]: ...
     def record_compatibility_export(
         self,
         run_id: UUID,
@@ -310,6 +305,79 @@ class IndexJobRepository(Protocol):
     ) -> bool: ...
 
 
+class StrategyRevisionRepository(Protocol):
+    """Persist strategy-revision proposals and deterministic authorization decisions."""
+
+    def record_proposal(
+        self,
+        run_id: UUID,
+        proposal_id: UUID,
+        run_revision: int,
+        coverage_revision: int,
+        decision_type: str,
+        target_coverage_item_ids: list[str],
+        proposed_queries: list[dict[str, Any]],
+        proposed_candidate_ids: list[str],
+        proposed_retrieval_queries: list[str],
+        expected_contribution: str,
+        estimated_cost: dict[str, Any],
+        rationale: str,
+        confidence: float,
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+    def get_proposal(
+        self, run_id: UUID, proposal_id: UUID
+    ) -> dict[str, Any] | None: ...
+    def list_proposals(
+        self,
+        run_id: UUID,
+        *,
+        run_revision: int | None = None,
+        coverage_revision: int | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]: ...
+    def record_decision(
+        self,
+        run_id: UUID,
+        decision_id: UUID,
+        proposal_id: UUID,
+        run_revision: int,
+        coverage_revision: int,
+        outcome: str,
+        rejection_reasons: list[str],
+        policy_version: str,
+        scope_expansion_type: str | None,
+        scope_expansion_rationale: str | None,
+        scope_expansion_approved: bool | None,
+        authorized_by: str,
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+    def get_decision(
+        self, run_id: UUID, decision_id: UUID
+    ) -> dict[str, Any] | None: ...
+    def list_decisions(
+        self,
+        run_id: UUID,
+        *,
+        proposal_id: UUID | None = None,
+        outcome: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]: ...
+    def proposal_exists(self, run_id: UUID, proposal_id: UUID) -> bool: ...
+    def get_proposal_by_idempotency(
+        self, run_id: UUID, idempotency_key: str
+    ) -> dict[str, Any] | None: ...
+    def decision_exists(self, run_id: UUID, decision_id: UUID) -> bool: ...
+    def list_proposal_ids_for_run(self, run_id: UUID) -> list[str]: ...
+    def list_decision_ids_for_proposal(
+        self, run_id: UUID, proposal_id: UUID
+    ) -> list[str]: ...
+
+
 class BlobStore(Protocol):
     def put(self, stream: BinaryIO, mime_type: str | None = None) -> BlobReference: ...
     def open(self, digest: str) -> BinaryIO: ...
@@ -324,9 +392,6 @@ class RetrievalIndex(Protocol):
         self, vector: list[float], filters: dict[str, Any], limit: int
     ) -> list[dict[str, Any]]: ...
     def delete(self, ids: list[UUID]) -> None: ...
-
-
-
 
 
 class QueueBackend(Protocol):
@@ -356,6 +421,7 @@ class UnitOfWork(AbstractContextManager, Protocol):
     candidates: CandidateRepository
     retrieval_events: RetrievalEventRepository
     index_jobs: IndexJobRepository
+    strategy_revisions: StrategyRevisionRepository
 
     def commit(self) -> None: ...
     def rollback(self) -> None: ...
