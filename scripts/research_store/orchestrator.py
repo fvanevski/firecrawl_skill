@@ -49,6 +49,12 @@ from .stages import (
     STRATEGY_DECISION_PARTIAL,
     STRATEGY_DECISION_FAIL,
 )
+from .terminal_decision import (
+    TerminalDecisionConfig,
+    TerminalDecisionOutcome,
+    TerminalDecisionPolicy,
+)
+from .terminal_decision_service import TerminalDecisionService
 from .strategy_service import StrategyRevisionService
 
 logger = logging.getLogger(__name__)
@@ -799,7 +805,7 @@ class CoverageReviewStage:
         context[ContextKeys.COVERAGE_STATUS] = overall_status
         context[ContextKeys.OVERALL_STATUS] = overall_status
 
-        # Determine next action based on coverage
+        # Determine next action based on coverage and terminal decision policy
         budget_exhausted = context.get("_budget_exhausted", False)
         no_progress = context.get("_no_progress", False)
 
@@ -809,23 +815,75 @@ class CoverageReviewStage:
             no_progress=no_progress,
         )
 
+        # Check if terminal outcome was set by TerminalDecisionPolicy
+        terminal_outcome = context.get("_terminal_outcome")
+        if terminal_outcome:
+            if terminal_outcome == TerminalDecisionOutcome.SUFFICIENT.value:
+                decision_type = STRATEGY_DECISION_SYNTHESIZE
+                reason = context.get("_terminal_reason", "sufficient coverage")
+            elif terminal_outcome == TerminalDecisionOutcome.FAILED.value:
+                decision_type = STRATEGY_DECISION_FAIL
+                reason = context.get("_terminal_reason", "no-progress or loop detected")
+            elif terminal_outcome in (
+                TerminalDecisionOutcome.PARTIAL.value,
+                TerminalDecisionOutcome.BLOCKED.value,
+            ):
+                decision_type = STRATEGY_DECISION_PARTIAL
+                reason = context.get("_terminal_reason", "partial coverage or blocked requirement")
+
         # Map decision type to run state name for transitions
         state_name = decision_to_state(decision_type)
 
-        # Propose the next action through the strategy service
+        # Handle terminal decision paths (failed or partial) directly
+        if state_name in ("failed", "partial"):
+            try:
+                if state_name == "failed":
+                    self.run_service.fail(
+                        run_id,
+                        expected_revision=run_revision,
+                        idempotency_key=f"stage:coverage_review:failed:{run_id}:{uuid4()}",
+                        actor_type="orchestrator",
+                        actor_identifier="CoverageReviewStage",
+                        reason=f"coverage {overall_status} -> failed ({reason})",
+                        outcome="failed",
+                    )
+                else:
+                    self.run_service.partial(
+                        run_id,
+                        expected_revision=run_revision,
+                        idempotency_key=f"stage:coverage_review:partial:{run_id}:{uuid4()}",
+                        actor_type="orchestrator",
+                        actor_identifier="CoverageReviewStage",
+                        reason=f"coverage {overall_status} -> partial ({reason})",
+                        outcome="partial",
+                    )
+            except (RunStateError, StaleRunRevisionError) as exc:
+                return StageResult.failed("coverage_review", str(exc))
+
+            return StageResult.terminal(
+                "coverage_review",
+                f"coverage {overall_status}, next action: {state_name} ({reason})",
+                details={
+                    ContextKeys.COVERAGE_STATUS: overall_status,
+                    ContextKeys.OVERALL_STATUS: overall_status,
+                    ContextKeys.NEXT_ACTION: state_name,
+                    ContextKeys.STRATEGY_PROPOSAL_ID: None,
+                },
+            )
+
+        # Propose the next action through the strategy service for non-terminal decisions
         proposal_id = self._propose_next_action(
             run_id, run_revision, new_coverage_revision, decision_type, reason, context
         )
 
         # If authorization was rejected for a non-terminal decision, fail.
-        # Terminal decisions (partial/failed) do not require a proposal.
-        if proposal_id is None and state_name not in ("partial", "failed"):
+        if proposal_id is None:
             return StageResult.failed(
                 "coverage_review",
                 "strategy authorization rejected — cannot proceed",
             )
 
-        # Transition to the appropriate state
+        # Transition to the non-terminal state (acquiring or synthesizing)
         try:
             self.run_service.transition(
                 run_id,
@@ -855,11 +913,10 @@ class CoverageReviewStage:
                 if proposal_id
                 else None,
             },
-            # events are added by StageResult.ok() automatically
         )
 
-        # If terminal, return a terminal result
-        if state_name in ("synthesizing", "partial", "failed"):
+        # If synthesizing, return a terminal result to proceed to synthesis
+        if state_name == "synthesizing":
             return StageResult.terminal(
                 "coverage_review",
                 f"coverage {overall_status}, next action: {state_name} ({reason})",
@@ -1305,6 +1362,8 @@ class ResearchOrchestrator:
         config: StoreConfig,
         legacy_adapter: LegacyEntryPointAdapter | None = None,
         corpus_service: Any | None = None,
+        terminal_config: TerminalDecisionConfig | None = None,
+        terminal_service: TerminalDecisionService | None = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
@@ -1313,6 +1372,9 @@ class ResearchOrchestrator:
         self.config = config
         self.legacy_adapter = legacy_adapter
         self.corpus_service = corpus_service
+        self._terminal_config = terminal_config or TerminalDecisionConfig()
+        # B5: Terminal-decision persistence service
+        self._terminal_decision_service = terminal_service
 
         # Stage instances
         self._planning = PlanningStage(run_service, config)
@@ -1353,6 +1415,7 @@ class ResearchOrchestrator:
         *,
         orchestrator_config: OrchestratorConfig | None = None,
         corpus_service: Any | None = None,
+        terminal_config: Any | None = None,
     ) -> "ResearchOrchestrator":
         """Build an orchestrator with all required services.
 
@@ -1360,6 +1423,8 @@ class ResearchOrchestrator:
             config: Store configuration.  Defaults to env-based config.
             orchestrator_config: Orchestrator-specific settings.
             corpus_service: Optional CorpusService instance.
+            terminal_config: Optional TerminalDecisionConfig override.
+                Defaults to ``TerminalDecisionConfig.load()`` (env-var tuned).
 
         Returns:
             A fully wired ``ResearchOrchestrator`` instance.
@@ -1394,6 +1459,15 @@ class ResearchOrchestrator:
                 config,
             )
 
+        # N1: Load terminal config from env vars (or use explicit override)
+        if terminal_config is None:
+            from .terminal_decision import TerminalDecisionConfig
+
+            terminal_config = TerminalDecisionConfig.load()
+
+        # B5: Build terminal-decision persistence service
+        terminal_service = TerminalDecisionService(run_service.uow_factory)
+
         return cls(
             run_service=run_service,
             coverage_service=coverage_service,
@@ -1402,6 +1476,8 @@ class ResearchOrchestrator:
             config=config,
             legacy_adapter=legacy_adapter,
             corpus_service=corpus_service,
+            terminal_config=terminal_config,
+            terminal_service=terminal_service,
         )
 
     # ------------------------------------------------------------------
@@ -1469,6 +1545,10 @@ class ResearchOrchestrator:
         strategy_proposals = 0
         strategy_decisions = 0
         coverage_revision_num = 0  # Track coverage revision across cycles
+        # Accumulators for terminal-decision policy signals
+        _repeated_extraction_failures = 0
+        _repeated_retrieval_count = 0
+        _unsatisfiable_source = False
 
         try:
             # Stage 1: Planning
@@ -1524,6 +1604,12 @@ class ResearchOrchestrator:
                 wave_count += 1
                 ctx[ContextKeys.WAVE_COUNT] = wave_count
 
+                # Track new candidates from acquisition stage
+                if result.details and result.details.get(ContextKeys.CANDIDATE_COUNT):
+                    ctx["_new_candidate_count"] = result.details.get(
+                        ContextKeys.CANDIDATE_COUNT, 0
+                    )
+
                 # Evaluate budget exhaustion after wave_count is updated so that
                 # CoverageReviewStage receives _budget_exhausted = True on the final allowed wave.
                 budget_exhausted = self._check_budget(ctx, run_id)
@@ -1550,6 +1636,29 @@ class ResearchOrchestrator:
                 current_revision = run_status.lifecycle_revision
                 current_state = run_status.state
 
+                # Track new assets from indexing stage (successful URLs)
+                if result.details and result.details.get(ContextKeys.SUCCESSFUL_URLS):
+                    ctx["_new_asset_count"] = result.details.get(
+                        ContextKeys.SUCCESSFUL_URLS, 0
+                    )
+
+                # Accumulate extraction failure and retrieval counts from indexing
+                if result.details:
+                    attempts = result.details.get(ContextKeys.EXTRACTION_ATTEMPTS, 0)
+                    success = result.details.get(
+                        ContextKeys.EXTRACTION_SUCCESS_COUNT, 0
+                    )
+                    if isinstance(attempts, int) and isinstance(success, int):
+                        _repeated_extraction_failures = max(
+                            _repeated_extraction_failures,
+                            attempts - success,
+                        )
+                    retrieval = result.details.get(ContextKeys.RETRIEVAL_COUNT, 0)
+                    if isinstance(retrieval, int):
+                        _repeated_retrieval_count = max(
+                            _repeated_retrieval_count, retrieval
+                        )
+
                 # Stage: Coverage review
                 result = self._execute_stage(
                     "coverage_review",
@@ -1574,11 +1683,30 @@ class ResearchOrchestrator:
                     or coverage_revision_num
                 )
 
-                # Count strategy proposals
+                # Track strategy proposals
                 if result.details and result.details.get(
                     ContextKeys.STRATEGY_PROPOSAL_ID
                 ):
                     strategy_proposals += 1
+
+                # Track equivalent proposals (from strategy proposals in this cycle)
+                equivalent_proposals_in_cycle = result.details.get(
+                    ContextKeys.STRATEGY_PROPOSAL_ID
+                )
+                if equivalent_proposals_in_cycle:
+                    ctx["_equivalent_proposal_count"] = (
+                        ctx.get("_equivalent_proposal_count", 0) + 1
+                    )
+
+                # Track changed coverage items from coverage review
+                if result.details and result.details.get(ContextKeys.COVERAGE_LEDGER):
+                    ledger = result.details.get(ContextKeys.COVERAGE_LEDGER)
+                    if ledger and hasattr(ledger, "items"):
+                        ctx["_changed_coverage_count"] = len(ledger.items)
+
+                # Wire _unsatisfiable_source from overall coverage status
+                if ctx.get(ContextKeys.OVERALL_STATUS) == "blocked":
+                    _unsatisfiable_source = True
 
                 # Check if terminal
                 if result.outcome == StageOutcome.TERMINAL:
@@ -1602,6 +1730,59 @@ class ResearchOrchestrator:
                 # Check no-progress
                 if self._check_no_progress(ctx, run_id):
                     ctx["_no_progress"] = True
+
+                # Wire accumulators into context for terminal-decision policy
+                ctx["_strategy_revision_count"] = strategy_proposals
+                ctx["_repeated_extraction_failures"] = _repeated_extraction_failures
+                ctx["_repeated_retrieval_count"] = _repeated_retrieval_count
+                ctx["_unsatisfiable_source"] = _unsatisfiable_source
+
+                # Evaluate terminal decision policy
+                terminal_outcome = self._evaluate_terminal_decision(
+                    ctx, run_id, current_revision, coverage_revision_num
+                )
+                if terminal_outcome is not None:
+                    # Policy returned a terminal outcome — use it
+                    ctx["_terminal_outcome"] = terminal_outcome.value
+                    ctx["_terminal_reason"] = ctx.get(
+                        "_terminal_reason",
+                        "terminal decision policy triggered",
+                    )
+                    TERMINAL_STATES = ("completed", "partial", "failed", "cancelled")
+                    if current_state not in TERMINAL_STATES:
+                        try:
+                            if terminal_outcome == TerminalDecisionOutcome.FAILED:
+                                self.run_service.fail(
+                                    run_id,
+                                    expected_revision=current_revision,
+                                    idempotency_key=f"terminal:failed:{run_id}:{coverage_revision_num}:{uuid4()}",
+                                    actor_type="orchestrator",
+                                    actor_identifier="ResearchOrchestrator",
+                                    reason=ctx["_terminal_reason"],
+                                    outcome="failed",
+                                )
+                            elif terminal_outcome in (
+                                TerminalDecisionOutcome.PARTIAL,
+                                TerminalDecisionOutcome.BLOCKED,
+                            ):
+                                self.run_service.partial(
+                                    run_id,
+                                    expected_revision=current_revision,
+                                    idempotency_key=f"terminal:partial:{run_id}:{coverage_revision_num}:{uuid4()}",
+                                    actor_type="orchestrator",
+                                    actor_identifier="ResearchOrchestrator",
+                                    reason=ctx["_terminal_reason"],
+                                    outcome="partial",
+                                )
+                            run_status = self.run_service.status(run_id=run_id)
+                            current_revision = run_status.lifecycle_revision
+                            current_state = run_status.state
+                        except (RunStateError, StaleRunRevisionError) as exc:
+                            logger.warning(
+                                "terminal decision policy state transition failed: %s",
+                                exc,
+                            )
+                    break
 
                 # Fix: Update revision dynamically after cycle
                 run_status = self.run_service.status(run_id=run_id)
@@ -1840,7 +2021,12 @@ class ResearchOrchestrator:
         return wave_count >= max_cycles
 
     def _check_no_progress(self, context: dict[str, Any], run_id: UUID) -> bool:
-        """Check if the run has made no progress since the last cycle."""
+        """Check if the run has made no progress since the last cycle.
+
+        This is a lightweight pre-check.  The full terminal decision
+        policy is evaluated in ``_evaluate_terminal_decision`` which
+        produces structured no-progress signals.
+        """
         previous_status = context.get("_previous_coverage_status")
         current_status = context.get(ContextKeys.OVERALL_STATUS)
         if previous_status and current_status == previous_status:
@@ -1849,6 +2035,81 @@ class ResearchOrchestrator:
         if current_status:
             context["_previous_coverage_status"] = current_status
         return False
+
+    def _evaluate_terminal_decision(
+        self,
+        context: dict[str, Any],
+        run_id: UUID,
+        run_revision: int,
+        coverage_revision: int,
+    ) -> TerminalDecisionOutcome | None:
+        """Evaluate the terminal decision policy and update context.
+
+        Returns the terminal outcome if a terminal decision is reached,
+        or None if the run should continue.
+        """
+        try:
+            policy = TerminalDecisionPolicy(self._terminal_config)
+
+            decision = policy.evaluate(
+                run_id=run_id,
+                run_revision=run_revision,
+                coverage_revision=coverage_revision,
+                overall_status=context.get(ContextKeys.OVERALL_STATUS, "unassessed"),
+                budget_exhausted=context.get("_budget_exhausted", False),
+                no_progress=context.get("_no_progress", False),
+                strategy_revision_count=context.get("_strategy_revision_count", 0),
+                wall_clock_seconds=(
+                    time.monotonic()
+                    - context.get(ContextKeys.WALL_CLOCK_START, time.monotonic())
+                ),
+                wall_clock_limit_seconds=self._terminal_config.max_wall_clock_seconds,
+                new_candidate_count=context.get("_new_candidate_count", 0),
+                new_asset_count=context.get("_new_asset_count", 0),
+                changed_coverage_count=context.get("_changed_coverage_count", 0),
+                equivalent_proposal_count=context.get("_equivalent_proposal_count", 0),
+                repeated_extraction_failures=context.get(
+                    "_repeated_extraction_failures", 0
+                ),
+                repeated_retrieval_count=context.get("_repeated_retrieval_count", 0),
+                unresolved_gap=context.get("_unresolved_gap", ""),
+                unsatisfiable_source=context.get("_unsatisfiable_source", False),
+            )
+
+            # Store signals in context for observability
+            context["_terminal_signals"] = [
+                s.value for s in decision.no_progress_signals
+            ]
+            context["_terminal_outcome"] = decision.outcome.value
+            context["_terminal_reason"] = decision.unresolved_gap
+
+            # B5: Persist the terminal decision to the database
+            if self._terminal_decision_service is not None:
+                try:
+                    idempotency_key = (
+                        f"terminal:{run_id}:r{run_revision}:c{coverage_revision}"
+                    )
+                    self._terminal_decision_service.record(
+                        run_id=run_id,
+                        decision=decision,
+                        idempotency_key=idempotency_key,
+                    )
+                except Exception as persist_exc:
+                    # Non-blocking: a persistence failure should not prevent
+                    # the orchestrator from acting on the terminal decision.
+                    logger.warning(
+                        "terminal decision persistence failed, "
+                        "proceeding without audit record: %s",
+                        persist_exc,
+                    )
+
+            return decision.outcome
+        except Exception as exc:
+            logger.warning(
+                "terminal decision evaluation failed, falling back to budget check: %s",
+                exc,
+            )
+            return None
 
     def _failed_result(self, run_id: UUID, error: str) -> OrchestratorResult:
         """Create a failed orchestrator result."""
@@ -1883,4 +2144,8 @@ __all__ = [
     "STRATEGY_DECISION_SEARCH",
     "STRATEGY_DECISION_PARTIAL",
     "STRATEGY_DECISION_FAIL",
+    "TerminalDecisionConfig",
+    "TerminalDecisionOutcome",
+    "TerminalDecisionPolicy",
+    "TerminalDecisionService",
 ]

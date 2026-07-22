@@ -2010,9 +2010,7 @@ class TestResearchOrchestratorIntegration:
 
         # Create a test run
         run_svc = ResearchRunService(service.uow_factory)
-        run_status = run_svc.create(
-            "Integration test objective", f"test-{uuid4()}"
-        )
+        run_status = run_svc.create("Integration test objective", f"test-{uuid4()}")
         run_id = run_status.id
 
         # Create spec and search plan
@@ -2054,3 +2052,162 @@ class TestResearchOrchestratorIntegration:
         # Verify revision tracking: the lifecycle_revision should have
         # incremented through the stages
         assert final_status.lifecycle_revision > 0
+
+
+# ===================================================================
+# Test: Migration 0015 — terminal_decisions
+# ===================================================================
+
+
+class TestMigration0015TerminalDecisions:
+    """Test upgrade() on a fresh database containing Phase 1–3 tables.
+
+    Verifies:
+    - Index creation
+    - DDL trigger behavior (append-only enforcement)
+    - Forward-only downgrade behavior
+    - Compatibility with existing Phase 1/2/3 tables
+    """
+
+    def test_migration_creates_terminal_decisions_table(self):
+        """Verify terminal_decisions table is created with correct schema."""
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute("DROP SCHEMA public CASCADE")
+            cursor.execute("CREATE SCHEMA public")
+        assert migrate(TEST_DSN) == 15
+
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            # Verify table exists
+            cursor.execute(
+                "SELECT to_regclass('terminal_decisions')",
+            )
+            assert cursor.fetchone()[0] is not None
+
+            # Verify enum exists
+            cursor.execute(
+                "SELECT to_regtype('terminal_decision_outcome')",
+            )
+            assert cursor.fetchone()[0] is not None
+
+            # Verify columns exist
+            cursor.execute(
+                """SELECT column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_name = 'terminal_decisions'
+                ORDER BY ordinal_position"""
+            )
+            columns = {
+                row[0]: {"data_type": row[1], "nullable": row[2]}
+                for row in cursor.fetchall()
+            }
+            assert "id" in columns
+            assert "run_id" in columns
+            assert "decision_id" in columns
+            assert "run_revision" in columns
+            assert "coverage_revision" in columns
+            assert "outcome" in columns
+            assert "no_progress_signals" in columns
+            assert "unresolved_gap" in columns
+            assert "policy_version" in columns
+            assert "idempotency_key" in columns
+            assert "created_at" in columns
+
+    def test_migration_indexes_created(self):
+        """Verify indexes are created correctly."""
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute("DROP SCHEMA public CASCADE")
+            cursor.execute("CREATE SCHEMA public")
+        assert migrate(TEST_DSN) == 15
+
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT indexname FROM pg_indexes
+                WHERE tablename = 'terminal_decisions'
+                ORDER BY indexname"""
+            )
+            indexes = {row[0] for row in cursor.fetchall()}
+            assert "terminal_decisions_run_cursor_idx" in indexes
+            assert "terminal_decisions_outcome_idx" in indexes
+            assert "terminal_decisions_decision_idx" in indexes
+
+    def test_append_only_trigger_enforced(self):
+        """Verify DDL trigger prevents UPDATE/DELETE."""
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute("DROP SCHEMA public CASCADE")
+            cursor.execute("CREATE SCHEMA public")
+        assert migrate(TEST_DSN) == 15
+
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            # Insert a row
+            cursor.execute(
+                """INSERT INTO terminal_decisions(
+                    run_id, decision_id, run_revision, coverage_revision,
+                    outcome, no_progress_signals, unresolved_gap,
+                    policy_version, idempotency_key
+                ) VALUES (%s, %s, 1, 1, 'partial', '{}', 'test gap',
+                    'terminal-decision-policy-v1', 'test-idem-key')""",
+                (uuid4(), uuid4()),
+            )
+            assert cursor.rowcount == 1
+
+            # Try to UPDATE — should fail
+            with pytest.raises(Exception, match="terminal_decisions is append-only"):
+                cursor.execute(
+                    "UPDATE terminal_decisions SET outcome = 'failed' WHERE id = %s",
+                    (
+                        cursor.execute(
+                            "SELECT id FROM terminal_decisions LIMIT 1"
+                        ).fetchone()[0],
+                    ),
+                )
+
+            # Try to DELETE — should fail
+            with pytest.raises(Exception, match="terminal_decisions is append-only"):
+                cursor.execute(
+                    "DELETE FROM terminal_decisions WHERE id = %s",
+                    (
+                        cursor.execute(
+                            "SELECT id FROM terminal_decisions LIMIT 1"
+                        ).fetchone()[0],
+                    ),
+                )
+
+    def test_forward_only_downgrade(self):
+        """Verify downgrade raises RuntimeError."""
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute("DROP SCHEMA public CASCADE")
+            cursor.execute("CREATE SCHEMA public")
+        assert migrate(TEST_DSN) == 15
+
+        with pytest.raises(
+            RuntimeError, match="Research workflow migrations are forward-only"
+        ):
+            migrate(TEST_DSN, "0014_coverage_event_types")
+
+    def test_compatibility_with_existing_tables(self):
+        """Verify migration doesn't break existing Phase 1/2/3 tables."""
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute("DROP SCHEMA public CASCADE")
+            cursor.execute("CREATE SCHEMA public")
+        assert migrate(TEST_DSN) == 15
+
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            # Verify existing tables still exist
+            cursor.execute(
+                """SELECT to_regclass('research_runs'),
+                to_regclass('coverage_events'),to_regclass('coverage_snapshots'),
+                to_regclass('strategy_revisions'),to_regclass('search_plans'),
+                to_regclass('search_responses'),to_regclass('search_candidates')"""
+            )
+            results = cursor.fetchone()
+            assert all(results), "Existing Phase 1/2/3 tables should still exist"
+
+            # Verify terminal_decisions table coexists
+            cursor.execute(
+                """SELECT to_regclass('terminal_decisions'),
+                to_regclass('research_runs'),to_regclass('coverage_events')"""
+            )
+            results = cursor.fetchone()
+            assert all(results), (
+                "terminal_decisions should coexist with existing tables"
+            )
