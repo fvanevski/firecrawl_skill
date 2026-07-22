@@ -246,7 +246,9 @@ def upgrade():
           CONSTRAINT chk_audit_assessments_status
             CHECK (status IS NOT NULL),
           CONSTRAINT chk_audit_assessments_target_hash
-            CHECK (length(trim(target_hash)) > 0)
+            CHECK (length(trim(target_hash)) > 0),
+          CONSTRAINT uk_audit_assessments_target
+            UNIQUE (run_id, target_type, target_id, target_hash)
         );
         """
     )

@@ -209,18 +209,19 @@ class ResearchRunService:
         )
         with self.uow_factory() as uow:
             run_id = uow.runs.start_run(objective, run_metadata)
-            self.event_service.append(
-                run_id,
-                "run_started",
-                actor_type,
-                command_key,
-                actor_identifier=actor_identifier,
-                payload={
-                    "objective": objective,
-                    "execution_mode": execution_mode,
-                    "policy_version": self.policy_version,
-                },
-            )
+        self.event_service.append(
+            run_id,
+            "run_started",
+            actor_type,
+            command_key,
+            actor_identifier=actor_identifier,
+            payload={
+                "objective": objective,
+                "execution_mode": execution_mode,
+                "policy_version": self.policy_version,
+            },
+        )
+        with self.uow_factory() as uow:
             return RunStatus.from_mapping(uow.runs.get_run_status(run_id=run_id))
 
     def change_execution_mode(

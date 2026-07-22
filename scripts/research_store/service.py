@@ -7,6 +7,7 @@ from uuid import UUID
 
 from .config import StoreConfig
 from .domain import IngestRequest, IngestResult
+from .invocation_events import _sanitize
 from .parsing import deterministic_chunks, structural_blocks
 from .retrieval import reciprocal_rank_fusion
 from .url import canonicalize_url
@@ -569,13 +570,17 @@ class ClaimManifestService:
                     )
                     inserted_links += 1
                 except Exception as exc:
-                    failed_links.append(
-                        {
-                            "claim_id": str(link.get("claim_id", "unknown")),
-                            "passage_id": str(link.get("passage_id", "unknown")),
-                            "error": str(exc),
-                        }
-                    )
+                    exc_str = str(exc).lower()
+                    if "unique constraint" in exc_str or "uk_claim_evidence_links" in exc_str or "duplicate key" in exc_str:
+                        inserted_links += 1
+                    else:
+                        failed_links.append(
+                            {
+                                "claim_id": str(link.get("claim_id", "unknown")),
+                                "passage_id": str(link.get("passage_id", "unknown")),
+                                "error": str(exc),
+                            }
+                        )
 
         has_failures = bool(failed_claims) or bool(failed_links)
         return {
@@ -612,6 +617,25 @@ class ClaimManifestService:
 # ---------------------------------------------------------------------------
 
 
+def _extract_evidence_references(obj: Any) -> list[str]:
+    """Recursively extract evidence reference IDs from a stage output dictionary/list structure."""
+    refs: list[str] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            k_lower = str(k).lower()
+            if k_lower in ("evidence_refs", "evidence_references", "claim_id", "claim_ids", "passage_id", "passage_ids", "snapshot_id", "snapshot_ids"):
+                if isinstance(v, (list, tuple, set)):
+                    refs.extend([str(item) for item in v if item])
+                elif v:
+                    refs.append(str(v))
+            else:
+                refs.extend(_extract_evidence_references(v))
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            refs.extend(_extract_evidence_references(item))
+    return refs
+
+
 class AuditService:
     """Authoritative service for staged semantic audit persistence.
 
@@ -644,6 +668,7 @@ class AuditService:
         audit_packet_manifest: dict[str, Any] | None = None,
     ) -> UUID:
         """Create an audit assessment record. Returns the assessment ``id``."""
+        sanitized_manifest = _sanitize(audit_packet_manifest) if audit_packet_manifest else None
         with self.uow_factory() as uow:
             assessment_id = uow.create_audit_assessment(
                 run_id=run_id,
@@ -660,7 +685,7 @@ class AuditService:
                 prompt_hash=prompt_hash,
                 model_fingerprint=model_fingerprint,
                 elapsed_ms=elapsed_ms,
-                audit_packet_manifest=audit_packet_manifest,
+                audit_packet_manifest=sanitized_manifest,
             )
         return assessment_id
 
@@ -680,21 +705,34 @@ class AuditService:
         """Add a stage output to an assessment. Returns the stage ``id``.
 
         Stage failures are recorded individually; successful stages remain
-        intact.
+        intact. Evidence references in ``output`` are validated against the database.
         """
+        sanitized_output = _sanitize(output) if output else None
+        sanitized_error_details = _sanitize(error_details) if error_details else None
+
         with self.uow_factory() as uow:
             if not uow.validate_assessment_exists(assessment_id):
                 raise ValueError(
                     f"assessment not found: {assessment_id}"
                 )
+
+            if sanitized_output:
+                extracted_refs = _extract_evidence_references(sanitized_output)
+                if extracted_refs:
+                    invalid_refs = uow.validate_evidence_references(extracted_refs)
+                    if invalid_refs:
+                        raise ValueError(
+                            f"invalid evidence references in stage output: {sorted(set(invalid_refs))}"
+                        )
+
             stage_id = uow.insert_audit_stage_output(
                 assessment_id=assessment_id,
                 stage=stage,
                 sequence_number=sequence_number,
                 status=status,
-                output=output,
+                output=sanitized_output,
                 error=error,
-                error_details=error_details,
+                error_details=sanitized_error_details,
                 call_count=call_count,
                 used_fallback=used_fallback,
             )

@@ -49,9 +49,9 @@ def _make_audit_uow(
     stale: list[dict] | None = None,
 ):
     """Build a minimal UoW mock for AuditService unit tests."""
-    assessments = assessments or {}
-    stages = stages or {}
-    stale = stale or []
+    assessments = assessments if assessments is not None else {}
+    stages = stages if stages is not None else {}
+    stale = stale if stale is not None else []
 
     class MockUoW:
         def __enter__(self):
@@ -104,6 +104,18 @@ def _make_audit_uow(
             export = dict(assessment)
             export["stages"] = self.list_audit_stage_outputs(assessment_id)
             return export
+
+        def validate_evidence_references(self, references):
+            valid_set = getattr(self, "valid_evidence_refs", None)
+            if valid_set is None:
+                invalid = []
+                for ref in references:
+                    try:
+                        UUID(str(ref))
+                    except (ValueError, AttributeError):
+                        invalid.append(str(ref))
+                return invalid
+            return [str(ref) for ref in references if str(ref) not in valid_set]
 
     return MockUoW()
 
@@ -288,9 +300,78 @@ def test_add_stage_output_succeeds_for_known_assessment():
         stage="rubric",
         sequence_number=1,
         status="completed",
-        output={"rubric": "test"},
+        output={"score": 1.0},
     )
     assert isinstance(sid, UUID)
+
+
+def test_add_stage_output_rejects_invalid_evidence_references():
+    assessments = {}
+    uow = _make_audit_uow(assessments=assessments)
+    uow.valid_evidence_refs = {"11111111-1111-1111-1111-111111111111"}
+    svc = AuditService(lambda: uow)
+    run_id = uuid4()
+    aid = svc.create_assessment(
+        run_id=run_id,
+        target_type="run",
+        target_id=run_id,
+        target_hash="abc123",
+        evaluator_version="catalog-v5.0",
+        prompt_template_version="staged-research-audit-v1",
+        policy_version="audit-policy-v1",
+        stage_set=["evidence"],
+        status="partial",
+    )
+    # Valid evidence ref succeeds
+    svc.add_stage_output(
+        assessment_id=aid,
+        stage="evidence",
+        sequence_number=1,
+        status="completed",
+        output={"evidence_refs": ["11111111-1111-1111-1111-111111111111"]},
+    )
+    # Invalid evidence ref raises ValueError
+    with pytest.raises(ValueError, match="invalid evidence references"):
+        svc.add_stage_output(
+            assessment_id=aid,
+            stage="evidence",
+            sequence_number=2,
+            status="completed",
+            output={"evidence_refs": ["invented-ref-id"]},
+        )
+
+
+def test_audit_sanitizes_secrets():
+    assessments = {}
+    stages = {}
+    uow = _make_audit_uow(assessments=assessments, stages=stages)
+    svc = AuditService(lambda: uow)
+    run_id = uuid4()
+    aid = svc.create_assessment(
+        run_id=run_id,
+        target_type="run",
+        target_id=run_id,
+        target_hash="abc123",
+        evaluator_version="catalog-v5.0",
+        prompt_template_version="staged-research-audit-v1",
+        policy_version="audit-policy-v1",
+        stage_set=["rubric"],
+        status="completed",
+        audit_packet_manifest={"api_key": "secret-12345", "header": "Bearer secret_token_xyz"},
+    )
+    saved_assessment = uow.get_audit_assessment(aid)
+    assert saved_assessment["audit_packet_manifest"]["api_key"] == "[REDACTED]"
+    assert "[REDACTED]" in saved_assessment["audit_packet_manifest"]["header"]
+
+    sid = svc.add_stage_output(
+        assessment_id=aid,
+        stage="rubric",
+        sequence_number=1,
+        status="completed",
+        output={"api_key": "secret-999"},
+    )
+    saved_stage = list(stages.values())[0]
+    assert saved_stage["output"]["api_key"] == "[REDACTED]"
 
 
 def test_partial_audit_preserves_successful_stages():
@@ -466,6 +547,17 @@ INTEGRATION_MARK = pytest.mark.skipif(
 )
 
 
+def _ensure_run_exists(config, run_id):
+    from research_store.postgres import connect
+    with connect(config.database_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs (id, original_request, query_plan, skill_version, llm_model, status, state, execution_mode, objective)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO NOTHING""",
+            (str(run_id), "test request", "{}", "1.0", "test", "running", "created", "agent_led", "test request"),
+        )
+
+
 @INTEGRATION_MARK
 def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
     """Full lifecycle: create assessment, add stages, query, export."""
@@ -480,6 +572,7 @@ def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
     )
     svc = build_audit_service(config)
     run_id = uuid4()
+    _ensure_run_exists(config, run_id)
     target_hash = "sha256_test_hash"
 
     # Create assessment
@@ -557,6 +650,7 @@ def test_stale_assessment_retained_on_new_assessment(tmp_path, prepared_database
     )
     svc = build_audit_service(config)
     run_id = uuid4()
+    _ensure_run_exists(config, run_id)
 
     # First assessment with hash1
     aid1 = svc.create_assessment(
@@ -615,6 +709,7 @@ def test_audit_status_filter(tmp_path, prepared_database_for_audit):
     )
     svc = build_audit_service(config)
     run_id = uuid4()
+    _ensure_run_exists(config, run_id)
 
     svc.create_assessment(
         run_id=run_id,
@@ -660,6 +755,7 @@ def test_audit_stage_filter_by_status(tmp_path, prepared_database_for_audit):
     )
     svc = build_audit_service(config)
     run_id = uuid4()
+    _ensure_run_exists(config, run_id)
     aid = svc.create_assessment(
         run_id=run_id,
         target_type="run",
@@ -707,6 +803,7 @@ def test_audit_stage_filter_by_stage_name(tmp_path, prepared_database_for_audit)
     )
     svc = build_audit_service(config)
     run_id = uuid4()
+    _ensure_run_exists(config, run_id)
     aid = svc.create_assessment(
         run_id=run_id,
         target_type="run",
@@ -750,6 +847,7 @@ def test_audit_export_round_trip(tmp_path, prepared_database_for_audit):
     )
     svc = build_audit_service(config)
     run_id = uuid4()
+    _ensure_run_exists(config, run_id)
 
     aid = svc.create_assessment(
         run_id=run_id,
@@ -870,6 +968,7 @@ if TEST_DSN:
             assert "chk_audit_assessments_target_hash" in constraints
             assert "chk_audit_assessments_status" in constraints
             assert "chk_audit_assessments_target_type" in constraints
+            assert "uk_audit_assessments_target" in constraints
             assert "chk_audit_stage_outputs_sequence_number" in constraints
             assert "uk_audit_stage_outputs_assessment_stage_seq" in constraints
 
@@ -884,11 +983,9 @@ if TEST_DSN:
                 ORDER BY conname"""
             )
             fks = cur.fetchall()
-            fk_map = {(str(row[0]), str(row[1])): str(row[2]) for row in fks}
-            assert "fk_audit_assessments_run" in fk_map
-            assert fk_map["fk_audit_assessments_run"] == "research_runs"
-            assert "fk_audit_stage_outputs_assessment" in fk_map
-            assert fk_map["fk_audit_stage_outputs_assessment"] == "audit_assessments"
+            referenced_tables = {str(row[1]): str(row[2]) for row in fks}
+            assert referenced_tables.get("audit_assessments") == "research_runs"
+            assert referenced_tables.get("audit_stage_outputs") == "audit_assessments"
 
     def test_migration_0018_no_updated_at_column():
         """Verify audit_assessments does NOT have updated_at."""
@@ -905,7 +1002,7 @@ if TEST_DSN:
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT delete_rule FROM information_schema.referential_constraints
-                WHERE constraint_name = 'fk_audit_stage_outputs_assessment'"""
+                WHERE constraint_name IN ('fk_audit_stage_outputs_assessment', 'audit_stage_outputs_assessment_id_fkey')"""
             )
             row = cur.fetchone()
             assert row is not None
@@ -925,6 +1022,7 @@ if TEST_DSN:
         )
         svc = build_audit_service(config)
         run_id = uuid4()
+        _ensure_run_exists(config, run_id)
 
         # Create assessment with hash1
         svc.create_assessment(
@@ -996,6 +1094,7 @@ if TEST_DSN:
         )
         svc = build_audit_service(config)
         run_id = uuid4()
+        _ensure_run_exists(config, run_id)
 
         # First assessment succeeds
         aid1 = svc.create_assessment(

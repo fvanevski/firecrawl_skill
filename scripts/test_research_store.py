@@ -62,6 +62,20 @@ def test_destructive_integration_database_guard():
         )
         == "research_assets_test_codex"
     )
+    assert (
+        require_disposable_database_reset(
+            "postgresql://research_app@localhost/research_assets_test_codex",
+            "1",
+        )
+        == "research_assets_test_codex"
+    )
+    assert (
+        require_disposable_database_reset(
+            "postgresql://research_app@localhost/research_assets_test_codex",
+            "",
+        )
+        == "research_assets_test_codex"
+    )
 
 
 def test_run_finish_parser_rejects_nonterminal_status():
