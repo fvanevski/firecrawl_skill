@@ -738,7 +738,7 @@ class CoverageService:
         offset: int = 0,
     ) -> list[CoverageEvent]:
         with self.uow_factory() as uow:
-            rows = uow.coverage.list_events(
+            rows = uow.coverage.list_coverage_events(
                 run_id,
                 item_id=item_id,
                 event_type=event_type,

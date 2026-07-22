@@ -912,6 +912,101 @@ def purge_catalog(force=False, before=None, run_id=None, keep_last=None, orphans
     print(json.dumps({"action": "purged" if force else "dry_run", "targets": [str(path) for path in targets]}, indent=2))
 
 
+def export_invocation_to_filesystem(invocation_id, run_id=None):
+    """Export an invocation record from PostgreSQL to filesystem (derived).
+
+    This is a compatibility export function.  It reads from PostgreSQL
+    (the authoritative source) and writes to the filesystem (derived).
+    It is NOT used to determine current state.
+
+    Args:
+        invocation_id: Invocation UUID (string or UUID).
+        run_id: Optional run UUID for validation.
+
+    Returns:
+        Path to the written filesystem record, or None if export failed.
+    """
+    from research_store.container import build_run_service
+    from research_store.invocation_catalog import InvocationCatalogService
+    from research_store.config import StoreConfig
+
+    if not enabled():
+        return None
+
+    config = StoreConfig.from_env()
+    if not config.database_url:
+        return None
+
+    try:
+        service = build_run_service(config)
+        catalog_service = InvocationCatalogService(
+            service.uow_factory, event_service=service.event_service
+        )
+        catalog_record = catalog_service.export_to_catalog_format(
+            UUID(run_id) if run_id else UUID(invocation_id),
+            UUID(invocation_id),
+        )
+        path = invocation_path(invocation_id)
+        atomic_write(path, catalog_record)
+        return str(path)
+    except Exception as exc:
+        print(f"WARNING: filesystem export failed: {exc}", file=sys.stderr)
+        return None
+
+
+def export_run_events_to_filesystem(run_id):
+    """Export all events for a run from PostgreSQL to filesystem (derived).
+
+    This is a compatibility export function.  It reads from PostgreSQL
+    (the authoritative source) and writes to ``events.jsonl`` (derived).
+    It is NOT used to determine current state.
+
+    Args:
+        run_id: Research run UUID (string).
+
+    Returns:
+        Path to the written events file, or None if export failed.
+    """
+    from research_store.container import build_run_service
+    from research_store.invocation_catalog import InvocationCatalogService
+    from research_store.config import StoreConfig
+
+    if not enabled():
+        return None
+
+    config = StoreConfig.from_env()
+    if not config.database_url:
+        return None
+
+    try:
+        service = build_run_service(config)
+        catalog_service = InvocationCatalogService(
+            service.uow_factory, event_service=service.event_service
+        )
+        events = catalog_service.list_events(UUID(run_id))
+        root = catalog_root()
+        root.mkdir(parents=True, exist_ok=True)
+        events_path = root / "events.jsonl"
+        # Truncate and rebuild to avoid duplicates on repeated exports.
+        # Each event gets a deterministic event_id derived from the DB UUID.
+        with events_path.open("w", encoding="utf-8") as handle:
+            for event in events:
+                entry = {
+                    "schema_version": SCHEMA_VERSION,
+                    "event_id": "fe_" + event.id.hex,
+                    "at": event.created_at.isoformat(),
+                    "event": event.event_type,
+                    "invocation_id": str(event.invocation_id),
+                    "data": event.payload,
+                }
+                handle.write(json.dumps(entry, sort_keys=True) + "\n")
+                handle.flush()
+        return str(events_path)
+    except Exception as exc:
+        print(f"WARNING: filesystem export failed: {exc}", file=sys.stderr)
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__); sub = parser.add_subparsers(dest="command", required=True)
     item = sub.add_parser("start"); item.add_argument("--invocation-id", required=True); item.add_argument("--operation", required=True); item.add_argument("--input-json", default="{}"); item.add_argument("--research-run-id"); item.set_defaults(func=lambda a: begin(a.invocation_id, a.operation, load_json(a.input_json, {}), a.research_run_id))
@@ -932,4 +1027,10 @@ def main():
     item = sub.add_parser("migrate"); item.add_argument("--from", dest="from_schema", type=int, choices=(4,), default=4); item.add_argument("--to", dest="to_schema", type=int, choices=(5,), default=5); item.add_argument("--apply", action="store_true"); item.set_defaults(func=lambda a: migrate_catalog(a.apply))
     item = sub.add_parser("purge"); item.add_argument("--force", action="store_true"); item.add_argument("--before"); item.add_argument("--run-id"); item.add_argument("--keep-last", type=int); item.add_argument("--orphans", action="store_true"); item.set_defaults(func=lambda a: purge_catalog(a.force, a.before, a.run_id, a.keep_last, a.orphans))
     item = sub.add_parser("list"); item.set_defaults(func=lambda a: list_catalog())
+    item = sub.add_parser("export-to-fs"); item.add_argument("--invocation-id", required=True); item.add_argument("--run-id"); item.set_defaults(func=lambda a: print(export_invocation_to_filesystem(a.invocation_id, a.run_id) or "", end=""))
+    item = sub.add_parser("export-events-to-fs"); item.add_argument("--run-id", required=True); item.set_defaults(func=lambda a: print(export_run_events_to_filesystem(a.run_id) or "", end=""))
     args = parser.parse_args(); args.func(args)
+
+
+if __name__ == "__main__":
+    main()
