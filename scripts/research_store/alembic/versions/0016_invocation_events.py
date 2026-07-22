@@ -8,8 +8,8 @@ migration 0006 (workflow state) by adding:
   lifecycle events).
 * ``sequence_number`` — a ``bigint`` column that provides stable,
   queryable ordering of events within a run, independent of timestamps.
-* A ``NOT NULL`` foreign-key constraint on ``invocation_id`` so that
-  every event is explicitly anchored to an invocation record.
+* ``invocation_id`` — backfilled for invocation-level events;
+  remains nullable for run-level events (``run.created``, etc.)
 * A unique index on ``(run_id, sequence_number)`` for deterministic
   replay and ordering.
 
@@ -19,7 +19,6 @@ Key invariants enforced by DDL:
 
 * ``sequence_number`` is monotonically increasing per run.
 * ``event_type`` is constrained to the enum — no ad-hoc strings.
-* Every event must reference a valid ``research_invocations`` row.
 * The unique index prevents duplicate sequence numbers per run.
 * The migration is forward-only (additive); it does not rewrite
   existing Phase 1–3 data.
@@ -31,8 +30,10 @@ Key invariants enforced by DDL:
 - ``event_type`` — constrained to the ``research_event_type`` enum.
 - ``sequence_number`` — ``bigint NOT NULL``, defaults to next value
   from a per-run sequence.
-- ``invocation_id`` — changed from nullable to ``NOT NULL`` with a
-  foreign-key constraint to ``research_invocations(id, run_id)``.
+- ``invocation_id`` — backfilled for invocation-level events;
+  remains nullable for run-level events (``run.created``,
+  ``run.transitioned``, ``run.execution_mode_changed``) that are
+  not associated with a specific invocation.
 
 ### research_event_type enum values
 
@@ -59,8 +60,8 @@ Key invariants enforced by DDL:
 * Existing ``research_events`` rows are migrated: ``event_type`` is set
   to ``invocation_event`` for legacy rows, and ``sequence_number`` is
   assigned based on ``created_at`` order (ties broken by ``id``).
-* The ``invocation_id`` ``NOT NULL`` constraint is applied after
-  backfilling ``NULL`` values with the parent run's first invocation.
+* The ``invocation_id`` column is backfilled for invocation-level
+  events; run-level events (``run.created``, etc.) remain nullable.
 * No changes to existing Phase 1, 2, or 3 tables.
 
 ### Forward-repair
@@ -248,7 +249,7 @@ def upgrade():
     )
 
     # ----------------------------------------------------------------
-    # 9. Add indexes (idempotent)
+    # 10. Add indexes (idempotent)
     # ----------------------------------------------------------------
     op.execute(
         """
@@ -277,7 +278,7 @@ def upgrade():
     )
 
     # ----------------------------------------------------------------
-    # 10. Record migration
+    # 11. Record migration
     # ----------------------------------------------------------------
     op.execute(
         "INSERT INTO schema_migrations(version) VALUES (16) ON CONFLICT DO NOTHING"
