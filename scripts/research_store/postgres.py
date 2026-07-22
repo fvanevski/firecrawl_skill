@@ -12,9 +12,6 @@ from .domain import (
     BlobReference,
     IngestRequest,
     IngestResult,
-    RawSearchResponse,
-    SearchCandidate,
-    CandidateOccurrence,
     utcnow,
 )
 from .parsing import parse_raw_search_response

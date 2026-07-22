@@ -342,6 +342,10 @@ class StrategyRevisionService:
         estimated_cost = proposal.estimated_cost
 
         # Validate
+        # TODO (#26): Populate run_exists and coverage_items_exist from the
+        # repository when integrated into ResearchRunService. Currently the
+        # caller must supply these parameters; issue #26 will wire the
+        # strategy-revision service into the coverage-led state machine.
         result = self.validator.validate(
             run_id=run_id,
             run_revision=proposal.run_revision,
