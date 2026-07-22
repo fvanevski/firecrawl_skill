@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from io import BytesIO
 import json
 from typing import Any, Callable
@@ -617,6 +618,40 @@ class ClaimManifestService:
 # ---------------------------------------------------------------------------
 
 
+def compute_audit_identity_hash(
+    target_hash: str,
+    evaluator_version: str,
+    prompt_template_version: str,
+    policy_version: str,
+    stage_set: list[str],
+    model_fingerprint: str | None = None,
+) -> str:
+    """Compute the deterministic audit identity hash (SHA-256).
+
+    The identity is derived from the six fields that PRD Section 17.3
+    requires to match for semantic-output reuse:
+
+    * ``target_hash`` — input/evidence hash
+    * ``evaluator_version`` — evaluator schema version
+    * ``prompt_template_version`` — prompt template version
+    * ``policy_version`` — audit policy version
+    * ``stage_set`` — sorted list of audit stages
+    * ``model_fingerprint`` — model fingerprint (nullable)
+
+    Returns the SHA-256 hex digest of the canonical JSON representation.
+    """
+    identity = {
+        "evaluator_version": evaluator_version,
+        "model_fingerprint": model_fingerprint,
+        "policy_version": policy_version,
+        "prompt_template_version": prompt_template_version,
+        "stage_set": sorted(stage_set),
+        "target_hash": target_hash,
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _extract_evidence_references(obj: Any) -> list[str]:
     """Recursively extract evidence reference IDs from a stage output dictionary/list structure."""
     refs: list[str] = []
@@ -660,6 +695,7 @@ class AuditService:
         stage_set: list[str],
         status: str,
         *,
+        audit_identity_hash: str | None = None,
         provider: str | None = None,
         model: str | None = None,
         prompt_hash: str | None = None,
@@ -680,6 +716,7 @@ class AuditService:
                 policy_version=policy_version,
                 stage_set=stage_set,
                 status=status,
+                audit_identity_hash=audit_identity_hash,
                 provider=provider,
                 model=model,
                 prompt_hash=prompt_hash,
@@ -807,6 +844,150 @@ class AuditService:
                 target_id=target_id,
                 current_hash=current_hash,
             )
+
+    def find_equivalent_assessment(
+        self,
+        run_id: UUID,
+        target_type: str,
+        target_id: UUID,
+        target_hash: str,
+        evaluator_version: str,
+        prompt_template_version: str,
+        policy_version: str,
+        stage_set: list[str],
+        model_fingerprint: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Look up an existing equivalent non-failed audit assessment.
+
+        Returns ``None`` when no equivalent assessment exists.  When one
+        exists, returns the assessment dict including ``audit_identity_hash``
+        and ``id`` so the caller can reuse the existing assessment rather
+        than creating a new one.
+
+        This implements PRD Section 17.3 caching: semantic outputs are
+        reused only when all identity components match.
+        """
+        identity_hash = compute_audit_identity_hash(
+            target_hash=target_hash,
+            evaluator_version=evaluator_version,
+            prompt_template_version=prompt_template_version,
+            policy_version=policy_version,
+            stage_set=stage_set,
+            model_fingerprint=model_fingerprint,
+        )
+        with self.uow_factory() as uow:
+            return uow.lookup_equivalent_assessment(identity_hash)
+
+    def schedule_assessment(
+        self,
+        run_id: UUID,
+        target_type: str,
+        target_id: UUID,
+        target_hash: str,
+        evaluator_version: str,
+        prompt_template_version: str,
+        policy_version: str,
+        stage_set: list[str],
+        status: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_hash: str | None = None,
+        model_fingerprint: str | None = None,
+        elapsed_ms: int = 0,
+        audit_packet_manifest: dict[str, Any] | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Schedule an audit assessment idempotently.
+
+        If an equivalent non-failed assessment already exists (matching
+        ``audit_identity_hash``), returns the existing assessment without
+        creating a new row.  This prevents concurrent equivalent requests
+        from creating duplicate active audits.
+
+        When ``dry_run=True``, only checks for an existing equivalent
+        assessment without creating or modifying any rows.
+
+        Returns a dict with:
+        * ``action`` — ``"reuse"`` | ``"create"`` | ``"dry_run_no_match"`` | ``"dry_run_match"``
+        * ``assessment_id`` — the assessment UUID
+        * ``audit_identity_hash`` — the computed identity hash
+        * ``existing`` — bool indicating if an existing assessment was reused
+        * ``assessment`` — full export when action is ``"reuse"`` or ``"create"``
+        """
+        identity_hash = compute_audit_identity_hash(
+            target_hash=target_hash,
+            evaluator_version=evaluator_version,
+            prompt_template_version=prompt_template_version,
+            policy_version=policy_version,
+            stage_set=stage_set,
+            model_fingerprint=model_fingerprint,
+        )
+
+        with self.uow_factory() as uow:
+            existing = uow.lookup_equivalent_assessment(identity_hash)
+
+        if existing is not None:
+            export = self.export_assessment(UUID(existing["id"]))
+            if export is None:
+                export = {}
+            export["existing"] = True
+            export["audit_identity_hash"] = identity_hash
+            if dry_run:
+                return {
+                    "action": "dry_run_match",
+                    "assessment_id": str(existing["id"]),
+                    "audit_identity_hash": identity_hash,
+                    "existing": True,
+                    "assessment": export,
+                }
+            return {
+                "action": "reuse",
+                "assessment_id": str(existing["id"]),
+                "audit_identity_hash": identity_hash,
+                "existing": True,
+                "assessment": export,
+            }
+
+        if dry_run:
+            return {
+                "action": "dry_run_no_match",
+                "audit_identity_hash": identity_hash,
+                "existing": False,
+            }
+
+        # No equivalent found — create a new assessment.
+        # The partial unique constraint uk_audit_assessments_identity
+        # prevents concurrent duplicate creation.
+        assessment_id = self.create_assessment(
+            run_id=run_id,
+            target_type=target_type,
+            target_id=target_id,
+            target_hash=target_hash,
+            evaluator_version=evaluator_version,
+            prompt_template_version=prompt_template_version,
+            policy_version=policy_version,
+            stage_set=stage_set,
+            status=status,
+            audit_identity_hash=identity_hash,
+            provider=provider,
+            model=model,
+            prompt_hash=prompt_hash,
+            model_fingerprint=model_fingerprint,
+            elapsed_ms=elapsed_ms,
+            audit_packet_manifest=audit_packet_manifest,
+        )
+        export = self.export_assessment(assessment_id)
+        if export:
+            export["existing"] = False
+            export["audit_identity_hash"] = identity_hash
+        return {
+            "action": "create",
+            "assessment_id": str(assessment_id),
+            "audit_identity_hash": identity_hash,
+            "existing": False,
+            "assessment": export or {},
+        }
 
     def export_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
         """Export a complete audit assessment with all stage outputs."""

@@ -5143,6 +5143,7 @@ class PostgresUnitOfWork:
         stage_set: list[str],
         status: str,
         *,
+        audit_identity_hash: str | None = None,
         provider: str | None = None,
         model: str | None = None,
         prompt_hash: str | None = None,
@@ -5156,10 +5157,11 @@ class PostgresUnitOfWork:
                 """INSERT INTO audit_assessments (
                     run_id, target_type, target_id, target_hash,
                     evaluator_version, prompt_template_version, policy_version,
-                    stage_set, status, provider, model,
+                    stage_set, status, audit_identity_hash,
+                    provider, model,
                     prompt_hash, model_fingerprint, elapsed_ms,
                     audit_packet_manifest
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id""",
                 (
                     str(run_id),
@@ -5171,6 +5173,7 @@ class PostgresUnitOfWork:
                     policy_version,
                     stage_set,
                     status,
+                    audit_identity_hash,
                     provider,
                     model,
                     prompt_hash,
@@ -5395,7 +5398,38 @@ class PostgresUnitOfWork:
                     invalid_references.append(ref_str)
         return invalid_references
 
-    # -- Audit row mappers ------------------------------------------------
+    # -- Audit identity / idempotent scheduling (issue #34) ---------------
+
+    def lookup_equivalent_assessment(
+        self, audit_identity_hash: str
+    ) -> dict[str, Any] | None:
+        """Look up an existing non-failed assessment by audit identity hash.
+
+        Returns the assessment dict (via ``_row_to_audit_assessment_mapping``)
+        if an equivalent non-failed assessment exists, otherwise ``None``.
+
+        This is the core lookup for idempotent audit scheduling.  The
+        database partial unique constraint ``uk_audit_assessments_identity``
+        ensures that concurrent equivalent requests cannot create multiple
+        active assessments.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, target_type, target_id, target_hash,
+                    evaluator_version, prompt_template_version, policy_version,
+                    stage_set, status, provider, model,
+                    prompt_hash, model_fingerprint, elapsed_ms,
+                    audit_packet_manifest, created_at, audit_identity_hash
+                FROM audit_assessments
+                WHERE audit_identity_hash = %s
+                  AND status != 'failed'
+                LIMIT 1""",
+                (audit_identity_hash,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return self._row_to_audit_assessment_mapping(row)
 
     @staticmethod
     def _row_to_audit_assessment_mapping(row) -> dict[str, Any]:
@@ -5405,6 +5439,7 @@ class PostgresUnitOfWork:
             "stage_set", "status", "provider", "model",
             "prompt_hash", "model_fingerprint", "elapsed_ms",
             "audit_packet_manifest", "created_at",
+            "audit_identity_hash",
         )
         result = dict(zip(keys, row))
         for uid_key in ("id", "run_id", "target_id"):

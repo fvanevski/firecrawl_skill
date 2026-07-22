@@ -333,6 +333,12 @@ def parser():
     audit.add_argument("--model-fingerprint")
     audit.add_argument("--elapsed-ms", type=int, default=0)
     audit.add_argument("--packet-manifest-file")
+    audit.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Only check for an equivalent existing assessment; do not create.",
+    )
 
     audit_status = sub.add_parser("audit-status")
     audit_status.add_argument("external_id")
@@ -1784,9 +1790,12 @@ def main(argv=None):
             with open(args.packet_manifest_file, "r") as f:
                 manifest = json.load(f)
 
-        assessment = audit_svc.assess_run(
+        # Use idempotent scheduling (issue #34)
+        assessment = audit_svc.schedule_assessment(
             run_id=run_id,
             external_run_id=args.external_id,
+            target_type="run",
+            target_id=run_id,
             target_hash=args.target_hash,
             evaluator_version=args.evaluator_version,
             prompt_template_version=args.prompt_template_version,
@@ -1799,6 +1808,7 @@ def main(argv=None):
             model_fingerprint=args.model_fingerprint,
             elapsed_ms=args.elapsed_ms,
             audit_packet_manifest=manifest,
+            dry_run=args.dry_run,
         )
         print(dumps(assessment))
 
