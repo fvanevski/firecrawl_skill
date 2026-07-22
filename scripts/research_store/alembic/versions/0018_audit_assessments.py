@@ -99,11 +99,12 @@ referential-validation errors recorded in ``error_details``.
   outputs as JSON, including target hash, provenance, and status.
 * ``audit-query`` — returns assessments filtered by run, target, or status.
 
-## Survival guarantee
+## Catalog v5 compatibility
 
-Audit state is stored exclusively in PostgreSQL. Deleting scratch
-directories or Catalog v5 assessment files does not affect availability.
-Assessments are reconstructable from database records alone.
+Filesystem (Catalog v5 assessment files, scratch directories) is derived
+only — never authoritative. Regenerating Catalog v5 assessment files from
+PostgreSQL state is a Phase 5 deliverable (issue #35 — Catalog v5 exporter).
+Until then, deleting Catalog v5 files does not affect audit availability.
 
 ## Partial-stage behavior
 

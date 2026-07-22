@@ -5310,6 +5310,24 @@ class PostgresUnitOfWork:
             )
             return cur.fetchone() is not None
 
+    def run_exists(self, run_id: UUID) -> bool:
+        """Check whether a research run exists."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM research_runs WHERE id = %s LIMIT 1",
+                (str(run_id),),
+            )
+            return cur.fetchone() is not None
+
+    def invocation_exists(self, invocation_id: UUID) -> bool:
+        """Check whether an invocation exists."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM research_invocations WHERE id = %s LIMIT 1",
+                (str(invocation_id),),
+            )
+            return cur.fetchone() is not None
+
     # -- Audit row mappers ------------------------------------------------
 
     @staticmethod

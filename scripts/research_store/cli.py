@@ -326,7 +326,7 @@ def parser():
     audit.add_argument("--prompt-template-version", default="staged-research-audit-v1")
     audit.add_argument("--policy-version", default="audit-policy-v1")
     audit.add_argument("--stages", default="rubric,acquisition,evidence,synthesis")
-    audit.add_argument("--status", default="partial")
+    audit.add_argument("--status", default="partial", choices=["completed", "partial", "failed"])
     audit.add_argument("--provider", default="local")
     audit.add_argument("--model")
     audit.add_argument("--prompt-hash")
@@ -336,8 +336,7 @@ def parser():
 
     audit_status = sub.add_parser("audit-status")
     audit_status.add_argument("external_id")
-    audit_status.add_argument("--assessment-id")
-    audit_status.add_argument("--status-filter")
+    audit_status.description = "Show the latest audit assessment for a research run"
 
     audit_query = sub.add_parser("audit-query")
     audit_query.add_argument("external_id")
@@ -1810,19 +1809,15 @@ def main(argv=None):
         if run_id is None:
             raise SystemExit(f"research run not found: {args.external_id}")
 
-        if args.assessment_id:
-            assessment = audit_svc.get_assessment(UUID(args.assessment_id))
-            if assessment is None:
-                raise SystemExit(f"assessment not found: {args.assessment_id}")
-            result = assessment
-        else:
-            assessments = audit_svc.list_assessments(
-                run_id=run_id,
-                status=args.status_filter,
-                limit=100,
-                offset=0,
-            )
-            result = {"run_id": str(run_id), "assessments": assessments}
+        # Return only the latest assessment
+        assessments = audit_svc.list_assessments(
+            run_id=run_id,
+            limit=1,
+            offset=0,
+        )
+        result = assessments[0] if assessments else None
+        if result is None:
+            raise SystemExit(f"no assessments found for run: {args.external_id}")
         print(dumps(result))
 
     elif args.command == "audit-query":
@@ -1850,8 +1845,18 @@ def main(argv=None):
         if args.output == "-":
             print(dumps(export))
         else:
-            with open(args.output, "w") as f:
-                json.dump(export, f, indent=2, default=json_default)
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(output_path.parent), suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(export, f, indent=2, default=json_default)
+                os.replace(tmp_path, str(output_path))
+            except BaseException:
+                os.unlink(tmp_path)
+                raise
 
     elif args.command == "audit-staleness":
         config.require_database()
@@ -1871,8 +1876,6 @@ def main(argv=None):
 
     else:
         raise AssertionError(args.command)
-        print(dumps(result))
-        return 0
 
 
 if __name__ == "__main__":

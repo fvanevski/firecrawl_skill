@@ -88,6 +88,12 @@ def _make_audit_uow(
         def validate_assessment_exists(self, assessment_id):
             return str(assessment_id) in assessments
 
+        def run_exists(self, run_id):
+            return True
+
+        def invocation_exists(self, invocation_id):
+            return True
+
         def detect_stale_assessments(self, **kw):
             return stale
 
@@ -904,3 +910,130 @@ if TEST_DSN:
             row = cur.fetchone()
             assert row is not None
             assert row[0] == "CASCADE"
+
+    @INTEGRATION_MARK
+    def test_detect_stale_assessments_integration(tmp_path, prepared_database_for_audit):
+        """detect_stale_assessments works against real PostgreSQL."""
+        from research_store.container import build_audit_service
+        from research_store.config import StoreConfig
+        from dataclasses import replace
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            blob_root=tmp_path / "blobs",
+        )
+        svc = build_audit_service(config)
+        run_id = uuid4()
+
+        # Create assessment with hash1
+        svc.create_assessment(
+            run_id=run_id,
+            target_type="run",
+            target_id=run_id,
+            target_hash="hash1",
+            evaluator_version="catalog-v5.0",
+            prompt_template_version="staged-research-audit-v1",
+            policy_version="audit-policy-v1",
+            stage_set=["rubric"],
+            status="completed",
+        )
+
+        # Create assessment with hash2
+        svc.create_assessment(
+            run_id=run_id,
+            target_type="run",
+            target_id=run_id,
+            target_hash="hash2",
+            evaluator_version="catalog-v5.0",
+            prompt_template_version="staged-research-audit-v1",
+            policy_version="audit-policy-v1",
+            stage_set=["rubric"],
+            status="completed",
+        )
+
+        # With hash2 as current, hash1 is stale
+        stale = svc.detect_stale_assessments(
+            run_id=run_id,
+            target_type="run",
+            target_id=run_id,
+            current_hash="hash2",
+        )
+        assert len(stale) == 1
+        assert stale[0]["target_hash"] == "hash1"
+
+        # With hash1 as current, hash2 is stale
+        stale = svc.detect_stale_assessments(
+            run_id=run_id,
+            target_type="run",
+            target_id=run_id,
+            current_hash="hash1",
+        )
+        assert len(stale) == 1
+        assert stale[0]["target_hash"] == "hash2"
+
+        # With a new hash, both are stale
+        stale = svc.detect_stale_assessments(
+            run_id=run_id,
+            target_type="run",
+            target_id=run_id,
+            current_hash="hash3",
+        )
+        assert len(stale) == 2
+
+    @INTEGRATION_MARK
+    def test_duplicate_assessment_rejected_by_unique_constraint(tmp_path, prepared_database_for_audit):
+        """uk_audit_assessments_target prevents duplicate assessments for same target+hash."""
+        from research_store.container import build_audit_service
+        from research_store.config import StoreConfig
+        from dataclasses import replace
+        import psycopg
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            blob_root=tmp_path / "blobs",
+        )
+        svc = build_audit_service(config)
+        run_id = uuid4()
+
+        # First assessment succeeds
+        aid1 = svc.create_assessment(
+            run_id=run_id,
+            target_type="run",
+            target_id=run_id,
+            target_hash="same_hash",
+            evaluator_version="catalog-v5.0",
+            prompt_template_version="staged-research-audit-v1",
+            policy_version="audit-policy-v1",
+            stage_set=["rubric"],
+            status="completed",
+        )
+
+        # Duplicate assessment with same (run_id, target_type, target_id, target_hash) fails
+        with pytest.raises(psycopg.IntegrityError):
+            svc.create_assessment(
+                run_id=run_id,
+                target_type="run",
+                target_id=run_id,
+                target_hash="same_hash",
+                evaluator_version="catalog-v5.0",
+                prompt_template_version="staged-research-audit-v1",
+                policy_version="audit-policy-v1",
+                stage_set=["rubric"],
+                status="completed",
+            )
+
+        # Same target with different hash succeeds
+        aid2 = svc.create_assessment(
+            run_id=run_id,
+            target_type="run",
+            target_id=run_id,
+            target_hash="different_hash",
+            evaluator_version="catalog-v5.0",
+            prompt_template_version="staged-research-audit-v1",
+            policy_version="audit-policy-v1",
+            stage_set=["rubric"],
+            status="completed",
+        )
+        assert aid2 != aid1

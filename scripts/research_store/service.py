@@ -751,7 +751,17 @@ class AuditService:
         """Return assessments whose target_hash differs from current_hash.
 
         Stale assessments are retained as historical records.
+
+        Validates that the target entity exists before querying.
         """
+        if target_type == "run":
+            with self.uow_factory() as uow:
+                if not uow.run_exists(run_id):
+                    raise ValueError(f"run not found: {run_id}")
+        elif target_type == "invocation":
+            with self.uow_factory() as uow:
+                if not uow.invocation_exists(target_id):
+                    raise ValueError(f"invocation not found: {target_id}")
         with self.uow_factory() as uow:
             return uow.detect_stale_assessments(
                 run_id=run_id,
@@ -808,4 +818,50 @@ class AuditService:
         export = self.export_assessment(assessment_id)
         if export:
             export["external_run_id"] = external_run_id
+        return export or {}
+
+    def assess_invocation(
+        self,
+        run_id: UUID,
+        invocation_id: UUID,
+        target_hash: str,
+        evaluator_version: str,
+        prompt_template_version: str,
+        policy_version: str,
+        stage_set: list[str],
+        status: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_hash: str | None = None,
+        model_fingerprint: str | None = None,
+        elapsed_ms: int = 0,
+        audit_packet_manifest: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create an assessment for an invocation and return it.
+
+        Convenience method that creates the assessment with
+        ``target_type="invocation"`` and returns the full export
+        including stage outputs.
+        """
+        assessment_id = self.create_assessment(
+            run_id=run_id,
+            target_type="invocation",
+            target_id=invocation_id,
+            target_hash=target_hash,
+            evaluator_version=evaluator_version,
+            prompt_template_version=prompt_template_version,
+            policy_version=policy_version,
+            stage_set=stage_set,
+            status=status,
+            provider=provider,
+            model=model,
+            prompt_hash=prompt_hash,
+            model_fingerprint=model_fingerprint,
+            elapsed_ms=elapsed_ms,
+            audit_packet_manifest=audit_packet_manifest,
+        )
+        export = self.export_assessment(assessment_id)
+        if export:
+            export["invocation_id"] = str(invocation_id)
         return export or {}
