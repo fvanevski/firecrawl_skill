@@ -7,7 +7,10 @@
     "coverage_revision": {
       "type": "integer"
     },
-    "created_at": {},
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
     "decision_id": {
       "format": "uuid",
       "type": "string"

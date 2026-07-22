@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import MISSING, fields, is_dataclass
+from datetime import datetime
 from enum import Enum
 import json
 from pathlib import Path
@@ -45,13 +46,18 @@ def _decode(annotation, value, path):
         if not isinstance(value, list):
             raise DomainValidationError(f"{path}: expected array")
         item_type = args[0] if args else Any
-        return tuple(_decode(item_type, item, f"{path}[{index}]") for index, item in enumerate(value))
+        return tuple(
+            _decode(item_type, item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        )
     if origin is dict:
         if not isinstance(value, dict):
             raise DomainValidationError(f"{path}: expected object")
         key_type, value_type = args or (str, Any)
         return {
-            _decode(key_type, key, f"{path}.<key>"): _decode(value_type, item, f"{path}.{key}")
+            _decode(key_type, key, f"{path}.<key>"): _decode(
+                value_type, item, f"{path}.{key}"
+            )
             for key, item in value.items()
         }
     if is_dataclass(annotation):
@@ -64,14 +70,15 @@ def _decode(annotation, value, path):
         missing = [
             name
             for name, item in model_fields.items()
-            if name not in value and item.default is MISSING and item.default_factory is MISSING
+            if name not in value
+            and item.default is MISSING
+            and item.default_factory is MISSING
         ]
         if missing:
             raise DomainValidationError(f"{path}: missing required fields: {missing}")
         hints = get_type_hints(annotation)
         decoded = {
-            name: _decode(hints[name], value[name], f"{path}.{name}")
-            for name in value
+            name: _decode(hints[name], value[name], f"{path}.{name}") for name in value
         }
         try:
             return annotation(**decoded)
@@ -81,12 +88,21 @@ def _decode(annotation, value, path):
         try:
             return annotation(value)
         except (TypeError, ValueError) as exc:
-            raise DomainValidationError(f"{path}: unsupported enum value {value!r}") from exc
+            raise DomainValidationError(
+                f"{path}: unsupported enum value {value!r}"
+            ) from exc
     if annotation is UUID:
         try:
             return UUID(str(value))
         except (TypeError, ValueError, AttributeError) as exc:
             raise DomainValidationError(f"{path}: expected UUID") from exc
+    if annotation is datetime:
+        if not isinstance(value, str):
+            raise DomainValidationError(f"{path}: expected datetime string")
+        try:
+            return datetime.fromisoformat(value)
+        except (ValueError, AttributeError) as exc:
+            raise DomainValidationError(f"{path}: invalid datetime: {value}") from exc
     if annotation is str:
         if not isinstance(value, str):
             raise DomainValidationError(f"{path}: expected string")
@@ -113,17 +129,24 @@ def to_dict(value):
         return value.value
     if isinstance(value, UUID):
         return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
     if isinstance(value, tuple):
         return [to_dict(item) for item in value]
     if isinstance(value, list):
         return [to_dict(item) for item in value]
     if isinstance(value, dict):
-        return {str(key): to_dict(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))}
+        return {
+            str(key): to_dict(item)
+            for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+        }
     return value
 
 
 def dumps(value) -> str:
-    return json.dumps(to_dict(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        to_dict(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
 
 
 def schema_for(model_type) -> dict:
@@ -161,11 +184,19 @@ def schema_for(model_type) -> dict:
         origin = get_origin(annotation)
         args = get_args(annotation)
         if origin in (types.UnionType,):
-            return {"anyOf": [build(option) if option is not type(None) else {"type": "null"} for option in args]}
+            return {
+                "anyOf": [
+                    build(option) if option is not type(None) else {"type": "null"}
+                    for option in args
+                ]
+            }
         if origin is tuple:
             return {"type": "array", "items": build(args[0] if args else Any)}
         if origin is dict:
-            return {"type": "object", "additionalProperties": build(args[1] if args else Any)}
+            return {
+                "type": "object",
+                "additionalProperties": build(args[1] if args else Any),
+            }
         if is_dataclass(annotation):
             name = annotation.__name__
             if not root:
@@ -178,6 +209,8 @@ def schema_for(model_type) -> dict:
             return {"type": "string", "enum": [item.value for item in annotation]}
         if annotation is UUID:
             return {"type": "string", "format": "uuid"}
+        if annotation is datetime:
+            return {"type": "string", "format": "date-time"}
         if annotation is str:
             return {"type": "string"}
         if annotation is bool:
@@ -220,4 +253,7 @@ def schema_for(model_type) -> dict:
 
 def write_schema(model_type, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(schema_for(model_type), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(schema_for(model_type), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )

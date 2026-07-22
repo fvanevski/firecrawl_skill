@@ -817,7 +817,7 @@ class TerminalDecision:
     no_progress_signals: tuple[NoProgressSignal, ...]
     unresolved_gap: str
     policy_version: str
-    created_at: Any  # datetime
+    created_at: datetime
 
     SCHEMA_VERSION = "terminal-decision-v1"
     POLICY_VERSION = "terminal-decision-policy-v1"

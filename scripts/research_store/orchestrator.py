@@ -54,6 +54,7 @@ from .terminal_decision import (
     TerminalDecisionOutcome,
     TerminalDecisionPolicy,
 )
+from .terminal_decision_service import TerminalDecisionService
 from .strategy_service import StrategyRevisionService
 
 logger = logging.getLogger(__name__)
@@ -1311,6 +1312,7 @@ class ResearchOrchestrator:
         legacy_adapter: LegacyEntryPointAdapter | None = None,
         corpus_service: Any | None = None,
         terminal_config: TerminalDecisionConfig | None = None,
+        terminal_service: TerminalDecisionService | None = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
@@ -1320,6 +1322,8 @@ class ResearchOrchestrator:
         self.legacy_adapter = legacy_adapter
         self.corpus_service = corpus_service
         self._terminal_config = terminal_config or TerminalDecisionConfig()
+        # B5: Terminal-decision persistence service
+        self._terminal_decision_service = terminal_service
 
         # Stage instances
         self._planning = PlanningStage(run_service, config)
@@ -1360,6 +1364,7 @@ class ResearchOrchestrator:
         *,
         orchestrator_config: OrchestratorConfig | None = None,
         corpus_service: Any | None = None,
+        terminal_config: Any | None = None,
     ) -> "ResearchOrchestrator":
         """Build an orchestrator with all required services.
 
@@ -1367,6 +1372,8 @@ class ResearchOrchestrator:
             config: Store configuration.  Defaults to env-based config.
             orchestrator_config: Orchestrator-specific settings.
             corpus_service: Optional CorpusService instance.
+            terminal_config: Optional TerminalDecisionConfig override.
+                Defaults to ``TerminalDecisionConfig.load()`` (env-var tuned).
 
         Returns:
             A fully wired ``ResearchOrchestrator`` instance.
@@ -1401,6 +1408,15 @@ class ResearchOrchestrator:
                 config,
             )
 
+        # N1: Load terminal config from env vars (or use explicit override)
+        if terminal_config is None:
+            from .terminal_decision import TerminalDecisionConfig
+
+            terminal_config = TerminalDecisionConfig.load()
+
+        # B5: Build terminal-decision persistence service
+        terminal_service = TerminalDecisionService(run_service.uow_factory)
+
         return cls(
             run_service=run_service,
             coverage_service=coverage_service,
@@ -1409,6 +1425,8 @@ class ResearchOrchestrator:
             config=config,
             legacy_adapter=legacy_adapter,
             corpus_service=corpus_service,
+            terminal_config=terminal_config,
+            terminal_service=terminal_service,
         )
 
     # ------------------------------------------------------------------
@@ -1476,6 +1494,10 @@ class ResearchOrchestrator:
         strategy_proposals = 0
         strategy_decisions = 0
         coverage_revision_num = 0  # Track coverage revision across cycles
+        # Accumulators for terminal-decision policy signals
+        _repeated_extraction_failures = 0
+        _repeated_retrieval_count = 0
+        _unsatisfiable_source = False
 
         try:
             # Stage 1: Planning
@@ -1569,6 +1591,23 @@ class ResearchOrchestrator:
                         ContextKeys.SUCCESSFUL_URLS, 0
                     )
 
+                # Accumulate extraction failure and retrieval counts from indexing
+                if result.details:
+                    attempts = result.details.get(ContextKeys.EXTRACTION_ATTEMPTS, 0)
+                    success = result.details.get(
+                        ContextKeys.EXTRACTION_SUCCESS_COUNT, 0
+                    )
+                    if isinstance(attempts, int) and isinstance(success, int):
+                        _repeated_extraction_failures = max(
+                            _repeated_extraction_failures,
+                            attempts - success,
+                        )
+                    retrieval = result.details.get(ContextKeys.RETRIEVAL_COUNT, 0)
+                    if isinstance(retrieval, int):
+                        _repeated_retrieval_count = max(
+                            _repeated_retrieval_count, retrieval
+                        )
+
                 # Stage: Coverage review
                 result = self._execute_stage(
                     "coverage_review",
@@ -1614,6 +1653,10 @@ class ResearchOrchestrator:
                     if ledger and hasattr(ledger, "items"):
                         ctx["_changed_coverage_count"] = len(ledger.items)
 
+                # Wire _unsatisfiable_source from overall coverage status
+                if ctx.get(ContextKeys.OVERALL_STATUS) == "blocked":
+                    _unsatisfiable_source = True
+
                 # Check if terminal
                 if result.outcome == StageOutcome.TERMINAL:
                     next_action = (
@@ -1636,6 +1679,12 @@ class ResearchOrchestrator:
                 # Check no-progress
                 if self._check_no_progress(ctx, run_id):
                     ctx["_no_progress"] = True
+
+                # Wire accumulators into context for terminal-decision policy
+                ctx["_strategy_revision_count"] = strategy_proposals
+                ctx["_repeated_extraction_failures"] = _repeated_extraction_failures
+                ctx["_repeated_retrieval_count"] = _repeated_retrieval_count
+                ctx["_unsatisfiable_source"] = _unsatisfiable_source
 
                 # Evaluate terminal decision policy
                 terminal_outcome = self._evaluate_terminal_decision(
@@ -1949,6 +1998,24 @@ class ResearchOrchestrator:
             context["_terminal_outcome"] = decision.outcome.value
             context["_terminal_reason"] = decision.unresolved_gap
 
+            # B5: Persist the terminal decision to the database
+            if self._terminal_decision_service is not None:
+                try:
+                    idempotency_key = f"terminal:{run_id}:{decision.decision_id}"
+                    self._terminal_decision_service.record(
+                        run_id=run_id,
+                        decision=decision,
+                        idempotency_key=idempotency_key,
+                    )
+                except Exception as persist_exc:
+                    # Non-blocking: a persistence failure should not prevent
+                    # the orchestrator from acting on the terminal decision.
+                    logger.warning(
+                        "terminal decision persistence failed, "
+                        "proceeding without audit record: %s",
+                        persist_exc,
+                    )
+
             return decision.outcome
         except Exception as exc:
             logger.warning(
@@ -1993,4 +2060,5 @@ __all__ = [
     "TerminalDecisionConfig",
     "TerminalDecisionOutcome",
     "TerminalDecisionPolicy",
+    "TerminalDecisionService",
 ]
