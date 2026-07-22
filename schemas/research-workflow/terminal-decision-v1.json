@@ -21,7 +21,8 @@
           "repeated_equivalent_proposals",
           "repeated_extraction_failures",
           "repeated_retrieval",
-          "budget_exhausted",
+          "cost_budget_exhausted",
+          "wall_clock_exhausted",
           "unsatisfiable_source"
         ],
         "type": "string"

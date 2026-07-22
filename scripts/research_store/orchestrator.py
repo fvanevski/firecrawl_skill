@@ -1531,6 +1531,12 @@ class ResearchOrchestrator:
                 wave_count += 1
                 ctx[ContextKeys.WAVE_COUNT] = wave_count
 
+                # Track new candidates from acquisition stage
+                if result.details and result.details.get(ContextKeys.CANDIDATE_COUNT):
+                    ctx["_new_candidate_count"] = result.details.get(
+                        ContextKeys.CANDIDATE_COUNT, 0
+                    )
+
                 # Evaluate budget exhaustion after wave_count is updated so that
                 # CoverageReviewStage receives _budget_exhausted = True on the final allowed wave.
                 budget_exhausted = self._check_budget(ctx, run_id)
@@ -1557,6 +1563,12 @@ class ResearchOrchestrator:
                 current_revision = run_status.lifecycle_revision
                 current_state = run_status.state
 
+                # Track new assets from indexing stage (successful URLs)
+                if result.details and result.details.get(ContextKeys.SUCCESSFUL_URLS):
+                    ctx["_new_asset_count"] = result.details.get(
+                        ContextKeys.SUCCESSFUL_URLS, 0
+                    )
+
                 # Stage: Coverage review
                 result = self._execute_stage(
                     "coverage_review",
@@ -1581,11 +1593,26 @@ class ResearchOrchestrator:
                     or coverage_revision_num
                 )
 
-                # Count strategy proposals
+                # Track strategy proposals
                 if result.details and result.details.get(
                     ContextKeys.STRATEGY_PROPOSAL_ID
                 ):
                     strategy_proposals += 1
+
+                # Track equivalent proposals (from strategy proposals in this cycle)
+                equivalent_proposals_in_cycle = result.details.get(
+                    ContextKeys.STRATEGY_PROPOSAL_ID
+                )
+                if equivalent_proposals_in_cycle:
+                    ctx["_equivalent_proposal_count"] = (
+                        ctx.get("_equivalent_proposal_count", 0) + 1
+                    )
+
+                # Track changed coverage items from coverage review
+                if result.details and result.details.get(ContextKeys.COVERAGE_LEDGER):
+                    ledger = result.details.get(ContextKeys.COVERAGE_LEDGER)
+                    if ledger and hasattr(ledger, "items"):
+                        ctx["_changed_coverage_count"] = len(ledger.items)
 
                 # Check if terminal
                 if result.outcome == StageOutcome.TERMINAL:
@@ -1609,6 +1636,19 @@ class ResearchOrchestrator:
                 # Check no-progress
                 if self._check_no_progress(ctx, run_id):
                     ctx["_no_progress"] = True
+
+                # Evaluate terminal decision policy
+                terminal_outcome = self._evaluate_terminal_decision(
+                    ctx, run_id, current_revision, coverage_revision_num
+                )
+                if terminal_outcome is not None:
+                    # Policy returned a terminal outcome — use it
+                    ctx["_terminal_outcome"] = terminal_outcome.value
+                    ctx["_terminal_reason"] = ctx.get(
+                        "_terminal_reason",
+                        "terminal decision policy triggered",
+                    )
+                    break
 
                 # Fix: Update revision dynamically after cycle
                 run_status = self.run_service.status(run_id=run_id)

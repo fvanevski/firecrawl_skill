@@ -779,12 +779,18 @@ class NoProgressSignal(str, Enum):
     REPEATED_EQUIVALENT_PROPOSALS = "repeated_equivalent_proposals"
     REPEATED_EXTRACTION_FAILURES = "repeated_extraction_failures"
     REPEATED_RETRIEVAL = "repeated_retrieval"
-    BUDGET_EXHAUSTED = "budget_exhausted"
+    COST_BUDGET_EXHAUSTED = "cost_budget_exhausted"
+    WALL_CLOCK_EXHAUSTED = "wall_clock_exhausted"
     UNSATISFIABLE_SOURCE = "unsatisfiable_source"
 
 
 class TerminalDecisionOutcome(str, Enum):
-    """Deterministic terminal outcomes for a research run."""
+    """Deterministic terminal outcomes for a research run.
+
+    CANCELLED is reserved for external/operator-triggered termination
+    (e.g., manual cancellation via CLI or API) and is not produced by
+    any internal signal condition in TerminalDecisionPolicy.
+    """
 
     SUFFICIENT = "sufficient"
     PARTIAL = "partial"

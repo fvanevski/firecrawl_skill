@@ -42,6 +42,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -92,6 +93,11 @@ class TerminalDecisionConfig:
             When exceeded, the policy returns PARTIAL or FAILED.
         max_equivalent_proposals: Number of equivalent proposals before
             triggering REPEATED_EQUIVALENT_PROPOSALS.
+
+    Environment variables (override defaults when set):
+        TERMINAL_MAX_STRATEGY_REVISIONS: max_strategy_revisions
+        TERMINAL_MAX_WALL_CLOCK_SECONDS: max_wall_clock_seconds
+        TERMINAL_MAX_EQUIVALENT_PROPOSALS: max_equivalent_proposals
     """
 
     max_strategy_revisions: int = 10
@@ -105,6 +111,31 @@ class TerminalDecisionConfig:
             raise TerminalDecisionPolicyError("max_wall_clock_seconds must be >= 1")
         if self.max_equivalent_proposals < 1:
             raise TerminalDecisionPolicyError("max_equivalent_proposals must be >= 1")
+
+    @classmethod
+    def load(cls) -> "TerminalDecisionConfig":
+        """Load configuration from environment variables with defaults.
+
+        Consistent with BudgetPolicy.load() pattern.
+        """
+        return cls(
+            max_strategy_revisions=int(
+                os.environ.get(
+                    "TERMINAL_MAX_STRATEGY_REVISIONS", str(cls.max_strategy_revisions)
+                )
+            ),
+            max_wall_clock_seconds=int(
+                os.environ.get(
+                    "TERMINAL_MAX_WALL_CLOCK_SECONDS", str(cls.max_wall_clock_seconds)
+                )
+            ),
+            max_equivalent_proposals=int(
+                os.environ.get(
+                    "TERMINAL_MAX_EQUIVALENT_PROPOSALS",
+                    str(cls.max_equivalent_proposals),
+                )
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +343,9 @@ class TerminalDecisionPolicy:
         """
         signals: list[NoProgressSignal] = []
 
-        # 1. Budget exhaustion
+        # 1. Cost budget exhaustion
         if budget_exhausted:
-            signals.append(NoProgressSignal.BUDGET_EXHAUSTED)
+            signals.append(NoProgressSignal.COST_BUDGET_EXHAUSTED)
 
         # 2. Max strategy revisions exceeded
         if strategy_revision_count >= self.config.max_strategy_revisions:
@@ -327,7 +358,7 @@ class TerminalDecisionPolicy:
             else self.config.max_wall_clock_seconds
         )
         if wall_clock_seconds >= limit:
-            signals.append(NoProgressSignal.BUDGET_EXHAUSTED)
+            signals.append(NoProgressSignal.WALL_CLOCK_EXHAUSTED)
 
         # 4. No new candidates
         if new_candidate_count <= 0:
@@ -416,7 +447,7 @@ class TerminalDecisionPolicy:
             return TerminalDecisionOutcome.PARTIAL
 
         # 7. Wall-clock exhausted with insufficient coverage → partial
-        if NoProgressSignal.BUDGET_EXHAUSTED in signals:
+        if NoProgressSignal.WALL_CLOCK_EXHAUSTED in signals:
             return TerminalDecisionOutcome.PARTIAL
 
         # 8. No new candidates/assets with insufficient → partial
@@ -458,8 +489,10 @@ class TerminalDecisionPolicy:
         # Build gap from signals for other outcomes
         parts: list[str] = []
 
-        if NoProgressSignal.BUDGET_EXHAUSTED in signals:
-            parts.append("budget exhausted")
+        if NoProgressSignal.COST_BUDGET_EXHAUSTED in signals:
+            parts.append("cost budget exhausted")
+        if NoProgressSignal.WALL_CLOCK_EXHAUSTED in signals:
+            parts.append("wall-clock limit reached")
         if NoProgressSignal.REPEATED_EQUIVALENT_PROPOSALS in signals:
             parts.append("repeated equivalent proposals detected")
         if NoProgressSignal.NO_NEW_CANDIDATES in signals:

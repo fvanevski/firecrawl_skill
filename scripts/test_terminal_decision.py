@@ -139,7 +139,9 @@ class TestTerminalDecisionBudgetExhaustion(unittest.TestCase):
             budget_exhausted=True,
         )
         self.assertEqual(decision.outcome, TerminalDecisionOutcome.PARTIAL)
-        self.assertIn(NoProgressSignal.BUDGET_EXHAUSTED, decision.no_progress_signals)
+        self.assertIn(
+            NoProgressSignal.COST_BUDGET_EXHAUSTED, decision.no_progress_signals
+        )
 
     def test_budget_exhausted_sufficient_coverage(self):
         decision = self.policy.evaluate(
@@ -396,7 +398,7 @@ class TestTerminalDecisionWallClock(unittest.TestCase):
             wall_clock_seconds=99.0,
         )
         self.assertNotIn(
-            NoProgressSignal.BUDGET_EXHAUSTED, decision.no_progress_signals
+            NoProgressSignal.WALL_CLOCK_EXHAUSTED, decision.no_progress_signals
         )
 
     def test_custom_wall_clock_limit(self):
@@ -503,7 +505,8 @@ class TestTerminalDecisionSignalCollection(unittest.TestCase):
         )
         signal_values = {s.value for s in signals}
         expected = {
-            NoProgressSignal.BUDGET_EXHAUSTED.value,
+            NoProgressSignal.COST_BUDGET_EXHAUSTED.value,
+            NoProgressSignal.WALL_CLOCK_EXHAUSTED.value,
             NoProgressSignal.REPEATED_EQUIVALENT_PROPOSALS.value,
             NoProgressSignal.NO_NEW_CANDIDATES.value,
             NoProgressSignal.NO_NEW_ASSETS.value,

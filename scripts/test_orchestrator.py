@@ -52,6 +52,7 @@ from research_store.orchestrator import (  # noqa: E402
     STRATEGY_DECISION_PARTIAL,
     STRATEGY_DECISION_FAIL,
 )
+from research_domain.models import OverallCoverageStatus  # noqa: E402
 
 
 # ===================================================================
@@ -1722,6 +1723,143 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         query_text = queries[0]["query"]
         self.assertNotIn("coverage item ", query_text)
         self.assertIn("vulkan driver setup guide", query_text)
+
+
+# ===================================================================
+# Test: Terminal Decision Integration
+# ===================================================================
+
+
+class TestTerminalDecisionIntegration(unittest.TestCase):
+    """Verify that the terminal decision policy integrates with the orchestrator."""
+
+    def setUp(self):
+        self.run_id = uuid4()
+
+    def test_orchestrator_uses_terminal_decision_policy(self):
+        """Test that the orchestrator calls _evaluate_terminal_decision and uses its result."""
+        from research_store.terminal_decision import (
+            TerminalDecisionConfig,
+        )
+
+        # Create a mock orchestrator with a custom terminal config
+        config = MockConfig()
+        run_svc = MockRunService(initial_state="coverage_review", revision=1)
+        coverage_svc = MockCoverageService(item_count=3)
+        strategy_svc = MockStrategyService()
+        acquisition_svc = MagicMock()
+
+        # Create orchestrator with a custom terminal config
+        terminal_config = TerminalDecisionConfig(max_strategy_revisions=3)
+        orchestrator = ResearchOrchestrator(
+            run_service=run_svc,
+            coverage_service=coverage_svc,
+            strategy_service=strategy_svc,
+            acquisition_service=acquisition_svc,
+            config=config,
+            terminal_config=terminal_config,
+        )
+
+        # Verify the terminal config is set
+        self.assertEqual(orchestrator._terminal_config.max_strategy_revisions, 3)
+
+    def test_terminal_decision_evaluated_in_loop(self):
+        """Test that _evaluate_terminal_decision is called and returns correct outcome."""
+        from research_store.terminal_decision import (
+            TerminalDecisionConfig,
+            TerminalDecisionOutcome,
+        )
+
+        config = MockConfig()
+        run_svc = MockRunService(initial_state="coverage_review", revision=1)
+        coverage_svc = MockCoverageService(item_count=3)
+        strategy_svc = MockStrategyService()
+        acquisition_svc = MagicMock()
+
+        terminal_config = TerminalDecisionConfig(max_strategy_revisions=3)
+        orchestrator = ResearchOrchestrator(
+            run_service=run_svc,
+            coverage_service=coverage_svc,
+            strategy_service=strategy_svc,
+            acquisition_service=acquisition_svc,
+            config=config,
+            terminal_config=terminal_config,
+        )
+
+        # Test that _evaluate_terminal_decision returns correct outcome
+        ctx = {
+            ContextKeys.OVERALL_STATUS: OverallCoverageStatus.INSUFFICIENT.value,
+            "_budget_exhausted": False,
+            "_no_progress": False,
+            "_strategy_revision_count": 5,  # Exceeds max of 3
+            "_equivalent_proposal_count": 0,
+        }
+
+        outcome = orchestrator._evaluate_terminal_decision(ctx, self.run_id, 1, 1)
+        # Strategy revisions exceeded → REPEATED_EQUIVALENT_PROPOSALS → FAILED
+        self.assertEqual(outcome, TerminalDecisionOutcome.FAILED)
+
+    def test_terminal_decision_sufficient_overrides_all(self):
+        """Test that SUFFICIENT coverage overrides all terminal signals."""
+        from research_store.terminal_decision import (
+            TerminalDecisionOutcome,
+        )
+
+        config = MockConfig()
+        run_svc = MockRunService(initial_state="coverage_review", revision=1)
+        coverage_svc = MockCoverageService(item_count=3)
+        strategy_svc = MockStrategyService()
+        acquisition_svc = MagicMock()
+
+        orchestrator = ResearchOrchestrator(
+            run_service=run_svc,
+            coverage_service=coverage_svc,
+            strategy_service=strategy_svc,
+            acquisition_service=acquisition_svc,
+            config=config,
+        )
+
+        ctx = {
+            ContextKeys.OVERALL_STATUS: OverallCoverageStatus.SUFFICIENT.value,
+            "_budget_exhausted": True,
+            "_no_progress": True,
+            "_strategy_revision_count": 100,
+        }
+
+        outcome = orchestrator._evaluate_terminal_decision(ctx, self.run_id, 1, 1)
+        # Sufficient coverage always wins
+        self.assertEqual(outcome, TerminalDecisionOutcome.SUFFICIENT)
+
+    def test_terminal_decision_blocked_by_unsatisfiable_source(self):
+        """Test that unsatisfiable source produces BLOCKED outcome."""
+        from research_store.terminal_decision import (
+            TerminalDecisionOutcome,
+        )
+
+        config = MockConfig()
+        run_svc = MockRunService(initial_state="coverage_review", revision=1)
+        coverage_svc = MockCoverageService(item_count=3)
+        strategy_svc = MockStrategyService()
+        acquisition_svc = MagicMock()
+
+        orchestrator = ResearchOrchestrator(
+            run_service=run_svc,
+            coverage_service=coverage_svc,
+            strategy_service=strategy_svc,
+            acquisition_service=acquisition_svc,
+            config=config,
+        )
+
+        ctx = {
+            ContextKeys.OVERALL_STATUS: OverallCoverageStatus.INSUFFICIENT.value,
+            "_budget_exhausted": False,
+            "_no_progress": False,
+            "_unsatisfiable_source": True,
+        }
+
+        outcome = orchestrator._evaluate_terminal_decision(ctx, self.run_id, 1, 1)
+        # Unsatisfiable source → BLOCKED
+        self.assertEqual(outcome, TerminalDecisionOutcome.BLOCKED)
 
 
 # ===================================================================

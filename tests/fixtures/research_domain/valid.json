@@ -342,10 +342,10 @@
     "coverage_revision": 3,
     "outcome": "partial",
     "no_progress_signals": [
-      "budget_exhausted",
+      "cost_budget_exhausted",
       "no_new_candidates"
     ],
-    "unresolved_gap": "budget exhausted; no new candidates found",
+    "unresolved_gap": "cost budget exhausted; no new candidates found",
     "policy_version": "terminal-decision-policy-v1",
     "created_at": "2026-07-21T12:00:00+00:00"
   }

@@ -44,6 +44,14 @@ coverage, spec, budget, corpus, search, or strategy records.
   and recreated from PostgreSQL WAL if needed.
 * Existing orchestrator behavior is preserved — this table is for
   observability and audit of terminal decisions.
+
+### Partitioning note
+
+For high-volume runs that accumulate many terminal decisions during
+shadow-comparison testing or extended investigation, consider
+partitioning the table by ``created_at`` in a future migration. The
+current schema supports this — just add a partition key to the table
+definition and update the indexes accordingly.
 """
 
 from alembic import op
