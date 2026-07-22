@@ -303,6 +303,8 @@ def _make_policy() -> BudgetPolicy:
 class MemoryStrategyUow:
     def __init__(self, repository):
         self.strategy_revisions = repository
+        self.runs = self  # For run_exists check (delegates to strategy_revisions)
+        self.coverage = self  # For coverage_items_exist check
         self.commit = lambda: None
         self.rollback = lambda: None
 
@@ -315,6 +317,29 @@ class MemoryStrategyUow:
         else:
             self.commit()
         return False
+
+    def get_run_status(self, *, run_id=None, external_id=None):
+        """Mock implementation for run_exists check."""
+        # Always return a valid status for tests
+        return {
+            "id": str(run_id) if run_id else "",
+            "external_id": external_id or "",
+            "state": "coverage_review",
+            "lifecycle_revision": 1,
+            "reopened_from_revision": 0,
+            "execution_mode": "autonomous_local",
+            "objective": "",
+            "declared_outcome": "",
+            "status": "active",
+            "completed_at": None,
+            "error": None,
+            "current_coverage_revision": 1,
+        }
+
+    def count_coverage_items(self, run_id):
+        """Mock implementation for coverage_items_exist check."""
+        # Return 1 to indicate coverage items exist
+        return 1
 
 
 def strategy_fixture():

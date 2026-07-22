@@ -169,6 +169,24 @@ class StrategyRevisionService:
         self.validator = StrategyRevisionValidator(self.budget_policy)
 
     # ------------------------------------------------------------------
+    # Existence checks (used by authorize)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_run_exists(uow: Any, run_id: UUID) -> bool:
+        """Return True if a research run with the given ID exists."""
+        try:
+            uow.runs.get_run_status(run_id=run_id)
+            return True
+        except KeyError:
+            return False
+
+    @staticmethod
+    def _check_coverage_items_exist(uow: Any, run_id: UUID) -> bool:
+        """Return True if coverage items have been created for this run."""
+        return uow.coverage.count_coverage_items(run_id) > 0
+
+    # ------------------------------------------------------------------
     # Proposal lifecycle
     # ------------------------------------------------------------------
 
@@ -312,8 +330,6 @@ class StrategyRevisionService:
         existing_retrieval_queries: set[str] | None = None,
         budget_snapshot: BudgetSnapshot | None = None,
         scope_expansion: ScopeExpansionRationale | None = None,
-        run_exists: bool | None = None,
-        coverage_items_exist: bool | None = None,
         actor_type: str = "deterministic_policy",
         actor_identifier: str | None = None,
         idempotency_key: str | None = None,
@@ -341,11 +357,11 @@ class StrategyRevisionService:
         proposed_retrieval = list(proposal.proposed_retrieval_queries)
         estimated_cost = proposal.estimated_cost
 
-        # Validate
-        # TODO (#26): Populate run_exists and coverage_items_exist from the
-        # repository when integrated into ResearchRunService. Currently the
-        # caller must supply these parameters; issue #26 will wire the
-        # strategy-revision service into the coverage-led state machine.
+        # Query repository for existence checks
+        with self.uow_factory() as uow:
+            run_exists = self._check_run_exists(uow, run_id)
+            coverage_items_exist = self._check_coverage_items_exist(uow, run_id)
+
         result = self.validator.validate(
             run_id=run_id,
             run_revision=proposal.run_revision,

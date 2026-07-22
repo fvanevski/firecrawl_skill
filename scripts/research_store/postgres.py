@@ -4025,6 +4025,16 @@ class PostgresUnitOfWork:
             )
             return cur.fetchone()[0]
 
+    def count_coverage_items(self, run_id):
+        """Return the number of coverage items (item_created events) for a run."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM coverage_events
+                   WHERE run_id=%s AND event_type='item_created'""",
+                (run_id,),
+            )
+            return cur.fetchone()[0]
+
     def chunks_for_index(self, chunk_ids=None, manifest_id=None):
         with self.connection.cursor() as cur:
             cur.execute(

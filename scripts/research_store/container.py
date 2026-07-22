@@ -190,3 +190,19 @@ def build_strategy_service(
         ),
         budget_policy=DEFAULT_POLICY,
     )
+
+
+def build_orchestrator(
+    config: StoreConfig | None = None,
+    *,
+    orchestrator_config=None,
+):
+    """Build a fully wired ResearchOrchestrator.
+
+    This is a convenience wrapper around ``ResearchOrchestrator.build``
+    that uses the same configuration pattern as the other ``build_*``
+    functions.
+    """
+    from .orchestrator import ResearchOrchestrator
+
+    return ResearchOrchestrator.build(config, orchestrator_config=orchestrator_config)

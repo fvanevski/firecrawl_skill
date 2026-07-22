@@ -764,6 +764,11 @@ class CoverageService:
         with self.uow_factory() as uow:
             return uow.coverage.count_events(run_id)
 
+    def coverage_items_exist(self, run_id: UUID) -> bool:
+        """Return True if coverage items have been created for this run."""
+        with self.uow_factory() as uow:
+            return uow.coverage.count_coverage_items(run_id) > 0
+
     def coverage_summary(self, run_id: UUID) -> dict[str, Any]:
         """Return a compact coverage summary for a run.
 

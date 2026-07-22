@@ -443,6 +443,21 @@ def main():
     parser.add_argument("--research-run-id", default=os.environ.get("FIRECRAWL_RESEARCH_RUN_ID", ""), help="Link this operation to an explicit fr_<uuid> research run")
     parser.add_argument("--dry-run", action="store_true", help="Generate and print the query plan without running Firecrawl")
     
+    parser.add_argument(
+        "--orchestrator",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the coverage-led orchestrator instead of the legacy "
+            "monolithic loop.  Requires --research-run-id."
+        ),
+    )
+    parser.add_argument(
+        "--orchestrator-max-cycles",
+        type=int,
+        default=None,
+        help="Override the default max adaptive cycles for the orchestrator.",
+    )
     args = parser.parse_args()
     research_env = resolved_research_environment()
     persistence_mode = research_env.get("FIRECRAWL_RESEARCH_PERSIST", "auto")
@@ -730,6 +745,96 @@ def main():
             )
             raise SystemExit(adapted.returncode)
         complete_catalog(invocation_id, "completed")
+        return
+
+    # --- Orchestrator mode (coverage-led pipeline) -------------------
+    if args.orchestrator:
+        if not args.research_run_id:
+            parser.error("--orchestrator requires --research-run-id")
+        print(f"{CYAN}=== Coverage-Led Orchestrator ==={RESET}")
+        print(f"{BOLD}Topic:{RESET}       {args.topic}")
+        print(f"{BOLD}Invocation:{RESET}  {invocation_id}")
+        print(f"{BOLD}Run ID:{RESET}      {args.research_run_id}")
+        print("")
+
+        from research_store.orchestrator import (
+            ResearchOrchestrator,
+            OrchestratorConfig,
+        )
+        from research_store.config import StoreConfig
+
+        try:
+            orchestrator_config = OrchestratorConfig(
+                execution_mode="autonomous_local",
+                budget_policy_version=budget_snapshot.policy_version,
+                max_adaptive_cycles=(
+                    args.orchestrator_max_cycles
+                    if args.orchestrator_max_cycles is not None
+                    else effective_caps.max_adaptive_cycles
+                ),
+                legacy_adapter_mode=adapter_mode,
+            )
+            orchestrator = ResearchOrchestrator.build(
+                StoreConfig.from_env(),
+                orchestrator_config=orchestrator_config,
+            )
+            result = orchestrator.run_from_external_id(
+                args.research_run_id,
+                spec=serialize_model(spec),
+                search_plan={
+                    "schema_version": "search-plan-v1",
+                    "research_spec_id": str(spec.research_spec_id),
+                    "revision": 1,
+                    "queries": query_plan,
+                },
+                max_adaptive_cycles=orchestrator_config.max_adaptive_cycles,
+            )
+            print(f"Orchestrator outcome: {result.outcome}")
+            print(f"Final state: {result.final_state}")
+            print(f"Wave count: {result.wave_count}")
+            print(f"Successful URLs: {result.successful_urls}")
+            if result.error:
+                print(f"Error: {result.error}")
+                sys.exit(1)
+
+            # Record compatibility export
+            if research_active:
+                try:
+                    from research_store.legacy_adapter import (
+                        LegacyEntryPointAdapter,
+                        AdapterMode,
+                    )
+                    adapter = LegacyEntryPointAdapter(
+                        None, AdapterMode(adapter_mode)
+                    )
+                    adapter.route(
+                        "fsearch_smart",
+                        {
+                            "action": "complete",
+                            "status": result.final_state,
+                            "input": {
+                                "run_id": str(result.run_id),
+                                "coverage_revision": result.coverage_revision,
+                                "wave_count": result.wave_count,
+                            },
+                        },
+                        external_run_id=args.research_run_id,
+                        idempotency_key=f"legacy:orchestrator:{invocation_id}",
+                        service_proposal={
+                            "coverage_led": True,
+                            "final_state": result.final_state,
+                        },
+                    )
+                except Exception as exc:
+                    print(f"Warning: legacy adapter export failed: {exc}")
+
+            complete_catalog(invocation_id, result.outcome)
+            return
+        except Exception as exc:
+            print(f"{RED}Orchestrator failed: {exc}{RESET}")
+            complete_catalog(invocation_id, "failed", error=str(exc))
+            raise
+
         return
     
     # Create unified base directory
