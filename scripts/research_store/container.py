@@ -206,3 +206,24 @@ def build_orchestrator(
     from .orchestrator import ResearchOrchestrator
 
     return ResearchOrchestrator.build(config, orchestrator_config=orchestrator_config)
+
+
+def build_claim_service(config: StoreConfig | None = None):
+    """Build a ClaimManifestService wired to the PostgreSQL database."""
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    from .service import ClaimManifestService
+
+    return ClaimManifestService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
+    )

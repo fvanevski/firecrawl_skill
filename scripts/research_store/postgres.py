@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
@@ -1186,14 +1187,27 @@ class PostgresUnitOfWork:
                     (run_id,),
                 )
             else:
-                raise ValueError("must provide invocation_id, external_invocation_id, or run_id")
+                raise ValueError(
+                    "must provide invocation_id, external_invocation_id, or run_id"
+                )
             row = cur.fetchone()
             if row is None:
-                raise KeyError(f"invocation not found")
+                raise KeyError("invocation not found")
             keys = (
-                "id", "run_id", "parent_invocation_id", "external_invocation_id",
-                "operation", "status", "lifecycle_revision", "input", "output",
-                "error", "metadata", "started_at", "completed_at", "created_at",
+                "id",
+                "run_id",
+                "parent_invocation_id",
+                "external_invocation_id",
+                "operation",
+                "status",
+                "lifecycle_revision",
+                "input",
+                "output",
+                "error",
+                "metadata",
+                "started_at",
+                "completed_at",
+                "created_at",
             )
             return dict(zip(keys, row))
 
@@ -1249,9 +1263,20 @@ class PostgresUnitOfWork:
                     (run_id, limit, offset),
                 )
             keys = (
-                "id", "run_id", "parent_invocation_id", "external_invocation_id",
-                "operation", "status", "lifecycle_revision", "input", "output",
-                "error", "metadata", "started_at", "completed_at", "created_at",
+                "id",
+                "run_id",
+                "parent_invocation_id",
+                "external_invocation_id",
+                "operation",
+                "status",
+                "lifecycle_revision",
+                "input",
+                "output",
+                "error",
+                "metadata",
+                "started_at",
+                "completed_at",
+                "created_at",
             )
             return [dict(zip(keys, row)) for row in cur.fetchall()]
 
@@ -1281,9 +1306,21 @@ class PostgresUnitOfWork:
                 # existing columns: id(0), invocation_id(1), event_type(2), actor_type(3),
                 #   actor_identifier(4), payload(5), sequence_number(6)
                 # psycopg3 returns jsonb as dict, so no need to json.loads
-                existing_payload = existing[5] if isinstance(existing[5], dict) else json.loads(existing[5]) if existing[5] else {}
+                existing_payload = (
+                    existing[5]
+                    if isinstance(existing[5], dict)
+                    else json.loads(existing[5])
+                    if existing[5]
+                    else {}
+                )
                 incoming_payload = json.loads(payload_json)
-                if (existing[1], existing[2], existing[3], existing[4], existing_payload) != (
+                if (
+                    existing[1],
+                    existing[2],
+                    existing[3],
+                    existing[4],
+                    existing_payload,
+                ) != (
                     invocation_id,
                     event_type,
                     actor_type,
@@ -1342,9 +1379,16 @@ class PostgresUnitOfWork:
             if row is None:
                 return None
             keys = (
-                "id", "run_id", "invocation_id", "event_type",
-                "actor_type", "actor_identifier", "payload",
-                "sequence_number", "run_revision", "created_at",
+                "id",
+                "run_id",
+                "invocation_id",
+                "event_type",
+                "actor_type",
+                "actor_identifier",
+                "payload",
+                "sequence_number",
+                "run_revision",
+                "created_at",
             )
             return dict(zip(keys, row))
 
@@ -1409,9 +1453,16 @@ class PostgresUnitOfWork:
                     (run_id, limit, offset),
                 )
             keys = (
-                "id", "run_id", "invocation_id", "event_type",
-                "actor_type", "actor_identifier", "payload",
-                "sequence_number", "run_revision", "created_at",
+                "id",
+                "run_id",
+                "invocation_id",
+                "event_type",
+                "actor_type",
+                "actor_identifier",
+                "payload",
+                "sequence_number",
+                "run_revision",
+                "created_at",
             )
             return [dict(zip(keys, row)) for row in cur.fetchall()]
 
@@ -4795,3 +4846,244 @@ class PostgresUnitOfWork:
         if row is None:
             return None
         return self._row_to_decision_mapping(row)
+
+    # ========================================================================
+    # Claims and evidence links (issue #32 / PRD FR-015, FR-016, Section 14)
+    # ========================================================================
+
+    def claim_exists(self, run_id: UUID, claim_id: UUID) -> bool:
+        """Return True if a claim with the given domain UUID exists for the run."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT 1 FROM research_claims
+                WHERE run_id=%s AND claim_id=%s LIMIT 1""",
+                (run_id, claim_id),
+            )
+            return cur.fetchone() is not None
+
+    def claim_statement(self, run_id: UUID, claim_id: UUID) -> str | None:
+        """Return the claim statement, or None if not found."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT statement FROM research_claims
+                WHERE run_id=%s AND claim_id=%s LIMIT 1""",
+                (run_id, claim_id),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def upsert_claim(
+        self,
+        run_id: UUID,
+        claim_id: UUID,
+        statement: str,
+        semantic_status: str = "unassessed",
+        uncertainty: str | None = None,
+        evidence_packet_revision: int = 1,
+    ) -> UUID:
+        """Insert or update a claim record. Returns the claim row ``id``.
+
+        Idempotent on ``(run_id, claim_id)``.
+        """
+        if not statement.strip():
+            raise ValueError("claim statement must be non-empty")
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_claims (run_id, claim_id, statement,
+                    semantic_status, uncertainty, evidence_packet_revision)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (run_id, claim_id) DO UPDATE SET
+                    statement=excluded.statement,
+                    semantic_status=excluded.semantic_status,
+                    uncertainty=excluded.uncertainty,
+                    evidence_packet_revision=excluded.evidence_packet_revision,
+                    updated_at=now()
+                RETURNING id""",
+                (
+                    run_id,
+                    claim_id,
+                    statement,
+                    semantic_status,
+                    uncertainty,
+                    evidence_packet_revision,
+                ),
+            )
+            return cur.fetchone()[0]
+
+    def list_claims(self, run_id: UUID) -> list[dict[str, Any]]:
+        """Return all claims for a run, ordered by created_at."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, claim_id, statement, semantic_status,
+                    uncertainty, evidence_packet_revision, created_at
+                    FROM research_claims
+                    WHERE run_id=%s ORDER BY created_at""",
+                (run_id,),
+            )
+            keys = (
+                "id",
+                "run_id",
+                "claim_id",
+                "statement",
+                "semantic_status",
+                "uncertainty",
+                "evidence_packet_revision",
+                "created_at",
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    def delete_claims(self, run_id: UUID) -> int:
+        """Delete all claims for a run. Returns the number of rows deleted."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "DELETE FROM research_claims WHERE run_id=%s",
+                (run_id,),
+            )
+            return cur.rowcount
+
+    def validate_passage_id(self, passage_id: UUID) -> bool:
+        """Return True if the chunk/passage ID exists in the database."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM chunks WHERE id=%s LIMIT 1",
+                (passage_id,),
+            )
+            return cur.fetchone() is not None
+
+    def validate_snapshot_id(self, snapshot_id: UUID) -> bool:
+        """Return True if the snapshot ID exists in the database."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM asset_snapshots WHERE id=%s LIMIT 1",
+                (snapshot_id,),
+            )
+            return cur.fetchone() is not None
+
+    def upsert_evidence_link(
+        self,
+        run_id: UUID,
+        claim_id: UUID,
+        passage_id: UUID,
+        snapshot_id: UUID,
+        source_url: str = "",
+        relationship: str = "supports",
+        confidence: float = 1.0,
+    ) -> UUID:
+        """Insert a claim-evidence link. Returns the link row ``id``.
+
+        Append-only — no conflict resolution. Each call creates a new row.
+        """
+        if not self.validate_passage_id(passage_id):
+            raise ValueError(f"unknown passage ID: {passage_id}")
+        if not self.validate_snapshot_id(snapshot_id):
+            raise ValueError(f"unknown snapshot ID: {snapshot_id}")
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO claim_evidence_links (run_id, claim_id, passage_id,
+                    snapshot_id, source_url, relationship, confidence)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id""",
+                (
+                    run_id,
+                    claim_id,
+                    passage_id,
+                    snapshot_id,
+                    source_url,
+                    relationship,
+                    confidence,
+                ),
+            )
+            return cur.fetchone()[0]
+
+    def list_evidence_links(self, run_id: UUID) -> list[dict[str, Any]]:
+        """Return all evidence links for a run, ordered by created_at."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, claim_id, passage_id, snapshot_id,
+                    source_url, relationship, confidence, created_at
+                    FROM claim_evidence_links
+                    WHERE run_id=%s ORDER BY created_at""",
+                (run_id,),
+            )
+            keys = (
+                "id",
+                "run_id",
+                "claim_id",
+                "passage_id",
+                "snapshot_id",
+                "source_url",
+                "relationship",
+                "confidence",
+                "created_at",
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    def delete_evidence_links(self, run_id: UUID) -> int:
+        """Delete all evidence links for a run. Returns the number of rows deleted."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "DELETE FROM claim_evidence_links WHERE run_id=%s",
+                (run_id,),
+            )
+            return cur.rowcount
+
+    def export_claim_manifest(self, run_id: UUID) -> dict[str, Any]:
+        """Export all claims and evidence links for a run as a JSON-compatible dict.
+
+        Includes a source-state hash derived from the claim count and
+        evidence-link count for change detection.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, claim_id, statement, semantic_status,
+                    uncertainty, evidence_packet_revision, created_at
+                    FROM research_claims
+                    WHERE run_id=%s ORDER BY created_at""",
+                (run_id,),
+            )
+            claim_keys = (
+                "id",
+                "run_id",
+                "claim_id",
+                "statement",
+                "semantic_status",
+                "uncertainty",
+                "evidence_packet_revision",
+                "created_at",
+            )
+            claims = [dict(zip(claim_keys, row)) for row in cur.fetchall()]
+
+            cur.execute(
+                """SELECT id, run_id, claim_id, passage_id, snapshot_id,
+                    source_url, relationship, confidence, created_at
+                    FROM claim_evidence_links
+                    WHERE run_id=%s ORDER BY created_at""",
+                (run_id,),
+            )
+            link_keys = (
+                "id",
+                "run_id",
+                "claim_id",
+                "passage_id",
+                "snapshot_id",
+                "source_url",
+                "relationship",
+                "confidence",
+                "created_at",
+            )
+            links = [dict(zip(link_keys, row)) for row in cur.fetchall()]
+
+        import hashlib
+
+        state = json.dumps({"claims": claims, "links": links}, sort_keys=True)
+        source_hash = hashlib.sha256(state.encode()).hexdigest()
+
+        return {
+            "manifest_version": "claim-manifest-v1",
+            "run_id": str(run_id),
+            "source_state_hash": source_hash,
+            "claim_count": len(claims),
+            "link_count": len(links),
+            "claims": claims,
+            "links": links,
+        }

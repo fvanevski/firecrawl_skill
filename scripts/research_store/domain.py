@@ -145,6 +145,110 @@ class CandidateOccurrence:
     discovered_at: datetime = field(default_factory=utcnow)
 
 
+@dataclass(frozen=True)
+class ClaimRecord:
+    """A persisted claim record stored in ``research_claims``.
+
+    This is the authoritative PostgreSQL representation of a research claim.
+    Domain-level ``claim_id`` (from ``EvidenceClaim``) is preserved as a
+    separate column so that domain UUIDs are queryable alongside the
+    surrogate ``id``.
+    """
+
+    id: UUID
+    run_id: UUID
+    claim_id: UUID
+    statement: str
+    semantic_status: str
+    uncertainty: str | None
+    evidence_packet_revision: int
+    created_at: datetime
+
+    @classmethod
+    def from_mapping(cls, value: dict[str, Any]) -> "ClaimRecord":
+        def _uuid(v):
+            return UUID(v) if not isinstance(v, UUID) else v
+
+        return cls(
+            id=_uuid(value["id"]),
+            run_id=_uuid(value["run_id"]),
+            claim_id=_uuid(value["claim_id"]),
+            statement=value["statement"],
+            semantic_status=value["semantic_status"],
+            uncertainty=value.get("uncertainty"),
+            evidence_packet_revision=value.get("evidence_packet_revision", 1),
+            created_at=value["created_at"],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "run_id": str(self.run_id),
+            "claim_id": str(self.claim_id),
+            "statement": self.statement,
+            "semantic_status": self.semantic_status,
+            "uncertainty": self.uncertainty,
+            "evidence_packet_revision": self.evidence_packet_revision,
+            "created_at": (
+                self.created_at.isoformat()
+                if hasattr(self.created_at, "isoformat")
+                else str(self.created_at)
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class ClaimEvidenceLink:
+    """A persisted claim-to-passage evidence link.
+
+    Stored in ``claim_evidence_links``.  Append-only — no UPDATE/DELETE.
+    """
+
+    id: UUID
+    run_id: UUID
+    claim_id: UUID
+    passage_id: UUID
+    snapshot_id: UUID
+    source_url: str
+    relationship: str
+    confidence: float
+    created_at: datetime
+
+    @classmethod
+    def from_mapping(cls, value: dict[str, Any]) -> "ClaimEvidenceLink":
+        def _uuid(v):
+            return UUID(v) if not isinstance(v, UUID) else v
+
+        return cls(
+            id=_uuid(value["id"]),
+            run_id=_uuid(value["run_id"]),
+            claim_id=_uuid(value["claim_id"]),
+            passage_id=_uuid(value["passage_id"]),
+            snapshot_id=_uuid(value["snapshot_id"]),
+            source_url=value.get("source_url", ""),
+            relationship=value.get("relationship", "supports"),
+            confidence=value.get("confidence", 1.0),
+            created_at=value["created_at"],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "run_id": str(self.run_id),
+            "claim_id": str(self.claim_id),
+            "passage_id": str(self.passage_id),
+            "snapshot_id": str(self.snapshot_id),
+            "source_url": self.source_url,
+            "relationship": self.relationship,
+            "confidence": self.confidence,
+            "created_at": (
+                self.created_at.isoformat()
+                if hasattr(self.created_at, "isoformat")
+                else str(self.created_at)
+            ),
+        }
+
+
 def new_id() -> UUID:
     return uuid4()
 

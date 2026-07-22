@@ -6,6 +6,7 @@ from functools import partial
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 from uuid import UUID, uuid4
 
@@ -175,7 +176,9 @@ def parser():
     search_resp_rec.add_argument("external_id")
     search_resp_rec.add_argument("--query-text", required=True)
     search_resp_rec.add_argument("--backend", default="firecrawl")
-    search_resp_rec.add_argument("--payload-file", help="Path to raw payload file (reads stdin if omitted)")
+    search_resp_rec.add_argument(
+        "--payload-file", help="Path to raw payload file (reads stdin if omitted)"
+    )
     search_resp_rec.add_argument("--idempotency-key", required=True)
     search_resp_rec.add_argument("--plan-id")
     search_resp_rec.add_argument("--plan-query-id")
@@ -270,11 +273,6 @@ def parser():
     regen_search_exp.add_argument("external_id")
     regen_search_exp.add_argument("--target-dir", required=True)
 
-
-
-
-
-
     sub.add_parser("corpus-overview")
     search = sub.add_parser("search-assets")
     search.add_argument("query")
@@ -299,6 +297,23 @@ def parser():
     packet = sub.add_parser("build-evidence-packet")
     packet.add_argument("ids", nargs="+")
     packet.add_argument("--max-tokens", type=int, default=3000)
+
+    # Claim manifest commands (issue #32)
+    claim = sub.add_parser("claim-manifest")
+    claim_sub = claim.add_subparsers(dest="claim_command", required=True)
+
+    claim_import = claim_sub.add_parser("import")
+    claim_import.add_argument("external_id")
+    claim_import.add_argument("--file", required=True)
+    claim_import.add_argument("--dry-run", action="store_true")
+
+    claim_export = claim_sub.add_parser("export")
+    claim_export.add_argument("external_id")
+    claim_export.add_argument("--output", required=True)
+
+    claim_list = claim_sub.add_parser("list")
+    claim_list.add_argument("external_id")
+
     return root
 
 
@@ -1328,7 +1343,9 @@ def main(argv=None):
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
         plan_id = UUID(args.plan_id) if args.plan_id else None
-        plan = run_svc.get_search_plan(status.id, plan_id=plan_id, revision=args.revision)
+        plan = run_svc.get_search_plan(
+            status.id, plan_id=plan_id, revision=args.revision
+        )
         print(dumps(plan))
         return 0
     if args.command == "search-plan-query-get":
@@ -1402,7 +1419,9 @@ def main(argv=None):
             status.id,
             domain=args.domain,
             min_recurrence=args.min_recurrence,
-            duplicate_group_id=UUID(args.duplicate_group_id) if args.duplicate_group_id else None,
+            duplicate_group_id=UUID(args.duplicate_group_id)
+            if args.duplicate_group_id
+            else None,
         )
         print(dumps(cands))
         return 0
@@ -1421,6 +1440,7 @@ def main(argv=None):
         return 0
     if args.command == "acquisition-search":
         from .container import build_acquisition_service
+
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
         acq_svc = build_acquisition_service(config)
@@ -1437,21 +1457,26 @@ def main(argv=None):
             scratch_dir=args.scratch_dir,
             export_scratch=bool(args.scratch_dir),
         )
-        print(dumps({
-            "search_response_id": str(result.search_response_id),
-            "run_id": str(result.run_id),
-            "query_text": result.query_text,
-            "backend": result.backend,
-            "status": result.status,
-            "candidate_count": result.candidate_count,
-            "postgres_committed": result.postgres_committed,
-            "scratch_exported": result.scratch_exported,
-            "event_id": str(result.event_id) if result.event_id else None,
-            "scratch_error": result.scratch_error,
-        }))
+        print(
+            dumps(
+                {
+                    "search_response_id": str(result.search_response_id),
+                    "run_id": str(result.run_id),
+                    "query_text": result.query_text,
+                    "backend": result.backend,
+                    "status": result.status,
+                    "candidate_count": result.candidate_count,
+                    "postgres_committed": result.postgres_committed,
+                    "scratch_exported": result.scratch_exported,
+                    "event_id": str(result.event_id) if result.event_id else None,
+                    "scratch_error": result.scratch_error,
+                }
+            )
+        )
         return 0
     if args.command == "acquisition-reconcile":
         from .container import build_acquisition_service
+
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
         acq_svc = build_acquisition_service(config)
@@ -1519,6 +1544,7 @@ def main(argv=None):
         return 0
     if args.command == "export-search-compat":
         from .container import build_compatibility_export_service
+
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
         exporter = build_compatibility_export_service(config)
@@ -1545,6 +1571,7 @@ def main(argv=None):
         return 0
     if args.command == "regenerate-search-exports":
         from .container import build_compatibility_export_service
+
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
         exporter = build_compatibility_export_service(config)
@@ -1567,11 +1594,6 @@ def main(argv=None):
             )
         )
         return 0
-
-
-
-
-
 
     service = build_service(config)
     if args.command == "corpus-overview":
@@ -1626,6 +1648,52 @@ def main(argv=None):
         result = service.build_evidence_packet(
             [UUID(value) for value in args.ids], max_tokens=args.max_tokens
         )
+    elif args.command == "claim-manifest":
+        from .container import build_claim_service
+
+        claim_svc = build_claim_service(config)
+        run_id = _resolve_run_id(config, args.external_id)
+        if not run_id:
+            raise SystemExit(
+                f"research run not found or not running: {args.external_id}"
+            )
+        if args.claim_command == "import":
+            import json as _json
+
+            manifest_file = args.file
+            if Path(manifest_file).is_file():
+                with open(manifest_file, "r") as f:
+                    manifest = _json.load(f)
+            else:
+                manifest = _json.load(sys.stdin)
+            result = claim_svc.import_manifest(
+                run_id, manifest, dry_run=getattr(args, "dry_run", False)
+            )
+        elif args.claim_command == "export":
+            manifest = claim_svc.export_manifest(run_id)
+            output = args.output
+            if output == "-":
+                print(dumps(manifest))
+            else:
+                with open(output, "w") as f:
+                    f.write(dumps(manifest))
+                result = {
+                    "exported_to": output,
+                    "claim_count": manifest.get("claim_count", 0),
+                    "link_count": manifest.get("link_count", 0),
+                }
+            result = manifest
+        elif args.claim_command == "list":
+            claims = claim_svc.list_claims(run_id)
+            links = claim_svc.list_evidence_links(run_id)
+            result = {
+                "claims": claims,
+                "links": links,
+                "claim_count": len(claims),
+                "link_count": len(links),
+            }
+        else:
+            raise SystemExit(f"unknown claim-manifest command: {args.claim_command}")
     else:
         raise AssertionError(args.command)
         print(dumps(result))
