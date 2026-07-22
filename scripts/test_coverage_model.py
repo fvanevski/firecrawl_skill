@@ -211,6 +211,74 @@ class MemoryCoverageRepository:
                     if "confidence" in (evt.payload or {}):
                         items[key]["confidence"] = evt.payload["confidence"]
 
+            # Workflow observation events (FR-012, FR-013)
+            if evt.item_id and evt.event_type == "candidate_identified":
+                key = str(evt.item_id)
+                if key in items:
+                    candidate_id = (evt.payload or {}).get("candidate_id")
+                    if candidate_id:
+                        cid = str(candidate_id)
+                        if cid not in items[key]["candidate_ids"]:
+                            items[key]["candidate_ids"].append(cid)
+
+            elif evt.item_id and evt.event_type == "extraction_attempted":
+                key = str(evt.item_id)
+                if key in items:
+                    source_url = (evt.payload or {}).get("source_url")
+                    if source_url:
+                        items[key].setdefault("_source_urls", []).append(
+                            str(source_url)
+                        )
+
+            elif evt.item_id and evt.event_type == "asset_acquired":
+                key = str(evt.item_id)
+                if key in items:
+                    items[key]["status"] = "acquired"
+                    source_url = (evt.payload or {}).get("source_url")
+                    if source_url:
+                        items[key].setdefault("_source_urls", []).append(
+                            str(source_url)
+                        )
+                    if "independent_source_count" in (evt.payload or {}):
+                        items[key]["independent_source_count"] = evt.payload[
+                            "independent_source_count"
+                        ]
+
+            elif evt.item_id and evt.event_type == "evidence_retrieved":
+                key = str(evt.item_id)
+                if key in items:
+                    passage_ids = (evt.payload or {}).get("passage_ids", [])
+                    for pid in passage_ids:
+                        pid_str = str(pid)
+                        if pid_str not in items[key]["passage_ids"]:
+                            items[key]["passage_ids"].append(pid_str)
+
+            elif evt.item_id and evt.event_type == "source_class_observed":
+                key = str(evt.item_id)
+                if key in items:
+                    authority_class = (evt.payload or {}).get("authority_class")
+                    if authority_class:
+                        if (
+                            authority_class
+                            not in items[key]["authority_classes_present"]
+                        ):
+                            items[key]["authority_classes_present"].append(
+                                authority_class
+                            )
+
+            elif evt.item_id and evt.event_type == "freshness_observed":
+                key = str(evt.item_id)
+                if key in items:
+                    fs = (evt.payload or {}).get("freshness_status")
+                    if fs:
+                        items[key]["freshness_status"] = fs
+
+        # Post-process: deduplicate source URLs → independent_source_count
+        for item in items.values():
+            source_urls = item.pop("_source_urls", [])
+            if source_urls:
+                item["independent_source_count"] = len(set(source_urls))
+
         if not items:
             overall_status = "unassessed"
         else:
@@ -1212,3 +1280,620 @@ class TestCoverageSummary:
         assert summary["schema_version"] == "coverage-ledger-v1"
         assert summary["run_id"] == str(run_id)
         assert summary["coverage_revision"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Issue #25 — Workflow observation events (FR-012, FR-013)
+# ---------------------------------------------------------------------------
+
+
+class TestCandidateIdentified:
+    """Test candidate_identified event application and projection."""
+
+    def test_applies_candidate_identified(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        candidate_id = uuid4()
+        event = service.apply_candidate_identified(
+            run_id, UUID(item_id), candidate_id=candidate_id
+        )
+        assert event.event_type == "candidate_identified"
+        assert event.coverage_revision == 2
+
+    def test_candidate_id_in_projection(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        candidate_id = uuid4()
+        service.apply_candidate_identified(
+            run_id, UUID(item_id), candidate_id=candidate_id
+        )
+        ledger = service.rebuild_projection(run_id)
+        item = ledger.items[0]
+        assert len(item.candidate_ids) == 1
+        assert item.candidate_ids[0] == candidate_id
+
+    def test_duplicate_candidate_id_not_doubled(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        candidate_id = uuid4()
+        service.apply_candidate_identified(
+            run_id, UUID(item_id), candidate_id=candidate_id
+        )
+        service.apply_candidate_identified(
+            run_id, UUID(item_id), candidate_id=candidate_id
+        )
+        ledger = service.rebuild_projection(run_id)
+        assert len(ledger.items[0].candidate_ids) == 1
+
+    def test_multiple_candidates_accumulate(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        c1, c2 = uuid4(), uuid4()
+        service.apply_candidate_identified(run_id, UUID(item_id), candidate_id=c1)
+        service.apply_candidate_identified(run_id, UUID(item_id), candidate_id=c2)
+        ledger = service.rebuild_projection(run_id)
+        assert len(ledger.items[0].candidate_ids) == 2
+
+    def test_idempotent_candidate_identified(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        candidate_id = uuid4()
+        first = service.apply_candidate_identified(
+            run_id, UUID(item_id), candidate_id=candidate_id
+        )
+        second = service.apply_candidate_identified(
+            run_id, UUID(item_id), candidate_id=candidate_id
+        )
+        assert first.id == second.id
+
+    def test_rejects_missing_candidate_id(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        with pytest.raises(CoverageError, match="candidate_id is required"):
+            service.apply_candidate_identified(run_id, UUID(item_id), candidate_id=None)  # type: ignore[arg-type]
+
+
+class TestExtractionAttempted:
+    """Test extraction_attempted event application and projection."""
+
+    def test_applies_extraction_attempted(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        event = service.apply_extraction_attempted(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        assert event.event_type == "extraction_attempted"
+        assert event.payload["source_url"] == "https://example.com"
+
+    def test_does_not_change_status(self):
+        """Extraction attempted is a process observation — status unchanged."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_extraction_attempted(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].status == CoverageStatus.UNASSESSED
+
+    def test_tracks_source_url(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_extraction_attempted(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        ledger = service.rebuild_projection(run_id)
+        # Source URL is tracked for independent-source counting
+        assert ledger.items[0].independent_source_count == 1
+
+    def test_rejects_missing_source_url(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        with pytest.raises(CoverageError, match="source_url is required"):
+            service.apply_extraction_attempted(run_id, UUID(item_id), source_url="")  # type: ignore[arg-type]
+
+
+class TestAssetAcquired:
+    """Test asset_acquired event application and projection."""
+
+    def test_applies_asset_acquired(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        event = service.apply_asset_acquired(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        assert event.event_type == "asset_acquired"
+
+    def test_changes_status_to_acquired(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_asset_acquired(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].status == CoverageStatus.ACQUIRED
+
+    def test_tracks_unique_source_url(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_asset_acquired(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].independent_source_count == 1
+
+    def test_duplicate_source_url_not_doubled(self):
+        """Duplicate source URLs must NOT inflate independent_source_count."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        url = "https://example.com"
+        service.apply_asset_acquired(
+            run_id, UUID(item_id), source_url=url, idempotency_key="acq:1"
+        )
+        # Same URL via different idempotency key — should create a new event
+        # but the projection should deduplicate the URL
+        service.apply_asset_acquired(
+            run_id, UUID(item_id), source_url=url, idempotency_key="acq:2"
+        )
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].independent_source_count == 1
+
+    def test_multiple_unique_sources_increments_count(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_asset_acquired(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        service.apply_asset_acquired(
+            run_id, UUID(item_id), source_url="https://other.com"
+        )
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].independent_source_count == 2
+
+    def test_acquisition_does_not_imply_support(self):
+        """Asset acquired ≠ claim semantically supported."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_asset_acquired(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        ledger = service.rebuild_projection(run_id)
+        # Status is "acquired", NOT "supported"
+        assert ledger.items[0].status == CoverageStatus.ACQUIRED
+        assert ledger.items[0].status != CoverageStatus.SUPPORTED
+
+    def test_rejects_missing_source_url(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        with pytest.raises(CoverageError, match="source_url is required"):
+            service.apply_asset_acquired(run_id, UUID(item_id), source_url="")  # type: ignore[arg-type]
+
+
+class TestEvidenceRetrieved:
+    """Test evidence_retrieved event application and projection."""
+
+    def test_applies_evidence_retrieved(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        passage_ids = [str(uuid4()), str(uuid4())]
+        event = service.apply_evidence_retrieved(
+            run_id, UUID(item_id), passage_ids=passage_ids
+        )
+        assert event.event_type == "evidence_retrieved"
+
+    def test_passage_ids_in_projection(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        passage_ids = [str(uuid4()), str(uuid4())]
+        service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
+        ledger = service.rebuild_projection(run_id)
+        assert len(ledger.items[0].passage_ids) == 2
+        for pid in passage_ids:
+            assert UUID(pid) in ledger.items[0].passage_ids
+
+    def test_duplicate_passage_ids_not_doubled(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        passage_ids = [str(uuid4())]
+        service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
+        service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
+        ledger = service.rebuild_projection(run_id)
+        assert len(ledger.items[0].passage_ids) == 1
+
+    def test_evidence_does_not_imply_support(self):
+        """Evidence retrieved ≠ claim semantically supported."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        passage_ids = [str(uuid4())]
+        service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].status == CoverageStatus.UNASSESSED
+        assert ledger.items[0].status != CoverageStatus.SUPPORTED
+
+    def test_rejects_empty_passage_ids(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        with pytest.raises(CoverageError, match="passage_ids is required"):
+            service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=[])
+
+
+class TestSourceClassObserved:
+    """Test source_class_observed event application and projection."""
+
+    def test_applies_source_class_observed(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        event = service.apply_source_class_observed(
+            run_id, UUID(item_id), authority_class="primary"
+        )
+        assert event.event_type == "source_class_observed"
+
+    def test_authority_class_in_projection(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_source_class_observed(
+            run_id, UUID(item_id), authority_class="primary"
+        )
+        service.apply_source_class_observed(
+            run_id, UUID(item_id), authority_class="authoritative_secondary"
+        )
+        ledger = service.rebuild_projection(run_id)
+        assert "primary" in ledger.items[0].authority_classes_present
+        assert "authoritative_secondary" in ledger.items[0].authority_classes_present
+
+    def test_duplicate_authority_class_not_doubled(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_source_class_observed(
+            run_id, UUID(item_id), authority_class="primary"
+        )
+        service.apply_source_class_observed(
+            run_id, UUID(item_id), authority_class="primary"
+        )
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].authority_classes_present.count("primary") == 1
+
+    def test_rejects_missing_authority_class(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        with pytest.raises(CoverageError, match="authority_class is required"):
+            service.apply_source_class_observed(
+                run_id, UUID(item_id), authority_class=""
+            )  # type: ignore[arg-type]
+
+
+class TestFreshnessObserved:
+    """Test freshness_observed event application and projection."""
+
+    def test_applies_freshness_observed(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        event = service.apply_freshness_observed(
+            run_id, UUID(item_id), freshness_status="satisfied"
+        )
+        assert event.event_type == "freshness_observed"
+
+    def test_updates_freshness_status(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_freshness_observed(
+            run_id, UUID(item_id), freshness_status="unsatisfied"
+        )
+        ledger = service.rebuild_projection(run_id)
+        from research_domain.models import FreshnessStatus
+
+        assert ledger.items[0].freshness_status == FreshnessStatus.UNSATISFIED
+
+
+class TestSourceCountCorrectness:
+    """Test that independent-source counts are correct and not inflated."""
+
+    def test_no_events_means_zero_count(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].independent_source_count == 0
+
+    def test_extraction_attempts_do_not_inflate_count(self):
+        """extraction_attempted events alone should not inflate source count.
+
+        Independent-source counts should NOT be calculated merely by:
+        - number of URLs (raw, not deduplicated)
+        - number of candidate occurrences
+        - number of extraction attempts
+        - number of retrieved chunks
+        """
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        # 5 extraction attempts, same URL — should give count of 1
+        for _ in range(5):
+            service.apply_extraction_attempted(
+                run_id, UUID(item_id), source_url="https://example.com"
+            )
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].independent_source_count == 1
+
+    def test_asset_acquired_deduplicates_urls(self):
+        """asset_acquired with same URL twice should give count of 1."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        url = "https://example.com"
+        for _ in range(3):
+            service.apply_asset_acquired(run_id, UUID(item_id), source_url=url)
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].independent_source_count == 1
+
+    def test_evidence_retrieved_does_not_affect_source_count(self):
+        """evidence_retrieved should not affect independent_source_count."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        passage_ids = [str(uuid4()) for _ in range(10)]
+        service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
+        ledger = service.rebuild_projection(run_id)
+        assert ledger.items[0].independent_source_count == 0
+
+
+class TestSourceEventIdProvenance:
+    """Test that ledger changes retain source_event_id."""
+
+    def test_source_event_id_preserved(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        source_event = uuid4()
+        event = service.apply_asset_acquired(
+            run_id,
+            UUID(item_id),
+            source_url="https://example.com",
+            source_event_id=source_event,
+        )
+        assert str(event.source_event_id) == str(source_event)
+
+    def test_source_event_id_in_event_list(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        source_event = uuid4()
+        service.apply_candidate_identified(
+            run_id,
+            UUID(item_id),
+            candidate_id=uuid4(),
+            source_event_id=source_event,
+        )
+        events = service.list_events(run_id, event_type="candidate_identified")
+        assert len(events) == 1
+        assert str(events[0].source_event_id) == str(source_event)
+
+
+class TestRestartAndReplay:
+    """Test that restart and replay produce consistent projections."""
+
+    def test_rebuild_after_multiple_events(self):
+        """Rebuilding after many events produces consistent projection."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+
+        # Apply a mix of events
+        candidate_id = uuid4()
+        service.apply_candidate_identified(
+            run_id, UUID(item_id), candidate_id=candidate_id
+        )
+        service.apply_extraction_attempted(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        service.apply_asset_acquired(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        passage_ids = [str(uuid4())]
+        service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
+        service.apply_source_class_observed(
+            run_id, UUID(item_id), authority_class="primary"
+        )
+        service.apply_freshness_observed(
+            run_id, UUID(item_id), freshness_status="satisfied"
+        )
+
+        ledger = service.rebuild_projection(run_id)
+        item = ledger.items[0]
+
+        assert item.status == CoverageStatus.ACQUIRED
+        assert len(item.candidate_ids) == 1
+        assert item.candidate_ids[0] == candidate_id
+        assert item.independent_source_count == 1
+        assert len(item.passage_ids) == 1
+        assert "primary" in item.authority_classes_present
+        from research_domain.models import FreshnessStatus
+
+        assert item.freshness_status == FreshnessStatus.SATISFIED
+
+    def test_rebuild_is_deterministic(self):
+        """Multiple rebuilds produce identical projections."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        service.apply_asset_acquired(
+            run_id, UUID(item_id), source_url="https://example.com"
+        )
+        first = service.rebuild_projection(run_id)
+        second = service.rebuild_projection(run_id)
+        assert first.items[0].status == second.items[0].status
+        assert (
+            first.items[0].independent_source_count
+            == second.items[0].independent_source_count
+        )
+        assert first.overall_status == second.overall_status

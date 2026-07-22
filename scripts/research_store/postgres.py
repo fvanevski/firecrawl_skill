@@ -3627,6 +3627,83 @@ class PostgresUnitOfWork:
                     if key in items:
                         items[key]["status"] = "satisfied"
 
+                # ------------------------------------------------------------------
+                # Workflow observation events (FR-012, FR-013)
+                # These record deterministic observations, NOT semantic support.
+                # ------------------------------------------------------------------
+
+                elif event_type == "candidate_identified" and item_id:
+                    key = str(item_id)
+                    if key in items:
+                        candidate_id = (payload or {}).get("candidate_id")
+                        if candidate_id:
+                            cid = str(candidate_id)
+                            if cid not in items[key]["candidate_ids"]:
+                                items[key]["candidate_ids"].append(cid)
+
+                elif event_type == "extraction_attempted" and item_id:
+                    key = str(item_id)
+                    if key in items:
+                        # Record extraction attempt; does not change status.
+                        # Payload may contain source_url, extraction_status.
+                        source_url = (payload or {}).get("source_url")
+                        if source_url:
+                            items[key].setdefault("_source_urls", []).append(
+                                str(source_url)
+                            )
+
+                elif event_type == "asset_acquired" and item_id:
+                    key = str(item_id)
+                    if key in items:
+                        items[key]["status"] = "acquired"
+                        # Track unique source URLs for independent-source count.
+                        source_url = (payload or {}).get("source_url")
+                        if source_url:
+                            items[key].setdefault("_source_urls", []).append(
+                                str(source_url)
+                            )
+                        # Allow payload to carry an explicit count (e.g. from
+                        # a higher-level service that has already deduplicated).
+                        if "independent_source_count" in (payload or {}):
+                            items[key]["independent_source_count"] = payload[
+                                "independent_source_count"
+                            ]
+
+                elif event_type == "evidence_retrieved" and item_id:
+                    key = str(item_id)
+                    if key in items:
+                        # Evidence retrieval is an observation, NOT a semantic
+                        # support judgment.  Status is NOT changed to supported.
+                        passage_ids = (payload or {}).get("passage_ids", [])
+                        for pid in passage_ids:
+                            pid_str = str(pid)
+                            if pid_str not in items[key]["passage_ids"]:
+                                items[key]["passage_ids"].append(pid_str)
+
+                elif event_type == "source_class_observed" and item_id:
+                    key = str(item_id)
+                    if key in items:
+                        authority_class = (payload or {}).get("authority_class")
+                        if authority_class:
+                            if (
+                                authority_class
+                                not in items[key]["authority_classes_present"]
+                            ):
+                                items[key]["authority_classes_present"].append(
+                                    authority_class
+                                )
+
+                elif event_type == "freshness_observed" and item_id:
+                    key = str(item_id)
+                    if key in items:
+                        fs = (payload or {}).get("freshness_status")
+                        if fs:
+                            items[key]["freshness_status"] = fs
+
+                # ------------------------------------------------------------------
+                # End of workflow observation events
+                # ------------------------------------------------------------------
+
                 if event_type != "snapshot_created":
                     max_revision = max(
                         max_revision,
@@ -3636,6 +3713,18 @@ class PostgresUnitOfWork:
                         else 0,
                     )
 
+            # ------------------------------------------------------------------
+            # Post-process: deduplicate source URLs → independent_source_count.
+            # Independent-source counts must NOT be derived from raw event counts
+            # (URLs, candidate occurrences, extraction attempts, or chunk counts).
+            # Instead we use unique source URLs as a stable grouping proxy.
+            # ------------------------------------------------------------------
+            for item in items.values():
+                source_urls = item.pop("_source_urls", [])
+                if source_urls:
+                    item["independent_source_count"] = len(set(source_urls))
+
+            # ------------------------------------------------------------------
             # Calculate overall status
             if not items:
                 overall_status = "unassessed"
