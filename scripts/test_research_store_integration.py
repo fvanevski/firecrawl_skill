@@ -75,7 +75,7 @@ def prepared_database():
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN) == 11
+    assert migrate(TEST_DSN) == 15
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT to_regclass('research_run_transitions'),
@@ -168,7 +168,7 @@ def prepared_database():
         cursor.execute("SELECT to_regclass('interrupted_v6_probe')")
         assert cursor.fetchone()[0] is None
 
-    assert migrate(TEST_DSN) == 11
+    assert migrate(TEST_DSN) == 15
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT state,lifecycle_revision,execution_mode,objective
@@ -1970,7 +1970,14 @@ class TestCoverageWorkflowObservationEvents:
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
         item_id = items[0].coverage_item_id
-        source_event = uuid4()
+
+        with service.uow_factory() as uow:
+            with uow.connection.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM research_events WHERE run_id=%s LIMIT 1",
+                    (status.id,),
+                )
+                source_event = cur.fetchone()[0]
 
         event = coverage.apply_asset_acquired(
             status.id,
@@ -2013,21 +2020,30 @@ class TestResearchOrchestratorIntegration:
         run_status = run_svc.create("Integration test objective", f"test-{uuid4()}")
         run_id = run_status.id
 
-        # Create spec and search plan
-        spec = {
-            "objective": "Integration test objective",
-            "research_spec_id": str(uuid4()),
-            "questions": [{"question_id": str(uuid4()), "text": "Q1"}],
-            "claims_to_validate": [],
-            "freshness_requirements": [],
-            "required_source_classes": [],
-            "corroboration_requirements": [],
-            "contradiction_requirements": [],
-        }
+        from budget_policy import conservative_research_spec
+        from research_domain import serialize_model
+        spec = serialize_model(conservative_research_spec("Integration test objective", "fact_finding"))
 
+        qid = spec["questions"][0]["question_id"]
         search_plan = {
+            "schema_version": "search-plan-v1",
+            "research_spec_id": spec["research_spec_id"],
+            "revision": 1,
             "queries": [
-                {"query": "test query", "facet": "overview"},
+                {
+                    "query_id": str(uuid4()),
+                    "query": "test query",
+                    "facet": "overview",
+                    "target_question_ids": [qid],
+                    "target_claim_ids": [],
+                    "intended_source_classes": [],
+                    "expected_organizations": [],
+                    "freshness_requirement": {"start": None, "end": None, "description": "unconstrained", "uncertainty": "none"},
+                    "expected_contribution": "overview",
+                    "domain_restrictions": [],
+                    "negative_terms": [],
+                    "priority": 1,
+                },
             ],
         }
 
@@ -2039,6 +2055,7 @@ class TestResearchOrchestratorIntegration:
         )
 
         # Verify the run ended in a terminal state
+        print("ORCHESTRATOR RESULT:", result)
         assert result.final_state in ("completed", "partial", "failed")
         assert result.outcome == result.final_state
 
@@ -2047,7 +2064,14 @@ class TestResearchOrchestratorIntegration:
         assert final_status.state in ("completed", "partial", "failed")
 
         # Verify state transitions were recorded
-        assert len(run_svc.status(run_id=run_id).transitions) > 0
+        with service.uow_factory() as uow:
+            with uow.connection.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM research_run_transitions WHERE run_id=%s",
+                    (run_id,),
+                )
+                transition_count = cur.fetchone()[0]
+        assert transition_count > 0
 
         # Verify revision tracking: the lifecycle_revision should have
         # incremented through the stages
@@ -2138,6 +2162,14 @@ class TestMigration0015TerminalDecisions:
         assert migrate(TEST_DSN) == 15
 
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            run_id = uuid4()
+            cursor.execute(
+                """INSERT INTO research_runs(
+                    id, original_request, query_plan, skill_version,
+                    retrieval_policy_version, status, state, execution_mode, objective, external_run_id
+                ) VALUES (%s, 'test', '{}', 'v1', 'v1', 'running', 'created', 'autonomous_local', 'test', %s)""",
+                (run_id, f"fr_test_{uuid4().hex}"),
+            )
             # Insert a row
             cursor.execute(
                 """INSERT INTO terminal_decisions(
@@ -2146,31 +2178,29 @@ class TestMigration0015TerminalDecisions:
                     policy_version, idempotency_key
                 ) VALUES (%s, %s, 1, 1, 'partial', '{}', 'test gap',
                     'terminal-decision-policy-v1', 'test-idem-key')""",
-                (uuid4(), uuid4()),
+                (run_id, uuid4()),
             )
             assert cursor.rowcount == 1
+            cursor.execute("SELECT id FROM terminal_decisions LIMIT 1")
+            row_id = cursor.fetchone()[0]
 
             # Try to UPDATE — should fail
+            cursor.execute("SAVEPOINT update_sp")
             with pytest.raises(Exception, match="terminal_decisions is append-only"):
                 cursor.execute(
                     "UPDATE terminal_decisions SET outcome = 'failed' WHERE id = %s",
-                    (
-                        cursor.execute(
-                            "SELECT id FROM terminal_decisions LIMIT 1"
-                        ).fetchone()[0],
-                    ),
+                    (row_id,),
                 )
+            cursor.execute("ROLLBACK TO SAVEPOINT update_sp")
 
             # Try to DELETE — should fail
+            cursor.execute("SAVEPOINT delete_sp")
             with pytest.raises(Exception, match="terminal_decisions is append-only"):
                 cursor.execute(
                     "DELETE FROM terminal_decisions WHERE id = %s",
-                    (
-                        cursor.execute(
-                            "SELECT id FROM terminal_decisions LIMIT 1"
-                        ).fetchone()[0],
-                    ),
+                    (row_id,),
                 )
+            cursor.execute("ROLLBACK TO SAVEPOINT delete_sp")
 
     def test_forward_only_downgrade(self):
         """Verify downgrade raises RuntimeError."""
@@ -2179,10 +2209,22 @@ class TestMigration0015TerminalDecisions:
             cursor.execute("CREATE SCHEMA public")
         assert migrate(TEST_DSN) == 15
 
-        with pytest.raises(
-            RuntimeError, match="Research workflow migrations are forward-only"
-        ):
-            migrate(TEST_DSN, "0014_coverage_event_types")
+        from alembic import command
+        from alembic.config import Config
+        root = Path(__file__).parents[1]
+        config = Config(str(root / "alembic.ini"))
+        old_env = os.environ.get("DATABASE_URL")
+        os.environ["DATABASE_URL"] = TEST_DSN
+        try:
+            with pytest.raises(
+                RuntimeError, match="Research workflow migrations are forward-only"
+            ):
+                command.downgrade(config, "0014_coverage_event_types")
+        finally:
+            if old_env is not None:
+                os.environ["DATABASE_URL"] = old_env
+            else:
+                os.environ.pop("DATABASE_URL", None)
 
     def test_compatibility_with_existing_tables(self):
         """Verify migration doesn't break existing Phase 1/2/3 tables."""

@@ -174,7 +174,7 @@ def build_strategy_service(
 ) -> StrategyRevisionService:
     config = config or StoreConfig.from_env()
     config.require_database()
-    from .budget_policy import DEFAULT_POLICY
+    from budget_policy import DEFAULT_POLICY
 
     return StrategyRevisionService(
         partial(

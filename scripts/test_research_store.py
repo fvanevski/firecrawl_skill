@@ -263,6 +263,7 @@ def test_research_run_transition_matrix_is_exact():
         ("acquiring", "coverage_review"),
         ("acquiring", "extracting"),
         ("acquiring", "failed"),
+        ("acquiring", "partial"),
         ("extracting", "indexing"),
         ("extracting", "coverage_review"),
         ("extracting", "failed"),

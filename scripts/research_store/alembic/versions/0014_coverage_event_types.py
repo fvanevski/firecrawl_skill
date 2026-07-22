@@ -53,7 +53,7 @@ def upgrade():
         -- Convert columns to use the new type
         ALTER TABLE coverage_events
           ALTER COLUMN event_type TYPE coverage_event_type_new
-          USING event_type::text;
+          USING event_type::text::coverage_event_type_new;
 
         -- Drop the old type and rename
         DROP TYPE coverage_event_type;

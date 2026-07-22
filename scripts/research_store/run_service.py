@@ -31,7 +31,7 @@ PERMITTED_TRANSITIONS = {
     "created": frozenset({"planning"}),
     "planning": frozenset({"corpus_review", "failed"}),
     "corpus_review": frozenset({"acquiring", "retrieving", "failed"}),
-    "acquiring": frozenset({"coverage_review", "extracting", "failed"}),
+    "acquiring": frozenset({"coverage_review", "extracting", "failed", "partial"}),
     "extracting": frozenset({"indexing", "coverage_review", "failed"}),
     "indexing": frozenset({"coverage_review", "partial", "failed"}),
     "coverage_review": frozenset(
@@ -420,6 +420,26 @@ class ResearchRunService:
                     raise RunStateError(str(exc)) from exc
                 raise
         return TransitionResult.from_mapping(result)
+
+    def record_research_spec(
+        self,
+        run_id: UUID,
+        spec: dict[str, Any] | Any,
+        revision: int = 1,
+        idempotency_key: str | None = None,
+        **metadata: Any,
+    ) -> UUID:
+        with self.uow_factory() as uow:
+            res = uow.runs.record_research_spec(
+                run_id,
+                spec_revision=revision,
+                schema_name="research_spec",
+                schema_version=1,
+                payload=spec,
+                idempotency_key=idempotency_key or f"spec_raw:{run_id}:{revision}",
+                **metadata,
+            )
+            return res
 
     def record_search_plan(
         self,

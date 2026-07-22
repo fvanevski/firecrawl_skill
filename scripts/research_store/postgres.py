@@ -123,7 +123,7 @@ class PostgresUnitOfWork:
             self.retrieval_events
         ) = self.index_jobs = self.search_responses = self.candidates = (
             self.strategy_revisions
-        ) = self
+        ) = self.coverage = self.terminal_decisions = self
 
         return self
 
@@ -3325,7 +3325,7 @@ class PostgresUnitOfWork:
                         %s, %s,
                         %s, %s)
                     ON CONFLICT(run_id, idempotency_key) DO NOTHING
-                    RETURNING id""",
+                    RETURNING item_id""",
                     (
                         run_id,
                         item["item_type"],
@@ -3347,16 +3347,21 @@ class PostgresUnitOfWork:
             if not item_ids:
                 # Already existed — return existing IDs
                 cur.execute(
-                    """SELECT id FROM coverage_events
+                    """SELECT item_id FROM coverage_events
                     WHERE run_id=%s AND event_type='item_created'
                       AND item_type=ANY(%s)
-                    ORDER BY id""",
+                    ORDER BY created_at, id""",
                     (
                         run_id,
                         [item["item_type"] for item in items],
                     ),
                 )
                 item_ids = [r[0] for r in cur.fetchall()]
+            # Update run's current_coverage_revision to at least 1
+            cur.execute(
+                "UPDATE research_runs SET current_coverage_revision = 1 WHERE id = %s AND current_coverage_revision < 1",
+                (run_id,),
+            )
             return item_ids
 
     def apply_event(
@@ -3460,7 +3465,7 @@ class PostgresUnitOfWork:
                     source_event_id, source_invocation_id,
                     payload, idempotency_key
                 ) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id, coverage_revision, prior_coverage_revision,
+                RETURNING id, run_id, coverage_revision, prior_coverage_revision,
                     event_type, item_id, item_type, subject_id,
                     new_status, previous_status,
                     new_freshness_status, previous_freshness_status,
@@ -3487,6 +3492,7 @@ class PostgresUnitOfWork:
             row = cur.fetchone()
             keys = (
                 "id",
+                "run_id",
                 "coverage_revision",
                 "prior_coverage_revision",
                 "event_type",
@@ -3817,8 +3823,8 @@ class PostgresUnitOfWork:
                 """SELECT id, run_id, coverage_revision, ledger,
                     content_sha256, triggering_event_id, created_at
                 FROM coverage_snapshots
-                WHERE run_id=%s AND idempotency_key=%s""",
-                (run_id, idempotency_key),
+                WHERE run_id=%s AND coverage_revision=%s""",
+                (run_id, coverage_revision),
             )
             existing = cur.fetchone()
             if existing:
@@ -3836,17 +3842,16 @@ class PostgresUnitOfWork:
             cur.execute(
                 """INSERT INTO coverage_snapshots(
                     run_id, coverage_revision, ledger,
-                    content_sha256, triggering_event_id, idempotency_key
-                ) VALUES(%s, %s, %s, %s, %s, %s)
+                    content_sha256, triggering_event_id
+                ) VALUES(%s, %s, %s, %s, %s)
                 RETURNING id, run_id, coverage_revision, ledger,
                     content_sha256, triggering_event_id, created_at""",
                 (
                     run_id,
                     coverage_revision,
-                    json.dumps(ledger),
+                    json.dumps(ledger) if isinstance(ledger, dict) else ledger,
                     content_sha256,
                     triggering_event_id,
-                    idempotency_key,
                 ),
             )
             row = cur.fetchone()

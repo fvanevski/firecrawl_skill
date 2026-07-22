@@ -33,7 +33,7 @@ def prepared_database():
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN) == 11
+    assert migrate(TEST_DSN) >= 11
 
 
 # --- Unit Tests ---

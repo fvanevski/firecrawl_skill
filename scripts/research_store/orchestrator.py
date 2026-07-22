@@ -193,11 +193,25 @@ class PlanningStage:
         spec_revision = context.get(ContextKeys.SPEC_REVISION, 1)
         if spec_id is None:
             spec_revision = 1
+            spec_uuid = UUID(str(spec.get("research_spec_id", uuid4())))
+            spec["research_spec_id"] = str(spec_uuid)
+            if hasattr(self.run_service, "record_research_spec"):
+                self.run_service.record_research_spec(
+                    run_id,
+                    spec=spec,
+                    revision=spec_revision,
+                )
+            plan_payload = search_plan or {
+                "schema_version": "search-plan-v1",
+                "research_spec_id": str(spec_uuid),
+                "revision": spec_revision,
+                "queries": [],
+            }
             spec_id = self.run_service.record_search_plan(
                 run_id,
-                research_spec_id=UUID(str(spec.get("research_spec_id", uuid4()))),
+                research_spec_id=spec_uuid,
                 revision=spec_revision,
-                search_plan=search_plan or {"queries": []},
+                search_plan=plan_payload,
                 idempotency_key=f"spec:{run_id}:{spec_revision}",
             )
             context[ContextKeys.SPEC_ID] = spec_id
@@ -1364,12 +1378,14 @@ class ResearchOrchestrator:
         corpus_service: Any | None = None,
         terminal_config: TerminalDecisionConfig | None = None,
         terminal_service: TerminalDecisionService | None = None,
+        orchestrator_config: OrchestratorConfig | None = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
         self.strategy_service = strategy_service
         self.acquisition_service = acquisition_service
         self.config = config
+        self.orchestrator_config = orchestrator_config or OrchestratorConfig()
         self.legacy_adapter = legacy_adapter
         self.corpus_service = corpus_service
         self._terminal_config = terminal_config or TerminalDecisionConfig()
@@ -1478,6 +1494,7 @@ class ResearchOrchestrator:
             corpus_service=corpus_service,
             terminal_config=terminal_config,
             terminal_service=terminal_service,
+            orchestrator_config=orchestrator_config,
         )
 
     # ------------------------------------------------------------------
@@ -1514,11 +1531,11 @@ class ResearchOrchestrator:
         Returns:
             An ``OrchestratorResult`` describing the final outcome.
         """
-        max_cycles = max_adaptive_cycles or self.config.max_adaptive_cycles
+        max_cycles = max_adaptive_cycles or self.orchestrator_config.max_adaptive_cycles
         ctx = context or {}
         ctx["spec"] = spec
         ctx["search_plan"] = search_plan
-        ctx["execution_mode"] = self.config.execution_mode
+        ctx["execution_mode"] = self.orchestrator_config.execution_mode
         ctx["_max_adaptive_cycles"] = max_cycles
         ctx[ContextKeys.WALL_CLOCK_START] = time.monotonic()
         ctx[ContextKeys.WAVE_COUNT] = 0
@@ -1619,45 +1636,46 @@ class ResearchOrchestrator:
                 if result.outcome == StageOutcome.TERMINAL:
                     break
 
-                # Stage: Indexing
-                result = self._execute_stage(
-                    "indexing",
-                    run_id,
-                    current_revision,
-                    coverage_revision_num,
-                    current_state,
-                    ctx,
-                )
-                if result.error:
-                    return self._failed_result(run_id, result.error)
-
-                # Fix: Update revision dynamically after stage transition
-                run_status = self.run_service.status(run_id=run_id)
-                current_revision = run_status.lifecycle_revision
-                current_state = run_status.state
-
-                # Track new assets from indexing stage (successful URLs)
-                if result.details and result.details.get(ContextKeys.SUCCESSFUL_URLS):
-                    ctx["_new_asset_count"] = result.details.get(
-                        ContextKeys.SUCCESSFUL_URLS, 0
+                # Stage: Indexing (only if transitioned to indexing/extracting)
+                if current_state in ("indexing", "extracting"):
+                    result = self._execute_stage(
+                        "indexing",
+                        run_id,
+                        current_revision,
+                        coverage_revision_num,
+                        current_state,
+                        ctx,
                     )
+                    if result.error:
+                        return self._failed_result(run_id, result.error)
 
-                # Accumulate extraction failure and retrieval counts from indexing
-                if result.details:
-                    attempts = result.details.get(ContextKeys.EXTRACTION_ATTEMPTS, 0)
-                    success = result.details.get(
-                        ContextKeys.EXTRACTION_SUCCESS_COUNT, 0
-                    )
-                    if isinstance(attempts, int) and isinstance(success, int):
-                        _repeated_extraction_failures = max(
-                            _repeated_extraction_failures,
-                            attempts - success,
+                    # Fix: Update revision dynamically after stage transition
+                    run_status = self.run_service.status(run_id=run_id)
+                    current_revision = run_status.lifecycle_revision
+                    current_state = run_status.state
+
+                    # Track new assets from indexing stage (successful URLs)
+                    if result.details and result.details.get(ContextKeys.SUCCESSFUL_URLS):
+                        ctx["_new_asset_count"] = result.details.get(
+                            ContextKeys.SUCCESSFUL_URLS, 0
                         )
-                    retrieval = result.details.get(ContextKeys.RETRIEVAL_COUNT, 0)
-                    if isinstance(retrieval, int):
-                        _repeated_retrieval_count = max(
-                            _repeated_retrieval_count, retrieval
+
+                    # Accumulate extraction failure and retrieval counts from indexing
+                    if result.details:
+                        attempts = result.details.get(ContextKeys.EXTRACTION_ATTEMPTS, 0)
+                        success = result.details.get(
+                            ContextKeys.EXTRACTION_SUCCESS_COUNT, 0
                         )
+                        if isinstance(attempts, int) and isinstance(success, int):
+                            _repeated_extraction_failures = max(
+                                _repeated_extraction_failures,
+                                attempts - success,
+                            )
+                        retrieval = result.details.get(ContextKeys.RETRIEVAL_COUNT, 0)
+                        if isinstance(retrieval, int):
+                            _repeated_retrieval_count = max(
+                                _repeated_retrieval_count, retrieval
+                            )
 
                 # Stage: Coverage review
                 result = self._execute_stage(
@@ -1944,7 +1962,7 @@ class ResearchOrchestrator:
             run_status = self.run_service.create(
                 objective=spec.get("objective", external_id),
                 external_id=external_id,
-                execution_mode=self.config.execution_mode,
+                execution_mode=self.orchestrator_config.execution_mode,
             )
             run_id = run_status.id
 
@@ -2016,7 +2034,7 @@ class ResearchOrchestrator:
         """Check if the hard budget has been exhausted."""
         wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
         max_cycles = context.get(
-            "_max_adaptive_cycles", self.config.max_adaptive_cycles
+            "_max_adaptive_cycles", self.orchestrator_config.max_adaptive_cycles
         )
         return wave_count >= max_cycles
 

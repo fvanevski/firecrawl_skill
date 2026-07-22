@@ -166,31 +166,6 @@ def upgrade():
         -- ----------------------------------------------------------------
         -- Update research_runs to reference current coverage revision
         -- (already exists as a column from 0006, but add FK for
-        -- referential integrity if the column is present)
-        -- ----------------------------------------------------------------
-
-        DO $$
-        BEGIN
-          IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'research_runs'
-              AND column_name = 'current_coverage_revision'
-          ) THEN
-            ALTER TABLE research_runs
-              ADD CONSTRAINT research_runs_current_cov_rev_fk
-              FOREIGN KEY (current_coverage_revision, run_id)
-              REFERENCES coverage_snapshots(coverage_revision, run_id)
-              NOT VALID;
-            -- Validate on populated data; skip if no coverage rows yet
-            BEGIN
-              ALTER TABLE research_runs
-                VALIDATE CONSTRAINT research_runs_current_cov_rev_fk;
-            EXCEPTION WHEN OTHERS THEN
-              -- Leave NOT VALID if there is nothing to validate against
-              NULL;
-            END;
-          END IF;
-        END $$;
         """
     )
 
