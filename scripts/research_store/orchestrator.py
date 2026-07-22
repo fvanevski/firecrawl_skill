@@ -805,7 +805,7 @@ class CoverageReviewStage:
         context[ContextKeys.COVERAGE_STATUS] = overall_status
         context[ContextKeys.OVERALL_STATUS] = overall_status
 
-        # Determine next action based on coverage
+        # Determine next action based on coverage and terminal decision policy
         budget_exhausted = context.get("_budget_exhausted", False)
         no_progress = context.get("_no_progress", False)
 
@@ -815,23 +815,75 @@ class CoverageReviewStage:
             no_progress=no_progress,
         )
 
+        # Check if terminal outcome was set by TerminalDecisionPolicy
+        terminal_outcome = context.get("_terminal_outcome")
+        if terminal_outcome:
+            if terminal_outcome == TerminalDecisionOutcome.SUFFICIENT.value:
+                decision_type = STRATEGY_DECISION_SYNTHESIZE
+                reason = context.get("_terminal_reason", "sufficient coverage")
+            elif terminal_outcome == TerminalDecisionOutcome.FAILED.value:
+                decision_type = STRATEGY_DECISION_FAIL
+                reason = context.get("_terminal_reason", "no-progress or loop detected")
+            elif terminal_outcome in (
+                TerminalDecisionOutcome.PARTIAL.value,
+                TerminalDecisionOutcome.BLOCKED.value,
+            ):
+                decision_type = STRATEGY_DECISION_PARTIAL
+                reason = context.get("_terminal_reason", "partial coverage or blocked requirement")
+
         # Map decision type to run state name for transitions
         state_name = decision_to_state(decision_type)
 
-        # Propose the next action through the strategy service
+        # Handle terminal decision paths (failed or partial) directly
+        if state_name in ("failed", "partial"):
+            try:
+                if state_name == "failed":
+                    self.run_service.fail(
+                        run_id,
+                        expected_revision=run_revision,
+                        idempotency_key=f"stage:coverage_review:failed:{run_id}:{uuid4()}",
+                        actor_type="orchestrator",
+                        actor_identifier="CoverageReviewStage",
+                        reason=f"coverage {overall_status} -> failed ({reason})",
+                        outcome="failed",
+                    )
+                else:
+                    self.run_service.partial(
+                        run_id,
+                        expected_revision=run_revision,
+                        idempotency_key=f"stage:coverage_review:partial:{run_id}:{uuid4()}",
+                        actor_type="orchestrator",
+                        actor_identifier="CoverageReviewStage",
+                        reason=f"coverage {overall_status} -> partial ({reason})",
+                        outcome="partial",
+                    )
+            except (RunStateError, StaleRunRevisionError) as exc:
+                return StageResult.failed("coverage_review", str(exc))
+
+            return StageResult.terminal(
+                "coverage_review",
+                f"coverage {overall_status}, next action: {state_name} ({reason})",
+                details={
+                    ContextKeys.COVERAGE_STATUS: overall_status,
+                    ContextKeys.OVERALL_STATUS: overall_status,
+                    ContextKeys.NEXT_ACTION: state_name,
+                    ContextKeys.STRATEGY_PROPOSAL_ID: None,
+                },
+            )
+
+        # Propose the next action through the strategy service for non-terminal decisions
         proposal_id = self._propose_next_action(
             run_id, run_revision, new_coverage_revision, decision_type, reason, context
         )
 
         # If authorization was rejected for a non-terminal decision, fail.
-        # Terminal decisions (partial/failed) do not require a proposal.
-        if proposal_id is None and state_name not in ("partial", "failed"):
+        if proposal_id is None:
             return StageResult.failed(
                 "coverage_review",
                 "strategy authorization rejected — cannot proceed",
             )
 
-        # Transition to the appropriate state
+        # Transition to the non-terminal state (acquiring or synthesizing)
         try:
             self.run_service.transition(
                 run_id,
@@ -861,11 +913,10 @@ class CoverageReviewStage:
                 if proposal_id
                 else None,
             },
-            # events are added by StageResult.ok() automatically
         )
 
-        # If terminal, return a terminal result
-        if state_name in ("synthesizing", "partial", "failed"):
+        # If synthesizing, return a terminal result to proceed to synthesis
+        if state_name == "synthesizing":
             return StageResult.terminal(
                 "coverage_review",
                 f"coverage {overall_status}, next action: {state_name} ({reason})",
@@ -1697,6 +1748,40 @@ class ResearchOrchestrator:
                         "_terminal_reason",
                         "terminal decision policy triggered",
                     )
+                    TERMINAL_STATES = ("completed", "partial", "failed", "cancelled")
+                    if current_state not in TERMINAL_STATES:
+                        try:
+                            if terminal_outcome == TerminalDecisionOutcome.FAILED:
+                                self.run_service.fail(
+                                    run_id,
+                                    expected_revision=current_revision,
+                                    idempotency_key=f"terminal:failed:{run_id}:{coverage_revision_num}:{uuid4()}",
+                                    actor_type="orchestrator",
+                                    actor_identifier="ResearchOrchestrator",
+                                    reason=ctx["_terminal_reason"],
+                                    outcome="failed",
+                                )
+                            elif terminal_outcome in (
+                                TerminalDecisionOutcome.PARTIAL,
+                                TerminalDecisionOutcome.BLOCKED,
+                            ):
+                                self.run_service.partial(
+                                    run_id,
+                                    expected_revision=current_revision,
+                                    idempotency_key=f"terminal:partial:{run_id}:{coverage_revision_num}:{uuid4()}",
+                                    actor_type="orchestrator",
+                                    actor_identifier="ResearchOrchestrator",
+                                    reason=ctx["_terminal_reason"],
+                                    outcome="partial",
+                                )
+                            run_status = self.run_service.status(run_id=run_id)
+                            current_revision = run_status.lifecycle_revision
+                            current_state = run_status.state
+                        except (RunStateError, StaleRunRevisionError) as exc:
+                            logger.warning(
+                                "terminal decision policy state transition failed: %s",
+                                exc,
+                            )
                     break
 
                 # Fix: Update revision dynamically after cycle
@@ -2001,7 +2086,9 @@ class ResearchOrchestrator:
             # B5: Persist the terminal decision to the database
             if self._terminal_decision_service is not None:
                 try:
-                    idempotency_key = f"terminal:{run_id}:{decision.decision_id}"
+                    idempotency_key = (
+                        f"terminal:{run_id}:r{run_revision}:c{coverage_revision}"
+                    )
                     self._terminal_decision_service.record(
                         run_id=run_id,
                         decision=decision,

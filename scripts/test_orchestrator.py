@@ -1861,6 +1861,45 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
         # Unsatisfiable source → BLOCKED
         self.assertEqual(outcome, TerminalDecisionOutcome.BLOCKED)
 
+    def test_deterministic_idempotency_key_format(self):
+        """Test that _evaluate_terminal_decision passes a deterministic idempotency key."""
+        from research_store.terminal_decision import TerminalDecisionConfig
+
+        config = MockConfig()
+        run_svc = MockRunService(initial_state="coverage_review", revision=1)
+        coverage_svc = MockCoverageService(item_count=3)
+        strategy_svc = MockStrategyService()
+        acquisition_svc = MagicMock()
+        mock_terminal_svc = MagicMock()
+
+        terminal_config = TerminalDecisionConfig(max_strategy_revisions=3)
+        orchestrator = ResearchOrchestrator(
+            run_service=run_svc,
+            coverage_service=coverage_svc,
+            strategy_service=strategy_svc,
+            acquisition_service=acquisition_svc,
+            config=config,
+            terminal_config=terminal_config,
+            terminal_service=mock_terminal_svc,
+        )
+
+        ctx = {
+            ContextKeys.OVERALL_STATUS: OverallCoverageStatus.INSUFFICIENT.value,
+            "_budget_exhausted": False,
+            "_no_progress": False,
+            "_strategy_revision_count": 5,
+        }
+
+        orchestrator._evaluate_terminal_decision(ctx, self.run_id, 2, 4)
+
+        # Verify idempotency key format passed to record()
+        mock_terminal_svc.record.assert_called_once()
+        _, kwargs = mock_terminal_svc.record.call_args
+        self.assertEqual(
+            kwargs["idempotency_key"],
+            f"terminal:{self.run_id}:r2:c4",
+        )
+
 
 # ===================================================================
 # Main
