@@ -186,6 +186,7 @@ class ContextKeys:
     STRATEGY_DECISION_ID = "strategy_decision_id"
     STRATEGY_DECISION = "strategy_decision"
     NEXT_ACTION = "next_action"
+    AUTHORIZED_QUERIES = "authorized_queries"  # Queries from authorized proposals
 
     # Retrieval stage output
     RETRIEVAL_PASSAGES = "retrieval_passages"
