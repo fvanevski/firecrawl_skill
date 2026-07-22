@@ -360,6 +360,9 @@ class MemoryCoverageRepository:
         events.sort(key=lambda e: (e["coverage_revision"], str(e["id"])))
         return events[offset : offset + limit]
 
+    def list_coverage_events(self, run_id, item_id=None, event_type=None, limit=100, offset=0):
+        return self.list_events(run_id, item_id=item_id, event_type=event_type, limit=limit, offset=offset)
+
     def get_event(self, run_id, event_id):
         for e in self.events.values():
             if str(e.run_id) == str(run_id) and str(e.id) == str(event_id):

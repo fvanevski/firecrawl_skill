@@ -46,7 +46,7 @@ labels. Append-only — no UPDATE/DELETE.
 Constraints:
 * ``chk_claim_evidence_links_confidence`` — ``confidence >= 0 AND confidence <= 1``
 * ``chk_claim_evidence_links_relationship`` — enum constraint.
-* ``chk_claim_evidence_links_passage`` — ``passage_id`` is NOT NULL.
+* ``fk_claim_evidence_links_passage`` — FK from ``passage_id`` to ``chunks(id)`` ON DELETE CASCADE.
 * ``uk_claim_evidence_links_claim_passage`` — unique ``(claim_id, passage_id)``
   prevents duplicate evidence links for the same claim+passage pair.
 
@@ -185,7 +185,7 @@ def upgrade():
           id                          uuid NOT NULL DEFAULT gen_random_uuid(),
           run_id                      uuid NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
           claim_id                    uuid NOT NULL,
-          passage_id                  uuid NOT NULL,
+          passage_id                  uuid NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
           snapshot_id                 uuid NOT NULL REFERENCES asset_snapshots(id) ON DELETE CASCADE,
           source_url                  text NOT NULL DEFAULT '',
           relationship                claim_evidence_relationship NOT NULL DEFAULT 'supports',
@@ -193,8 +193,7 @@ def upgrade():
           created_at                  timestamptz NOT NULL DEFAULT now(),
 
           PRIMARY KEY (id),
-          CONSTRAINT chk_claim_evidence_links_passage
-            CHECK (passage_id IS NOT NULL),
+
           CONSTRAINT chk_claim_evidence_links_confidence
             CHECK (confidence >= 0.0 AND confidence <= 1.0),
           CONSTRAINT chk_claim_evidence_links_relationship

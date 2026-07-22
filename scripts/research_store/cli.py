@@ -394,6 +394,26 @@ def _resolve_run_id(config, external_id):
     return row[0]
 
 
+def _resolve_any_run_id(config, external_id):
+    """Resolve a run UUID from its external_run_id, accepting any lifecycle status.
+
+    Used by read-only claim-manifest subcommands (export, list) where the run
+    may already be finished.  Use :func:`_resolve_run_id` for write operations
+    that require the run to be in ``running`` status.
+    """
+    if not external_id:
+        return None
+    with _db(config) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM research_runs WHERE external_run_id=%s",
+            (external_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise SystemExit(f"research run not found: {external_id}")
+    return row[0]
+
+
 def _index_rows(config):
     with _db(config) as conn, conn.cursor() as cur:
         cur.execute(
@@ -1652,12 +1672,9 @@ def main(argv=None):
         from .container import build_claim_service
 
         claim_svc = build_claim_service(config)
-        run_id = _resolve_run_id(config, args.external_id)
-        if not run_id:
-            raise SystemExit(
-                f"research run not found or not running: {args.external_id}"
-            )
         if args.claim_command == "import":
+            # import requires a running run (write operation)
+            run_id = _resolve_run_id(config, args.external_id)
             import json as _json
 
             manifest_file = args.file
@@ -1670,10 +1687,13 @@ def main(argv=None):
                 run_id, manifest, dry_run=getattr(args, "dry_run", False)
             )
         elif args.claim_command == "export":
+            # export is read-only; works on any run status
+            run_id = _resolve_any_run_id(config, args.external_id)
             manifest = claim_svc.export_manifest(run_id)
             output = args.output
             if output == "-":
                 print(dumps(manifest))
+                return 0
             else:
                 output_path = Path(output)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1693,6 +1713,8 @@ def main(argv=None):
                     "link_count": manifest.get("link_count", 0),
                 }
         elif args.claim_command == "list":
+            # list is read-only; works on any run status
+            run_id = _resolve_any_run_id(config, args.external_id)
             claims = claim_svc.list_claims(run_id)
             links = claim_svc.list_evidence_links(run_id)
             result = {
@@ -1703,10 +1725,10 @@ def main(argv=None):
             }
         else:
             raise SystemExit(f"unknown claim-manifest command: {args.claim_command}")
-    else:
-        raise AssertionError(args.command)
         print(dumps(result))
         return 0
+    else:
+        raise AssertionError(args.command)
 
 
 if __name__ == "__main__":

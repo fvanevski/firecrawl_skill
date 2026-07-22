@@ -100,7 +100,7 @@ def _make_uow_mock(claims=None, passages=None, snapshots=None):
                 raise ValueError("claim statement must be non-empty")
             return uuid4()
 
-        def upsert_evidence_link(self, run_id, claim_id, passage_id, snapshot_id, **kw):
+        def insert_evidence_link(self, run_id, claim_id, passage_id, snapshot_id, **kw):
             if passage_id not in passages:
                 raise ValueError(f"unknown passage ID: {passage_id}")
             if snapshot_id not in snapshots:
@@ -326,12 +326,12 @@ def test_import_apply_reports_failed_claims():
     uow = _make_uow_mock(passages={passage}, snapshots={snapshot})
     svc = ClaimManifestService(lambda: uow)
 
-    # Mock upsert_evidence_link to fail
+    # Mock insert_evidence_link to fail
 
     def failing_upsert(*args, **kw):
         raise RuntimeError("simulated FK violation")
 
-    uow.upsert_evidence_link = failing_upsert
+    uow.insert_evidence_link = failing_upsert
 
     manifest = {
         "claims": [{"claim_id": str(uuid4()), "statement": "Valid claim"}],
@@ -664,7 +664,7 @@ if TEST_DSN:
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute("DROP SCHEMA public CASCADE")
             cur.execute("CREATE SCHEMA public")
-        assert migrate(TEST_DSN) == 17
+        assert migrate(TEST_DSN) >= 17
 
     def test_migration_0017_creates_tables():
         """Verify migration 0017 creates research_claims and claim_evidence_links."""

@@ -439,7 +439,7 @@ class ClaimManifestService:
         if not (0.0 <= confidence <= 1.0):
             raise ValueError(f"confidence must be in [0, 1], got {confidence}")
         with self.uow_factory() as uow:
-            row_id = uow.upsert_evidence_link(
+            row_id = uow.insert_evidence_link(
                 run_id,
                 claim_id,
                 passage_id,
@@ -480,36 +480,38 @@ class ClaimManifestService:
         claims = manifest.get("claims", [])
         links = manifest.get("links", [])
 
-        # Dry-run phase: validate all references
+        # Dry-run phase: validate all references in a single UoW to avoid
+        # opening O(n) connections (one per passage/snapshot check).
         unknown_passages = []
         unknown_snapshots = []
         malformed_claim_ids = []
 
-        for claim in claims:
-            cid = claim.get("claim_id")
-            if cid:
-                try:
-                    UUID(str(cid))
-                except ValueError:
-                    malformed_claim_ids.append(str(cid))
+        with self.uow_factory() as uow:
+            for claim in claims:
+                cid = claim.get("claim_id")
+                if cid:
+                    try:
+                        UUID(str(cid))
+                    except ValueError:
+                        malformed_claim_ids.append(str(cid))
 
-        for link in links:
-            pid = link.get("passage_id")
-            sid = link.get("snapshot_id")
-            if pid:
-                try:
-                    uid = UUID(str(pid))
-                    if not self._passage_id_valid(uid):
+            for link in links:
+                pid = link.get("passage_id")
+                sid = link.get("snapshot_id")
+                if pid:
+                    try:
+                        uid = UUID(str(pid))
+                        if not uow.validate_passage_id(uid):
+                            unknown_passages.append(str(pid))
+                    except ValueError:
                         unknown_passages.append(str(pid))
-                except ValueError:
-                    unknown_passages.append(str(pid))
-            if sid:
-                try:
-                    uid = UUID(str(sid))
-                    if not self._snapshot_id_valid(uid):
+                if sid:
+                    try:
+                        uid = UUID(str(sid))
+                        if not uow.validate_snapshot_id(uid):
+                            unknown_snapshots.append(str(sid))
+                    except ValueError:
                         unknown_snapshots.append(str(sid))
-                except ValueError:
-                    unknown_snapshots.append(str(sid))
 
         dry_run_result = {
             "dry_run": True,
@@ -556,7 +558,7 @@ class ClaimManifestService:
             inserted_links = 0
             for link in links:
                 try:
-                    uow.upsert_evidence_link(
+                    uow.insert_evidence_link(
                         run_id,
                         UUID(str(link["claim_id"])),
                         UUID(str(link["passage_id"])),

@@ -4933,7 +4933,7 @@ class PostgresUnitOfWork:
             )
             return cur.fetchone() is not None
 
-    def upsert_evidence_link(
+    def insert_evidence_link(
         self,
         run_id: UUID,
         claim_id: UUID,
@@ -4945,7 +4945,11 @@ class PostgresUnitOfWork:
     ) -> UUID:
         """Insert a claim-evidence link. Returns the link row ``id``.
 
-        Append-only — no conflict resolution. Each call creates a new row.
+        Append-only — raises ``IntegrityError`` (psycopg2 unique violation) if a
+        link for ``(claim_id, passage_id)`` already exists.  Callers that need
+        idempotent behaviour should catch ``psycopg2.errors.UniqueViolation``.
+        Pre-validates ``passage_id`` and ``snapshot_id`` at the service layer
+        before the DB round-trip.
         """
         if not self.validate_passage_id(passage_id):
             raise ValueError(f"unknown passage ID: {passage_id}")
@@ -5004,8 +5008,9 @@ class PostgresUnitOfWork:
     def export_claim_manifest(self, run_id: UUID) -> dict[str, Any]:
         """Export all claims and evidence links for a run as a JSON-compatible dict.
 
-        Includes a source-state hash derived from the claim count and
-        evidence-link count for change detection.
+        Includes a source-state hash derived from the serialized claim and link
+        rows for change detection.  UUID and datetime values returned by
+        psycopg2 are serialised to strings so the hash is reproducible.
         """
         with self.connection.cursor() as cur:
             cur.execute(
@@ -5049,8 +5054,28 @@ class PostgresUnitOfWork:
 
         import hashlib
 
-        state = json.dumps({"claims": claims, "links": links}, sort_keys=True)
+        def _json_serial(obj):
+            """Serialize UUID and datetime objects returned by psycopg2."""
+            if hasattr(obj, "isoformat"):
+                return obj.isoformat()
+            if hasattr(obj, "hex"):  # UUID
+                return str(obj)
+            raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+        state = json.dumps(
+            {"claims": claims, "links": links},
+            sort_keys=True,
+            default=_json_serial,
+        )
         source_hash = hashlib.sha256(state.encode()).hexdigest()
+
+        # Normalise rows to string values for the returned dict so that callers
+        # receive JSON-safe data regardless of the psycopg2 return types.
+        def _stringify_row(row: dict) -> dict:
+            return {
+                k: _json_serial(v) if not isinstance(v, (str, int, float, bool, type(None))) else v
+                for k, v in row.items()
+            }
 
         return {
             "manifest_version": "claim-manifest-v1",
@@ -5058,6 +5083,6 @@ class PostgresUnitOfWork:
             "source_state_hash": source_hash,
             "claim_count": len(claims),
             "link_count": len(links),
-            "claims": claims,
-            "links": links,
+            "claims": [_stringify_row(c) for c in claims],
+            "links": [_stringify_row(lnk) for lnk in links],
         }
