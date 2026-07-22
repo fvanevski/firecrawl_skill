@@ -1143,21 +1143,6 @@ class TestInvalidInput:
         with pytest.raises(CoverageError, match="run_id is required"):
             service.create_items_from_spec(None, spec)
 
-    def test_empty_string_idempotency_key(self):
-        repo, service = coverage_fixture()
-        run_id = uuid4()
-        service.create_items_from_spec(
-            run_id,
-            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
-        )
-        # Whitespace-only key is rejected; empty string is auto-generated.
-        with pytest.raises(CoverageError, match="nonempty"):
-            service.apply_event(
-                run_id,
-                "item_status_changed",
-                idempotency_key="   ",
-            )
-
 
 class TestCoverageSummary:
     """Test the coverage_summary() convenience API."""

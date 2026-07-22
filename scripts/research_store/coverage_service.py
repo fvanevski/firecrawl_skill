@@ -572,6 +572,8 @@ class CoverageService:
             return {
                 "schema_version": "coverage-ledger-v1",
                 "run_id": str(run_id),
+                # Sentinel: 0 means no items exist; not a valid coverage
+                # revision (DDL requires coverage_revision > 0).
                 "coverage_revision": 0,
                 "total_items": 0,
                 "status_counts": {},
