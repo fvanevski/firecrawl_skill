@@ -313,7 +313,7 @@ class CorpusReviewStage:
             self.run_service.transition(
                 run_id,
                 "acquiring",
-                expected_revision=run_revision + 1,
+                expected_revision=run_revision,
                 idempotency_key=f"stage:corpus_review_done:{run_id}:{uuid4()}",
                 actor_type="orchestrator",
                 actor_identifier="CorpusReviewStage",
@@ -400,6 +400,7 @@ class AcquisitionStage:
         response_ids = []
         candidate_count = 0
         successful_urls = 0
+        candidate_ids = []  # Collect actual candidate IDs for coverage events
 
         for query in queries:
             query_text = query.get("query", "")
@@ -415,6 +416,9 @@ class AcquisitionStage:
                 response_ids.append(result.get("response_id"))
                 candidate_count += result.get("candidate_count", 0)
                 successful_urls += result.get("successful_urls", 0)
+                # Collect candidate IDs for coverage events
+                for cid in result.get("candidate_ids", []):
+                    candidate_ids.append(cid)
             except Exception as exc:
                 logger.warning("acquisition query failed: %s — %s", query_text, exc)
 
@@ -422,13 +426,15 @@ class AcquisitionStage:
         if coverage_revision is not None:
             try:
                 # Apply one event per candidate to track individual discoveries
-                for i in range(min(candidate_count, 5)):  # Limit to first 5
+                # Use cycle-scoped idempotency keys and actual candidate IDs
+                for i, cand_id in enumerate(candidate_ids[:5]):  # Limit to first 5
                     self.coverage_service.apply_event(
                         run_id,
                         "candidate_identified",
-                        idempotency_key=f"acquire:cand:{run_id}:{i}",
+                        item_id=target_items[i] if i < len(target_items) else None,
+                        idempotency_key=f"acquire:cand:{run_id}:w{wave_count}:{i}",
                         payload={
-                            "candidate_id": str(uuid4()),
+                            "candidate_id": cand_id,
                             "candidate_count": candidate_count,
                         },
                     )
@@ -446,7 +452,7 @@ class AcquisitionStage:
                 self.run_service.transition(
                     run_id,
                     "indexing",
-                    expected_revision=run_revision + 1,
+                    expected_revision=run_revision,
                     idempotency_key=f"stage:acquisition_done:{run_id}:{uuid4()}",
                     actor_type="orchestrator",
                     actor_identifier="AcquisitionStage",
@@ -471,7 +477,7 @@ class AcquisitionStage:
             self.run_service.transition(
                 run_id,
                 "coverage_review",
-                expected_revision=run_revision + 1,
+                expected_revision=run_revision,
                 idempotency_key=f"stage:acquisition_empty:{run_id}:{uuid4()}",
                 actor_type="orchestrator",
                 actor_identifier="AcquisitionStage",
@@ -535,13 +541,25 @@ class ExtractionStage:
                 self.run_service.transition(
                     run_id,
                     "indexing",
-                    expected_revision=run_revision + 1,
+                    expected_revision=run_revision,
                     idempotency_key=f"stage:extraction_done:{run_id}:{uuid4()}",
                     actor_type="orchestrator",
                     actor_identifier="ExtractionStage",
                     triggering_event="run.indexing",
                     reason=f"extraction succeeded for {extraction_success_count} sources",
                 )
+                # Emit extraction_attempted events for coverage tracking
+                for url in context.get(ContextKeys.SUCCESSFUL_URLS, []):
+                    try:
+                        self.coverage_service.apply_event(
+                            run_id,
+                            "extraction_attempted",
+                            item_id=None,
+                            idempotency_key=f"extract:{run_id}:{url}",
+                            payload={"source_url": url, "extraction_status": "success"},
+                        )
+                    except Exception as exc:
+                        logger.warning("coverage event for extraction failed: %s", exc)
             except (RunStateError, StaleRunRevisionError) as exc:
                 return StageResult.failed("extraction", str(exc))
         else:
@@ -549,7 +567,7 @@ class ExtractionStage:
                 self.run_service.transition(
                     run_id,
                     "coverage_review",
-                    expected_revision=run_revision + 1,
+                    expected_revision=run_revision,
                     idempotency_key=f"stage:extraction_empty:{run_id}:{uuid4()}",
                     actor_type="orchestrator",
                     actor_identifier="ExtractionStage",
@@ -601,7 +619,7 @@ class IndexingStage:
             self.run_service.transition(
                 run_id,
                 "coverage_review",
-                expected_revision=run_revision + 1,
+                expected_revision=run_revision,
                 idempotency_key=f"stage:indexing_done:{run_id}:{uuid4()}",
                 actor_type="orchestrator",
                 actor_identifier="IndexingStage",
@@ -809,6 +827,14 @@ class CoverageReviewStage:
 
         # C5: Validate proposal before creating to avoid orphaned records
         proposed_queries = []
+        if decision_type == STRATEGY_DECISION_SEARCH and target_items:
+            # Construct search queries targeting the uncovered items
+            for item_id in target_items[:10]:  # Limit to first 10 items
+                proposed_queries.append({
+                    "query": f"coverage item {item_id}",
+                    "facet": "adaptive",
+                })
+
         try:
             validation = self.strategy_service.validate_proposal(
                 run_id=run_id,
@@ -844,7 +870,7 @@ class CoverageReviewStage:
                 coverage_revision=coverage_revision,
                 decision_type=decision_type,
                 target_coverage_item_ids=[UUID(tid) for tid in target_items[:10]],
-                proposed_queries=[],
+                proposed_queries=proposed_queries,
                 expected_contribution=f"coverage_{reason}",
                 rationale=f"Next action: {decision_type} because {reason}",
                 confidence=0.5,
@@ -983,7 +1009,7 @@ class SynthesisStage:
             self.run_service.transition(
                 run_id,
                 "validating",
-                expected_revision=run_revision + 1,
+                expected_revision=run_revision,
                 idempotency_key=f"stage:synthesis_done:{run_id}:{uuid4()}",
                 actor_type="orchestrator",
                 actor_identifier="SynthesisStage",
@@ -1029,10 +1055,20 @@ class TerminalStage:
 
         if run_state == "validating":
             try:
-                if outcome == "partial":
+                if outcome == "completed":
+                    self.run_service.complete(
+                        run_id,
+                        expected_revision=run_revision,
+                        idempotency_key=f"terminal:completed:{run_id}:{uuid4()}",
+                        actor_type="orchestrator",
+                        actor_identifier="TerminalStage",
+                        reason=context.get("_terminal_reason", "sufficient coverage"),
+                        outcome="completed",
+                    )
+                elif outcome == "partial":
                     self.run_service.partial(
                         run_id,
-                        expected_revision=run_revision + 1,
+                        expected_revision=run_revision,
                         idempotency_key=f"terminal:partial:{run_id}:{uuid4()}",
                         actor_type="orchestrator",
                         actor_identifier="TerminalStage",
@@ -1042,7 +1078,7 @@ class TerminalStage:
                 else:
                     self.run_service.fail(
                         run_id,
-                        expected_revision=run_revision + 1,
+                        expected_revision=run_revision,
                         idempotency_key=f"terminal:failed:{run_id}:{uuid4()}",
                         actor_type="orchestrator",
                         actor_identifier="TerminalStage",
@@ -1472,7 +1508,7 @@ class ResearchOrchestrator:
                 run_id=run_id,
                 final_state=final_state,
                 outcome=final_state,
-                coverage_revision=ctx.get(ContextKeys.OVERALL_STATUS),
+                coverage_revision=ctx.get("coverage_revision_num"),
                 wave_count=wave_count,
                 successful_urls=ctx.get(ContextKeys.SUCCESSFUL_URLS, 0),
                 strategy_proposals=strategy_proposals,

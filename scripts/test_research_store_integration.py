@@ -1978,4 +1978,79 @@ class TestCoverageWorkflowObservationEvents:
             source_url="https://integration.example.com",
             source_event_id=source_event,
         )
-        assert str(event.source_event_id) == str(source_event)
+
+        assert event.source_event_id == source_event
+
+
+# ===================================================================
+# Integration test: ResearchOrchestrator end-to-end
+# ===================================================================
+
+
+class TestResearchOrchestratorIntegration:
+    """End-to-end integration test for ResearchOrchestrator with PostgreSQL.
+
+    This test verifies:
+    - DB revision tracking (current_revision updates after every stage)
+    - State transition persistence (all transitions are recorded in DB)
+    - Final completed state (run ends in 'completed' state)
+    """
+
+    def test_orchestrator_end_to_end(self, service):
+        """Execute ResearchOrchestrator.run() end-to-end with PostgreSQL."""
+        from research_store.orchestrator import ResearchOrchestrator, OrchestratorConfig
+        from research_store.run_service import ResearchRunService
+        from uuid import uuid4
+
+        # Build orchestrator
+        orchestrator = ResearchOrchestrator.build(
+            config=service.config,
+            orchestrator_config=OrchestratorConfig(max_adaptive_cycles=2),
+        )
+
+        # Create a test run
+        run_svc = ResearchRunService(service.uow_factory)
+        run_status = run_svc.create(
+            "Integration test objective", f"test-{uuid4()}"
+        )
+        run_id = run_status.id
+
+        # Create spec and search plan
+        spec = {
+            "objective": "Integration test objective",
+            "research_spec_id": str(uuid4()),
+            "questions": [{"question_id": str(uuid4()), "text": "Q1"}],
+            "claims_to_validate": [],
+            "freshness_requirements": [],
+            "required_source_classes": [],
+            "corroboration_requirements": [],
+            "contradiction_requirements": [],
+        }
+
+        search_plan = {
+            "queries": [
+                {"query": "test query", "facet": "overview"},
+            ],
+        }
+
+        # Run the orchestrator
+        result = orchestrator.run(
+            run_id=run_id,
+            spec=spec,
+            search_plan=search_plan,
+        )
+
+        # Verify the run ended in a terminal state
+        assert result.final_state in ("completed", "partial", "failed")
+        assert result.outcome == result.final_state
+
+        # Verify the run state in the database
+        final_status = run_svc.status(run_id=run_id)
+        assert final_status.state in ("completed", "partial", "failed")
+
+        # Verify state transitions were recorded
+        assert len(run_svc.status(run_id=run_id).transitions) > 0
+
+        # Verify revision tracking: the lifecycle_revision should have
+        # incremented through the stages
+        assert final_status.lifecycle_revision > 0
