@@ -350,7 +350,7 @@ class TestStrategyRevisionValidator:
             proposed_queries=[{"query": "test query", "facet": ""}],
             proposed_candidate_ids=[],
             proposed_retrieval_queries=[],
-            estimated_cost={"searches": 1, "llm_calls": 0},
+            estimated_cost={"max_search_branches": 1, "max_llm_calls": 0},
             rationale="Test rationale",
             scope_expansion=None,
             current_run_revision=1,
@@ -384,6 +384,7 @@ class TestStrategyRevisionValidator:
     # -- Stale run revision --
 
     def test_stale_run_revision_rejected(self):
+        """Proposal at revision 1 is rejected when current run revision is 0."""
         result = self.validator.validate(
             run_id=uuid4(),
             run_revision=1,
@@ -396,7 +397,7 @@ class TestStrategyRevisionValidator:
             estimated_cost={},
             rationale="test",
             scope_expansion=None,
-            current_run_revision=-1,
+            current_run_revision=0,  # current < proposal revision
             current_coverage_revision=1,
             run_state="coverage_review",
             is_terminal=False,
@@ -404,9 +405,54 @@ class TestStrategyRevisionValidator:
         assert result.valid is False
         assert RejectionReason.STALE_RUN_REVISION in result.rejection_reasons
 
-    # -- Stale coverage revision --
+    def test_run_revision_not_stale_when_equal(self):
+        """Proposal at revision 3 is valid when current run revision is 3."""
+        result = self.validator.validate(
+            run_id=uuid4(),
+            run_revision=3,
+            coverage_revision=3,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[],
+            proposed_candidate_ids=[],
+            proposed_retrieval_queries=[],
+            estimated_cost={},
+            rationale="test",
+            scope_expansion=None,
+            current_run_revision=3,  # equal — not stale
+            current_coverage_revision=3,
+            run_state="coverage_review",
+            is_terminal=False,
+        )
+        assert result.valid is True
+        assert RejectionReason.STALE_RUN_REVISION not in result.rejection_reasons
 
-    def test_stale_coverage_revision_rejected(self):
+    def test_run_revision_not_stale_when_current_is_newer(self):
+        """Proposal at revision 1 is valid when current run revision is 5."""
+        result = self.validator.validate(
+            run_id=uuid4(),
+            run_revision=1,
+            coverage_revision=1,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[],
+            proposed_candidate_ids=[],
+            proposed_retrieval_queries=[],
+            estimated_cost={},
+            rationale="test",
+            scope_expansion=None,
+            current_run_revision=5,  # newer — not stale
+            current_coverage_revision=5,
+            run_state="coverage_review",
+            is_terminal=False,
+        )
+        assert result.valid is True
+        assert RejectionReason.STALE_RUN_REVISION not in result.rejection_reasons
+
+    # -- Unknown run --
+
+    def test_unknown_run_rejected(self):
+        """Proposal is rejected when the run does not exist."""
         result = self.validator.validate(
             run_id=uuid4(),
             run_revision=1,
@@ -420,7 +466,103 @@ class TestStrategyRevisionValidator:
             rationale="test",
             scope_expansion=None,
             current_run_revision=1,
-            current_coverage_revision=-1,
+            current_coverage_revision=1,
+            run_state="coverage_review",
+            is_terminal=False,
+            run_exists=False,
+        )
+        assert result.valid is False
+        assert RejectionReason.UNKNOWN_RUN in result.rejection_reasons
+
+    def test_unknown_run_not_rejected_when_not_supplied(self):
+        """When run_exists is not supplied, UNKNOWN_RUN is not triggered."""
+        result = self.validator.validate(
+            run_id=uuid4(),
+            run_revision=1,
+            coverage_revision=1,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[],
+            proposed_candidate_ids=[],
+            proposed_retrieval_queries=[],
+            estimated_cost={},
+            rationale="test",
+            scope_expansion=None,
+            current_run_revision=1,
+            current_coverage_revision=1,
+            run_state="coverage_review",
+            is_terminal=False,
+            # run_exists not supplied — should not trigger
+        )
+        assert result.valid is True
+        assert RejectionReason.UNKNOWN_RUN not in result.rejection_reasons
+
+    # -- Unknown coverage items --
+
+    def test_unknown_coverage_items_rejected(self):
+        """Proposal is rejected when coverage items do not exist."""
+        result = self.validator.validate(
+            run_id=uuid4(),
+            run_revision=1,
+            coverage_revision=1,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[],
+            proposed_candidate_ids=[],
+            proposed_retrieval_queries=[],
+            estimated_cost={},
+            rationale="test",
+            scope_expansion=None,
+            current_run_revision=1,
+            current_coverage_revision=1,
+            run_state="coverage_review",
+            is_terminal=False,
+            coverage_items_exist=False,
+        )
+        assert result.valid is False
+        assert RejectionReason.UNKNOWN_COVERAGE_ITEM in result.rejection_reasons
+
+    def test_unknown_coverage_items_not_rejected_when_not_supplied(self):
+        """When coverage_items_exist is not supplied, UNKNOWN_COVERAGE_ITEM is not triggered."""
+        result = self.validator.validate(
+            run_id=uuid4(),
+            run_revision=1,
+            coverage_revision=1,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[],
+            proposed_candidate_ids=[],
+            proposed_retrieval_queries=[],
+            estimated_cost={},
+            rationale="test",
+            scope_expansion=None,
+            current_run_revision=1,
+            current_coverage_revision=1,
+            run_state="coverage_review",
+            is_terminal=False,
+            # coverage_items_exist not supplied — should not trigger
+        )
+        assert result.valid is True
+        assert RejectionReason.UNKNOWN_COVERAGE_ITEM not in result.rejection_reasons
+
+    # -- Stale coverage revision --
+
+    def test_stale_coverage_revision_rejected(self):
+        """Proposal at coverage revision 1 is rejected when current is 0."""
+        result = self.validator.validate(
+            run_id=uuid4(),
+            run_revision=1,
+            coverage_revision=1,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[],
+            proposed_candidate_ids=[],
+            proposed_retrieval_queries=[],
+            estimated_cost={},
+            rationale="test",
+            scope_expansion=None,
+            current_run_revision=1,
+            current_coverage_revision=0,  # current < proposal revision
             run_state="coverage_review",
             is_terminal=False,
         )
@@ -509,7 +651,7 @@ class TestStrategyRevisionValidator:
             proposed_queries=[],
             proposed_candidate_ids=[],
             proposed_retrieval_queries=[],
-            estimated_cost={"searches": 999, "llm_calls": 999},
+            estimated_cost={"max_search_branches": 999, "max_llm_calls": 999},
             rationale="test",
             scope_expansion=None,
             current_run_revision=1,
@@ -629,8 +771,8 @@ class TestStrategyRevisionValidator:
     def test_multiple_rejection_reasons(self):
         result = self.validator.validate(
             run_id=uuid4(),
-            run_revision=1,
-            coverage_revision=1,
+            run_revision=5,  # proposal at revision 5
+            coverage_revision=5,
             decision_type="unknown_action",
             target_coverage_item_ids=[],
             proposed_queries=[],
@@ -639,8 +781,8 @@ class TestStrategyRevisionValidator:
             estimated_cost={},
             rationale="",
             scope_expansion=None,
-            current_run_revision=-1,
-            current_coverage_revision=-1,
+            current_run_revision=3,  # 3 < 5 — stale
+            current_coverage_revision=3,  # 3 < 5 — stale
             run_state="completed",
             is_terminal=True,
         )
@@ -679,7 +821,7 @@ class TestStrategyRevisionService:
             proposed_candidate_ids=[],
             proposed_retrieval_queries=["retrieval q"],
             expected_contribution="Find evidence for claims",
-            estimated_cost={"searches": 1, "llm_calls": 2},
+            estimated_cost={"max_search_branches": 1, "max_llm_calls": 2},
             rationale="Need to search for X",
             confidence=0.8,
         )
@@ -810,8 +952,8 @@ class TestStrategyRevisionService:
         run_id = uuid4()
         proposal = self.service.create_proposal(
             run_id=run_id,
-            run_revision=1,
-            coverage_revision=1,
+            run_revision=5,
+            coverage_revision=5,
             decision_type="search",
             target_coverage_item_ids=[uuid4()],
             proposed_queries=[],
@@ -820,8 +962,8 @@ class TestStrategyRevisionService:
         decision = self.service.authorize(
             run_id=run_id,
             proposal_id=proposal.proposal_id,
-            current_run_revision=-1,  # stale
-            current_coverage_revision=-1,  # stale
+            current_run_revision=3,  # 3 < 5 — stale
+            current_coverage_revision=3,  # 3 < 5 — stale
             run_state="coverage_review",
             is_terminal=False,
         )
@@ -864,7 +1006,7 @@ class TestStrategyRevisionService:
             decision_type="search",
             target_coverage_item_ids=[uuid4()],
             proposed_queries=[],
-            estimated_cost={"searches": 999},
+            estimated_cost={"max_search_branches": 999},
             rationale="test",
         )
         decision = self.service.authorize(
@@ -877,8 +1019,7 @@ class TestStrategyRevisionService:
             budget_snapshot=_make_budget_snapshot(),
         )
         assert decision.outcome == "rejected"
-        reasons = set(r.value for r in decision.rejection_reasons)
-        assert "budget_exceeded" in reasons
+        assert RejectionReason.BUDGET_EXCEEDED in decision.rejection_reasons
 
     # -- Decision retrieval --
 
@@ -980,22 +1121,136 @@ class TestStrategyRevisionService:
     def test_validate_proposal_rejected(self):
         result = self.service.validate_proposal(
             run_id=uuid4(),
-            run_revision=1,
-            coverage_revision=1,
+            run_revision=5,
+            coverage_revision=5,
             decision_type="search",
             target_coverage_item_ids=[uuid4()],
             proposed_queries=[],
             rationale="test",
-            current_run_revision=-1,
-            current_coverage_revision=1,
+            current_run_revision=3,  # 3 < 5 — stale
+            current_coverage_revision=5,
             run_state="coverage_review",
             is_terminal=False,
         )
         assert result.valid is False
 
+    def test_validate_proposal_scope_expansion_approved(self):
+        expansion = ScopeExpansionRationale(
+            expansion_type=ScopeExpansionType.NEW_ENTITIES,
+            rationale="Need broader coverage",
+            approved=True,
+        )
+        result = self.service.validate_proposal(
+            run_id=uuid4(),
+            run_revision=1,
+            coverage_revision=1,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[{"query": "broader query", "facet": ""}],
+            rationale="test",
+            scope_expansion=expansion,
+            current_run_revision=1,
+            current_coverage_revision=1,
+            run_state="coverage_review",
+            is_terminal=False,
+        )
+        assert result.valid is True
+        assert result.scope_expansion is not None
+        assert result.scope_expansion.approved is True
+
+    def test_validate_proposal_scope_expansion_unjustified(self):
+        expansion = ScopeExpansionRationale(
+            expansion_type=ScopeExpansionType.NEW_ENTITIES,
+            rationale="Need broader coverage",
+            approved=False,
+        )
+        result = self.service.validate_proposal(
+            run_id=uuid4(),
+            run_revision=1,
+            coverage_revision=1,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[{"query": "broader query", "facet": ""}],
+            rationale="test",
+            scope_expansion=expansion,
+            current_run_revision=1,
+            current_coverage_revision=1,
+            run_state="coverage_review",
+            is_terminal=False,
+        )
+        assert result.valid is False
+        assert RejectionReason.SCOPE_EXPANSION_UNJUSTIFIED in result.rejection_reasons
+
+    def test_authorize_scope_expansion_approved(self):
+        run_id = uuid4()
+        proposal = self.service.create_proposal(
+            run_id=run_id,
+            run_revision=1,
+            coverage_revision=1,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[{"query": "broader query", "facet": ""}],
+            rationale="Need broader coverage",
+        )
+        expansion = ScopeExpansionRationale(
+            expansion_type=ScopeExpansionType.NEW_ENTITIES,
+            rationale="Need broader coverage",
+            approved=True,
+        )
+        decision = self.service.authorize(
+            run_id=run_id,
+            proposal_id=proposal.proposal_id,
+            current_run_revision=1,
+            current_coverage_revision=1,
+            run_state="coverage_review",
+            is_terminal=False,
+            scope_expansion=expansion,
+        )
+        assert decision.outcome == "accepted"
+        assert decision.scope_expansion is not None
+        assert decision.scope_expansion.approved is True
+
+    def test_authorize_scope_expansion_unjustified(self):
+        run_id = uuid4()
+        proposal = self.service.create_proposal(
+            run_id=run_id,
+            run_revision=1,
+            coverage_revision=1,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[{"query": "broader query", "facet": ""}],
+            rationale="Need broader coverage",
+        )
+        expansion = ScopeExpansionRationale(
+            expansion_type=ScopeExpansionType.NEW_ENTITIES,
+            rationale="Need broader coverage",
+            approved=False,
+        )
+        decision = self.service.authorize(
+            run_id=run_id,
+            proposal_id=proposal.proposal_id,
+            current_run_revision=1,
+            current_coverage_revision=1,
+            run_state="coverage_review",
+            is_terminal=False,
+            scope_expansion=expansion,
+        )
+        assert decision.outcome == "rejected"
+        assert RejectionReason.SCOPE_EXPANSION_UNJUSTIFIED in decision.rejection_reasons
+
     # -- Idempotency --
 
     def test_proposal_idempotency(self):
+        """Verify that duplicate proposal calls with the same idempotency key
+        return the original proposal rather than creating a new one.
+
+        NOTE: The in-memory repository does not simulate concurrent access.
+        Real PostgreSQL idempotency relies on the unique constraint on
+        (run_id, idempotency_key) and serializable transaction isolation.
+        This test verifies the logical deduplication path only — concurrent
+        race conditions are covered by the database-level unique constraint
+        enforced in the migration (0013_strategy_revisions).
+        """
         run_id = uuid4()
         idem_key = "test-idempotency-key"
         proposal1 = self.service.create_proposal(
@@ -1019,6 +1274,59 @@ class TestStrategyRevisionService:
             idempotency_key=idem_key,
         )
         assert proposal1.proposal_id == proposal2.proposal_id
+
+    def test_revision_order_is_monotonically_increasing(self):
+        """Verify that each new proposal/decision gets a strictly higher
+        revision_order than all previous rows for the same run.
+
+        This test exercises the in-memory repository's revision_order
+        computation.  In PostgreSQL the same ordering is achieved via the
+        subquery ``COALESCE(MAX(revision_order), 0) + 1`` inside the
+        ``record_proposal`` / ``record_decision`` INSERT, protected by
+        the advisory lock from ``_lock_workflow_run``.
+        """
+        run_id = uuid4()
+        # Create a proposal
+        p = self.service.create_proposal(
+            run_id=run_id,
+            run_revision=1,
+            coverage_revision=1,
+            decision_type="search",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[],
+            rationale="first",
+        )
+        # Authorize it (creates a decision row)
+        d = self.service.authorize(
+            run_id=run_id,
+            proposal_id=p.proposal_id,
+            current_run_revision=1,
+            current_coverage_revision=1,
+            run_state="coverage_review",
+            is_terminal=False,
+        )
+        # Create a second proposal
+        p2 = self.service.create_proposal(
+            run_id=run_id,
+            run_revision=2,
+            coverage_revision=2,
+            decision_type="scrape",
+            target_coverage_item_ids=[uuid4()],
+            proposed_queries=[],
+            rationale="second",
+        )
+        # List proposals ordered by revision_order descending
+        proposals = self.service.list_proposals(run_id)
+        assert len(proposals) == 2
+        # The second proposal (higher revision_order) should come first
+        # when sorted descending
+        assert proposals[0].proposal_id == p2.proposal_id
+        assert proposals[1].proposal_id == p.proposal_id
+
+        # List decisions
+        decisions = self.service.list_decisions(run_id)
+        assert len(decisions) == 1
+        assert decisions[0].decision_id == d.decision_id
 
     # -- Proposal existence --
 

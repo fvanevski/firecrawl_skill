@@ -311,6 +311,9 @@ class StrategyRevisionService:
         existing_candidate_ids: set[UUID] | None = None,
         existing_retrieval_queries: set[str] | None = None,
         budget_snapshot: BudgetSnapshot | None = None,
+        scope_expansion: ScopeExpansionRationale | None = None,
+        run_exists: bool | None = None,
+        coverage_items_exist: bool | None = None,
         actor_type: str = "deterministic_policy",
         actor_identifier: str | None = None,
         idempotency_key: str | None = None,
@@ -319,7 +322,7 @@ class StrategyRevisionService:
 
         This method:
         1. Retrieves the proposal.
-        2. Runs deterministic validation.
+        2. Runs deterministic validation (optionally with scope expansion).
         3. Records an accepted or rejected decision.
 
         Returns the ``StrategyRevisionDecision``.
@@ -350,7 +353,7 @@ class StrategyRevisionService:
             proposed_retrieval_queries=proposed_retrieval,
             estimated_cost=estimated_cost,
             rationale=proposal.rationale,
-            scope_expansion=None,  # handled separately if needed
+            scope_expansion=scope_expansion,
             current_run_revision=current_run_revision,
             current_coverage_revision=current_coverage_revision,
             run_state=run_state,
@@ -358,6 +361,8 @@ class StrategyRevisionService:
             existing_candidate_ids=existing_candidate_ids,
             existing_retrieval_queries=existing_retrieval_queries,
             budget_snapshot=budget_snapshot,
+            run_exists=run_exists,
+            coverage_items_exist=coverage_items_exist,
             is_terminal=is_terminal,
         )
 
@@ -381,9 +386,17 @@ class StrategyRevisionService:
                 outcome=outcome,
                 rejection_reasons=rejection_reasons,
                 policy_version=self.budget_policy.policy_version,
-                scope_expansion_type=None,
-                scope_expansion_rationale=None,
-                scope_expansion_approved=None,
+                scope_expansion_type=(
+                    scope_expansion.expansion_type.value
+                    if scope_expansion is not None
+                    else None
+                ),
+                scope_expansion_rationale=(
+                    scope_expansion.rationale if scope_expansion is not None else None
+                ),
+                scope_expansion_approved=(
+                    scope_expansion.approved if scope_expansion is not None else None
+                ),
                 authorized_by=actor_type,
                 idempotency_key=idempotency_key or f"decision:{decision_id}",
                 actor_type=actor_type,
@@ -460,6 +473,8 @@ class StrategyRevisionService:
         existing_query_signatures: list[str] | None = None,
         existing_candidate_ids: set[UUID] | None = None,
         existing_retrieval_queries: set[str] | None = None,
+        run_exists: bool | None = None,
+        coverage_items_exist: bool | None = None,
     ) -> ValidationResult:
         """Run deterministic validation without persisting.
 
@@ -485,6 +500,8 @@ class StrategyRevisionService:
             existing_candidate_ids=existing_candidate_ids,
             existing_retrieval_queries=existing_retrieval_queries,
             budget_snapshot=budget_snapshot,
+            run_exists=run_exists,
+            coverage_items_exist=coverage_items_exist,
             is_terminal=is_terminal,
         )
 
@@ -537,6 +554,29 @@ class StrategyRevisionService:
         rejection_reasons = [
             RejectionReason(r) for r in mapping.get("rejection_reasons", [])
         ]
+        # Reconstruct scope_expansion from stored fields when present
+        scope_expansion = None
+        outcome = mapping.get("outcome", "")
+        if outcome == "accepted":
+            expansion_type = mapping.get("scope_expansion_type")
+            expansion_rationale = mapping.get("scope_expansion_rationale")
+            expansion_approved = mapping.get("scope_expansion_approved")
+            if (
+                expansion_type is not None
+                and expansion_rationale is not None
+                and expansion_approved is not None
+            ):
+                try:
+                    from research_domain.models import ScopeExpansionType
+
+                    scope_expansion = ScopeExpansionRationale(
+                        expansion_type=ScopeExpansionType(expansion_type),
+                        rationale=expansion_rationale,
+                        approved=expansion_approved,
+                    )
+                except ValueError:
+                    # Invalid expansion_type — treat as no expansion
+                    pass
         return StrategyRevisionDecision(
             decision_id=UUID(str(mapping["decision_id"])),
             proposal_id=UUID(str(mapping["proposal_id"])),
@@ -546,7 +586,7 @@ class StrategyRevisionService:
             outcome=mapping["outcome"],
             rejection_reasons=tuple(rejection_reasons),
             policy_version=mapping.get("policy_version", ""),
-            scope_expansion=None,
+            scope_expansion=scope_expansion,
             authorized_by=mapping.get("authorized_by", ""),
             created_at=mapping["created_at"],
         )

@@ -506,27 +506,6 @@ class CoverageLedger:
 
 
 @dataclass(frozen=True)
-class EstimatedCost:
-    searches: int
-    scrapes: int
-    retrievals: int
-    llm_calls: int
-    input_tokens: int
-    output_tokens: int
-
-    def __post_init__(self):
-        for name in (
-            "searches",
-            "scrapes",
-            "retrievals",
-            "llm_calls",
-            "input_tokens",
-            "output_tokens",
-        ):
-            _positive(getattr(self, name), name, allow_zero=True)
-
-
-@dataclass(frozen=True)
 class StrategyRevisionProposal:
     schema_version: str
     proposal_id: UUID
@@ -538,7 +517,7 @@ class StrategyRevisionProposal:
     proposed_candidate_ids: tuple[UUID, ...]
     proposed_retrieval_queries: tuple[str, ...]
     expected_contribution: str
-    estimated_cost: EstimatedCost
+    estimated_cost: dict[str, int]
     rationale: str
     confidence: float
 

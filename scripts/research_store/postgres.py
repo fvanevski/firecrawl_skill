@@ -3994,6 +3994,13 @@ class PostgresUnitOfWork:
         """Persist a strategy-revision proposal row.
 
         Idempotent on (run_id, idempotency_key).  Returns the row id.
+
+        revision_order is computed as ``COALESCE(MAX(revision_order), 0) + 1``
+        for the given run_id.  This subquery is not atomic with respect to the
+        INSERT, so correctness relies on ``_lock_workflow_run`` holding an
+        advisory lock on ``run_id`` for the entire cursor scope.  Without that
+        lock, concurrent inserts could read the same ``MAX(revision_order)``
+        and produce duplicate ``revision_order`` values.
         """
         with self.connection.cursor() as cur:
             self._lock_workflow_run(cur, run_id)
@@ -4148,6 +4155,11 @@ class PostgresUnitOfWork:
         """Persist a strategy-revision decision row.
 
         Idempotent on (run_id, idempotency_key).  Returns the row id.
+
+        revision_order is computed as ``COALESCE(MAX(revision_order), 0) + 1``
+        for the given run_id.  This subquery is not atomic with respect to the
+        INSERT, so correctness relies on ``_lock_workflow_run`` holding an
+        advisory lock on ``run_id`` for the entire cursor scope.
         """
         with self.connection.cursor() as cur:
             self._lock_workflow_run(cur, run_id)

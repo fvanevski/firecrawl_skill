@@ -25,7 +25,7 @@ and budget constraints.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 from uuid import UUID
 
 from research_domain.models import (
@@ -130,10 +130,9 @@ class StrategyRevisionValidator:
     Public API:
 
     * ``validate`` — run all validation checks and return a ValidationResult.
-    * ``validate_queries`` — check proposed queries for novelty and scope.
     * ``validate_budget`` — check estimated cost against effective caps.
-    * ``validate_scope`` — detect and validate scope expansion.
     * ``validate_revision`` — check run and coverage revision staleness.
+    * ``validate_queries`` — check proposed queries for novelty and scope.
     """
 
     def __init__(
@@ -172,7 +171,8 @@ class StrategyRevisionValidator:
         existing_candidate_ids: set[UUID] | None = None,
         existing_retrieval_queries: set[str] | None = None,
         budget_snapshot: BudgetSnapshot | None = None,
-        spec: Mapping[str, Any] | None = None,
+        run_exists: bool | None = None,
+        coverage_items_exist: bool | None = None,
         is_terminal: bool = False,
     ) -> ValidationResult:
         """Run all deterministic validation checks.
@@ -204,10 +204,18 @@ class StrategyRevisionValidator:
             reasons.append(RejectionReason.MISSING_RATIONALE)
 
         # 5. Revision staleness
-        if current_run_revision < 0:
+        if current_run_revision < run_revision:
             reasons.append(RejectionReason.STALE_RUN_REVISION)
-        if current_coverage_revision < 0:
+        if current_coverage_revision < coverage_revision:
             reasons.append(RejectionReason.STALE_COVERAGE_REVISION)
+
+        # 5b. Run existence (optional — caller must supply)
+        if run_exists is False:
+            reasons.append(RejectionReason.UNKNOWN_RUN)
+
+        # 5c. Coverage item existence (optional — caller must supply)
+        if coverage_items_exist is False:
+            reasons.append(RejectionReason.UNKNOWN_COVERAGE_ITEM)
 
         # 6. Scope expansion check
         result = self._check_scope_expansion(scope_expansion, reasons)
@@ -263,40 +271,11 @@ class StrategyRevisionValidator:
         Returns a list of rejection reasons (empty if valid).
         """
         reasons: list[RejectionReason] = []
-        if current_run_revision < 0:
+        if current_run_revision < run_revision:
             reasons.append(RejectionReason.STALE_RUN_REVISION)
-        if current_coverage_revision < 0:
+        if current_coverage_revision < coverage_revision:
             reasons.append(RejectionReason.STALE_COVERAGE_REVISION)
         return reasons
-
-    # ------------------------------------------------------------------
-    # Scope expansion validation
-    # ------------------------------------------------------------------
-
-    def validate_scope(
-        self,
-        scope_expansion: ScopeExpansionRationale | None,
-        *,
-        proposal_requires_expansion: bool,
-    ) -> ScopeExpansionRationale | None:
-        """Validate scope expansion rationale.
-
-        Returns the scope expansion rationale if valid, or None if no
-        expansion is needed.  Raises ``ScopeExpansionError`` if expansion
-        is required but missing or unjustified.
-        """
-        if not proposal_requires_expansion:
-            return None
-        if scope_expansion is None:
-            raise ScopeExpansionError(
-                "scope expansion required but no rationale provided"
-            )
-        if not scope_expansion.approved:
-            raise ScopeExpansionError(
-                f"scope expansion {scope_expansion.expansion_type.value} "
-                "not approved by policy"
-            )
-        return scope_expansion
 
     # ------------------------------------------------------------------
     # Budget validation
