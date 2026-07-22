@@ -28,14 +28,9 @@ before any adaptive action executes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol
 from uuid import UUID
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------------------

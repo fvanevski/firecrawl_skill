@@ -434,9 +434,13 @@ class AcquisitionStage:
                         for item in snapshot.ledger["items"]
                     ]
 
+                # Get wave count from context for cycle-scoped idempotency keys
+                wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
+
                 # Apply one event per candidate to track individual discoveries
                 # Use cycle-scoped idempotency keys and actual candidate IDs
-                for i, cand_id in enumerate(candidate_ids[:5]):  # Limit to first 5
+                # Limit to first 5 candidates per wave to avoid overwhelming the ledger
+                for i, cand_id in enumerate(candidate_ids[:5]):
                     self.coverage_service.apply_event(
                         run_id,
                         "candidate_identified",
@@ -1293,6 +1297,7 @@ class ResearchOrchestrator:
         wave_count = 0
         strategy_proposals = 0
         strategy_decisions = 0
+        coverage_revision_num = 0  # Track coverage revision across cycles
 
         try:
             # Stage 1: Planning
@@ -1318,6 +1323,10 @@ class ResearchOrchestrator:
             run_status = self.run_service.status(run_id=run_id)
             current_revision = run_status.lifecycle_revision
             current_state = run_status.state
+            # Initialize coverage revision from run status (CorpusReviewStage creates revision 1)
+            coverage_revision_num = getattr(
+                run_status, "current_coverage_revision", 0
+            ) or 1
 
             # Main loop: acquisition -> indexing -> coverage_review -> ...
             while cycle_count < max_cycles:
@@ -1333,7 +1342,7 @@ class ResearchOrchestrator:
                     "acquisition",
                     run_id,
                     current_revision,
-                    ctx.get(ContextKeys.OVERALL_STATUS),
+                    coverage_revision_num,
                     current_state,
                     ctx,
                 )
@@ -1357,7 +1366,7 @@ class ResearchOrchestrator:
                     "indexing",
                     run_id,
                     current_revision,
-                    ctx.get(ContextKeys.OVERALL_STATUS),
+                    coverage_revision_num,
                     current_state,
                     ctx,
                 )
@@ -1374,7 +1383,7 @@ class ResearchOrchestrator:
                     "coverage_review",
                     run_id,
                     current_revision,
-                    ctx.get(ContextKeys.OVERALL_STATUS),
+                    coverage_revision_num,
                     current_state,
                     ctx,
                 )
@@ -1385,6 +1394,10 @@ class ResearchOrchestrator:
                 run_status = self.run_service.status(run_id=run_id)
                 current_revision = run_status.lifecycle_revision
                 current_state = run_status.state
+                # Update coverage revision from run status
+                coverage_revision_num = getattr(
+                    run_status, "current_coverage_revision", coverage_revision_num
+                ) or coverage_revision_num
 
                 # Count strategy proposals
                 if result.details and result.details.get(
@@ -1461,7 +1474,7 @@ class ResearchOrchestrator:
                     "synthesis",
                     run_id,
                     current_revision,
-                    ctx.get(ContextKeys.OVERALL_STATUS),
+                    coverage_revision_num,
                     "synthesizing",
                     ctx,
                 )
@@ -1478,7 +1491,7 @@ class ResearchOrchestrator:
                 "terminal",
                 run_id,
                 current_revision,
-                ctx.get(ContextKeys.OVERALL_STATUS),
+                coverage_revision_num,
                 current_state,
                 ctx,
             )
@@ -1517,7 +1530,7 @@ class ResearchOrchestrator:
                 run_id=run_id,
                 final_state=final_state,
                 outcome=final_state,
-                coverage_revision=ctx.get("coverage_revision_num"),
+                coverage_revision=coverage_revision_num,
                 wave_count=wave_count,
                 successful_urls=ctx.get(ContextKeys.SUCCESSFUL_URLS, 0),
                 strategy_proposals=strategy_proposals,
@@ -1592,15 +1605,17 @@ class ResearchOrchestrator:
 
         # Record invocation
         try:
+            # Include wave count in idempotency key for multi-cycle runs
+            wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
             self.run_service.record_search_response(
                 run_id,
                 query_text=f"stage:{stage_name}",
                 backend="orchestrator",
                 raw_payload=f"stage invocation: {stage_name}",
-                idempotency_key=f"invocation:{stage_name}:{run_id}",
+                idempotency_key=f"invocation:{stage_name}:{run_id}:w{wave_count}",
             )
-        except Exception:
-            pass  # Invocation recording is best-effort
+        except Exception as exc:
+            logger.debug("stage invocation recording failed for %s: %s", stage_name, exc)
 
         start = time.monotonic()
         result = stage.execute(
