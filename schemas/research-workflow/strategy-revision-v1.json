@@ -1,37 +1,5 @@
 {
   "$defs": {
-    "EstimatedCost": {
-      "additionalProperties": false,
-      "properties": {
-        "input_tokens": {
-          "type": "integer"
-        },
-        "llm_calls": {
-          "type": "integer"
-        },
-        "output_tokens": {
-          "type": "integer"
-        },
-        "retrievals": {
-          "type": "integer"
-        },
-        "scrapes": {
-          "type": "integer"
-        },
-        "searches": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "searches",
-        "scrapes",
-        "retrievals",
-        "llm_calls",
-        "input_tokens",
-        "output_tokens"
-      ],
-      "type": "object"
-    },
     "SearchQuery": {
       "additionalProperties": false,
       "properties": {
@@ -177,7 +145,10 @@
       "type": "string"
     },
     "estimated_cost": {
-      "$ref": "#/$defs/EstimatedCost"
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
     },
     "expected_contribution": {
       "minLength": 1,
