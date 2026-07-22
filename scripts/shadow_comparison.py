@@ -119,6 +119,8 @@ class LegacyResult:
         final_state: The final run state.
         coverage_status: Final coverage assessment.
         strategy_proposals: Number of adaptive strategy proposals.
+        extracted_urls: Set of URLs that were successfully scraped.
+        search_revisions: Per-wave adaptive query plans (initial + each cycle).
         error: Error message if the run failed.
         wall_clock_seconds: Elapsed wall-clock time.
     """
@@ -132,6 +134,8 @@ class LegacyResult:
     final_state: str
     coverage_status: str
     strategy_proposals: int
+    extracted_urls: tuple[str, ...] = ()
+    search_revisions: list[list[dict[str, Any]]] = field(default_factory=list)
     error: str | None = None
     wall_clock_seconds: float = 0.0
 
@@ -159,6 +163,8 @@ class CoverageLedResult:
         coverage_items: Number of coverage items created.
         strategy_proposals: Number of adaptive strategy proposals.
         strategy_decisions: Number of authorized strategy decisions.
+        extracted_urls: Set of URLs that were successfully scraped.
+        search_revisions: Per-wave adaptive query plans (initial + each cycle).
         error: Error message if the run failed.
         wall_clock_seconds: Elapsed wall-clock time.
     """
@@ -174,6 +180,8 @@ class CoverageLedResult:
     coverage_items: int
     strategy_proposals: int
     strategy_decisions: int
+    extracted_urls: tuple[str, ...] = ()
+    search_revisions: list[list[dict[str, Any]]] = field(default_factory=list)
     error: str | None = None
     wall_clock_seconds: float = 0.0
 
@@ -248,10 +256,18 @@ class ComparisonResult:
 
     @classmethod
     def from_dict(cls, data: dict) -> "ComparisonResult":
+        """Reconstruct a ``ComparisonResult`` from a serialized dict.
+
+        Uses ``.get()`` with safe defaults for every field so that
+        deserialization silently tolerates missing keys rather than
+        raising ``KeyError``.  This is important because ``to_dict``
+        may evolve independently — adding a top-level key to the output
+        without updating this method should not break round-trips.
+        """
         return cls(
-            objective_id=data["objective_id"],
-            legacy=LegacyResult.from_dict(data["legacy"]),
-            coverage_led=CoverageLedResult.from_dict(data["coverage_led"]),
+            objective_id=data.get("objective_id", ""),
+            legacy=LegacyResult.from_dict(data.get("legacy", {})),
+            coverage_led=CoverageLedResult.from_dict(data.get("coverage_led", {})),
             divergences=[Divergence.from_dict(d) for d in data.get("divergences", [])],
             false_completion_legacy=data.get("false_completion_legacy", False),
             false_completion_coverage_led=data.get(
@@ -437,7 +453,54 @@ class ShadowComparisonEngine:
                 )
             )
 
-        # 5. False completion check
+        # 5. Candidate-set divergence (URL-level comparison)
+        legacy_urls = set(legacy.extracted_urls)
+        coverage_urls = set(coverage_led.extracted_urls)
+        if legacy_urls != coverage_urls:
+            divergences.append(
+                Divergence(
+                    dimension="candidate_set",
+                    severity="P1",
+                    legacy_value=sorted(legacy_urls),
+                    coverage_led_value=sorted(coverage_urls),
+                    explanation=(
+                        "Candidate URL sets differ. P1 when scrape targets diverge "
+                        "across the two policies."
+                    ),
+                )
+            )
+
+        # 6. Extraction-choice divergence (set equality)
+        if legacy.extracted_urls != coverage_led.extracted_urls:
+            divergences.append(
+                Divergence(
+                    dimension="extraction_choices",
+                    severity="P1",
+                    legacy_value=sorted(legacy.extracted_urls),
+                    coverage_led_value=sorted(coverage_led.extracted_urls),
+                    explanation=(
+                        "Extraction choices differ — the two policies scraped "
+                        "different URLs."
+                    ),
+                )
+            )
+
+        # 7. Search-revision divergence (per-wave query plans)
+        if legacy.search_revisions != coverage_led.search_revisions:
+            divergences.append(
+                Divergence(
+                    dimension="search_revisions",
+                    severity="P2",
+                    legacy_value=legacy.search_revisions,
+                    coverage_led_value=coverage_led.search_revisions,
+                    explanation=(
+                        "Search revisions differ — adaptive query plans diverge "
+                        "across waves."
+                    ),
+                )
+            )
+
+        # 8. False completion check
         if legacy.final_state == "completed" and legacy.coverage_status != "sufficient":
             divergences.append(
                 Divergence(
@@ -502,7 +565,14 @@ class ShadowComparisonEngine:
         return False
 
     def _synthetic_legacy_result(self, objective: BenchmarkObjective) -> LegacyResult:
-        """Generate a synthetic legacy result for dry-run comparison."""
+        """Generate a synthetic legacy result for dry-run comparison.
+
+        Note: wave_count and strategy_proposals are fixed at 1 and 0
+        respectively because the legacy heuristic planner does not produce
+        per-wave adaptive revisions.  This is a known dry-run limitation —
+        wave-count divergence cannot be detected without real policy
+        execution.
+        """
         complexity_map = {"simple": 2, "moderate": 3, "complex": 5}
         n_queries = complexity_map.get(objective.expected_complexity, 3)
         queries = [
@@ -515,6 +585,10 @@ class ShadowComparisonEngine:
             wave_count=1,
             candidate_count=n_queries * 5,
             successful_extractions=n_queries * 2,
+            extracted_urls=tuple(
+                f"https://example.com/page/{i}" for i in range(n_queries * 2)
+            ),
+            search_revisions=[queries],
             stop_reason="page_target_reached",
             final_state="completed",
             coverage_status="unassessed",
@@ -525,7 +599,12 @@ class ShadowComparisonEngine:
     def _synthetic_coverage_led_result(
         self, objective: BenchmarkObjective
     ) -> CoverageLedResult:
-        """Generate a synthetic coverage-led result for dry-run comparison."""
+        """Generate a synthetic coverage-led result for dry-run comparison.
+
+        Coverage-led may stop earlier if coverage is sufficient, but the
+        synthetic result uses wave_count=1 for simplicity.  Real comparison
+        will produce multi-wave revisions when coverage gaps persist.
+        """
         complexity_map = {"simple": 2, "moderate": 3, "complex": 5}
         n_queries = complexity_map.get(objective.expected_complexity, 3)
         queries = [
@@ -539,6 +618,10 @@ class ShadowComparisonEngine:
             wave_count=1,
             candidate_count=n_queries * 5,
             successful_extractions=n_queries * 2,
+            extracted_urls=tuple(
+                f"https://example.com/source/{i}" for i in range(n_queries * 2)
+            ),
+            search_revisions=[queries],
             stop_reason="coverage_sufficient",
             final_state="completed",
             coverage_status="sufficient",

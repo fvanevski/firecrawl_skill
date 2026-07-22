@@ -55,6 +55,8 @@ def _make_legacy_result(
     wave_count: int = 1,
     candidate_count: int = 10,
     successful_extractions: int = 4,
+    extracted_urls: tuple[str, ...] | None = None,
+    search_revisions: list[list[dict]] | None = None,
     query_plan: list[dict] | None = None,
     strategy_proposals: int = 0,
     error: str | None = None,
@@ -64,12 +66,20 @@ def _make_legacy_result(
             {"query": "test query 1", "facet": "broad_overview"},
             {"query": "test query 2", "facet": "primary_sources"},
         ]
+    if extracted_urls is None:
+        extracted_urls = tuple(
+            f"https://example.com/page/{i}" for i in range(successful_extractions)
+        )
+    if search_revisions is None:
+        search_revisions = [query_plan]
     return LegacyResult(
         run_id=str(uuid4()),
         query_plan=query_plan,
         wave_count=wave_count,
         candidate_count=candidate_count,
         successful_extractions=successful_extractions,
+        extracted_urls=extracted_urls,
+        search_revisions=search_revisions,
         stop_reason=stop_reason,
         final_state=final_state,
         coverage_status=coverage_status,
@@ -86,6 +96,8 @@ def _make_coverage_led_result(
     candidate_count: int = 10,
     successful_extractions: int = 4,
     coverage_items: int = 2,
+    extracted_urls: tuple[str, ...] | None = None,
+    search_revisions: list[list[dict]] | None = None,
     query_plan: list[dict] | None = None,
     strategy_proposals: int = 0,
     strategy_decisions: int = 0,
@@ -96,12 +108,20 @@ def _make_coverage_led_result(
             {"query": "test query 1", "facet": "broad_overview"},
             {"query": "test query 2", "facet": "primary_sources"},
         ]
+    if extracted_urls is None:
+        extracted_urls = tuple(
+            f"https://example.com/source/{i}" for i in range(successful_extractions)
+        )
+    if search_revisions is None:
+        search_revisions = [query_plan]
     return CoverageLedResult(
         run_id=str(uuid4()),
         query_plan=query_plan,
         wave_count=wave_count,
         candidate_count=candidate_count,
         successful_extractions=successful_extractions,
+        extracted_urls=extracted_urls,
+        search_revisions=search_revisions,
         stop_reason=stop_reason,
         final_state=final_state,
         coverage_status=coverage_status,
@@ -374,6 +394,62 @@ class TestComparisonResults(unittest.TestCase):
         self.assertIn("legacy", d)
         self.assertIn("coverage_led", d)
         self.assertIn("divergences", d)
+
+    def test_extraction_choice_divergence(self):
+        """Test extraction-choice divergence detection."""
+        legacy = _make_legacy_result(
+            extracted_urls=("https://a.com/1", "https://a.com/2"),
+        )
+        coverage = _make_coverage_led_result(
+            extracted_urls=("https://b.com/1", "https://b.com/2"),
+        )
+        engine = ShadowComparisonEngine()
+        divergences = engine._compare_results(_make_objective(), legacy, coverage)
+        extraction_divs = [
+            d for d in divergences if d.dimension == "extraction_choices"
+        ]
+        self.assertGreater(len(extraction_divs), 0)
+        self.assertEqual(extraction_divs[0].severity, "P1")
+
+    def test_candidate_set_divergence(self):
+        """Test candidate-set (URL-level) divergence detection."""
+        legacy = _make_legacy_result(
+            extracted_urls=("https://a.com/1", "https://a.com/2"),
+        )
+        coverage = _make_coverage_led_result(
+            extracted_urls=("https://a.com/1", "https://c.com/1"),
+        )
+        engine = ShadowComparisonEngine()
+        divergences = engine._compare_results(_make_objective(), legacy, coverage)
+        set_divs = [d for d in divergences if d.dimension == "candidate_set"]
+        self.assertGreater(len(set_divs), 0)
+        self.assertEqual(set_divs[0].severity, "P1")
+
+    def test_search_revision_divergence(self):
+        """Test search-revision divergence detection."""
+        legacy = _make_legacy_result(
+            search_revisions=[[{"query": "q1"}]],
+        )
+        coverage = _make_coverage_led_result(
+            search_revisions=[[{"query": "q1"}], [{"query": "q2"}]],
+        )
+        engine = ShadowComparisonEngine()
+        divergences = engine._compare_results(_make_objective(), legacy, coverage)
+        rev_divs = [d for d in divergences if d.dimension == "search_revisions"]
+        self.assertGreater(len(rev_divs), 0)
+        self.assertEqual(rev_divs[0].severity, "P2")
+
+    def test_identical_urls_no_extraction_divergence(self):
+        """Test that identical extracted URLs produce no divergence."""
+        urls = ("https://a.com/1", "https://a.com/2")
+        legacy = _make_legacy_result(extracted_urls=urls)
+        coverage = _make_coverage_led_result(extracted_urls=urls)
+        engine = ShadowComparisonEngine()
+        divergences = engine._compare_results(_make_objective(), legacy, coverage)
+        extraction_divs = [
+            d for d in divergences if d.dimension == "extraction_choices"
+        ]
+        self.assertEqual(len(extraction_divs), 0)
 
 
 # ===================================================================
@@ -809,6 +885,8 @@ class TestResultSerialization(unittest.TestCase):
         self.assertIn("wave_count", d)
         self.assertIn("candidate_count", d)
         self.assertIn("successful_extractions", d)
+        self.assertIn("extracted_urls", d)
+        self.assertIn("search_revisions", d)
         self.assertIn("stop_reason", d)
         self.assertIn("final_state", d)
         self.assertIn("coverage_status", d)
@@ -825,6 +903,8 @@ class TestResultSerialization(unittest.TestCase):
         self.assertIn("wave_count", d)
         self.assertIn("candidate_count", d)
         self.assertIn("successful_extractions", d)
+        self.assertIn("extracted_urls", d)
+        self.assertIn("search_revisions", d)
         self.assertIn("stop_reason", d)
         self.assertIn("final_state", d)
         self.assertIn("coverage_status", d)
@@ -833,6 +913,28 @@ class TestResultSerialization(unittest.TestCase):
         self.assertIn("strategy_decisions", d)
         self.assertIn("error", d)
         self.assertIn("wall_clock_seconds", d)
+
+    def test_round_trip_serialization(self):
+        """Test that to_dict/from_dict round-trip preserves data."""
+        legacy = _make_legacy_result(
+            extracted_urls=("https://a.com/1", "https://a.com/2"),
+            search_revisions=[[{"query": "q1"}, {"query": "q2"}]],
+        )
+        coverage = _make_coverage_led_result(
+            extracted_urls=("https://b.com/1", "https://b.com/2"),
+            search_revisions=[[{"query": "q1"}]],
+        )
+        result = ComparisonResult(
+            objective_id="roundtrip",
+            legacy=legacy,
+            coverage_led=coverage,
+        )
+        d = result.to_dict()
+        restored = ComparisonResult.from_dict(d)
+        self.assertEqual(restored.objective_id, "roundtrip")
+        self.assertEqual(restored.legacy.extracted_urls, legacy.extracted_urls)
+        self.assertEqual(restored.legacy.search_revisions, legacy.search_revisions)
+        self.assertEqual(restored.coverage_led.extracted_urls, coverage.extracted_urls)
 
     def test_divergence_to_dict(self):
         """Test Divergence.to_dict() includes all fields."""
