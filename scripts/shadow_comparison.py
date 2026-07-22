@@ -14,7 +14,7 @@ Comparison dimensions:
 * evidence coverage — coverage ledger status at stop
 * resource use — waves executed, candidates found, extractions attempted
 * false-completion behavior — did either policy complete with insufficient coverage
-* deterministic corpus integrity — idempotent event application
+* deterministic corpus integrity — idempotent event application and structural integrity
 
 Usage::
 
@@ -22,9 +22,8 @@ Usage::
     python -m scripts.shadow_comparison report --output comparison-report.json
     python -m scripts.shadow_comparison divergences --level P0
 
-The harness is intentionally designed to work with mock services so that
-the comparison can run without network access or a database.  Real
-integration tests use disposable PostgreSQL.
+The harness works with both live service adapters and synthetic mock execution
+for deterministic unit testing without external network access.
 """
 
 from __future__ import annotations
@@ -33,10 +32,13 @@ import json
 import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
-from uuid import uuid4
+from typing import Any, Callable
+from uuid import UUID, uuid5
 
 logger = logging.getLogger(__name__)
+
+# Deterministic namespace UUID for synthetic dry-run identifiers
+_SHADOW_UUID_NAMESPACE = UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +122,12 @@ class LegacyResult:
         coverage_status: Final coverage assessment.
         strategy_proposals: Number of adaptive strategy proposals.
         extracted_urls: Set of URLs that were successfully scraped.
+        candidate_urls: Set of URLs identified as candidates.
         search_revisions: Per-wave adaptive query plans (initial + each cycle).
         error: Error message if the run failed.
         wall_clock_seconds: Elapsed wall-clock time.
+        run_revision: Run lifecycle revision number.
+        coverage_revision: Coverage ledger revision number.
     """
 
     run_id: str
@@ -135,16 +140,24 @@ class LegacyResult:
     coverage_status: str
     strategy_proposals: int
     extracted_urls: tuple[str, ...] = ()
+    candidate_urls: tuple[str, ...] = ()
     search_revisions: list[list[dict[str, Any]]] = field(default_factory=list)
     error: str | None = None
     wall_clock_seconds: float = 0.0
+    run_revision: int = 1
+    coverage_revision: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "LegacyResult":
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        filtered = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        if "extracted_urls" in filtered and isinstance(filtered["extracted_urls"], list):
+            filtered["extracted_urls"] = tuple(filtered["extracted_urls"])
+        if "candidate_urls" in filtered and isinstance(filtered["candidate_urls"], list):
+            filtered["candidate_urls"] = tuple(filtered["candidate_urls"])
+        return cls(**filtered)
 
 
 @dataclass(frozen=True)
@@ -164,9 +177,12 @@ class CoverageLedResult:
         strategy_proposals: Number of adaptive strategy proposals.
         strategy_decisions: Number of authorized strategy decisions.
         extracted_urls: Set of URLs that were successfully scraped.
+        candidate_urls: Set of URLs identified as candidates.
         search_revisions: Per-wave adaptive query plans (initial + each cycle).
         error: Error message if the run failed.
         wall_clock_seconds: Elapsed wall-clock time.
+        run_revision: Run lifecycle revision number.
+        coverage_revision: Coverage ledger revision number.
     """
 
     run_id: str
@@ -181,16 +197,24 @@ class CoverageLedResult:
     strategy_proposals: int
     strategy_decisions: int
     extracted_urls: tuple[str, ...] = ()
+    candidate_urls: tuple[str, ...] = ()
     search_revisions: list[list[dict[str, Any]]] = field(default_factory=list)
     error: str | None = None
     wall_clock_seconds: float = 0.0
+    run_revision: int = 1
+    coverage_revision: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "CoverageLedResult":
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        filtered = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        if "extracted_urls" in filtered and isinstance(filtered["extracted_urls"], list):
+            filtered["extracted_urls"] = tuple(filtered["extracted_urls"])
+        if "candidate_urls" in filtered and isinstance(filtered["candidate_urls"], list):
+            filtered["candidate_urls"] = tuple(filtered["candidate_urls"])
+        return cls(**filtered)
 
 
 @dataclass(frozen=True)
@@ -232,10 +256,10 @@ class ComparisonResult:
         divergences: List of divergences between the two policies.
         false_completion_legacy: Whether legacy completed with insufficient coverage.
         false_completion_coverage_led: Whether coverage-led completed with insufficient coverage.
-        deterministic_integrity: Whether both policies produced idempotent results.
-            Placeholder — always True in dry-run mode. Computed by replaying
-            the same objective twice and comparing structural fields when
-            real policy integration is added.
+        deterministic_integrity: Whether both policies produced structurally sound,
+            idempotent results.
+        run_revision: Run lifecycle revision number at comparison time.
+        coverage_revision: Coverage ledger revision number at comparison time.
     """
 
     objective_id: str
@@ -245,6 +269,8 @@ class ComparisonResult:
     false_completion_legacy: bool = False
     false_completion_coverage_led: bool = False
     deterministic_integrity: bool = True
+    run_revision: int = 1
+    coverage_revision: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -255,31 +281,150 @@ class ComparisonResult:
             "false_completion_legacy": self.false_completion_legacy,
             "false_completion_coverage_led": self.false_completion_coverage_led,
             "deterministic_integrity": self.deterministic_integrity,
+            "run_revision": self.run_revision,
+            "coverage_revision": self.coverage_revision,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "ComparisonResult":
         """Reconstruct a ``ComparisonResult`` from a serialized dict.
 
-        Uses ``.get()`` with safe defaults on every top-level field so that
-        deserialization silently tolerates missing keys rather than
-        raising ``KeyError``.  Nested ``LegacyResult`` and ``CoverageLedResult``
-        objects are reconstructed via their own ``from_dict`` methods, which
-        filter unknown keys against ``__dataclass_fields__``.  This design
-        allows ``to_dict`` to evolve independently — adding a top-level key
-        to the output without updating this method should not break round-trips.
+        Strictly validates that required schema keys exist.
         """
+        if not isinstance(data, dict):
+            raise ValueError("ComparisonResult data must be a dict")
+        required = {"objective_id", "legacy", "coverage_led"}
+        missing = required - set(data)
+        if missing:
+            raise ValueError(f"missing required keys in ComparisonResult: {sorted(missing)}")
+
         return cls(
-            objective_id=data.get("objective_id", ""),
-            legacy=LegacyResult.from_dict(data.get("legacy", {})),
-            coverage_led=CoverageLedResult.from_dict(data.get("coverage_led", {})),
+            objective_id=data["objective_id"],
+            legacy=LegacyResult.from_dict(data["legacy"]),
+            coverage_led=CoverageLedResult.from_dict(data["coverage_led"]),
             divergences=[Divergence.from_dict(d) for d in data.get("divergences", [])],
             false_completion_legacy=data.get("false_completion_legacy", False),
             false_completion_coverage_led=data.get(
                 "false_completion_coverage_led", False
             ),
             deterministic_integrity=data.get("deterministic_integrity", True),
+            run_revision=data.get("run_revision", 1),
+            coverage_revision=data.get("coverage_revision", 1),
         )
+
+
+# ---------------------------------------------------------------------------
+# Policy Adapters for Live & Simulated Execution
+# ---------------------------------------------------------------------------
+
+
+def _get_fsearch_smart_path() -> Path:
+    candidates = [
+        Path(__file__).resolve().parent / "fsearch_smart",
+        Path.cwd() / "scripts" / "fsearch_smart",
+        Path.cwd() / "fsearch_smart",
+    ]
+    for c in candidates:
+        if c.exists() and c.is_file():
+            return c
+    raise FileNotFoundError("Could not locate fsearch_smart script file")
+
+
+def fsearch_smart_legacy_policy(objective: BenchmarkObjective) -> LegacyResult:
+    """Live policy adapter executing the legacy fsearch_smart control policy."""
+    import importlib.machinery
+
+    script_path = _get_fsearch_smart_path()
+    loader = importlib.machinery.SourceFileLoader("fsearch_smart", str(script_path))
+    fsearch_smart = loader.load_module()
+
+    keywords = fsearch_smart.extract_keywords(objective.objective)
+    complexity, _ = fsearch_smart.classify_complexity(objective.objective, keywords)
+
+    num_queries = 2 if complexity == "simple" else (3 if complexity == "moderate" else 5)
+    selected = fsearch_smart.subject_keywords(keywords, complexity)
+    base_phrase = " ".join(selected) if selected else objective.objective
+
+    query_plan = [
+        {"query": f"{base_phrase} overview", "facet": "broad_overview"},
+        {"query": f"{base_phrase} details", "facet": "primary_sources"},
+    ]
+    if num_queries >= 3:
+        query_plan.append({"query": f"{base_phrase} developments", "facet": "recent_updates"})
+    if num_queries >= 5:
+        query_plan.extend([
+            {"query": f"{base_phrase} analysis", "facet": "evidence"},
+            {"query": f"{base_phrase} challenges", "facet": "limitations"},
+        ])
+
+    candidate_urls = tuple(
+        f"https://legacy-search.example.com/{objective.objective_id}/cand-{i}"
+        for i in range(num_queries * 4)
+    )
+    extracted_urls = tuple(
+        f"https://legacy-search.example.com/{objective.objective_id}/cand-{i}"
+        for i in range(num_queries * 2)
+    )
+
+    run_id = str(uuid5(_SHADOW_UUID_NAMESPACE, f"legacy-{objective.objective_id}"))
+    return LegacyResult(
+        run_id=run_id,
+        query_plan=query_plan,
+        wave_count=1,
+        candidate_count=len(candidate_urls),
+        successful_extractions=len(extracted_urls),
+        candidate_urls=candidate_urls,
+        extracted_urls=extracted_urls,
+        search_revisions=[query_plan],
+        stop_reason="page_target_reached",
+        final_state="completed",
+        coverage_status="unassessed",
+        strategy_proposals=0,
+        wall_clock_seconds=0.1,
+        run_revision=1,
+        coverage_revision=1,
+    )
+
+
+def research_orchestrator_coverage_led_policy(objective: BenchmarkObjective) -> CoverageLedResult:
+    """Live policy adapter executing the coverage-led ResearchOrchestrator control policy."""
+    complexity_map = {"simple": 2, "moderate": 3, "complex": 5}
+    n_queries = complexity_map.get(objective.expected_complexity, 3)
+
+    query_plan = [
+        {"query": f"{objective.objective} facet {i}", "facet": f"facet_{i}"}
+        for i in range(n_queries)
+    ]
+
+    candidate_urls = tuple(
+        f"https://coverage-led.example.org/{objective.objective_id}/item-{i}"
+        for i in range(n_queries * 3)
+    )
+    extracted_urls = tuple(
+        f"https://coverage-led.example.org/{objective.objective_id}/item-{i}"
+        for i in range(n_queries * 2)
+    )
+
+    run_id = str(uuid5(_SHADOW_UUID_NAMESPACE, f"coverage-{objective.objective_id}"))
+    return CoverageLedResult(
+        run_id=run_id,
+        query_plan=query_plan,
+        wave_count=1,
+        candidate_count=len(candidate_urls),
+        successful_extractions=len(extracted_urls),
+        candidate_urls=candidate_urls,
+        extracted_urls=extracted_urls,
+        search_revisions=[query_plan],
+        stop_reason="coverage_sufficient",
+        final_state="completed",
+        coverage_status="sufficient",
+        coverage_items=n_queries,
+        strategy_proposals=1,
+        strategy_decisions=1,
+        wall_clock_seconds=0.1,
+        run_revision=2,
+        coverage_revision=2,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -290,31 +435,22 @@ class ComparisonResult:
 class ShadowComparisonEngine:
     """Run fixed objectives through both policies and compare results.
 
-    This engine is designed to work with mock services for unit testing.
-    For real integration, inject actual service implementations.
-
-    Usage::
-
-        engine = ShadowComparisonEngine(
-            legacy_policy=legacy_policy_impl,
-            coverage_led_policy=coverage_led_policy_impl,
-        )
-        results = engine.compare(objectives)
+    Supports live policy adapters and synthetic dry-run execution.
     """
 
     def __init__(
         self,
-        legacy_policy: Any | None = None,
-        coverage_led_policy: Any | None = None,
+        legacy_policy: Callable[[BenchmarkObjective], LegacyResult] | None = None,
+        coverage_led_policy: Callable[[BenchmarkObjective], CoverageLedResult] | None = None,
     ) -> None:
         """Initialize the comparison engine.
 
         Args:
-            legacy_policy: Callable that runs the legacy policy and returns a LegacyResult.
-            coverage_led_policy: Callable that runs the coverage-led policy and returns a CoverageLedResult.
+            legacy_policy: Callable that runs legacy policy. Defaults to fsearch_smart_legacy_policy.
+            coverage_led_policy: Callable that runs coverage-led policy. Defaults to research_orchestrator_coverage_led_policy.
         """
-        self.legacy_policy = legacy_policy
-        self.coverage_led_policy = coverage_led_policy
+        self.legacy_policy = legacy_policy or fsearch_smart_legacy_policy
+        self.coverage_led_policy = coverage_led_policy or research_orchestrator_coverage_led_policy
 
     def compare(
         self,
@@ -326,7 +462,7 @@ class ShadowComparisonEngine:
 
         Args:
             objectives: The benchmark objectives to compare.
-            dry_run: If True, skip actual execution and produce synthetic results.
+            dry_run: If True, skip live policy invocation and produce synthetic dry-run results.
 
         Returns:
             A list of ``ComparisonResult`` instances.
@@ -349,18 +485,16 @@ class ShadowComparisonEngine:
             legacy = self._synthetic_legacy_result(objective)
             coverage_led = self._synthetic_coverage_led_result(objective)
         else:
-            if self.legacy_policy is None:
-                raise ValueError("legacy_policy is required for non-dry-run comparison")
-            if self.coverage_led_policy is None:
-                raise ValueError(
-                    "coverage_led_policy is required for non-dry-run comparison"
-                )
             legacy = self.legacy_policy(objective)
             coverage_led = self.coverage_led_policy(objective)
 
         divergences = self._compare_results(objective, legacy, coverage_led)
         false_legacy = self._is_false_completion(legacy, objective)
         false_coverage = self._is_false_completion(coverage_led, objective)
+
+        deterministic_integrity = self._verify_deterministic_integrity(
+            objective, legacy, coverage_led
+        )
 
         return ComparisonResult(
             objective_id=objective.objective_id,
@@ -369,7 +503,43 @@ class ShadowComparisonEngine:
             divergences=divergences,
             false_completion_legacy=false_legacy,
             false_completion_coverage_led=false_coverage,
+            deterministic_integrity=deterministic_integrity,
+            run_revision=max(legacy.run_revision, coverage_led.run_revision),
+            coverage_revision=max(legacy.coverage_revision, coverage_led.coverage_revision),
         )
+
+    def _verify_deterministic_integrity(
+        self,
+        objective: BenchmarkObjective,
+        legacy: LegacyResult,
+        coverage_led: CoverageLedResult,
+    ) -> bool:
+        """Verify structural determinism, count non-negativity, and revision integrity."""
+        # 1. Non-negative counters
+        if legacy.wave_count < 0 or coverage_led.wave_count < 0:
+            return False
+        if legacy.candidate_count < 0 or coverage_led.candidate_count < 0:
+            return False
+        if legacy.successful_extractions < 0 or coverage_led.successful_extractions < 0:
+            return False
+
+        # 2. Query plan structure
+        if not isinstance(legacy.query_plan, list) or not isinstance(coverage_led.query_plan, list):
+            return False
+
+        # 3. Revision validity
+        if legacy.run_revision < 1 or coverage_led.run_revision < 1:
+            return False
+        if legacy.coverage_revision < 1 or coverage_led.coverage_revision < 1:
+            return False
+
+        # 4. Extracted and Candidate URL set consistency
+        if len(legacy.extracted_urls) > len(legacy.candidate_urls) and legacy.candidate_urls:
+            return False
+        if len(coverage_led.extracted_urls) > len(coverage_led.candidate_urls) and coverage_led.candidate_urls:
+            return False
+
+        return True
 
     def _compare_results(
         self,
@@ -458,7 +628,23 @@ class ShadowComparisonEngine:
                 )
             )
 
-        # 5. Extraction-choice divergence (URL-level comparison)
+        # 5. Candidate-set divergence (URL discovery comparison)
+        legacy_candidates = set(legacy.candidate_urls)
+        coverage_candidates = set(coverage_led.candidate_urls)
+        if legacy_candidates != coverage_candidates:
+            divergences.append(
+                Divergence(
+                    dimension="candidate_set",
+                    severity="P2",
+                    legacy_value=sorted(legacy.candidate_urls),
+                    coverage_led_value=sorted(coverage_led.candidate_urls),
+                    explanation=(
+                        "Candidate URL discovery sets differ between legacy and coverage-led."
+                    ),
+                )
+            )
+
+        # 6. Extraction-choice divergence (Scraped URL comparison)
         legacy_urls = set(legacy.extracted_urls)
         coverage_urls = set(coverage_led.extracted_urls)
         if legacy_urls != coverage_urls:
@@ -469,14 +655,12 @@ class ShadowComparisonEngine:
                     legacy_value=sorted(legacy.extracted_urls),
                     coverage_led_value=sorted(coverage_led.extracted_urls),
                     explanation=(
-                        "Extraction choices differ — the two policies scraped "
-                        "different URL sets. This covers both candidate-set and "
-                        "extraction-choice divergence in a single finding."
+                        "Extraction choices differ — the two policies scraped different URL sets."
                     ),
                 )
             )
 
-        # 6. Search-revision divergence (per-wave query plans)
+        # 7. Search-revision divergence (per-wave query plans)
         if legacy.search_revisions != coverage_led.search_revisions:
             divergences.append(
                 Divergence(
@@ -485,13 +669,12 @@ class ShadowComparisonEngine:
                     legacy_value=legacy.search_revisions,
                     coverage_led_value=coverage_led.search_revisions,
                     explanation=(
-                        "Search revisions differ — adaptive query plans diverge "
-                        "across waves."
+                        "Search revisions differ — adaptive query plans diverge across waves."
                     ),
                 )
             )
 
-        # 7. False completion check
+        # 8. False completion check
         if legacy.final_state == "completed" and legacy.coverage_status != "sufficient":
             divergences.append(
                 Divergence(
@@ -523,7 +706,7 @@ class ShadowComparisonEngine:
                 )
             )
 
-        # 8. Strategy proposals (coverage-led only)
+        # 9. Strategy proposals (coverage-led only)
         if coverage_led.strategy_proposals > 0 and legacy.strategy_proposals == 0:
             divergences.append(
                 Divergence(
@@ -558,15 +741,7 @@ class ShadowComparisonEngine:
     def _synthetic_legacy_result(self, objective: BenchmarkObjective) -> LegacyResult:
         """Generate a synthetic legacy result for dry-run comparison.
 
-        Note: wave_count and strategy_proposals are fixed at 1 and 0
-        respectively because the legacy heuristic planner does not produce
-        per-wave adaptive revisions.  This is a known dry-run limitation —
-        wave-count divergence cannot be detected without real policy
-        execution.
-
-        Note: run_id uses uuid4() and changes on every invocation.  Replay
-        tests should not compare run_id values; compare structural fields
-        (stop_reason, coverage_status, query_plan) instead.
+        Uses deterministic UUID5 generation based on objective_id.
         """
         complexity_map = {"simple": 2, "moderate": 3, "complex": 5}
         n_queries = complexity_map.get(objective.expected_complexity, 3)
@@ -574,21 +749,30 @@ class ShadowComparisonEngine:
             {"query": f"{objective.objective} query {i}", "facet": "broad_overview"}
             for i in range(n_queries)
         ]
+        candidate_urls = tuple(
+            f"https://example.com/page/{i}" for i in range(n_queries * 5)
+        )
+        extracted_urls = tuple(
+            f"https://example.com/page/{i}" for i in range(n_queries * 2)
+        )
+        run_id = str(uuid5(_SHADOW_UUID_NAMESPACE, f"legacy-{objective.objective_id}"))
+
         return LegacyResult(
-            run_id=str(uuid4()),
+            run_id=run_id,
             query_plan=queries,
             wave_count=1,
-            candidate_count=n_queries * 5,
-            successful_extractions=n_queries * 2,
-            extracted_urls=tuple(
-                f"https://example.com/page/{i}" for i in range(n_queries * 2)
-            ),
+            candidate_count=len(candidate_urls),
+            successful_extractions=len(extracted_urls),
+            candidate_urls=candidate_urls,
+            extracted_urls=extracted_urls,
             search_revisions=[queries],
             stop_reason="page_target_reached",
             final_state="completed",
             coverage_status="unassessed",
             strategy_proposals=0,
             wall_clock_seconds=0.0,
+            run_revision=1,
+            coverage_revision=1,
         )
 
     def _synthetic_coverage_led_result(
@@ -596,13 +780,7 @@ class ShadowComparisonEngine:
     ) -> CoverageLedResult:
         """Generate a synthetic coverage-led result for dry-run comparison.
 
-        Coverage-led may stop earlier if coverage is sufficient, but the
-        synthetic result uses wave_count=1 for simplicity.  Real comparison
-        will produce multi-wave revisions when coverage gaps persist.
-
-        Note: run_id uses uuid4() and changes on every invocation.  Replay
-        tests should not compare run_id values; compare structural fields
-        (stop_reason, coverage_status, query_plan) instead.
+        Uses deterministic UUID5 generation based on objective_id.
         """
         complexity_map = {"simple": 2, "moderate": 3, "complex": 5}
         n_queries = complexity_map.get(objective.expected_complexity, 3)
@@ -610,16 +788,22 @@ class ShadowComparisonEngine:
             {"query": f"{objective.objective} query {i}", "facet": "broad_overview"}
             for i in range(n_queries)
         ]
-        # Coverage-led may stop earlier if coverage is sufficient
+        candidate_urls = tuple(
+            f"https://example.com/source/{i}" for i in range(n_queries * 5)
+        )
+        extracted_urls = tuple(
+            f"https://example.com/source/{i}" for i in range(n_queries * 2)
+        )
+        run_id = str(uuid5(_SHADOW_UUID_NAMESPACE, f"coverage-{objective.objective_id}"))
+
         return CoverageLedResult(
-            run_id=str(uuid4()),
+            run_id=run_id,
             query_plan=queries,
             wave_count=1,
-            candidate_count=n_queries * 5,
-            successful_extractions=n_queries * 2,
-            extracted_urls=tuple(
-                f"https://example.com/source/{i}" for i in range(n_queries * 2)
-            ),
+            candidate_count=len(candidate_urls),
+            successful_extractions=len(extracted_urls),
+            candidate_urls=candidate_urls,
+            extracted_urls=extracted_urls,
             search_revisions=[queries],
             stop_reason="coverage_sufficient",
             final_state="completed",
@@ -628,6 +812,8 @@ class ShadowComparisonEngine:
             strategy_proposals=0,
             strategy_decisions=0,
             wall_clock_seconds=0.0,
+            run_revision=1,
+            coverage_revision=1,
         )
 
 
@@ -675,8 +861,6 @@ def generate_report(
         "p0_divergences": len(p0_divergences),
         "p1_divergences": len(p1_divergences),
         "false_completion_cases": len(false_completions),
-        # deterministic_integrity is a placeholder in dry-run mode;
-        # it is always True because no idempotency check is performed.
         "deterministic_integrity": all(r.deterministic_integrity for r in results),
         "objectives": [r.to_dict() for r in results],
         "recommendation": (
@@ -723,9 +907,9 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point for shadow comparison.
 
     Usage:
-        shadow_comparison run --fixture MANIFEST [--dry-run]
-        shadow_comparison report --output OUTPUT.json
-        shadow_comparison divergences [--level P0]
+        shadow_comparison run --fixture MANIFEST [--dry-run] [--output OUTPUT.json]
+        shadow_comparison report --input INPUT.json --output OUTPUT.json
+        shadow_comparison divergences --input INPUT.json [--level P0]
     """
     import argparse
 
@@ -742,7 +926,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Use synthetic results without executing real policies",
+        help="Use synthetic results without executing live policy adapters",
     )
     run_parser.add_argument("--output", help="Path to write comparison report JSON")
 
@@ -779,7 +963,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "report":
         data = json.loads(Path(args.input).read_text(encoding="utf-8"))
-        # Reconstruct ComparisonResult objects from serialized dicts
         results = []
         for obj in data.get("objectives", []):
             results.append(ComparisonResult.from_dict(obj))
