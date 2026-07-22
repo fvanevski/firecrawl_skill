@@ -38,6 +38,8 @@ class MemoryCoverageRepository:
         self.snapshots: dict[tuple[str, int], CoverageSnapshot] = {}
         self.revisions: dict[str, int] = {}
         self.items: dict[str, dict] = {}
+        # Separate dict for batch idempotency results (not events)
+        self._batch_results: dict[tuple[str, str], list[str]] = {}
 
     def create_items(
         self,
@@ -48,15 +50,28 @@ class MemoryCoverageRepository:
         source_invocation_id=None,
         execution_mode="deterministic_debug",
     ):
+        """Seed coverage items from a ResearchSpec.
+
+        Uses a batch-level idempotency key (matching the DB layer).
+        On first call, creates one event per item and returns their IDs.
+        On repeated calls, returns the existing IDs without creating new events.
+        """
+        run_id_str = str(run_id)
+        # Batch-level idempotency key (same as DB layer)
+        batch_key = (run_id_str, idempotency_key)
+
+        # Check if batch already existed — return existing IDs
+        if batch_key in self._batch_results:
+            return self._batch_results[batch_key]
+
+        # First call — create one event per item
         item_ids = []
-        for idx, item in enumerate(items):
+        for item in items:
             iid = uuid4()
             self.items[str(iid)] = {
                 "item_type": item["item_type"],
                 "subject_id": item["subject_id"],
             }
-            # Each item gets a unique idempotency key
-            item_key = f"{idempotency_key}:item:{idx}"
             event = CoverageEvent(
                 id=iid,
                 run_id=run_id,
@@ -76,14 +91,19 @@ class MemoryCoverageRepository:
                     "execution_mode": execution_mode,
                     "text": item.get("text", ""),
                 },
-                idempotency_key=item_key,
+                idempotency_key=idempotency_key,
                 created_at=None,
             )
-            self.events[(str(run_id), item_key)] = event
+            # Store per-item events keyed by (run_id, item_id) for rebuild_projection
+            self.events[(run_id_str, str(iid))] = event
             item_ids.append(str(iid))
+
+        # Store batch result for idempotency (separate from events)
+        self._batch_results[batch_key] = item_ids
+
         # Update revision counter (one atomic batch = revision 1)
-        current = self.revisions.get(str(run_id), 0)
-        self.revisions[str(run_id)] = max(current, 1)
+        current = self.revisions.get(run_id_str, 0)
+        self.revisions[run_id_str] = max(current, 1)
         return item_ids
 
     def apply_event(
@@ -112,7 +132,16 @@ class MemoryCoverageRepository:
         current_revision = self.revisions.get(str(run_id), 0)
         new_revision = current_revision + 1
 
-        if new_revision <= current_revision:
+        # Stale-rejection: check if there's already an event with this
+        # revision (simulating a concurrent update that advanced the revision).
+        # In the DB layer this is enforced by transaction isolation + the
+        # CHECK(coverage_revision > prior_coverage_revision) constraint.
+        existing_revisions = {
+            evt.coverage_revision
+            for evt in self.events.values()
+            if evt.run_id == run_id and evt.coverage_revision is not None
+        }
+        if new_revision in existing_revisions:
             raise ValueError(
                 f"stale coverage revision: proposed {new_revision} "
                 f"does not exceed current {current_revision}"
@@ -353,6 +382,41 @@ class TestCoverageItemCreation:
         second = service.create_items_from_spec(run_id, spec)
         assert len(first) == len(second) == 1
 
+    def test_idempotent_item_creation_returns_same_ids(self):
+        """Idempotent re-initialization returns the exact same item IDs."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {"questions": [{"question_id": uuid4(), "text": "What is X?"}]}
+        first = service.create_items_from_spec(run_id, spec)
+        second = service.create_items_from_spec(run_id, spec)
+        assert first[0].coverage_item_id == second[0].coverage_item_id
+
+    def test_idempotent_creation_all_types_same_ids(self):
+        """Batch-level idempotency with all 6 item types returns same IDs."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+            "claims_to_validate": [{"claim_id": uuid4(), "statement": "C1"}],
+            "freshness_requirements": [
+                {"requirement_id": uuid4(), "description": "F1"}
+            ],
+            "required_source_classes": [
+                {"requirement_id": uuid4(), "source_class": "S1"}
+            ],
+            "corroboration_requirements": [
+                {"requirement_id": uuid4(), "description": "CR1"}
+            ],
+            "contradiction_requirements": [
+                {"requirement_id": uuid4(), "description": "CD1"}
+            ],
+        }
+        first = service.create_items_from_spec(run_id, spec)
+        second = service.create_items_from_spec(run_id, spec)
+        assert len(first) == len(second) == 6
+        for i, j in zip(first, second):
+            assert i.coverage_item_id == j.coverage_item_id
+
 
 class TestEventApplication:
     def test_applies_event_and_increments_revision(self):
@@ -402,7 +466,8 @@ class TestEventApplication:
 
     def test_rejects_stale_revision(self):
         """Stale revision is enforced by the DB layer (CHECK constraint).
-        The memory repo always increments, so we test the pattern instead.
+        The memory repo simulates this by checking if the proposed revision
+        already exists among events for the run.
         """
         repo, service = coverage_fixture()
         run_id = uuid4()
@@ -410,13 +475,38 @@ class TestEventApplication:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        # The DB layer raises ValueError for stale revisions.
-        # The memory repo always increments, so we verify the pattern:
-        # current_revision is read, new = current + 1, and if new <= current
-        # it raises. The DB CHECK(coverage_revision > prior_coverage_revision)
-        # enforces this at the constraint level.
-        current = repo.get_current_revision(run_id)
-        assert current >= 1  # items created bumped revision
+        # Insert a fake event with revision 3 to simulate a concurrent update.
+        # The next apply_event will compute new_revision = 3 (since current
+        # revision is now 2), but 3 is already taken, so it raises stale.
+        fake_event = CoverageEvent(
+            id=uuid4(),
+            run_id=run_id,
+            coverage_revision=3,
+            prior_coverage_revision=2,
+            event_type="item_status_changed",
+            item_id=None,
+            item_type=None,
+            subject_id=None,
+            new_status="supported",
+            previous_status=None,
+            new_freshness_status=None,
+            previous_freshness_status=None,
+            source_event_id=None,
+            source_invocation_id=None,
+            payload={},
+            idempotency_key="fake:concurrent",
+            created_at=None,
+        )
+        repo.events[(str(run_id), "fake:concurrent")] = fake_event
+        repo.revisions[str(run_id)] = 2
+
+        with pytest.raises(ValueError, match="stale coverage revision"):
+            service.apply_event(
+                run_id,
+                "item_status_changed",
+                new_status="supported",
+                idempotency_key="stale:1",
+            )
 
     def test_rejects_unknown_item(self):
         repo, service = coverage_fixture()
