@@ -4847,31 +4847,6 @@ class PostgresUnitOfWork:
             return None
         return self._row_to_decision_mapping(row)
 
-    # ========================================================================
-    # Claims and evidence links (issue #32 / PRD FR-015, FR-016, Section 14)
-    # ========================================================================
-
-    def claim_exists(self, run_id: UUID, claim_id: UUID) -> bool:
-        """Return True if a claim with the given domain UUID exists for the run."""
-        with self.connection.cursor() as cur:
-            cur.execute(
-                """SELECT 1 FROM research_claims
-                WHERE run_id=%s AND claim_id=%s LIMIT 1""",
-                (run_id, claim_id),
-            )
-            return cur.fetchone() is not None
-
-    def claim_statement(self, run_id: UUID, claim_id: UUID) -> str | None:
-        """Return the claim statement, or None if not found."""
-        with self.connection.cursor() as cur:
-            cur.execute(
-                """SELECT statement FROM research_claims
-                WHERE run_id=%s AND claim_id=%s LIMIT 1""",
-                (run_id, claim_id),
-            )
-            row = cur.fetchone()
-            return row[0] if row else None
-
     def upsert_claim(
         self,
         run_id: UUID,
@@ -4896,8 +4871,7 @@ class PostgresUnitOfWork:
                     statement=excluded.statement,
                     semantic_status=excluded.semantic_status,
                     uncertainty=excluded.uncertainty,
-                    evidence_packet_revision=excluded.evidence_packet_revision,
-                    updated_at=now()
+                    evidence_packet_revision=excluded.evidence_packet_revision
                 RETURNING id""",
                 (
                     run_id,

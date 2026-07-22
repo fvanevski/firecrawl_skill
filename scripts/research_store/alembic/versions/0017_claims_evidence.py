@@ -47,6 +47,8 @@ Constraints:
 * ``chk_claim_evidence_links_confidence`` — ``confidence >= 0 AND confidence <= 1``
 * ``chk_claim_evidence_links_relationship`` — enum constraint.
 * ``chk_claim_evidence_links_passage`` — ``passage_id`` is NOT NULL.
+* ``uk_claim_evidence_links_claim_passage`` — unique ``(claim_id, passage_id)``
+  prevents duplicate evidence links for the same claim+passage pair.
 
 Indexes:
 * ``idx_claim_evidence_links_passage`` — filter by ``passage_id``
@@ -164,7 +166,6 @@ def upgrade():
           uncertainty                 text,
           evidence_packet_revision    bigint NOT NULL DEFAULT 1,
           created_at                  timestamptz NOT NULL DEFAULT now(),
-          updated_at                  timestamptz NOT NULL DEFAULT now(),
 
           PRIMARY KEY (id),
           CONSTRAINT uk_research_claims_run_claim
@@ -197,7 +198,9 @@ def upgrade():
           CONSTRAINT chk_claim_evidence_links_confidence
             CHECK (confidence >= 0.0 AND confidence <= 1.0),
           CONSTRAINT chk_claim_evidence_links_relationship
-            CHECK (relationship IS NOT NULL)
+            CHECK (relationship IS NOT NULL),
+          CONSTRAINT uk_claim_evidence_links_claim_passage
+            UNIQUE (claim_id, passage_id)
         );
         """
     )

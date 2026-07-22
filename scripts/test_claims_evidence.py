@@ -124,9 +124,6 @@ def _make_uow_mock(claims=None, passages=None, snapshots=None):
                 "links": [],
             }
 
-        def claim_exists(self, run_id, claim_id):
-            return claim_id in claims
-
         def validate_passage_id(self, passage_id):
             return passage_id in passages
 
@@ -574,17 +571,100 @@ def test_idempotent_claim_upsert(tmp_path, prepared_database_for_claims):
     assert claims[0]["statement"] == "Updated"
 
 
+@INTEGRATION_MARK
+def test_duplicate_evidence_link_rejected(tmp_path, prepared_database_for_claims):
+    """Duplicate (claim_id, passage_id) pairs are rejected by the unique constraint."""
+    from research_store.container import build_claim_service
+    from research_store.config import StoreConfig
+    from dataclasses import replace
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=TEST_DSN,
+        blob_root=tmp_path / "blobs",
+    )
+    svc = build_claim_service(config)
+    run_id = uuid4()
+    claim_id = uuid4()
+    passage_id = uuid4()
+    snapshot_id = uuid4()
+
+    svc.create_claim(run_id, claim_id, "Test claim")
+    svc.create_evidence_link(
+        run_id, claim_id, passage_id, snapshot_id, relationship="supports"
+    )
+
+    # Duplicate link for same claim+passage should be rejected
+    with pytest.raises(Exception):  # PostgreSQL unique violation
+        svc.create_evidence_link(
+            run_id, claim_id, passage_id, snapshot_id, relationship="supports"
+        )
+
+
+@INTEGRATION_MARK
+def test_confidence_edge_values_accepted(tmp_path, prepared_database_for_claims):
+    """Confidence values 0.0 and 1.0 are accepted at the service layer."""
+    from research_store.container import build_claim_service
+    from research_store.config import StoreConfig
+    from dataclasses import replace
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=TEST_DSN,
+        blob_root=tmp_path / "blobs",
+    )
+    svc = build_claim_service(config)
+    run_id = uuid4()
+    claim_id = uuid4()
+    passage_id = uuid4()
+    snapshot_id = uuid4()
+
+    svc.create_claim(run_id, claim_id, "Test claim")
+
+    # Edge values should succeed
+    link_id_0 = svc.create_evidence_link(
+        run_id, claim_id, passage_id, snapshot_id, confidence=0.0
+    )
+    assert link_id_0 is not None
+
+    link_id_1 = svc.create_evidence_link(
+        run_id, claim_id, passage_id, snapshot_id, confidence=1.0
+    )
+    assert link_id_1 is not None
+
+    # Values outside [0, 1] should fail
+    with pytest.raises(ValueError, match="confidence"):
+        svc.create_evidence_link(
+            run_id, claim_id, passage_id, snapshot_id, confidence=-0.1
+        )
+
+    with pytest.raises(ValueError, match="confidence"):
+        svc.create_evidence_link(
+            run_id, claim_id, passage_id, snapshot_id, confidence=1.01
+        )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures for integration tests
 # ---------------------------------------------------------------------------
 
 if TEST_DSN:
-    from research_store.postgres import connect
+    from research_store.postgres import (
+        connect,
+        migrate,
+        require_disposable_database_reset,
+    )
 
     @pytest.fixture(scope="session")
     def prepared_database_for_claims():
-        """Prepare database with migration 0017."""
-        pass
+        """Prepare database with migration 0017 applied."""
+        require_disposable_database_reset(
+            TEST_DSN, os.environ.get("RESEARCH_STORE_TEST_ALLOW_RESET", "")
+        )
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute("DROP SCHEMA public CASCADE")
+            cur.execute("CREATE SCHEMA public")
+        assert migrate(TEST_DSN) == 17
 
     def test_migration_0017_creates_tables():
         """Verify migration 0017 creates research_claims and claim_evidence_links."""
@@ -599,13 +679,24 @@ if TEST_DSN:
             assert "claim_evidence_links" in tables
             assert "research_claims" in tables
 
-    def test_migration_0017_has_updated_at_column():
-        """Verify research_claims has the updated_at column (B1 fix)."""
+    def test_migration_0017_no_updated_at_column():
+        """Verify research_claims does NOT have updated_at (B2 fix — convention violation removed)."""
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT column_name FROM information_schema.columns
                 WHERE table_name='research_claims'
                 AND column_name='updated_at'"""
+            )
+            rows = cur.fetchall()
+            assert len(rows) == 0
+
+    def test_migration_0017_unique_constraint_on_links():
+        """Verify claim_evidence_links has the (claim_id, passage_id) unique constraint."""
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT conname FROM pg_constraint
+                WHERE conrelid='claim_evidence_links'::regclass
+                AND conname='uk_claim_evidence_links_claim_passage'"""
             )
             rows = cur.fetchall()
             assert len(rows) == 1

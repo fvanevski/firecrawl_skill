@@ -1692,7 +1692,6 @@ def main(argv=None):
                     "claim_count": manifest.get("claim_count", 0),
                     "link_count": manifest.get("link_count", 0),
                 }
-            result = manifest
         elif args.claim_command == "list":
             claims = claim_svc.list_claims(run_id)
             links = claim_svc.list_evidence_links(run_id)
