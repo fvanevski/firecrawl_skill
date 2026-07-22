@@ -20,7 +20,11 @@ def _text(value: str, name: str) -> None:
 
 
 def _confidence(value: float, name: str = "confidence") -> None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not 0 <= value <= 1
+    ):
         raise ValueError(f"{name} must be between 0 and 1")
 
 
@@ -297,12 +301,30 @@ class ResearchSpec:
         for values, name in (
             ([item.question_id for item in self.questions], "question IDs"),
             ([item.claim_id for item in self.claims_to_validate], "claim IDs"),
-            ([item.requirement_id for item in self.freshness_requirements], "freshness requirement IDs"),
-            ([item.requirement_id for item in self.required_source_classes], "source requirement IDs"),
-            ([item.requirement_id for item in self.corroboration_requirements], "corroboration requirement IDs"),
-            ([item.requirement_id for item in self.contradiction_requirements], "contradiction requirement IDs"),
-            ([item.requirement_id for item in self.structured_data_requirements], "structured requirement IDs"),
-            ([item.criterion_id for item in self.completion_criteria], "completion criterion IDs"),
+            (
+                [item.requirement_id for item in self.freshness_requirements],
+                "freshness requirement IDs",
+            ),
+            (
+                [item.requirement_id for item in self.required_source_classes],
+                "source requirement IDs",
+            ),
+            (
+                [item.requirement_id for item in self.corroboration_requirements],
+                "corroboration requirement IDs",
+            ),
+            (
+                [item.requirement_id for item in self.contradiction_requirements],
+                "contradiction requirement IDs",
+            ),
+            (
+                [item.requirement_id for item in self.structured_data_requirements],
+                "structured requirement IDs",
+            ),
+            (
+                [item.criterion_id for item in self.completion_criteria],
+                "completion criterion IDs",
+            ),
         ):
             _unique(values, name)
 
@@ -438,7 +460,9 @@ class CoverageItem:
 
     def __post_init__(self):
         _text(self.subject_id, "coverage_item.subject_id")
-        _positive(self.independent_source_count, "independent_source_count", allow_zero=True)
+        _positive(
+            self.independent_source_count, "independent_source_count", allow_zero=True
+        )
         _positive(
             self.required_independent_source_count,
             "required_independent_source_count",
@@ -467,11 +491,18 @@ class CoverageLedger:
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
         _positive(self.revision, "revision")
         _unique([item.coverage_item_id for item in self.items], "coverage item IDs")
-        _unique([item.failure_id for item in self.mechanical_failures], "mechanical failure IDs")
+        _unique(
+            [item.failure_id for item in self.mechanical_failures],
+            "mechanical failure IDs",
+        )
         known = {item.failure_id for item in self.mechanical_failures}
-        referenced = {item for coverage in self.items for item in coverage.mechanical_failure_ids}
+        referenced = {
+            item for coverage in self.items for item in coverage.mechanical_failure_ids
+        }
         if referenced - known:
-            raise ValueError(f"unknown mechanical failure IDs: {sorted(map(str, referenced-known))}")
+            raise ValueError(
+                f"unknown mechanical failure IDs: {sorted(map(str, referenced - known))}"
+            )
 
 
 @dataclass(frozen=True)
@@ -484,7 +515,14 @@ class EstimatedCost:
     output_tokens: int
 
     def __post_init__(self):
-        for name in ("searches", "scrapes", "retrievals", "llm_calls", "input_tokens", "output_tokens"):
+        for name in (
+            "searches",
+            "scrapes",
+            "retrievals",
+            "llm_calls",
+            "input_tokens",
+            "output_tokens",
+        ):
             _positive(getattr(self, name), name, allow_zero=True)
 
 
@@ -518,6 +556,89 @@ class StrategyRevisionProposal:
         _text(self.expected_contribution, "expected_contribution")
         _text(self.rationale, "rationale")
         _confidence(self.confidence)
+
+
+# ---------------------------------------------------------------------------
+# Strategy revision authorization
+# ---------------------------------------------------------------------------
+
+
+class RejectionReason(str, Enum):
+    """Taxonomy of deterministic rejection reasons for strategy proposals."""
+
+    STALE_COVERAGE_REVISION = "stale_coverage_revision"
+    STALE_RUN_REVISION = "stale_run_revision"
+    UNKNOWN_COVERAGE_ITEM = "unknown_coverage_item"
+    UNKNOWN_RUN = "unknown_run"
+    BUDGET_EXCEEDED = "budget_exceeded"
+    SCOPE_EXPANDED = "scope_expanded"
+    SCOPE_EXPANSION_UNJUSTIFIED = "scope_expansion_unjustified"
+    DUPLICATE_ACTION = "duplicate_action"
+    MISSING_RATIONALE = "missing_rationale"
+    MISSING_TARGET_ITEMS = "missing_target_items"
+    TERMINAL_RUN_STATE = "terminal_run_state"
+    UNKNOWN_DECISION_TYPE = "unknown_decision_type"
+
+
+class ScopeExpansionType(str, Enum):
+    """Types of scope expansion detected in a proposal."""
+
+    NEW_ENTITIES = "new_entities"
+    NEW_JURISDICTIONS = "new_jurisdictions"
+    NEW_TIME_WINDOWS = "new_time_windows"
+    NEW_SOURCE_CLASSES = "new_source_classes"
+    NEW_ARCHETYPE = "new_archetype"
+    BROADENED_QUERY_TERMS = "broadened_query_terms"
+
+
+@dataclass(frozen=True)
+class ScopeExpansionRationale:
+    """Explicit rationale required when a proposal expands scope.
+
+    Scope expansion is permitted only when the rationale is provided
+    and passes deterministic policy checks.
+    """
+
+    expansion_type: ScopeExpansionType
+    rationale: str
+    approved: bool
+
+    def __post_init__(self):
+        _text(self.rationale, "scope_expansion_rationale.rationale")
+
+
+@dataclass(frozen=True)
+class StrategyRevisionDecision:
+    """Deterministic authorization decision on a strategy proposal.
+
+    This record captures whether the proposal was accepted or rejected,
+    the rejection reason taxonomy (if rejected), and the deterministic
+    policy version that made the decision.
+    """
+
+    decision_id: UUID
+    proposal_id: UUID
+    run_id: UUID
+    run_revision: int
+    coverage_revision: int
+    outcome: str  # "accepted" | "rejected"
+    rejection_reasons: tuple[RejectionReason, ...]
+    policy_version: str
+    scope_expansion: ScopeExpansionRationale | None
+    authorized_by: str  # "deterministic_policy" | "operator"
+    created_at: Any  # datetime
+
+    def __post_init__(self):
+        if self.outcome not in ("accepted", "rejected"):
+            raise ValueError("outcome must be 'accepted' or 'rejected'")
+        if not self.rejection_reasons and self.outcome == "rejected":
+            raise ValueError("rejected decisions must include rejection reasons")
+        if self.outcome == "accepted" and self.rejection_reasons:
+            raise ValueError("accepted decisions must not include rejection reasons")
+        if self.scope_expansion and self.outcome == "rejected":
+            raise ValueError("scope_expansion is only recorded for accepted proposals")
+        _text(self.policy_version, "decision.policy_version")
+        _text(self.authorized_by, "decision.authorized_by")
 
 
 @dataclass(frozen=True)
@@ -588,9 +709,15 @@ class RetrievalProvenance:
         _text(self.requested_mode, "retrieval_provenance.requested_mode")
         _text(self.executed_mode, "retrieval_provenance.executed_mode")
         _unique(self.selected_passage_ids, "selected_passage_ids")
-        if self.mechanical_status is MechanicalStatus.SUCCEEDED and self.component_errors:
+        if (
+            self.mechanical_status is MechanicalStatus.SUCCEEDED
+            and self.component_errors
+        ):
             raise ValueError("successful retrieval cannot contain component errors")
-        if self.mechanical_status is not MechanicalStatus.SUCCEEDED and not self.component_errors:
+        if (
+            self.mechanical_status is not MechanicalStatus.SUCCEEDED
+            and not self.component_errors
+        ):
             raise ValueError("degraded or failed retrieval requires component errors")
 
 
@@ -621,7 +748,9 @@ class EvidencePacket:
         _positive(self.coverage_revision, "coverage_revision")
         _unique([item.claim_id for item in self.claims], "evidence claim IDs")
         _unique([item.passage_id for item in self.passages], "passage IDs")
-        _unique([item.binding_id for item in self.claim_evidence_bindings], "binding IDs")
+        _unique(
+            [item.binding_id for item in self.claim_evidence_bindings], "binding IDs"
+        )
         groups = (
             self.corroborating_groups
             + self.contradicting_groups
@@ -631,7 +760,9 @@ class EvidencePacket:
         _unique([item.group_id for item in groups], "evidence group IDs")
         claim_ids = {item.claim_id for item in self.claims}
         passage_ids = {item.passage_id for item in self.passages}
-        unknown_claims = {item.claim_id for item in self.claim_evidence_bindings} - claim_ids
+        unknown_claims = {
+            item.claim_id for item in self.claim_evidence_bindings
+        } - claim_ids
         unknown_passages = {
             passage
             for item in self.claim_evidence_bindings
@@ -646,9 +777,13 @@ class EvidencePacket:
             for passage in event.selected_passage_ids
         } - passage_ids
         if unknown_claims:
-            raise ValueError(f"unknown evidence claim IDs: {sorted(map(str, unknown_claims))}")
+            raise ValueError(
+                f"unknown evidence claim IDs: {sorted(map(str, unknown_claims))}"
+            )
         if unknown_passages:
-            raise ValueError(f"unknown passage IDs: {sorted(map(str, unknown_passages))}")
+            raise ValueError(
+                f"unknown passage IDs: {sorted(map(str, unknown_passages))}"
+            )
 
 
 CANONICAL_MODELS = (

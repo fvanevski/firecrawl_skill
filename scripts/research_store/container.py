@@ -14,6 +14,7 @@ from .retrieval import CohereCompatibleReranker
 from .run_service import ResearchRunService
 from .semantic_service import SemanticCallService
 from .service import CorpusService
+from .strategy_service import StrategyRevisionService
 
 
 def build_service(config: StoreConfig | None = None) -> CorpusService:
@@ -83,7 +84,6 @@ def build_run_service(config: StoreConfig | None = None) -> ResearchRunService:
     )
 
 
-
 def build_semantic_service(config: StoreConfig | None = None) -> SemanticCallService:
     config = config or StoreConfig.from_env()
     config.require_database()
@@ -124,10 +124,9 @@ def build_acquisition_service(
     )
 
 
-def build_compatibility_export_service(
-    config: StoreConfig | None = None
-):
+def build_compatibility_export_service(config: StoreConfig | None = None):
     from .compat_export import SearchCompatibilityExporter
+
     config = config or StoreConfig.from_env()
     config.require_database()
     return SearchCompatibilityExporter(
@@ -144,7 +143,6 @@ def build_compatibility_export_service(
         ),
         blob_store=ContentAddressedBlobStore(config.blob_root),
     )
-
 
 
 def build_legacy_adapter(
@@ -168,4 +166,27 @@ def build_legacy_adapter(
             config.chunker_version,
         ),
         mode,
+    )
+
+
+def build_strategy_service(
+    config: StoreConfig | None = None,
+) -> StrategyRevisionService:
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    from .budget_policy import DEFAULT_POLICY
+
+    return StrategyRevisionService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        ),
+        budget_policy=DEFAULT_POLICY,
     )

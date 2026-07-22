@@ -8,10 +8,17 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
-from .domain import BlobReference, IngestRequest, IngestResult, RawSearchResponse, SearchCandidate, CandidateOccurrence, utcnow
+from .domain import (
+    BlobReference,
+    IngestRequest,
+    IngestResult,
+    RawSearchResponse,
+    SearchCandidate,
+    CandidateOccurrence,
+    utcnow,
+)
 from .parsing import parse_raw_search_response
 from .url import canonicalize_candidate_url
-
 
 
 try:
@@ -21,6 +28,7 @@ try:
     from research_domain.validation import ValidationContext, validate_references
 except ImportError:
     import sys
+
     sys.path.insert(0, str(Path(__file__).parents[1]))
     from research_domain import load_model, serialize_model
     from research_domain.codec import to_dict
@@ -116,8 +124,9 @@ class PostgresUnitOfWork:
         self.connection = connect(self.database_url)
         self.sources = self.snapshots = self.documents = self.chunks = self.runs = (
             self.retrieval_events
-        ) = self.index_jobs = self.search_responses = self.candidates = self
-
+        ) = self.index_jobs = self.search_responses = self.candidates = (
+            self.strategy_revisions
+        ) = self
 
         return self
 
@@ -1413,7 +1422,9 @@ class PostgresUnitOfWork:
             spec_model = load_model(spec_payload)
 
             if plan_model.research_spec_id != spec_model.research_spec_id:
-                raise ValueError("search plan research_spec_id does not match research spec")
+                raise ValueError(
+                    "search plan research_spec_id does not match research spec"
+                )
 
             validate_references(plan_model, ValidationContext(research_spec=spec_model))
 
@@ -1508,9 +1519,7 @@ class PostgresUnitOfWork:
 
             return plan_id
 
-    def get_search_plan(
-        self, run_id, plan_id=None, revision=None
-    ):
+    def get_search_plan(self, run_id, plan_id=None, revision=None):
         with self.connection.cursor() as cur:
             if plan_id is not None:
                 cur.execute(
@@ -1624,9 +1633,7 @@ class PostgresUnitOfWork:
                 for r in rows
             ]
 
-    def get_plan_query(
-        self, query_id, run_id=None
-    ):
+    def get_plan_query(self, query_id, run_id=None):
         with self.connection.cursor() as cur:
             if run_id is not None:
                 cur.execute(
@@ -1741,9 +1748,7 @@ class PostgresUnitOfWork:
             raise ValueError("idempotency_key must be non-empty")
 
         raw_bytes = (
-            raw_payload.encode("utf-8")
-            if isinstance(raw_payload, str)
-            else raw_payload
+            raw_payload.encode("utf-8") if isinstance(raw_payload, str) else raw_payload
         )
 
         content_sha256 = hashlib.sha256(raw_bytes).hexdigest()
@@ -1820,7 +1825,9 @@ class PostgresUnitOfWork:
                     (plan_id, run_id),
                 )
                 if cur.fetchone() is None:
-                    raise ValueError(f"search plan {plan_id} not found for run {run_id}")
+                    raise ValueError(
+                        f"search plan {plan_id} not found for run {run_id}"
+                    )
 
             if plan_query_id is not None:
                 cur.execute(
@@ -1829,16 +1836,24 @@ class PostgresUnitOfWork:
                 )
                 pq_row = cur.fetchone()
                 if pq_row is None:
-                    raise ValueError(f"search plan query {plan_query_id} not found for run {run_id}")
+                    raise ValueError(
+                        f"search plan query {plan_query_id} not found for run {run_id}"
+                    )
                 if plan_id is not None and pq_row[1] != plan_id:
-                    raise ValueError(f"search plan query {plan_query_id} does not belong to plan {plan_id}")
+                    raise ValueError(
+                        f"search plan query {plan_query_id} does not belong to plan {plan_id}"
+                    )
                 if plan_id is None:
                     plan_id = pq_row[1]
 
-            blob_ref = blob_store.put(io.BytesIO(raw_bytes), mime_type="application/json")
+            blob_ref = blob_store.put(
+                io.BytesIO(raw_bytes), mime_type="application/json"
+            )
 
-            parsed_status, parsed_result_count, parsed_summary, parsed_error = parse_raw_search_response(
-                raw_bytes, http_status=http_status, parser_version=parser_version
+            parsed_status, parsed_result_count, parsed_summary, parsed_error = (
+                parse_raw_search_response(
+                    raw_bytes, http_status=http_status, parser_version=parser_version
+                )
             )
 
             final_error = error_message or parsed_error
@@ -2079,7 +2094,9 @@ class PostgresUnitOfWork:
                 backend_meta = {}
 
                 if isinstance(item, dict):
-                    raw_url = item.get("url") or item.get("link") or item.get("target_url")
+                    raw_url = (
+                        item.get("url") or item.get("link") or item.get("target_url")
+                    )
                     title = item.get("title") or item.get("name")
                     snippet = (
                         item.get("snippet")
@@ -2409,9 +2426,13 @@ class PostgresUnitOfWork:
             cur.execute(count_sql, tuple(params))
             total_count = cur.fetchone()[0]
 
-            order_by_sql = " ORDER BY c.recurrence_count DESC, c.created_at ASC, c.id ASC"
+            order_by_sql = (
+                " ORDER BY c.recurrence_count DESC, c.created_at ASC, c.id ASC"
+            )
             limit_sql = " LIMIT %s OFFSET %s"
-            full_sql = f"SELECT {select_cols} {base_from}{where_str}{order_by_sql}{limit_sql}"
+            full_sql = (
+                f"SELECT {select_cols} {base_from}{where_str}{order_by_sql}{limit_sql}"
+            )
 
             query_params = list(params)
             query_params.extend([limit, offset])
@@ -2448,7 +2469,6 @@ class PostgresUnitOfWork:
                 "offset": offset,
                 "has_next": (offset + len(items)) < total_count,
             }
-
 
     def list_candidate_occurrences(self, candidate_id, run_id=None):
         candidate_id = UUID(str(candidate_id))
@@ -2490,9 +2510,7 @@ class PostgresUnitOfWork:
         if not candidate_ids:
             raise ValueError("candidate_ids must not be empty")
         cand_uuids = [UUID(str(cid)) for cid in candidate_ids]
-        target_group_id = (
-            UUID(str(group_id)) if group_id is not None else cand_uuids[0]
-        )
+        target_group_id = UUID(str(group_id)) if group_id is not None else cand_uuids[0]
 
         with self.connection.cursor() as cur:
             if run_id is not None:
@@ -2511,8 +2529,6 @@ class PostgresUnitOfWork:
                     (target_group_id, cand_uuids),
                 )
         return target_group_id
-
-
 
     def record_semantic_call(
         self,
@@ -2594,7 +2610,9 @@ class PostgresUnitOfWork:
         self, run_id, call_id, status, response_metadata, error=None
     ):
         if status not in {"complete", "failed", "cancelled"}:
-            raise ValueError("semantic call final status must be complete, failed, or cancelled")
+            raise ValueError(
+                "semantic call final status must be complete, failed, or cancelled"
+            )
         response_json = _canonical_json(response_metadata or {})
         with self.connection.cursor() as cur:
             self._lock_workflow_run(cur, run_id)
@@ -2646,9 +2664,21 @@ class PostgresUnitOfWork:
             if row is None:
                 raise ValueError("semantic call does not belong to the research run")
             keys = (
-                "id", "run_id", "invocation_id", "stage", "provider", "model",
-                "model_revision", "prompt_version", "input_sha256", "request",
-                "response_metadata", "status", "error", "started_at", "completed_at",
+                "id",
+                "run_id",
+                "invocation_id",
+                "stage",
+                "provider",
+                "model",
+                "model_revision",
+                "prompt_version",
+                "input_sha256",
+                "request",
+                "response_metadata",
+                "status",
+                "error",
+                "started_at",
+                "completed_at",
                 "created_at",
             )
             result = dict(zip(keys, row))
@@ -2660,10 +2690,19 @@ class PostgresUnitOfWork:
                 (call_id, run_id),
             )
             artifact_keys = (
-                "id", "artifact_type", "schema_name", "schema_version", "payload",
-                "content_sha256", "validation_status", "validation_errors", "created_at",
+                "id",
+                "artifact_type",
+                "schema_name",
+                "schema_version",
+                "payload",
+                "content_sha256",
+                "validation_status",
+                "validation_errors",
+                "created_at",
             )
-            result["artifacts"] = [dict(zip(artifact_keys, item)) for item in cur.fetchall()]
+            result["artifacts"] = [
+                dict(zip(artifact_keys, item)) for item in cur.fetchall()
+            ]
             return result
 
     def record_semantic_artifact(
@@ -3296,10 +3335,12 @@ class PostgresUnitOfWork:
                         item["subject_id"],
                         source_event_id,
                         source_invocation_id,
-                        json.dumps({
-                            "execution_mode": execution_mode,
-                            "text": item.get("text", ""),
-                        }),
+                        json.dumps(
+                            {
+                                "execution_mode": execution_mode,
+                                "text": item.get("text", ""),
+                            }
+                        ),
                         idempotency_key,
                     ),
                 )
@@ -3361,12 +3402,22 @@ class PostgresUnitOfWork:
             existing = cur.fetchone()
             if existing:
                 keys = (
-                    "id", "coverage_revision", "prior_coverage_revision",
-                    "event_type", "item_id", "item_type", "subject_id",
-                    "new_status", "previous_status",
-                    "new_freshness_status", "previous_freshness_status",
-                    "source_event_id", "source_invocation_id",
-                    "payload", "idempotency_key", "created_at",
+                    "id",
+                    "coverage_revision",
+                    "prior_coverage_revision",
+                    "event_type",
+                    "item_id",
+                    "item_type",
+                    "subject_id",
+                    "new_status",
+                    "previous_status",
+                    "new_freshness_status",
+                    "previous_freshness_status",
+                    "source_event_id",
+                    "source_invocation_id",
+                    "payload",
+                    "idempotency_key",
+                    "created_at",
                 )
                 return dict(zip(keys, existing))
 
@@ -3438,12 +3489,22 @@ class PostgresUnitOfWork:
             )
             row = cur.fetchone()
             keys = (
-                "id", "coverage_revision", "prior_coverage_revision",
-                "event_type", "item_id", "item_type", "subject_id",
-                "new_status", "previous_status",
-                "new_freshness_status", "previous_freshness_status",
-                "source_event_id", "source_invocation_id",
-                "payload", "idempotency_key", "created_at",
+                "id",
+                "coverage_revision",
+                "prior_coverage_revision",
+                "event_type",
+                "item_id",
+                "item_type",
+                "subject_id",
+                "new_status",
+                "previous_status",
+                "new_freshness_status",
+                "previous_freshness_status",
+                "source_event_id",
+                "source_invocation_id",
+                "payload",
+                "idempotency_key",
+                "created_at",
             )
             result = dict(zip(keys, row))
 
@@ -3485,9 +3546,17 @@ class PostgresUnitOfWork:
             items = {}
             max_revision = 0
             for evt in events:
-                event_type, item_id, item_type, subject_id, new_status, \
-                    previous_status, new_freshness_status, \
-                    previous_freshness_status, payload = evt
+                (
+                    event_type,
+                    item_id,
+                    item_type,
+                    subject_id,
+                    new_status,
+                    previous_status,
+                    new_freshness_status,
+                    previous_freshness_status,
+                    payload,
+                ) = evt
 
                 if event_type == "item_created":
                     items[str(item_id)] = {
@@ -3565,7 +3634,8 @@ class PostgresUnitOfWork:
                     max_revision = max(
                         max_revision,
                         int(payload.get("coverage_revision", 0))
-                        if isinstance(payload, dict) and "coverage_revision" in (payload or {})
+                        if isinstance(payload, dict)
+                        and "coverage_revision" in (payload or {})
                         else 0,
                     )
 
@@ -3574,12 +3644,12 @@ class PostgresUnitOfWork:
                 overall_status = "unassessed"
             else:
                 satisfied = sum(
-                    1 for item in items.values()
+                    1
+                    for item in items.values()
                     if item["status"] in ("satisfied", "waived")
                 )
                 blocked = sum(
-                    1 for item in items.values()
-                    if item["status"] == "blocked"
+                    1 for item in items.values() if item["status"] == "blocked"
                 )
                 total = len(items)
                 if satisfied == total:
@@ -3622,12 +3692,16 @@ class PostgresUnitOfWork:
                     current_rev + 1,
                     current_rev,
                     source_event_id,
-                    json.dumps({
-                        "item_count": len(items),
-                        "overall_status": overall_status,
-                        "source_event_id": str(source_event_id) if source_event_id else None,
-                        "coverage_revision": current_rev,
-                    }),
+                    json.dumps(
+                        {
+                            "item_count": len(items),
+                            "overall_status": overall_status,
+                            "source_event_id": str(source_event_id)
+                            if source_event_id
+                            else None,
+                            "coverage_revision": current_rev,
+                        }
+                    ),
                     idempotency_key,
                 ),
             )
@@ -3658,8 +3732,13 @@ class PostgresUnitOfWork:
             existing = cur.fetchone()
             if existing:
                 keys = (
-                    "id", "run_id", "coverage_revision", "ledger",
-                    "content_sha256", "triggering_event_id", "created_at",
+                    "id",
+                    "run_id",
+                    "coverage_revision",
+                    "ledger",
+                    "content_sha256",
+                    "triggering_event_id",
+                    "created_at",
                 )
                 return dict(zip(keys, existing))
 
@@ -3681,8 +3760,13 @@ class PostgresUnitOfWork:
             )
             row = cur.fetchone()
             keys = (
-                "id", "run_id", "coverage_revision", "ledger",
-                "content_sha256", "triggering_event_id", "created_at",
+                "id",
+                "run_id",
+                "coverage_revision",
+                "ledger",
+                "content_sha256",
+                "triggering_event_id",
+                "created_at",
             )
             result = dict(zip(keys, row))
 
@@ -3707,8 +3791,13 @@ class PostgresUnitOfWork:
         if row is None:
             return None
         keys = (
-            "id", "run_id", "coverage_revision", "ledger",
-            "content_sha256", "triggering_event_id", "created_at",
+            "id",
+            "run_id",
+            "coverage_revision",
+            "ledger",
+            "content_sha256",
+            "triggering_event_id",
+            "created_at",
         )
         return dict(zip(keys, row))
 
@@ -3726,8 +3815,13 @@ class PostgresUnitOfWork:
         if row is None:
             return None
         keys = (
-            "id", "run_id", "coverage_revision", "ledger",
-            "content_sha256", "triggering_event_id", "created_at",
+            "id",
+            "run_id",
+            "coverage_revision",
+            "ledger",
+            "content_sha256",
+            "triggering_event_id",
+            "created_at",
         )
         return dict(zip(keys, row))
 
@@ -3764,12 +3858,23 @@ class PostgresUnitOfWork:
                 (*params, limit, offset),
             )
             keys = (
-                "id", "run_id", "coverage_revision", "prior_coverage_revision",
-                "event_type", "item_id", "item_type", "subject_id",
-                "new_status", "previous_status",
-                "new_freshness_status", "previous_freshness_status",
-                "source_event_id", "source_invocation_id",
-                "payload", "idempotency_key", "created_at",
+                "id",
+                "run_id",
+                "coverage_revision",
+                "prior_coverage_revision",
+                "event_type",
+                "item_id",
+                "item_type",
+                "subject_id",
+                "new_status",
+                "previous_status",
+                "new_freshness_status",
+                "previous_freshness_status",
+                "source_event_id",
+                "source_invocation_id",
+                "payload",
+                "idempotency_key",
+                "created_at",
             )
             return [dict(zip(keys, row)) for row in cur.fetchall()]
 
@@ -3790,12 +3895,23 @@ class PostgresUnitOfWork:
         if row is None:
             return None
         keys = (
-            "id", "run_id", "coverage_revision", "prior_coverage_revision",
-            "event_type", "item_id", "item_type", "subject_id",
-            "new_status", "previous_status",
-            "new_freshness_status", "previous_freshness_status",
-            "source_event_id", "source_invocation_id",
-            "payload", "idempotency_key", "created_at",
+            "id",
+            "run_id",
+            "coverage_revision",
+            "prior_coverage_revision",
+            "event_type",
+            "item_id",
+            "item_type",
+            "subject_id",
+            "new_status",
+            "previous_status",
+            "new_freshness_status",
+            "previous_freshness_status",
+            "source_event_id",
+            "source_invocation_id",
+            "payload",
+            "idempotency_key",
+            "created_at",
         )
         return dict(zip(keys, row))
 
@@ -3852,3 +3968,490 @@ class PostgresUnitOfWork:
                 "chunker_version",
             )
             return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Strategy revision repository
+    # ------------------------------------------------------------------
+
+    def record_proposal(
+        self,
+        run_id,
+        proposal_id,
+        run_revision,
+        coverage_revision,
+        decision_type,
+        target_coverage_item_ids,
+        proposed_queries,
+        proposed_candidate_ids,
+        proposed_retrieval_queries,
+        expected_contribution,
+        estimated_cost,
+        rationale,
+        confidence,
+        idempotency_key,
+        **metadata,
+    ):
+        """Persist a strategy-revision proposal row.
+
+        Idempotent on (run_id, idempotency_key).  Returns the row id.
+        """
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+            cur.execute(
+                """INSERT INTO strategy_revisions(
+                    run_id, run_revision, coverage_revision,
+                    revision_order, row_type,
+                    proposal_id, decision_type,
+                    target_coverage_item_ids,
+                    proposed_queries,
+                    proposed_candidate_ids,
+                    proposed_retrieval_queries,
+                    expected_contribution,
+                    estimated_cost,
+                    rationale,
+                    confidence,
+                    idempotency_key,
+                    actor_type,
+                    actor_identifier
+                ) VALUES(%s, %s, %s,
+                    (SELECT COALESCE(MAX(revision_order), 0) + 1
+                     FROM strategy_revisions WHERE run_id=%s),
+                    'proposal',
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s)
+                ON CONFLICT(run_id, idempotency_key) DO NOTHING
+                RETURNING id, run_id, run_revision, coverage_revision,
+                    revision_order, row_type,
+                    proposal_id, decision_type,
+                    target_coverage_item_ids,
+                    proposed_queries,
+                    proposed_candidate_ids,
+                    proposed_retrieval_queries,
+                    expected_contribution,
+                    estimated_cost,
+                    rationale,
+                    confidence,
+                    idempotency_key,
+                    actor_type,
+                    actor_identifier,
+                    created_at""",
+                (
+                    run_id,
+                    run_revision,
+                    coverage_revision,
+                    run_id,
+                    proposal_id,
+                    decision_type,
+                    json.dumps(target_coverage_item_ids),
+                    json.dumps(proposed_queries),
+                    json.dumps(proposed_candidate_ids),
+                    json.dumps(proposed_retrieval_queries),
+                    expected_contribution,
+                    json.dumps(estimated_cost),
+                    rationale,
+                    confidence,
+                    idempotency_key,
+                    metadata.get("actor_type", "system"),
+                    metadata.get("actor_identifier"),
+                ),
+            )
+            row = cur.fetchone()
+            if row is None:
+                # Already existed — return existing
+                return self._get_proposal_row(cur, run_id, proposal_id)
+            return self._row_to_proposal_mapping(row)
+
+    def get_proposal(self, run_id, proposal_id):
+        """Retrieve a strategy-revision proposal by run and proposal_id."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, run_revision, coverage_revision,
+                    revision_order, row_type,
+                    proposal_id, decision_type,
+                    target_coverage_item_ids,
+                    proposed_queries,
+                    proposed_candidate_ids,
+                    proposed_retrieval_queries,
+                    expected_contribution,
+                    estimated_cost,
+                    rationale,
+                    confidence,
+                    idempotency_key,
+                    actor_type,
+                    actor_identifier,
+                    created_at
+                FROM strategy_revisions
+                WHERE run_id=%s AND proposal_id=%s AND row_type='proposal'
+                ORDER BY created_at DESC LIMIT 1""",
+                (run_id, proposal_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return self._row_to_proposal_mapping(row)
+
+    def list_proposals(
+        self, run_id, *, run_revision=None, coverage_revision=None, limit=100, offset=0
+    ):
+        """List proposals for a run, optionally filtered by revision."""
+        with self.connection.cursor() as cur:
+            where = "WHERE run_id=%s AND row_type='proposal'"
+            params: list = [run_id]
+            if run_revision is not None:
+                where += " AND run_revision=%s"
+                params.append(run_revision)
+            if coverage_revision is not None:
+                where += " AND coverage_revision=%s"
+                params.append(coverage_revision)
+            where += " ORDER BY revision_order DESC LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
+            cur.execute(
+                f"""SELECT id, run_id, run_revision, coverage_revision,
+                    revision_order, row_type,
+                    proposal_id, decision_type,
+                    target_coverage_item_ids,
+                    proposed_queries,
+                    proposed_candidate_ids,
+                    proposed_retrieval_queries,
+                    expected_contribution,
+                    estimated_cost,
+                    rationale,
+                    confidence,
+                    idempotency_key,
+                    actor_type,
+                    actor_identifier,
+                    created_at
+                FROM strategy_revisions {where}""",
+                params,
+            )
+            return [self._row_to_proposal_mapping(r) for r in cur.fetchall()]
+
+    def record_decision(
+        self,
+        run_id,
+        decision_id,
+        proposal_id,
+        run_revision,
+        coverage_revision,
+        outcome,
+        rejection_reasons,
+        policy_version,
+        scope_expansion_type,
+        scope_expansion_rationale,
+        scope_expansion_approved,
+        authorized_by,
+        idempotency_key,
+        **metadata,
+    ):
+        """Persist a strategy-revision decision row.
+
+        Idempotent on (run_id, idempotency_key).  Returns the row id.
+        """
+        with self.connection.cursor() as cur:
+            self._lock_workflow_run(cur, run_id)
+            cur.execute(
+                """INSERT INTO strategy_revisions(
+                    run_id, run_revision, coverage_revision,
+                    revision_order, row_type,
+                    proposal_id, decision_id,
+                    outcome,
+                    rejection_reasons,
+                    policy_version,
+                    scope_expansion_type,
+                    scope_expansion_rationale,
+                    scope_expansion_approved,
+                    authorized_by,
+                    idempotency_key,
+                    actor_type,
+                    actor_identifier
+                ) VALUES(%s, %s, %s,
+                    (SELECT COALESCE(MAX(revision_order), 0) + 1
+                     FROM strategy_revisions WHERE run_id=%s),
+                    'decision',
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s)
+                ON CONFLICT(run_id, idempotency_key) DO NOTHING
+                RETURNING id, run_id, run_revision, coverage_revision,
+                    revision_order, row_type,
+                    proposal_id, decision_id,
+                    outcome,
+                    rejection_reasons,
+                    policy_version,
+                    scope_expansion_type,
+                    scope_expansion_rationale,
+                    scope_expansion_approved,
+                    authorized_by,
+                    idempotency_key,
+                    actor_type,
+                    actor_identifier,
+                    created_at""",
+                (
+                    run_id,
+                    run_revision,
+                    coverage_revision,
+                    run_id,
+                    proposal_id,
+                    decision_id,
+                    outcome,
+                    rejection_reasons or [],
+                    policy_version,
+                    scope_expansion_type,
+                    scope_expansion_rationale,
+                    scope_expansion_approved,
+                    authorized_by,
+                    idempotency_key,
+                    metadata.get("actor_type", "system"),
+                    metadata.get("actor_identifier"),
+                ),
+            )
+            row = cur.fetchone()
+            if row is None:
+                # Already existed — return existing
+                return self._get_decision_row(cur, run_id, decision_id)
+            return self._row_to_decision_mapping(row)
+
+    def get_decision(self, run_id, decision_id):
+        """Retrieve a strategy-revision decision by run and decision_id."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, run_revision, coverage_revision,
+                    revision_order, row_type,
+                    proposal_id, decision_id,
+                    outcome,
+                    rejection_reasons,
+                    policy_version,
+                    scope_expansion_type,
+                    scope_expansion_rationale,
+                    scope_expansion_approved,
+                    authorized_by,
+                    idempotency_key,
+                    actor_type,
+                    actor_identifier,
+                    created_at
+                FROM strategy_revisions
+                WHERE run_id=%s AND decision_id=%s AND row_type='decision'
+                ORDER BY created_at DESC LIMIT 1""",
+                (run_id, decision_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return self._row_to_decision_mapping(row)
+
+    def list_decisions(
+        self, run_id, *, proposal_id=None, outcome=None, limit=100, offset=0
+    ):
+        """List decisions for a run or proposal, optionally filtered."""
+        with self.connection.cursor() as cur:
+            where = "WHERE run_id=%s AND row_type='decision'"
+            params: list = [run_id]
+            if proposal_id is not None:
+                where += " AND proposal_id=%s"
+                params.append(proposal_id)
+            if outcome is not None:
+                where += " AND outcome=%s"
+                params.append(outcome)
+            where += " ORDER BY revision_order DESC LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
+            cur.execute(
+                f"""SELECT id, run_id, run_revision, coverage_revision,
+                    revision_order, row_type,
+                    proposal_id, decision_id,
+                    outcome,
+                    rejection_reasons,
+                    policy_version,
+                    scope_expansion_type,
+                    scope_expansion_rationale,
+                    scope_expansion_approved,
+                    authorized_by,
+                    idempotency_key,
+                    actor_type,
+                    actor_identifier,
+                    created_at
+                FROM strategy_revisions {where}""",
+                params,
+            )
+            return [self._row_to_decision_mapping(r) for r in cur.fetchall()]
+
+    def proposal_exists(self, run_id, proposal_id):
+        """Check if a proposal exists for the given run and proposal_id."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM strategy_revisions
+                WHERE run_id=%s AND proposal_id=%s AND row_type='proposal'""",
+                (run_id, proposal_id),
+            )
+            return cur.fetchone()[0] > 0
+
+    def get_proposal_by_idempotency(self, run_id, idempotency_key):
+        """Fetch a proposal by run_id and idempotency_key."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, run_revision, coverage_revision,
+                    revision_order, row_type,
+                    proposal_id, decision_type,
+                    target_coverage_item_ids,
+                    proposed_queries,
+                    proposed_candidate_ids,
+                    proposed_retrieval_queries,
+                    expected_contribution,
+                    estimated_cost,
+                    rationale,
+                    confidence,
+                    idempotency_key,
+                    actor_type,
+                    actor_identifier,
+                    created_at
+                FROM strategy_revisions
+                WHERE run_id=%s AND idempotency_key=%s AND row_type='proposal'
+                ORDER BY created_at DESC LIMIT 1""",
+                (run_id, idempotency_key),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return self._row_to_proposal_mapping(row)
+
+    def decision_exists(self, run_id, decision_id):
+        """Check if a decision exists for the given run and decision_id."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM strategy_revisions
+                WHERE run_id=%s AND decision_id=%s AND row_type='decision'""",
+                (run_id, decision_id),
+            )
+            return cur.fetchone()[0] > 0
+
+    def list_proposal_ids_for_run(self, run_id):
+        """List all proposal IDs for a run."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT DISTINCT proposal_id FROM strategy_revisions
+                WHERE run_id=%s AND row_type='proposal'
+                ORDER BY proposal_id""",
+                (run_id,),
+            )
+            return [str(r[0]) for r in cur.fetchall()]
+
+    def list_decision_ids_for_proposal(self, run_id, proposal_id):
+        """List all decision IDs for a proposal."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT decision_id FROM strategy_revisions
+                WHERE run_id=%s AND proposal_id=%s AND row_type='decision'
+                ORDER BY revision_order""",
+                (run_id, proposal_id),
+            )
+            return [str(r[0]) for r in cur.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Strategy revision helpers
+    # ------------------------------------------------------------------
+
+    def _row_to_proposal_mapping(self, row):
+        """Convert a strategy_revisions proposal row to a mapping."""
+        return {
+            "id": str(row[0]),
+            "run_id": str(row[1]),
+            "run_revision": row[2],
+            "coverage_revision": row[3],
+            "revision_order": row[4],
+            "row_type": row[5],
+            "proposal_id": str(row[6]),
+            "decision_type": row[7],
+            "target_coverage_item_ids": row[8] or [],
+            "proposed_queries": row[9] or [],
+            "proposed_candidate_ids": row[10] or [],
+            "proposed_retrieval_queries": row[11] or [],
+            "expected_contribution": row[12] or "",
+            "estimated_cost": row[13] or {},
+            "rationale": row[14] or "",
+            "confidence": row[15] or 0.0,
+            "idempotency_key": row[16],
+            "actor_type": row[17] or "system",
+            "actor_identifier": row[18],
+            "created_at": row[19],
+        }
+
+    def _row_to_decision_mapping(self, row):
+        """Convert a strategy_revisions decision row to a mapping."""
+        return {
+            "id": str(row[0]),
+            "run_id": str(row[1]),
+            "run_revision": row[2],
+            "coverage_revision": row[3],
+            "revision_order": row[4],
+            "row_type": row[5],
+            "proposal_id": str(row[6]),
+            "decision_id": str(row[7]),
+            "outcome": row[8],
+            "rejection_reasons": row[9] or [],
+            "policy_version": row[10] or "",
+            "scope_expansion_type": row[11],
+            "scope_expansion_rationale": row[12],
+            "scope_expansion_approved": row[13],
+            "authorized_by": row[14] or "",
+            "idempotency_key": row[15],
+            "actor_type": row[16] or "system",
+            "actor_identifier": row[17],
+            "created_at": row[18],
+        }
+
+    def _get_proposal_row(self, cur, run_id, proposal_id):
+        """Fetch an existing proposal row."""
+        cur.execute(
+            """SELECT id, run_id, run_revision, coverage_revision,
+                revision_order, row_type,
+                proposal_id, decision_type,
+                target_coverage_item_ids,
+                proposed_queries,
+                proposed_candidate_ids,
+                proposed_retrieval_queries,
+                expected_contribution,
+                estimated_cost,
+                rationale,
+                confidence,
+                idempotency_key,
+                actor_type,
+                actor_identifier,
+                created_at
+            FROM strategy_revisions
+            WHERE run_id=%s AND proposal_id=%s AND row_type='proposal'
+            ORDER BY created_at DESC LIMIT 1""",
+            (run_id, proposal_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_proposal_mapping(row)
+
+    def _get_decision_row(self, cur, run_id, decision_id):
+        """Fetch an existing decision row."""
+        cur.execute(
+            """SELECT id, run_id, run_revision, coverage_revision,
+                revision_order, row_type,
+                proposal_id, decision_id,
+                outcome,
+                rejection_reasons,
+                policy_version,
+                scope_expansion_type,
+                scope_expansion_rationale,
+                scope_expansion_approved,
+                authorized_by,
+                idempotency_key,
+                actor_type,
+                actor_identifier,
+                created_at
+            FROM strategy_revisions
+            WHERE run_id=%s AND decision_id=%s AND row_type='decision'
+            ORDER BY created_at DESC LIMIT 1""",
+            (run_id, decision_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_decision_mapping(row)
