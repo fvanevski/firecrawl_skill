@@ -797,9 +797,9 @@ def audit_target(identifier, provider="local", model=None, force=False, quiet=Fa
                 )
                 if reuse.get("action") == "dry_run_match":
                     postgres_reuse = reuse
-    except Exception:
-        # If PostgreSQL is unavailable or any import fails, fall through
-        # to the filesystem-based audit.
+    except (ImportError, RuntimeError, KeyError, AttributeError):
+        # If PostgreSQL is unavailable, the service is misconfigured, or
+        # any import fails, fall through to the filesystem-based audit.
         pass
 
     if postgres_reuse is not None:
@@ -886,7 +886,7 @@ def audit_target(identifier, provider="local", model=None, force=False, quiet=Fa
                     elapsed_ms=int((time.monotonic() - started) * 1000),
                     audit_packet_manifest=packet["context_manifest"],
                 )
-    except Exception:
+    except (ImportError, RuntimeError, KeyError, AttributeError):
         # PostgreSQL persistence failure must NOT roll back the
         # filesystem write.  Export failure is reported separately
         # from workflow failure (FR-018).

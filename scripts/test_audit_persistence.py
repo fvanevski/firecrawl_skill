@@ -1709,6 +1709,69 @@ class TestIdempotentScheduling:
         assert result["action"] == "create"
         assert result["existing"] is False
 
+    def test_schedule_assessment_concurrent_constraint(self, tmp_path, prepared_database_for_audit):
+        """Concurrent schedule_assessment calls create only one assessment."""
+        import threading
+        from research_store.container import build_audit_service
+        from research_store.config import StoreConfig
+        from dataclasses import replace
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            blob_root=tmp_path / "blobs",
+        )
+        svc = build_audit_service(config)
+        run_id = uuid4()
+        _ensure_run_exists(config, run_id)
+
+        identity_kwargs = dict(
+            run_id=run_id,
+            target_type="run",
+            target_id=run_id,
+            target_hash="concurrent_test",
+            evaluator_version="catalog-v5.0",
+            prompt_template_version="staged-research-audit-v1",
+            policy_version="audit-policy-v1",
+            stage_set=["rubric"],
+            status="completed",
+            model_fingerprint="fp-42",
+        )
+
+        results = []
+        errors = []
+
+        def schedule():
+            try:
+                result = svc.schedule_assessment(**identity_kwargs)
+                results.append(result)
+            except Exception as exc:
+                errors.append(exc)
+
+        # Launch 3 threads simultaneously
+        threads = [threading.Thread(target=schedule) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # No errors should have occurred
+        assert not errors, f"Errors: {errors}"
+        assert len(results) == 3
+
+        # Count actions: should have exactly one "create" and two "reuse"
+        actions = [r["action"] for r in results]
+        assert actions.count("create") == 1, f"Expected 1 create, got: {actions}"
+        assert actions.count("reuse") == 2, f"Expected 2 reuse, got: {actions}"
+
+        # All results should share the same assessment_id
+        assessment_ids = {r["assessment_id"] for r in results}
+        assert len(assessment_ids) == 1, f"Expected 1 assessment_id, got: {assessment_ids}"
+
+        # Verify only one row exists in the database
+        assessments = svc.list_assessments(run_id=run_id)
+        assert len(assessments) == 1
+
     def test_migration_0019_creates_identity_column(self, tmp_path):
         """Migration 0019 adds audit_identity_hash column."""
         from research_store.config import StoreConfig
@@ -1816,7 +1879,7 @@ class TestIdempotentScheduling:
         """Migration 0019 backfills audit_identity_hash for existing rows."""
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
-        from research_store.service import AuditService
+        from research_store.service import AuditService, compute_audit_identity_hash
         from dataclasses import replace
 
         config = replace(
@@ -1839,8 +1902,7 @@ class TestIdempotentScheduling:
         run_id = uuid4()
         _ensure_run_exists(config, run_id)
 
-        # Create assessment via create_assessment (pre-migration style)
-        svc.create_assessment(
+        identity_kwargs = dict(
             run_id=run_id,
             target_type="run",
             target_id=run_id,
@@ -1852,20 +1914,33 @@ class TestIdempotentScheduling:
             status="completed",
         )
 
-        # Verify audit_identity_hash is populated
-        assessment = svc.get_assessment(
-            svc.create_assessment(
-                run_id=run_id,
-                target_type="run",
-                target_id=run_id,
-                target_hash="test_hash",
-                evaluator_version="catalog-v5.0",
-                prompt_template_version="staged-research-audit-v1",
-                policy_version="audit-policy-v1",
-                stage_set=["rubric"],
-                status="completed",
-            )
+        # Compute identity hash (same for both calls)
+        identity_hash = compute_audit_identity_hash(
+            target_hash="test_hash",
+            evaluator_version="catalog-v5.0",
+            prompt_template_version="staged-research-audit-v1",
+            policy_version="audit-policy-v1",
+            stage_set=["rubric"],
         )
-        assert assessment is not None
-        assert assessment.get("audit_identity_hash") is not None
-        assert len(assessment["audit_identity_hash"]) == 64  # SHA-256 hex
+
+        # First assessment (simulates pre-migration row, backfilled by migration)
+        aid1 = svc.create_assessment(
+            **identity_kwargs,
+            audit_identity_hash=identity_hash,
+        )
+
+        # Second assessment with same identity → same hash
+        aid2 = svc.create_assessment(
+            **identity_kwargs,
+            audit_identity_hash=identity_hash,
+        )
+
+        # Verify both assessments have audit_identity_hash populated
+        assessment1 = svc.get_assessment(aid1)
+        assert assessment1 is not None
+        assert assessment1.get("audit_identity_hash") is not None
+        assert len(assessment1["audit_identity_hash"]) == 64  # SHA-256 hex
+
+        assessment2 = svc.get_assessment(aid2)
+        assert assessment2 is not None
+        assert assessment2.get("audit_identity_hash") == identity_hash

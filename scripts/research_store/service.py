@@ -1017,6 +1017,14 @@ class AuditService:
         Convenience method that creates the assessment and returns the
         full export including stage outputs.
         """
+        identity_hash = compute_audit_identity_hash(
+            target_hash=target_hash,
+            evaluator_version=evaluator_version,
+            prompt_template_version=prompt_template_version,
+            policy_version=policy_version,
+            stage_set=stage_set,
+            model_fingerprint=model_fingerprint,
+        )
         assessment_id = self.create_assessment(
             run_id=run_id,
             target_type="run",
@@ -1027,6 +1035,7 @@ class AuditService:
             policy_version=policy_version,
             stage_set=stage_set,
             status=status,
+            audit_identity_hash=identity_hash,
             provider=provider,
             model=model,
             prompt_hash=prompt_hash,
@@ -1037,6 +1046,7 @@ class AuditService:
         export = self.export_assessment(assessment_id)
         if export:
             export["external_run_id"] = external_run_id
+            export["audit_identity_hash"] = identity_hash
         return export or {}
 
     def assess_invocation(
@@ -1063,6 +1073,14 @@ class AuditService:
         ``target_type="invocation"`` and returns the full export
         including stage outputs.
         """
+        identity_hash = compute_audit_identity_hash(
+            target_hash=target_hash,
+            evaluator_version=evaluator_version,
+            prompt_template_version=prompt_template_version,
+            policy_version=policy_version,
+            stage_set=stage_set,
+            model_fingerprint=model_fingerprint,
+        )
         assessment_id = self.create_assessment(
             run_id=run_id,
             target_type="invocation",
@@ -1073,6 +1091,7 @@ class AuditService:
             policy_version=policy_version,
             stage_set=stage_set,
             status=status,
+            audit_identity_hash=identity_hash,
             provider=provider,
             model=model,
             prompt_hash=prompt_hash,
@@ -1083,4 +1102,5 @@ class AuditService:
         export = self.export_assessment(assessment_id)
         if export:
             export["invocation_id"] = str(invocation_id)
+            export["audit_identity_hash"] = identity_hash
         return export or {}
