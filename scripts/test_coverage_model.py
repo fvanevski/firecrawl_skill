@@ -38,6 +38,8 @@ class MemoryCoverageRepository:
         self.snapshots: dict[tuple[str, int], CoverageSnapshot] = {}
         self.revisions: dict[str, int] = {}
         self.items: dict[str, dict] = {}
+        # Separate dict for batch idempotency results (not events)
+        self._batch_results: dict[tuple[str, str], list[str]] = {}
 
     def create_items(
         self,
@@ -48,15 +50,28 @@ class MemoryCoverageRepository:
         source_invocation_id=None,
         execution_mode="deterministic_debug",
     ):
+        """Seed coverage items from a ResearchSpec.
+
+        Uses a batch-level idempotency key (matching the DB layer).
+        On first call, creates one event per item and returns their IDs.
+        On repeated calls, returns the existing IDs without creating new events.
+        """
+        run_id_str = str(run_id)
+        # Batch-level idempotency key (same as DB layer)
+        batch_key = (run_id_str, idempotency_key)
+
+        # Check if batch already existed — return existing IDs
+        if batch_key in self._batch_results:
+            return self._batch_results[batch_key]
+
+        # First call — create one event per item
         item_ids = []
-        for idx, item in enumerate(items):
+        for item in items:
             iid = uuid4()
             self.items[str(iid)] = {
                 "item_type": item["item_type"],
                 "subject_id": item["subject_id"],
             }
-            # Each item gets a unique idempotency key
-            item_key = f"{idempotency_key}:item:{idx}"
             event = CoverageEvent(
                 id=iid,
                 run_id=run_id,
@@ -76,14 +91,19 @@ class MemoryCoverageRepository:
                     "execution_mode": execution_mode,
                     "text": item.get("text", ""),
                 },
-                idempotency_key=item_key,
+                idempotency_key=idempotency_key,
                 created_at=None,
             )
-            self.events[(str(run_id), item_key)] = event
+            # Store per-item events keyed by (run_id, item_id) for rebuild_projection
+            self.events[(run_id_str, str(iid))] = event
             item_ids.append(str(iid))
+
+        # Store batch result for idempotency (separate from events)
+        self._batch_results[batch_key] = item_ids
+
         # Update revision counter (one atomic batch = revision 1)
-        current = self.revisions.get(str(run_id), 0)
-        self.revisions[str(run_id)] = max(current, 1)
+        current = self.revisions.get(run_id_str, 0)
+        self.revisions[run_id_str] = max(current, 1)
         return item_ids
 
     def apply_event(
@@ -112,7 +132,16 @@ class MemoryCoverageRepository:
         current_revision = self.revisions.get(str(run_id), 0)
         new_revision = current_revision + 1
 
-        if new_revision <= current_revision:
+        # Stale-rejection: check if there's already an event with this
+        # revision (simulating a concurrent update that advanced the revision).
+        # In the DB layer this is enforced by transaction isolation + the
+        # CHECK(coverage_revision > prior_coverage_revision) constraint.
+        existing_revisions = {
+            evt.coverage_revision
+            for evt in self.events.values()
+            if evt.run_id == run_id and evt.coverage_revision is not None
+        }
+        if new_revision in existing_revisions:
             raise ValueError(
                 f"stale coverage revision: proposed {new_revision} "
                 f"does not exceed current {current_revision}"
@@ -353,6 +382,41 @@ class TestCoverageItemCreation:
         second = service.create_items_from_spec(run_id, spec)
         assert len(first) == len(second) == 1
 
+    def test_idempotent_item_creation_returns_same_ids(self):
+        """Idempotent re-initialization returns the exact same item IDs."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {"questions": [{"question_id": uuid4(), "text": "What is X?"}]}
+        first = service.create_items_from_spec(run_id, spec)
+        second = service.create_items_from_spec(run_id, spec)
+        assert first[0].coverage_item_id == second[0].coverage_item_id
+
+    def test_idempotent_creation_all_types_same_ids(self):
+        """Batch-level idempotency with all 6 item types returns same IDs."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+            "claims_to_validate": [{"claim_id": uuid4(), "statement": "C1"}],
+            "freshness_requirements": [
+                {"requirement_id": uuid4(), "description": "F1"}
+            ],
+            "required_source_classes": [
+                {"requirement_id": uuid4(), "source_class": "S1"}
+            ],
+            "corroboration_requirements": [
+                {"requirement_id": uuid4(), "description": "CR1"}
+            ],
+            "contradiction_requirements": [
+                {"requirement_id": uuid4(), "description": "CD1"}
+            ],
+        }
+        first = service.create_items_from_spec(run_id, spec)
+        second = service.create_items_from_spec(run_id, spec)
+        assert len(first) == len(second) == 6
+        for i, j in zip(first, second):
+            assert i.coverage_item_id == j.coverage_item_id
+
 
 class TestEventApplication:
     def test_applies_event_and_increments_revision(self):
@@ -402,7 +466,8 @@ class TestEventApplication:
 
     def test_rejects_stale_revision(self):
         """Stale revision is enforced by the DB layer (CHECK constraint).
-        The memory repo always increments, so we test the pattern instead.
+        The memory repo simulates this by checking if the proposed revision
+        already exists among events for the run.
         """
         repo, service = coverage_fixture()
         run_id = uuid4()
@@ -410,13 +475,38 @@ class TestEventApplication:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        # The DB layer raises ValueError for stale revisions.
-        # The memory repo always increments, so we verify the pattern:
-        # current_revision is read, new = current + 1, and if new <= current
-        # it raises. The DB CHECK(coverage_revision > prior_coverage_revision)
-        # enforces this at the constraint level.
-        current = repo.get_current_revision(run_id)
-        assert current >= 1  # items created bumped revision
+        # Insert a fake event with revision 3 to simulate a concurrent update.
+        # The next apply_event will compute new_revision = 3 (since current
+        # revision is now 2), but 3 is already taken, so it raises stale.
+        fake_event = CoverageEvent(
+            id=uuid4(),
+            run_id=run_id,
+            coverage_revision=3,
+            prior_coverage_revision=2,
+            event_type="item_status_changed",
+            item_id=None,
+            item_type=None,
+            subject_id=None,
+            new_status="supported",
+            previous_status=None,
+            new_freshness_status=None,
+            previous_freshness_status=None,
+            source_event_id=None,
+            source_invocation_id=None,
+            payload={},
+            idempotency_key="fake:concurrent",
+            created_at=None,
+        )
+        repo.events[(str(run_id), "fake:concurrent")] = fake_event
+        repo.revisions[str(run_id)] = 2
+
+        with pytest.raises(ValueError, match="stale coverage revision"):
+            service.apply_event(
+                run_id,
+                "item_status_changed",
+                new_status="supported",
+                idempotency_key="stale:1",
+            )
 
     def test_rejects_unknown_item(self):
         repo, service = coverage_fixture()
@@ -818,3 +908,307 @@ class TestContentHashing:
         h = _json_sha256(ledger)
         assert len(h) == 64
         assert h == _json_sha256(ledger)
+
+
+# ---------------------------------------------------------------------------
+# Issue #23 — ResearchSpec-to-ledger mapping tests
+# ---------------------------------------------------------------------------
+
+
+class TestResearchSpecLedgerMapping:
+    """Verify that every mandatory ResearchSpec requirement produces a
+    coverage ledger item, with no silent waivers.
+
+    PRD mapping: FR-012, Section 12.1, Section 12.4
+    """
+
+    def test_all_six_item_types_created(self):
+        """Every mandatory ResearchSpec field produces a ledger item."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {
+            "questions": [
+                {"question_id": uuid4(), "text": "What caused the outage?"},
+            ],
+            "claims_to_validate": [
+                {"claim_id": uuid4(), "statement": "The CDN was down"},
+            ],
+            "freshness_requirements": [
+                {"requirement_id": uuid4(), "description": "Last 24 hours"},
+            ],
+            "required_source_classes": [
+                {"requirement_id": uuid4(), "source_class": "primary"},
+            ],
+            "corroboration_requirements": [
+                {"requirement_id": uuid4(), "description": "Two independent sources"},
+            ],
+            "contradiction_requirements": [
+                {"requirement_id": uuid4(), "description": "Contradictory views"},
+            ],
+        }
+        items = service.create_items_from_spec(run_id, spec)
+        assert len(items) == 6
+        types = {item.item_type for item in items}
+        assert types == {
+            CoverageItemType.QUESTION,
+            CoverageItemType.CLAIM,
+            CoverageItemType.FRESHNESS_REQUIREMENT,
+            CoverageItemType.SOURCE_REQUIREMENT,
+            CoverageItemType.CORROBORATION_REQUIREMENT,
+            CoverageItemType.CONTRADICTION_REQUIREMENT,
+        }
+
+    def test_multiple_questions_each_get_item(self):
+        spec = {
+            "questions": [
+                {"question_id": uuid4(), "text": "Q1"},
+                {"question_id": uuid4(), "text": "Q2"},
+                {"question_id": uuid4(), "text": "Q3"},
+            ],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        items = service.create_items_from_spec(run_id, spec)
+        assert len(items) == 3
+        assert all(item.item_type == CoverageItemType.QUESTION for item in items)
+
+    def test_multiple_claims_each_get_item(self):
+        spec = {
+            "claims_to_validate": [
+                {"claim_id": uuid4(), "statement": "C1"},
+                {"claim_id": uuid4(), "statement": "C2"},
+            ],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        items = service.create_items_from_spec(run_id, spec)
+        assert len(items) == 2
+        assert all(item.item_type == CoverageItemType.CLAIM for item in items)
+
+    def test_all_requirement_types_represented(self):
+        """Freshness, source, corroboration, and contradiction requirements
+        each produce coverage items with the correct type."""
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+            "freshness_requirements": [
+                {"requirement_id": uuid4(), "description": "D1"},
+                {"requirement_id": uuid4(), "description": "D2"},
+            ],
+            "required_source_classes": [
+                {"requirement_id": uuid4(), "source_class": "S1"},
+            ],
+            "corroboration_requirements": [
+                {"requirement_id": uuid4(), "description": "C1"},
+            ],
+            "contradiction_requirements": [
+                {"requirement_id": uuid4(), "description": "CD1"},
+            ],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        items = service.create_items_from_spec(run_id, spec)
+        assert len(items) == 6
+        type_counts = {}
+        for item in items:
+            type_counts[item.item_type.value] = (
+                type_counts.get(item.item_type.value, 0) + 1
+            )
+        assert type_counts["freshness_requirement"] == 2
+        assert type_counts["source_requirement"] == 1
+        assert type_counts["corroboration_requirement"] == 1
+        assert type_counts["contradiction_requirement"] == 1
+
+    def test_no_item_is_silently_waived(self):
+        """Every item starts as unassessed, not waived."""
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+            "claims_to_validate": [{"claim_id": uuid4(), "statement": "C1"}],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        items = service.create_items_from_spec(run_id, spec)
+        for item in items:
+            assert item.status == CoverageStatus.UNASSESSED
+            assert item.status != CoverageStatus.WAIVED
+
+    def test_subject_id_preserved_from_spec(self):
+        """Stable subject references are preserved."""
+        spec = {
+            "questions": [{"question_id": "a1b2c3", "text": "Q1"}],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        items = service.create_items_from_spec(run_id, spec)
+        assert items[0].subject_id == "a1b2c3"
+
+    def test_execution_mode_passed_to_payload(self):
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(run_id, spec, execution_mode="autonomous_local")
+        event = service.list_events(run_id)[0]
+        assert event.payload["execution_mode"] == "autonomous_local"
+
+
+class TestIdempotencyEdgeCases:
+    """Repeated initialization must be idempotent."""
+
+    def test_repeated_init_same_run(self):
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        first = service.create_items_from_spec(run_id, spec)
+        second = service.create_items_from_spec(run_id, spec)
+        assert len(first) == len(second)
+
+    def test_repeated_init_with_all_types(self):
+        spec = {
+            "questions": [{"question_id": uuid4(), "text": "Q1"}],
+            "claims_to_validate": [{"claim_id": uuid4(), "statement": "C1"}],
+            "freshness_requirements": [
+                {"requirement_id": uuid4(), "description": "F1"}
+            ],
+            "required_source_classes": [
+                {"requirement_id": uuid4(), "source_class": "S1"}
+            ],
+            "corroboration_requirements": [
+                {"requirement_id": uuid4(), "description": "CR1"}
+            ],
+            "contradiction_requirements": [
+                {"requirement_id": uuid4(), "description": "CD1"}
+            ],
+        }
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        first = service.create_items_from_spec(run_id, spec)
+        second = service.create_items_from_spec(run_id, spec)
+        assert len(first) == len(second) == 6
+        assert all(item.status == CoverageStatus.UNASSESSED for item in second)
+
+    def test_different_runs_get_independent_items(self):
+        spec = {"questions": [{"question_id": uuid4(), "text": "Q1"}]}
+        repo, service = coverage_fixture()
+        run_a = uuid4()
+        run_b = uuid4()
+        items_a = service.create_items_from_spec(run_a, spec)
+        items_b = service.create_items_from_spec(run_b, spec)
+        assert len(items_a) == 1
+        assert len(items_b) == 1
+        # Different runs should have different events
+        events_a = service.list_events(run_a)
+        events_b = service.list_events(run_b)
+        assert len(events_a) == 1
+        assert len(events_b) == 1
+        event_ids_a = {str(e.id) for e in events_a}
+        event_ids_b = {str(e.id) for e in events_b}
+        assert event_ids_a.isdisjoint(event_ids_b)
+
+
+class TestInvalidInput:
+    """Invalid input must be rejected with clear errors."""
+
+    def test_none_spec(self):
+        _, service = coverage_fixture()
+        run_id = uuid4()
+        with pytest.raises(CoverageError, match="spec is required"):
+            service.create_items_from_spec(run_id, None)
+
+    def test_empty_spec_dict(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        with pytest.raises(CoverageError, match="at least one question"):
+            service.create_items_from_spec(run_id, {})
+
+    def test_spec_with_only_empty_lists(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {
+            "questions": [],
+            "claims_to_validate": [],
+            "freshness_requirements": [],
+            "required_source_classes": [],
+            "corroboration_requirements": [],
+            "contradiction_requirements": [],
+        }
+        with pytest.raises(CoverageError, match="at least one question"):
+            service.create_items_from_spec(run_id, spec)
+
+    def test_none_run_id(self):
+        _, service = coverage_fixture()
+        spec = {"questions": [{"question_id": uuid4(), "text": "Q1"}]}
+        with pytest.raises(CoverageError, match="run_id is required"):
+            service.create_items_from_spec(None, spec)
+
+
+class TestCoverageSummary:
+    """Test the coverage_summary() convenience API."""
+
+    def test_summary_after_initialization(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {
+            "questions": [
+                {"question_id": uuid4(), "text": "Q1"},
+                {"question_id": uuid4(), "text": "Q2"},
+            ],
+            "claims_to_validate": [{"claim_id": uuid4(), "statement": "C1"}],
+        }
+        service.create_items_from_spec(run_id, spec)
+        summary = service.coverage_summary(run_id)
+        assert summary["total_items"] == 3
+        assert summary["type_counts"]["question"] == 2
+        assert summary["type_counts"]["claim"] == 1
+        # Memory repo projection: all-unassessed → "insufficient"
+        assert summary["overall_status"] == "insufficient"
+        assert summary["status_counts"]["unassessed"] == 3
+
+    def test_summary_after_status_changes(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        spec = {
+            "questions": [
+                {"question_id": uuid4(), "text": "Q1"},
+                {"question_id": uuid4(), "text": "Q2"},
+            ],
+        }
+        service.create_items_from_spec(run_id, spec)
+        item_id = list(repo.items.keys())[0]
+        service.apply_event(
+            run_id,
+            "item_status_changed",
+            item_id=UUID(item_id),
+            new_status="supported",
+            idempotency_key="evt:1",
+        )
+        summary = service.coverage_summary(run_id)
+        assert summary["status_counts"]["unassessed"] == 1
+        assert summary["status_counts"]["supported"] == 1
+        # Memory repo only counts "satisfied"/"waived" as resolved,
+        # so "supported" does not make the run "partial".
+        assert summary["overall_status"] == "insufficient"
+
+    def test_summary_empty_run(self):
+        """A run with no items returns zero counts."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        summary = service.coverage_summary(run_id)
+        assert summary["total_items"] == 0
+        assert summary["overall_status"] == "unassessed"
+        assert summary["status_counts"] == {}
+        assert summary["type_counts"] == {}
+
+    def test_summary_contains_schema_version(self):
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        summary = service.coverage_summary(run_id)
+        assert summary["schema_version"] == "coverage-ledger-v1"
+        assert summary["run_id"] == str(run_id)
+        assert summary["coverage_revision"] >= 1
