@@ -132,6 +132,12 @@ def parser():
     run_finish.add_argument("--expected-revision", type=int)
     run_finish.add_argument("--idempotency-key")
     run_finish.add_argument("--actor", default="cli")
+    run_finish.add_argument(
+        "--auto-audit",
+        action="store_true",
+        default=False,
+        help="Trigger automatic semantic audit after finishing the run.",
+    )
     run_reopen = sub.add_parser("run-reopen")
     run_reopen.add_argument("external_id")
     run_reopen.add_argument("--reason", default="legacy compatibility reopen")
@@ -1308,6 +1314,38 @@ def main(argv=None):
             },
         )
         print(dumps(result.to_dict()))
+        # Auto-audit trigger (issue #34)
+        if args.auto_audit:
+            try:
+                from research_store.container import build_audit_service
+                from research_store.config import StoreConfig
+                from research_store.service import compute_audit_identity_hash
+
+                config = StoreConfig.from_env()
+                if config.database_url:
+                    audit_svc = build_audit_service(config)
+                    identity_hash = compute_audit_identity_hash(
+                        target_hash=args.source_manifest_sha256 or "",
+                        evaluator_version="catalog-v5.0",
+                        prompt_template_version="staged-research-audit-v1",
+                        policy_version="audit-policy-v1",
+                        stage_set=["rubric", "acquisition", "evidence", "synthesis"],
+                    )
+                    audit_svc.create_assessment(
+                        run_id=status.id,
+                        target_type="run",
+                        target_id=status.id,
+                        target_hash=args.source_manifest_sha256 or "",
+                        evaluator_version="catalog-v5.0",
+                        prompt_template_version="staged-research-audit-v1",
+                        policy_version="audit-policy-v1",
+                        stage_set=["rubric", "acquisition", "evidence", "synthesis"],
+                        status="partial",
+                        audit_identity_hash=identity_hash,
+                    )
+            except Exception:
+                # Audit failure is non-fatal — the run is already finished.
+                pass
         return 0
     if args.command == "run-reopen":
         result = run_service.reopen(

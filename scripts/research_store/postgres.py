@@ -5192,7 +5192,8 @@ class PostgresUnitOfWork:
             cur.execute(
                 """SELECT id, run_id, target_type, target_id, target_hash,
                     evaluator_version, prompt_template_version, policy_version,
-                    stage_set, status, provider, model,
+                    stage_set, status, audit_identity_hash,
+                    provider, model,
                     prompt_hash, model_fingerprint, elapsed_ms,
                     audit_packet_manifest, created_at
                 FROM audit_assessments
@@ -5229,7 +5230,8 @@ class PostgresUnitOfWork:
         )
         query = f"""SELECT aa.id, aa.run_id, aa.target_type, aa.target_id, aa.target_hash,
             aa.evaluator_version, aa.prompt_template_version, aa.policy_version,
-            aa.stage_set, aa.status, aa.provider, aa.model,
+            aa.stage_set, aa.status, aa.audit_identity_hash,
+            aa.provider, aa.model,
             aa.prompt_hash, aa.model_fingerprint, aa.elapsed_ms,
             aa.audit_packet_manifest, aa.created_at
          FROM audit_assessments aa{where_clause}

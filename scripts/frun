@@ -82,6 +82,9 @@ case "${1:-}" in
       if [[ -n "$answer_file" ]]; then
         db_args+=(--answer-sha256 "$(sha256sum "$answer_file" | awk '{print $1}')")
       fi
+      if [[ "$auto_audit" == "1" ]]; then
+        db_args+=(--auto-audit)
+      fi
       "$SCRIPT_DIR/research-db" "${db_args[@]}" >/dev/null
       # Derive filesystem catalog record from committed PostgreSQL state
       if [[ "${FIRECRAWL_CATALOG_DISABLED:-}" != "1" ]]; then

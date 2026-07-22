@@ -897,6 +897,7 @@ class AuditService:
         elapsed_ms: int = 0,
         audit_packet_manifest: dict[str, Any] | None = None,
         dry_run: bool = False,
+        external_run_id: str | None = None,
     ) -> dict[str, Any]:
         """Schedule an audit assessment idempotently.
 
@@ -952,6 +953,7 @@ class AuditService:
         if dry_run:
             return {
                 "action": "dry_run_no_match",
+                "assessment_id": None,
                 "audit_identity_hash": identity_hash,
                 "existing": False,
             }
@@ -959,35 +961,59 @@ class AuditService:
         # No equivalent found — create a new assessment.
         # The partial unique constraint uk_audit_assessments_identity
         # prevents concurrent duplicate creation.
-        assessment_id = self.create_assessment(
-            run_id=run_id,
-            target_type=target_type,
-            target_id=target_id,
-            target_hash=target_hash,
-            evaluator_version=evaluator_version,
-            prompt_template_version=prompt_template_version,
-            policy_version=policy_version,
-            stage_set=stage_set,
-            status=status,
-            audit_identity_hash=identity_hash,
-            provider=provider,
-            model=model,
-            prompt_hash=prompt_hash,
-            model_fingerprint=model_fingerprint,
-            elapsed_ms=elapsed_ms,
-            audit_packet_manifest=audit_packet_manifest,
-        )
+        try:
+            assessment_id = self.create_assessment(
+                run_id=run_id,
+                target_type=target_type,
+                target_id=target_id,
+                target_hash=target_hash,
+                evaluator_version=evaluator_version,
+                prompt_template_version=prompt_template_version,
+                policy_version=policy_version,
+                stage_set=stage_set,
+                status=status,
+                audit_identity_hash=identity_hash,
+                provider=provider,
+                model=model,
+                prompt_hash=prompt_hash,
+                model_fingerprint=model_fingerprint,
+                elapsed_ms=elapsed_ms,
+                audit_packet_manifest=audit_packet_manifest,
+            )
+        except Exception:
+            # If the unique constraint fired (concurrent duplicate create),
+            # fall through to a lookup and return the existing assessment.
+            with self.uow_factory() as uow:
+                existing = uow.lookup_equivalent_assessment(identity_hash)
+            if existing is not None:
+                export = self.export_assessment(UUID(existing["id"]))
+                if export is None:
+                    export = {}
+                export["existing"] = True
+                export["audit_identity_hash"] = identity_hash
+                return {
+                    "action": "reuse",
+                    "assessment_id": str(existing["id"]),
+                    "audit_identity_hash": identity_hash,
+                    "existing": True,
+                    "assessment": export,
+                }
+            raise  # Re-raise if we still can't find it
+
         export = self.export_assessment(assessment_id)
         if export:
             export["existing"] = False
             export["audit_identity_hash"] = identity_hash
-        return {
+        result = {
             "action": "create",
             "assessment_id": str(assessment_id),
             "audit_identity_hash": identity_hash,
             "existing": False,
             "assessment": export or {},
         }
+        if external_run_id is not None:
+            result["external_run_id"] = external_run_id
+        return result
 
     def export_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
         """Export a complete audit assessment with all stage outputs."""

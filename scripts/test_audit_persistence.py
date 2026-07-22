@@ -1772,7 +1772,7 @@ class TestIdempotentScheduling:
         assessments = svc.list_assessments(run_id=run_id)
         assert len(assessments) == 1
 
-    def test_migration_0019_creates_identity_column(self, tmp_path):
+    def test_migration_0019_creates_identity_column(self, tmp_path, prepared_database_for_audit):
         """Migration 0019 adds audit_identity_hash column."""
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -1807,7 +1807,7 @@ class TestIdempotentScheduling:
         finally:
             conn.close()
 
-    def test_migration_0019_partial_unique_constraint(self, tmp_path):
+    def test_migration_0019_partial_unique_constraint(self, tmp_path, prepared_database_for_audit):
         """Migration 0019 adds partial unique constraint on audit_identity_hash."""
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -1841,7 +1841,7 @@ class TestIdempotentScheduling:
         finally:
             conn.close()
 
-    def test_migration_0019_lookup_index(self, tmp_path):
+    def test_migration_0019_lookup_index(self, tmp_path, prepared_database_for_audit):
         """Migration 0019 adds lookup index on audit_identity_hash."""
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork

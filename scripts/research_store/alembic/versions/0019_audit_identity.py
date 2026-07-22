@@ -102,11 +102,11 @@ def upgrade():
         """
         UPDATE audit_assessments
         SET audit_identity_hash = md5(
-            target_hash || '|' ||
-            evaluator_version || '|' ||
-            prompt_template_version || '|' ||
+            COALESCE(target_hash, '') || '|' ||
+            COALESCE(evaluator_version, '') || '|' ||
+            COALESCE(prompt_template_version, '') || '|' ||
             COALESCE(model_fingerprint, '') || '|' ||
-            policy_version || '|' ||
+            COALESCE(policy_version, '') || '|' ||
             array_to_string(
                 (SELECT json_agg(s) FROM (
                     SELECT unnest(stage_set) AS s ORDER BY s
@@ -129,13 +129,21 @@ def upgrade():
     )
 
     # ----------------------------------------------------------------
-    # 4. Add NOT NULL check constraint
+    # 4. Add NOT NULL check constraint (idempotent)
     # ----------------------------------------------------------------
     op.execute(
         """
-        ALTER TABLE audit_assessments
-        ADD CONSTRAINT chk_audit_assessments_audit_identity_hash
-        CHECK (length(trim(audit_identity_hash)) > 0);
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'chk_audit_assessments_audit_identity_hash'
+          ) THEN
+            ALTER TABLE audit_assessments
+            ADD CONSTRAINT chk_audit_assessments_audit_identity_hash
+            CHECK (length(trim(audit_identity_hash)) > 0);
+          END IF;
+        END $$;
         """
     )
 
