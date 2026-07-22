@@ -1,0 +1,73 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/terminal-decision-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "coverage_revision": {
+      "type": "integer"
+    },
+    "created_at": {},
+    "decision_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "no_progress_signals": {
+      "items": {
+        "enum": [
+          "no_new_candidates",
+          "no_new_assets",
+          "no_changed_coverage",
+          "repeated_equivalent_proposals",
+          "repeated_extraction_failures",
+          "repeated_retrieval",
+          "budget_exhausted",
+          "unsatisfiable_source"
+        ],
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "outcome": {
+      "enum": [
+        "sufficient",
+        "partial",
+        "blocked",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "policy_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "run_revision": {
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "terminal-decision-v1",
+      "type": "string"
+    },
+    "unresolved_gap": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "decision_id",
+    "run_id",
+    "run_revision",
+    "coverage_revision",
+    "outcome",
+    "no_progress_signals",
+    "unresolved_gap",
+    "policy_version",
+    "created_at"
+  ],
+  "title": "TerminalDecision",
+  "type": "object"
+}

@@ -765,6 +765,69 @@ class EvidencePacket:
             )
 
 
+# ---------------------------------------------------------------------------
+# Terminal decision (Phase 3 / FR-012)
+# ---------------------------------------------------------------------------
+
+
+class NoProgressSignal(str, Enum):
+    """Deterministic signals that the adaptive loop is not making progress."""
+
+    NO_NEW_CANDIDATES = "no_new_candidates"
+    NO_NEW_ASSETS = "no_new_assets"
+    NO_CHANGED_COVERAGE = "no_changed_coverage"
+    REPEATED_EQUIVALENT_PROPOSALS = "repeated_equivalent_proposals"
+    REPEATED_EXTRACTION_FAILURES = "repeated_extraction_failures"
+    REPEATED_RETRIEVAL = "repeated_retrieval"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    UNSATISFIABLE_SOURCE = "unsatisfiable_source"
+
+
+class TerminalDecisionOutcome(str, Enum):
+    """Deterministic terminal outcomes for a research run."""
+
+    SUFFICIENT = "sufficient"
+    PARTIAL = "partial"
+    BLOCKED = "blocked"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class TerminalDecision:
+    """Deterministic terminal decision produced by TerminalDecisionPolicy.
+
+    This is a pure data contract — it carries no orchestration or
+    persistence logic.  The orchestrator is responsible for translating
+    the decision into a run-state transition via ResearchRunService.
+    """
+
+    schema_version: str
+    decision_id: UUID
+    run_id: UUID
+    run_revision: int
+    coverage_revision: int
+    outcome: TerminalDecisionOutcome
+    no_progress_signals: tuple[NoProgressSignal, ...]
+    unresolved_gap: str
+    policy_version: str
+    created_at: Any  # datetime
+
+    SCHEMA_VERSION = "terminal-decision-v1"
+    POLICY_VERSION = "terminal-decision-policy-v1"
+
+    def __post_init__(self):
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+        if self.policy_version != self.POLICY_VERSION:
+            raise ValueError(f"unsupported policy_version: {self.policy_version}")
+        _unique(
+            [s.value for s in self.no_progress_signals],
+            "no_progress_signals",
+        )
+        _text(self.unresolved_gap, "terminal_decision.unresolved_gap")
+
+
 CANONICAL_MODELS = (
     ResearchSpec,
     SearchPlan,
@@ -772,4 +835,5 @@ CANONICAL_MODELS = (
     CoverageLedger,
     StrategyRevisionProposal,
     EvidencePacket,
+    TerminalDecision,
 )

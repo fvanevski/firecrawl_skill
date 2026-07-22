@@ -6,50 +6,145 @@
     "research_archetype": "technical_troubleshooting",
     "risk_level": "medium",
     "execution_mode": "agent_led",
-    "questions": [{"question_id": "00000000-0000-0000-0000-000000000101", "text": "What is the current behavior?"}],
-    "claims_to_validate": [{"claim_id": "00000000-0000-0000-0000-000000000102", "statement": "The documented behavior is reproducible."}],
-    "entities": ["Fixture Engine"],
-    "jurisdictions": ["unspecified"],
-    "time_window": {"start": null, "end": null, "description": "current documentation", "uncertainty": "publication lag possible"},
-    "freshness_requirements": [{"requirement_id": "00000000-0000-0000-0000-000000000103", "description": "Use currently published documentation.", "max_age_days": 30}],
-    "required_source_classes": [{"requirement_id": "00000000-0000-0000-0000-000000000104", "source_class": "primary documentation", "minimum_count": 1}],
-    "corroboration_requirements": [{"requirement_id": "00000000-0000-0000-0000-000000000105", "description": "Confirm consequential claims independently.", "required_independent_source_count": 2}],
-    "contradiction_requirements": [{"requirement_id": "00000000-0000-0000-0000-000000000106", "description": "Search for documented counterexamples.", "required_independent_source_count": 1}],
-    "excluded_interpretations": ["unrelated products"],
-    "structured_data_requirements": [{"requirement_id": "00000000-0000-0000-0000-000000000107", "description": "Capture version and status.", "required_fields": ["version", "status"]}],
-    "completion_criteria": [{"criterion_id": "00000000-0000-0000-0000-000000000108", "description": "Answer every stated question within the configured budget.", "mandatory": true}],
-    "user_constraints": ["Do not use unrelated sources."],
-    "ambiguities": ["Exact release date is uncertain."],
-    "assumptions": ["Published documentation is authoritative."]
+    "questions": [
+      {
+        "question_id": "00000000-0000-0000-0000-000000000101",
+        "text": "What is the current behavior?"
+      }
+    ],
+    "claims_to_validate": [
+      {
+        "claim_id": "00000000-0000-0000-0000-000000000102",
+        "statement": "The documented behavior is reproducible."
+      }
+    ],
+    "entities": [
+      "Fixture Engine"
+    ],
+    "jurisdictions": [
+      "unspecified"
+    ],
+    "time_window": {
+      "start": null,
+      "end": null,
+      "description": "current documentation",
+      "uncertainty": "publication lag possible"
+    },
+    "freshness_requirements": [
+      {
+        "requirement_id": "00000000-0000-0000-0000-000000000103",
+        "description": "Use currently published documentation.",
+        "max_age_days": 30
+      }
+    ],
+    "required_source_classes": [
+      {
+        "requirement_id": "00000000-0000-0000-0000-000000000104",
+        "source_class": "primary documentation",
+        "minimum_count": 1
+      }
+    ],
+    "corroboration_requirements": [
+      {
+        "requirement_id": "00000000-0000-0000-0000-000000000105",
+        "description": "Confirm consequential claims independently.",
+        "required_independent_source_count": 2
+      }
+    ],
+    "contradiction_requirements": [
+      {
+        "requirement_id": "00000000-0000-0000-0000-000000000106",
+        "description": "Search for documented counterexamples.",
+        "required_independent_source_count": 1
+      }
+    ],
+    "excluded_interpretations": [
+      "unrelated products"
+    ],
+    "structured_data_requirements": [
+      {
+        "requirement_id": "00000000-0000-0000-0000-000000000107",
+        "description": "Capture version and status.",
+        "required_fields": [
+          "version",
+          "status"
+        ]
+      }
+    ],
+    "completion_criteria": [
+      {
+        "criterion_id": "00000000-0000-0000-0000-000000000108",
+        "description": "Answer every stated question within the configured budget.",
+        "mandatory": true
+      }
+    ],
+    "user_constraints": [
+      "Do not use unrelated sources."
+    ],
+    "ambiguities": [
+      "Exact release date is uncertain."
+    ],
+    "assumptions": [
+      "Published documentation is authoritative."
+    ]
   },
   "search-plan-v1": {
     "schema_version": "search-plan-v1",
     "research_spec_id": "00000000-0000-0000-0000-000000000100",
     "revision": 1,
-    "queries": [{
-      "query_id": "00000000-0000-0000-0000-000000000201",
-      "query": "Fixture Engine current behavior official documentation",
-      "facet": "official behavior",
-      "target_question_ids": ["00000000-0000-0000-0000-000000000101"],
-      "target_claim_ids": ["00000000-0000-0000-0000-000000000102"],
-      "intended_source_classes": ["primary documentation"],
-      "expected_organizations": ["Fixture Foundation"],
-      "freshness_requirement": {"start": null, "end": null, "description": "current documentation", "uncertainty": "publication lag possible"},
-      "expected_contribution": "Establish documented current behavior.",
-      "domain_restrictions": ["fixture.invalid"],
-      "negative_terms": ["unrelated"],
-      "priority": 100
-    }]
+    "queries": [
+      {
+        "query_id": "00000000-0000-0000-0000-000000000201",
+        "query": "Fixture Engine current behavior official documentation",
+        "facet": "official behavior",
+        "target_question_ids": [
+          "00000000-0000-0000-0000-000000000101"
+        ],
+        "target_claim_ids": [
+          "00000000-0000-0000-0000-000000000102"
+        ],
+        "intended_source_classes": [
+          "primary documentation"
+        ],
+        "expected_organizations": [
+          "Fixture Foundation"
+        ],
+        "freshness_requirement": {
+          "start": null,
+          "end": null,
+          "description": "current documentation",
+          "uncertainty": "publication lag possible"
+        },
+        "expected_contribution": "Establish documented current behavior.",
+        "domain_restrictions": [
+          "fixture.invalid"
+        ],
+        "negative_terms": [
+          "unrelated"
+        ],
+        "priority": 100
+      }
+    ]
   },
   "candidate-assessment-v1": {
     "schema_version": "candidate-assessment-v1",
     "candidate_id": "00000000-0000-0000-0000-000000000301",
     "relevance": "high",
     "source_role": "primary",
-    "target_question_ids": ["00000000-0000-0000-0000-000000000101"],
-    "target_claim_ids": ["00000000-0000-0000-0000-000000000102"],
-    "freshness_assessment": {"status": "satisfied", "rationale": "The page is current."},
-    "independence_assessment": {"status": "independent", "rationale": "The publisher owns the specification."},
+    "target_question_ids": [
+      "00000000-0000-0000-0000-000000000101"
+    ],
+    "target_claim_ids": [
+      "00000000-0000-0000-0000-000000000102"
+    ],
+    "freshness_assessment": {
+      "status": "satisfied",
+      "rationale": "The page is current."
+    },
+    "independence_assessment": {
+      "status": "independent",
+      "rationale": "The publisher owns the specification."
+    },
     "extraction_recommendation": "scrape",
     "priority": 95,
     "rationale": "Directly addresses the question.",
@@ -60,22 +155,32 @@
     "schema_version": "coverage-ledger-v1",
     "run_id": "00000000-0000-0000-0000-000000000401",
     "revision": 2,
-    "items": [{
-      "coverage_item_id": "00000000-0000-0000-0000-000000000402",
-      "item_type": "question",
-      "subject_id": "00000000-0000-0000-0000-000000000101",
-      "status": "partially_supported",
-      "candidate_ids": ["00000000-0000-0000-0000-000000000301"],
-      "snapshot_ids": ["00000000-0000-0000-0000-000000000602"],
-      "passage_ids": ["00000000-0000-0000-0000-000000000601"],
-      "independent_source_count": 1,
-      "required_independent_source_count": 2,
-      "authority_classes_present": ["primary"],
-      "freshness_status": "satisfied",
-      "remaining_gap": "One independent source remains necessary.",
-      "confidence": 0.7,
-      "mechanical_failure_ids": []
-    }],
+    "items": [
+      {
+        "coverage_item_id": "00000000-0000-0000-0000-000000000402",
+        "item_type": "question",
+        "subject_id": "00000000-0000-0000-0000-000000000101",
+        "status": "partially_supported",
+        "candidate_ids": [
+          "00000000-0000-0000-0000-000000000301"
+        ],
+        "snapshot_ids": [
+          "00000000-0000-0000-0000-000000000602"
+        ],
+        "passage_ids": [
+          "00000000-0000-0000-0000-000000000601"
+        ],
+        "independent_source_count": 1,
+        "required_independent_source_count": 2,
+        "authority_classes_present": [
+          "primary"
+        ],
+        "freshness_status": "satisfied",
+        "remaining_gap": "One independent source remains necessary.",
+        "confidence": 0.7,
+        "mechanical_failure_ids": []
+      }
+    ],
     "overall_status": "partial",
     "mechanical_failures": []
   },
@@ -85,25 +190,51 @@
     "run_revision": 3,
     "coverage_revision": 2,
     "decision": "search",
-    "target_coverage_item_ids": ["00000000-0000-0000-0000-000000000402"],
-    "proposed_queries": [{
-      "query_id": "00000000-0000-0000-0000-000000000502",
-      "query": "Fixture Engine independent behavior analysis",
-      "facet": "independent corroboration",
-      "target_question_ids": ["00000000-0000-0000-0000-000000000101"],
-      "target_claim_ids": ["00000000-0000-0000-0000-000000000102"],
-      "intended_source_classes": ["independent secondary"],
-      "expected_organizations": [],
-      "freshness_requirement": {"start": null, "end": null, "description": "current analysis", "uncertainty": "none"},
-      "expected_contribution": "Close the independent corroboration gap.",
-      "domain_restrictions": [],
-      "negative_terms": [],
-      "priority": 80
-    }],
-    "proposed_candidate_ids": ["00000000-0000-0000-0000-000000000301"],
-    "proposed_retrieval_queries": ["documented behavior counterexample"],
+    "target_coverage_item_ids": [
+      "00000000-0000-0000-0000-000000000402"
+    ],
+    "proposed_queries": [
+      {
+        "query_id": "00000000-0000-0000-0000-000000000502",
+        "query": "Fixture Engine independent behavior analysis",
+        "facet": "independent corroboration",
+        "target_question_ids": [
+          "00000000-0000-0000-0000-000000000101"
+        ],
+        "target_claim_ids": [
+          "00000000-0000-0000-0000-000000000102"
+        ],
+        "intended_source_classes": [
+          "independent secondary"
+        ],
+        "expected_organizations": [],
+        "freshness_requirement": {
+          "start": null,
+          "end": null,
+          "description": "current analysis",
+          "uncertainty": "none"
+        },
+        "expected_contribution": "Close the independent corroboration gap.",
+        "domain_restrictions": [],
+        "negative_terms": [],
+        "priority": 80
+      }
+    ],
+    "proposed_candidate_ids": [
+      "00000000-0000-0000-0000-000000000301"
+    ],
+    "proposed_retrieval_queries": [
+      "documented behavior counterexample"
+    ],
     "expected_contribution": "Add independent corroboration or qualification.",
-    "estimated_cost": {"searches": 1, "scrapes": 2, "retrievals": 1, "llm_calls": 1, "input_tokens": 2000, "output_tokens": 1000},
+    "estimated_cost": {
+      "searches": 1,
+      "scrapes": 2,
+      "retrievals": 1,
+      "llm_calls": 1,
+      "input_tokens": 2000,
+      "output_tokens": 1000
+    },
     "rationale": "The primary source alone does not meet corroboration requirements.",
     "confidence": 0.8
   },
@@ -112,17 +243,110 @@
     "run_id": "00000000-0000-0000-0000-000000000401",
     "research_spec_id": "00000000-0000-0000-0000-000000000100",
     "coverage_revision": 2,
-    "claims": [{"claim_id": "00000000-0000-0000-0000-000000000102", "statement": "The documented behavior is reproducible.", "semantic_status": "qualified", "uncertainty": "Only one source has been acquired."}],
-    "passages": [{"passage_id": "00000000-0000-0000-0000-000000000601", "candidate_id": "00000000-0000-0000-0000-000000000301", "snapshot_id": "00000000-0000-0000-0000-000000000602", "chunk_id": "00000000-0000-0000-0000-000000000603", "text": "The fixture passage records the documented behavior.", "source_url": "https://fixture.invalid/docs"}],
-    "claim_evidence_bindings": [{"binding_id": "00000000-0000-0000-0000-000000000604", "claim_id": "00000000-0000-0000-0000-000000000102", "passage_ids": ["00000000-0000-0000-0000-000000000601"], "relationship": "qualifies", "confidence": 0.7, "uncertainty": "Independent replication is missing."}],
-    "corroborating_groups": [{"group_id": "00000000-0000-0000-0000-000000000605", "passage_ids": ["00000000-0000-0000-0000-000000000601"], "rationale": "One primary passage is available.", "evaluated": true}],
-    "contradicting_groups": [{"group_id": "00000000-0000-0000-0000-000000000606", "passage_ids": [], "rationale": "No contradiction was found in the evaluated evidence.", "evaluated": true}],
-    "qualifying_groups": [{"group_id": "00000000-0000-0000-0000-000000000607", "passage_ids": ["00000000-0000-0000-0000-000000000601"], "rationale": "The source is primary but not independent corroboration.", "evaluated": true}],
-    "near_duplicate_groups": [{"group_id": "00000000-0000-0000-0000-000000000608", "passage_ids": [], "rationale": "No near duplicates were found in the evaluated evidence.", "evaluated": true}],
-    "source_diversity_summary": {"independent_source_count": 1},
-    "freshness_summary": {"status": "satisfied"},
-    "limitations": ["Independent corroboration remains missing."],
-    "unresolved_items": ["00000000-0000-0000-0000-000000000402"],
-    "retrieval_provenance": [{"retrieval_event_id": "00000000-0000-0000-0000-000000000609", "requested_mode": "hybrid", "executed_mode": "hybrid", "mechanical_status": "succeeded", "component_errors": [], "selected_passage_ids": ["00000000-0000-0000-0000-000000000601"]}]
+    "claims": [
+      {
+        "claim_id": "00000000-0000-0000-0000-000000000102",
+        "statement": "The documented behavior is reproducible.",
+        "semantic_status": "qualified",
+        "uncertainty": "Only one source has been acquired."
+      }
+    ],
+    "passages": [
+      {
+        "passage_id": "00000000-0000-0000-0000-000000000601",
+        "candidate_id": "00000000-0000-0000-0000-000000000301",
+        "snapshot_id": "00000000-0000-0000-0000-000000000602",
+        "chunk_id": "00000000-0000-0000-0000-000000000603",
+        "text": "The fixture passage records the documented behavior.",
+        "source_url": "https://fixture.invalid/docs"
+      }
+    ],
+    "claim_evidence_bindings": [
+      {
+        "binding_id": "00000000-0000-0000-0000-000000000604",
+        "claim_id": "00000000-0000-0000-0000-000000000102",
+        "passage_ids": [
+          "00000000-0000-0000-0000-000000000601"
+        ],
+        "relationship": "qualifies",
+        "confidence": 0.7,
+        "uncertainty": "Independent replication is missing."
+      }
+    ],
+    "corroborating_groups": [
+      {
+        "group_id": "00000000-0000-0000-0000-000000000605",
+        "passage_ids": [
+          "00000000-0000-0000-0000-000000000601"
+        ],
+        "rationale": "One primary passage is available.",
+        "evaluated": true
+      }
+    ],
+    "contradicting_groups": [
+      {
+        "group_id": "00000000-0000-0000-0000-000000000606",
+        "passage_ids": [],
+        "rationale": "No contradiction was found in the evaluated evidence.",
+        "evaluated": true
+      }
+    ],
+    "qualifying_groups": [
+      {
+        "group_id": "00000000-0000-0000-0000-000000000607",
+        "passage_ids": [
+          "00000000-0000-0000-0000-000000000601"
+        ],
+        "rationale": "The source is primary but not independent corroboration.",
+        "evaluated": true
+      }
+    ],
+    "near_duplicate_groups": [
+      {
+        "group_id": "00000000-0000-0000-0000-000000000608",
+        "passage_ids": [],
+        "rationale": "No near duplicates were found in the evaluated evidence.",
+        "evaluated": true
+      }
+    ],
+    "source_diversity_summary": {
+      "independent_source_count": 1
+    },
+    "freshness_summary": {
+      "status": "satisfied"
+    },
+    "limitations": [
+      "Independent corroboration remains missing."
+    ],
+    "unresolved_items": [
+      "00000000-0000-0000-0000-000000000402"
+    ],
+    "retrieval_provenance": [
+      {
+        "retrieval_event_id": "00000000-0000-0000-0000-000000000609",
+        "requested_mode": "hybrid",
+        "executed_mode": "hybrid",
+        "mechanical_status": "succeeded",
+        "component_errors": [],
+        "selected_passage_ids": [
+          "00000000-0000-0000-0000-000000000601"
+        ]
+      }
+    ]
+  },
+  "terminal-decision-v1": {
+    "schema_version": "terminal-decision-v1",
+    "decision_id": "00000000-0000-0000-0000-000000000701",
+    "run_id": "00000000-0000-0000-0000-000000000401",
+    "run_revision": 5,
+    "coverage_revision": 3,
+    "outcome": "partial",
+    "no_progress_signals": [
+      "budget_exhausted",
+      "no_new_candidates"
+    ],
+    "unresolved_gap": "budget exhausted; no new candidates found",
+    "policy_version": "terminal-decision-policy-v1",
+    "created_at": "2026-07-21T12:00:00+00:00"
   }
 }

@@ -49,6 +49,11 @@ from .stages import (
     STRATEGY_DECISION_PARTIAL,
     STRATEGY_DECISION_FAIL,
 )
+from .terminal_decision import (
+    TerminalDecisionConfig,
+    TerminalDecisionOutcome,
+    TerminalDecisionPolicy,
+)
 from .strategy_service import StrategyRevisionService
 
 logger = logging.getLogger(__name__)
@@ -1305,6 +1310,7 @@ class ResearchOrchestrator:
         config: StoreConfig,
         legacy_adapter: LegacyEntryPointAdapter | None = None,
         corpus_service: Any | None = None,
+        terminal_config: TerminalDecisionConfig | None = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
@@ -1313,6 +1319,7 @@ class ResearchOrchestrator:
         self.config = config
         self.legacy_adapter = legacy_adapter
         self.corpus_service = corpus_service
+        self._terminal_config = terminal_config or TerminalDecisionConfig()
 
         # Stage instances
         self._planning = PlanningStage(run_service, config)
@@ -1840,7 +1847,12 @@ class ResearchOrchestrator:
         return wave_count >= max_cycles
 
     def _check_no_progress(self, context: dict[str, Any], run_id: UUID) -> bool:
-        """Check if the run has made no progress since the last cycle."""
+        """Check if the run has made no progress since the last cycle.
+
+        This is a lightweight pre-check.  The full terminal decision
+        policy is evaluated in ``_evaluate_terminal_decision`` which
+        produces structured no-progress signals.
+        """
         previous_status = context.get("_previous_coverage_status")
         current_status = context.get(ContextKeys.OVERALL_STATUS)
         if previous_status and current_status == previous_status:
@@ -1849,6 +1861,61 @@ class ResearchOrchestrator:
         if current_status:
             context["_previous_coverage_status"] = current_status
         return False
+
+    def _evaluate_terminal_decision(
+        self,
+        context: dict[str, Any],
+        run_id: UUID,
+        run_revision: int,
+        coverage_revision: int,
+    ) -> TerminalDecisionOutcome | None:
+        """Evaluate the terminal decision policy and update context.
+
+        Returns the terminal outcome if a terminal decision is reached,
+        or None if the run should continue.
+        """
+        try:
+            policy = TerminalDecisionPolicy(self._terminal_config)
+
+            decision = policy.evaluate(
+                run_id=run_id,
+                run_revision=run_revision,
+                coverage_revision=coverage_revision,
+                overall_status=context.get(ContextKeys.OVERALL_STATUS, "unassessed"),
+                budget_exhausted=context.get("_budget_exhausted", False),
+                no_progress=context.get("_no_progress", False),
+                strategy_revision_count=context.get("_strategy_revision_count", 0),
+                wall_clock_seconds=(
+                    time.monotonic()
+                    - context.get(ContextKeys.WALL_CLOCK_START, time.monotonic())
+                ),
+                wall_clock_limit_seconds=self._terminal_config.max_wall_clock_seconds,
+                new_candidate_count=context.get("_new_candidate_count", 0),
+                new_asset_count=context.get("_new_asset_count", 0),
+                changed_coverage_count=context.get("_changed_coverage_count", 0),
+                equivalent_proposal_count=context.get("_equivalent_proposal_count", 0),
+                repeated_extraction_failures=context.get(
+                    "_repeated_extraction_failures", 0
+                ),
+                repeated_retrieval_count=context.get("_repeated_retrieval_count", 0),
+                unresolved_gap=context.get("_unresolved_gap", ""),
+                unsatisfiable_source=context.get("_unsatisfiable_source", False),
+            )
+
+            # Store signals in context for observability
+            context["_terminal_signals"] = [
+                s.value for s in decision.no_progress_signals
+            ]
+            context["_terminal_outcome"] = decision.outcome.value
+            context["_terminal_reason"] = decision.unresolved_gap
+
+            return decision.outcome
+        except Exception as exc:
+            logger.warning(
+                "terminal decision evaluation failed, falling back to budget check: %s",
+                exc,
+            )
+            return None
 
     def _failed_result(self, run_id: UUID, error: str) -> OrchestratorResult:
         """Create a failed orchestrator result."""
@@ -1883,4 +1950,7 @@ __all__ = [
     "STRATEGY_DECISION_SEARCH",
     "STRATEGY_DECISION_PARTIAL",
     "STRATEGY_DECISION_FAIL",
+    "TerminalDecisionConfig",
+    "TerminalDecisionOutcome",
+    "TerminalDecisionPolicy",
 ]
