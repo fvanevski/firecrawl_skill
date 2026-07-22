@@ -5086,3 +5086,254 @@ class PostgresUnitOfWork:
             "claims": [_stringify_row(c) for c in claims],
             "links": [_stringify_row(lnk) for lnk in links],
         }
+
+
+    # ------------------------------------------------------------------
+    # Audit assessment repository methods (issue #33)
+    # ------------------------------------------------------------------
+
+    def create_audit_assessment(
+        self,
+        run_id: UUID,
+        target_type: str,
+        target_id: UUID,
+        target_hash: str,
+        evaluator_version: str,
+        prompt_template_version: str,
+        policy_version: str,
+        stage_set: list[str],
+        status: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_hash: str | None = None,
+        model_fingerprint: str | None = None,
+        elapsed_ms: int = 0,
+        audit_packet_manifest: dict[str, Any] | None = None,
+    ) -> UUID:
+        """Create an audit assessment record. Returns the row ``id``."""
+        with self._cursor() as cur:
+            cur.execute(
+                """INSERT INTO audit_assessments (
+                    run_id, target_type, target_id, target_hash,
+                    evaluator_version, prompt_template_version, policy_version,
+                    stage_set, status, provider, model,
+                    prompt_hash, model_fingerprint, elapsed_ms,
+                    audit_packet_manifest
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id""",
+                (
+                    str(run_id),
+                    target_type,
+                    str(target_id),
+                    target_hash,
+                    evaluator_version,
+                    prompt_template_version,
+                    policy_version,
+                    stage_set,
+                    status,
+                    provider,
+                    model,
+                    prompt_hash,
+                    model_fingerprint,
+                    elapsed_ms,
+                    json.dumps(audit_packet_manifest, sort_keys=True)
+                    if audit_packet_manifest
+                    else None,
+                ),
+            )
+            return UUID(cur.fetchone()[0])
+
+    def get_audit_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
+        """Fetch a single audit assessment by ID. Returns None if not found."""
+        with self._cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, target_type, target_id, target_hash,
+                    evaluator_version, prompt_template_version, policy_version,
+                    stage_set, status, provider, model,
+                    prompt_hash, model_fingerprint, elapsed_ms,
+                    audit_packet_manifest, created_at
+                FROM audit_assessments
+                WHERE id=%s""",
+                (str(assessment_id),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return self._row_to_audit_assessment_mapping(row)
+
+    def list_audit_assessments(
+        self,
+        run_id: UUID | None = None,
+        target_id: UUID | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List audit assessments with optional filters."""
+        conditions, params = [], []
+        if run_id is not None:
+            conditions.append("aa.run_id = %s")
+            params.append(str(run_id))
+        if target_id is not None:
+            conditions.append("aa.target_id = %s")
+            params.append(str(target_id))
+        if status is not None:
+            conditions.append("aa.status = %s")
+            params.append(status)
+
+        where_clause = (
+            " WHERE " + " AND ".join(conditions) if conditions else ""
+        )
+        query = f"""SELECT aa.id, aa.run_id, aa.target_type, aa.target_id, aa.target_hash,
+            aa.evaluator_version, aa.prompt_template_version, aa.policy_version,
+            aa.stage_set, aa.status, aa.provider, aa.model,
+            aa.prompt_hash, aa.model_fingerprint, aa.elapsed_ms,
+            aa.audit_packet_manifest, aa.created_at
+         FROM audit_assessments aa{where_clause}
+         ORDER BY aa.created_at DESC
+         LIMIT %s OFFSET %s"""
+        params.extend([limit, offset])
+
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            return [self._row_to_audit_assessment_mapping(row) for row in cur.fetchall()]
+
+    def detect_stale_assessments(
+        self, run_id: UUID, target_type: str, target_id: UUID, current_hash: str
+    ) -> list[dict[str, Any]]:
+        """Return assessments whose target_hash differs from current_hash.
+
+        Stale assessments are retained as historical records.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                """SELECT id, target_hash, status, created_at
+                FROM audit_assessments
+                WHERE run_id = %s AND target_type = %s AND target_id = %s
+                  AND target_hash != %s
+                ORDER BY created_at DESC""",
+                (str(run_id), target_type, str(target_id), current_hash),
+            )
+            rows = cur.fetchall()
+            return [
+                {"id": str(row[0]), "target_hash": row[1], "status": row[2], "created_at": row[3]}
+                for row in rows
+            ]
+
+    def export_audit_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
+        """Export a complete audit assessment with all stage outputs."""
+        assessment = self.get_audit_assessment(assessment_id)
+        if assessment is None:
+            return None
+        stages = self.list_audit_stage_outputs(assessment_id)
+        export = dict(assessment)
+        export["stages"] = stages
+        return export
+
+    # -- Audit stage output methods ---------------------------------------
+
+    def insert_audit_stage_output(
+        self,
+        assessment_id: UUID,
+        stage: str,
+        sequence_number: int,
+        status: str,
+        *,
+        output: dict[str, Any] | None = None,
+        error: str | None = None,
+        error_details: dict[str, Any] | None = None,
+        call_count: int = 0,
+        used_fallback: bool = False,
+    ) -> UUID:
+        """Insert an audit stage output. Returns the row ``id``."""
+        with self._cursor() as cur:
+            cur.execute(
+                """INSERT INTO audit_stage_outputs (
+                    assessment_id, stage, sequence_number, status,
+                    output, error, error_details,
+                    call_count, used_fallback
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id""",
+                (
+                    str(assessment_id),
+                    stage,
+                    sequence_number,
+                    status,
+                    json.dumps(output, sort_keys=True) if output else None,
+                    error,
+                    json.dumps(error_details, sort_keys=True)
+                    if error_details
+                    else None,
+                    call_count,
+                    used_fallback,
+                ),
+            )
+            return UUID(cur.fetchone()[0])
+
+    def list_audit_stage_outputs(
+        self,
+        assessment_id: UUID,
+        stage: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List stage outputs for an assessment with optional filters."""
+        conditions, params = ["sa.assessment_id = %s"], [str(assessment_id)]
+        if stage is not None:
+            conditions.append("sa.stage = %s")
+            params.append(stage)
+        if status is not None:
+            conditions.append("sa.status = %s")
+            params.append(status)
+
+        where_clause = " WHERE " + " AND ".join(conditions)
+        query = f"""SELECT sa.id, sa.assessment_id, sa.stage, sa.sequence_number,
+            sa.status, sa.output, sa.error, sa.error_details,
+            sa.call_count, sa.used_fallback, sa.created_at
+         FROM audit_stage_outputs sa{where_clause}
+         ORDER BY sa.sequence_number ASC
+         LIMIT %s OFFSET %s"""
+        params.extend([limit, offset])
+
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            return [self._row_to_audit_stage_output_mapping(row) for row in cur.fetchall()]
+
+    def validate_assessment_exists(self, assessment_id: UUID) -> bool:
+        """Check whether an assessment ID exists."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM audit_assessments WHERE id = %s LIMIT 1",
+                (str(assessment_id),),
+            )
+            return cur.fetchone() is not None
+
+    # -- Audit row mappers ------------------------------------------------
+
+    @staticmethod
+    def _row_to_audit_assessment_mapping(row) -> dict[str, Any]:
+        keys = (
+            "id", "run_id", "target_type", "target_id", "target_hash",
+            "evaluator_version", "prompt_template_version", "policy_version",
+            "stage_set", "status", "provider", "model",
+            "prompt_hash", "model_fingerprint", "elapsed_ms",
+            "audit_packet_manifest", "created_at",
+        )
+        result = dict(zip(keys, row))
+        stage_set = result.get("stage_set")
+        if isinstance(stage_set, (list, tuple)):
+            result["stage_set"] = tuple(stage_set)
+        elif isinstance(stage_set, str):
+            result["stage_set"] = (stage_set,)
+        return result
+
+    @staticmethod
+    def _row_to_audit_stage_output_mapping(row) -> dict[str, Any]:
+        keys = (
+            "id", "assessment_id", "stage", "sequence_number",
+            "status", "output", "error", "error_details",
+            "call_count", "used_fallback", "created_at",
+        )
+        return dict(zip(keys, row))

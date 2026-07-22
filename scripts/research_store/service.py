@@ -605,3 +605,207 @@ class ClaimManifestService:
         """Check if snapshot_id exists in asset_snapshots."""
         with self.uow_factory() as uow:
             return uow.validate_snapshot_id(snapshot_id)
+
+
+# ---------------------------------------------------------------------------
+# Audit service (issue #33)
+# ---------------------------------------------------------------------------
+
+
+class AuditService:
+    """Authoritative service for staged semantic audit persistence.
+
+    Persists audit assessments and their individual stage outputs in
+    PostgreSQL. Stage failures do not erase successful stages. Target
+    hash changes make prior assessments stale but they remain as
+    historical records.
+    """
+
+    def __init__(self, uow_factory: Callable):
+        self.uow_factory = uow_factory
+
+    def create_assessment(
+        self,
+        run_id: UUID,
+        target_type: str,
+        target_id: UUID,
+        target_hash: str,
+        evaluator_version: str,
+        prompt_template_version: str,
+        policy_version: str,
+        stage_set: list[str],
+        status: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_hash: str | None = None,
+        model_fingerprint: str | None = None,
+        elapsed_ms: int = 0,
+        audit_packet_manifest: dict[str, Any] | None = None,
+    ) -> UUID:
+        """Create an audit assessment record. Returns the assessment ``id``."""
+        with self.uow_factory() as uow:
+            assessment_id = uow.create_audit_assessment(
+                run_id=run_id,
+                target_type=target_type,
+                target_id=target_id,
+                target_hash=target_hash,
+                evaluator_version=evaluator_version,
+                prompt_template_version=prompt_template_version,
+                policy_version=policy_version,
+                stage_set=stage_set,
+                status=status,
+                provider=provider,
+                model=model,
+                prompt_hash=prompt_hash,
+                model_fingerprint=model_fingerprint,
+                elapsed_ms=elapsed_ms,
+                audit_packet_manifest=audit_packet_manifest,
+            )
+        return assessment_id
+
+    def add_stage_output(
+        self,
+        assessment_id: UUID,
+        stage: str,
+        sequence_number: int,
+        status: str,
+        *,
+        output: dict[str, Any] | None = None,
+        error: str | None = None,
+        error_details: dict[str, Any] | None = None,
+        call_count: int = 0,
+        used_fallback: bool = False,
+    ) -> UUID:
+        """Add a stage output to an assessment. Returns the stage ``id``.
+
+        Stage failures are recorded individually; successful stages remain
+        intact.
+        """
+        with self.uow_factory() as uow:
+            if not uow.validate_assessment_exists(assessment_id):
+                raise ValueError(
+                    f"assessment not found: {assessment_id}"
+                )
+            stage_id = uow.insert_audit_stage_output(
+                assessment_id=assessment_id,
+                stage=stage,
+                sequence_number=sequence_number,
+                status=status,
+                output=output,
+                error=error,
+                error_details=error_details,
+                call_count=call_count,
+                used_fallback=used_fallback,
+            )
+        return stage_id
+
+    def get_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
+        """Fetch a single audit assessment by ID."""
+        with self.uow_factory() as uow:
+            return uow.get_audit_assessment(assessment_id)
+
+    def list_assessments(
+        self,
+        run_id: UUID | None = None,
+        target_id: UUID | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List audit assessments with optional filters."""
+        with self.uow_factory() as uow:
+            return uow.list_audit_assessments(
+                run_id=run_id,
+                target_id=target_id,
+                status=status,
+                limit=limit,
+                offset=offset,
+            )
+
+    def get_stage_outputs(
+        self,
+        assessment_id: UUID,
+        stage: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List stage outputs for an assessment."""
+        with self.uow_factory() as uow:
+            return uow.list_audit_stage_outputs(
+                assessment_id=assessment_id,
+                stage=stage,
+                status=status,
+                limit=limit,
+                offset=offset,
+            )
+
+    def detect_stale_assessments(
+        self,
+        run_id: UUID,
+        target_type: str,
+        target_id: UUID,
+        current_hash: str,
+    ) -> list[dict[str, Any]]:
+        """Return assessments whose target_hash differs from current_hash.
+
+        Stale assessments are retained as historical records.
+        """
+        with self.uow_factory() as uow:
+            return uow.detect_stale_assessments(
+                run_id=run_id,
+                target_type=target_type,
+                target_id=target_id,
+                current_hash=current_hash,
+            )
+
+    def export_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
+        """Export a complete audit assessment with all stage outputs."""
+        with self.uow_factory() as uow:
+            return uow.export_audit_assessment(assessment_id)
+
+    def assess_run(
+        self,
+        run_id: UUID,
+        external_run_id: str,
+        target_hash: str,
+        evaluator_version: str,
+        prompt_template_version: str,
+        policy_version: str,
+        stage_set: list[str],
+        status: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_hash: str | None = None,
+        model_fingerprint: str | None = None,
+        elapsed_ms: int = 0,
+        audit_packet_manifest: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create an assessment for a research run and return it.
+
+        Convenience method that creates the assessment and returns the
+        full export including stage outputs.
+        """
+        assessment_id = self.create_assessment(
+            run_id=run_id,
+            target_type="run",
+            target_id=run_id,
+            target_hash=target_hash,
+            evaluator_version=evaluator_version,
+            prompt_template_version=prompt_template_version,
+            policy_version=policy_version,
+            stage_set=stage_set,
+            status=status,
+            provider=provider,
+            model=model,
+            prompt_hash=prompt_hash,
+            model_fingerprint=model_fingerprint,
+            elapsed_ms=elapsed_ms,
+            audit_packet_manifest=audit_packet_manifest,
+        )
+        export = self.export_assessment(assessment_id)
+        if export:
+            export["external_run_id"] = external_run_id
+        return export or {}
