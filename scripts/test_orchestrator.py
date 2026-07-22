@@ -862,7 +862,7 @@ class TestResearchOrchestrator(unittest.TestCase):
 
     def test_budget_exhaustion_yields_partial(self):
         """Test that budget exhaustion yields partial when coverage is insufficient."""
-        self.run_svc = MockRunService(initial_state="coverage_review", revision=2)
+        self.run_svc = MockRunService(initial_state="created", revision=0)
         self.coverage_svc = MockCoverageService(item_count=3)
 
         self.coverage_svc.rebuild_projection = lambda run_id, **kw: MockCoverageLedger(
@@ -898,7 +898,8 @@ class TestResearchOrchestrator(unittest.TestCase):
         )
 
         # Budget exhaustion with insufficient coverage should yield partial
-        self.assertIn(result.outcome, ("partial", "failed"))
+        self.assertEqual(result.outcome, "partial")
+        self.assertEqual(result.final_state, "partial")
 
     def test_orchestrator_config(self):
         """Test OrchestratorConfig defaults and overrides."""
@@ -1510,7 +1511,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
 
     def test_budget_exhaustion_flag_set(self):
         """Test that budget exhaustion sets ctx['_budget_exhausted'] = True."""
-        run_svc = MockRunService(initial_state="coverage_review", revision=2)
+        run_svc = MockRunService(initial_state="created", revision=0)
         coverage_svc = MockCoverageService(item_count=3)
 
         # Override to return insufficient coverage
@@ -1561,7 +1562,8 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         # and the coverage_review stage should have used it to determine
         # the next action. With insufficient coverage and budget exhausted,
         # the decision should be STRATEGY_DECISION_PARTIAL.
-        self.assertNotEqual(result.outcome, "completed")
+        self.assertEqual(result.outcome, "partial")
+        self.assertEqual(result.final_state, "partial")
 
     def test_budget_exhaustion_with_sufficient_coverage_completes(self):
         """Test that budget exhaustion with sufficient coverage completes."""

@@ -425,15 +425,6 @@ class AcquisitionStage:
         # Apply candidate_identified events to coverage
         if coverage_revision is not None:
             try:
-                # Fetch coverage items from the current snapshot to map candidates
-                snapshot = self.coverage_service.current_snapshot(run_id)
-                target_items = []
-                if snapshot and snapshot.ledger and "items" in snapshot.ledger:
-                    target_items = [
-                        item["coverage_item_id"]
-                        for item in snapshot.ledger["items"]
-                    ]
-
                 # Get wave count from context for cycle-scoped idempotency keys
                 wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
 
@@ -444,9 +435,7 @@ class AcquisitionStage:
                     self.coverage_service.apply_event(
                         run_id,
                         "candidate_identified",
-                        item_id=UUID(target_items[i])
-                        if i < len(target_items)
-                        else None,
+                        item_id=None,
                         idempotency_key=f"acquire:cand:{run_id}:w{wave_count}:{i}",
                         payload={
                             "candidate_id": cand_id,
@@ -845,10 +834,12 @@ class CoverageReviewStage:
         if decision_type == STRATEGY_DECISION_SEARCH and target_items:
             # Construct search queries targeting the uncovered items
             for item_id in target_items[:10]:  # Limit to first 10 items
-                proposed_queries.append({
-                    "query": f"coverage item {item_id}",
-                    "facet": "adaptive",
-                })
+                proposed_queries.append(
+                    {
+                        "query": f"coverage item {item_id}",
+                        "facet": "adaptive",
+                    }
+                )
 
         try:
             validation = self.strategy_service.validate_proposal(
@@ -1273,6 +1264,7 @@ class ResearchOrchestrator:
         ctx["spec"] = spec
         ctx["search_plan"] = search_plan
         ctx["execution_mode"] = self.config.execution_mode
+        ctx["_max_adaptive_cycles"] = max_cycles
         ctx[ContextKeys.WALL_CLOCK_START] = time.monotonic()
         ctx[ContextKeys.WAVE_COUNT] = 0
 
@@ -1324,18 +1316,13 @@ class ResearchOrchestrator:
             current_revision = run_status.lifecycle_revision
             current_state = run_status.state
             # Initialize coverage revision from run status (CorpusReviewStage creates revision 1)
-            coverage_revision_num = getattr(
-                run_status, "current_coverage_revision", 0
-            ) or 1
+            coverage_revision_num = (
+                getattr(run_status, "current_coverage_revision", 0) or 1
+            )
 
             # Main loop: acquisition -> indexing -> coverage_review -> ...
             while cycle_count < max_cycles:
                 cycle_count += 1
-
-                # Check budget exhaustion
-                budget_exhausted = self._check_budget(ctx, run_id)
-                if budget_exhausted:
-                    ctx["_budget_exhausted"] = True
 
                 # Stage: Acquisition
                 result = self._execute_stage(
@@ -1357,6 +1344,12 @@ class ResearchOrchestrator:
                 # Track wave count — increment after each successful acquisition
                 wave_count += 1
                 ctx[ContextKeys.WAVE_COUNT] = wave_count
+
+                # Evaluate budget exhaustion after wave_count is updated so that
+                # CoverageReviewStage receives _budget_exhausted = True on the final allowed wave.
+                budget_exhausted = self._check_budget(ctx, run_id)
+                if budget_exhausted:
+                    ctx["_budget_exhausted"] = True
 
                 if result.outcome == StageOutcome.TERMINAL:
                     break
@@ -1395,9 +1388,12 @@ class ResearchOrchestrator:
                 current_revision = run_status.lifecycle_revision
                 current_state = run_status.state
                 # Update coverage revision from run status
-                coverage_revision_num = getattr(
-                    run_status, "current_coverage_revision", coverage_revision_num
-                ) or coverage_revision_num
+                coverage_revision_num = (
+                    getattr(
+                        run_status, "current_coverage_revision", coverage_revision_num
+                    )
+                    or coverage_revision_num
+                )
 
                 # Count strategy proposals
                 if result.details and result.details.get(
@@ -1435,11 +1431,18 @@ class ResearchOrchestrator:
 
             # Fix: Terminal stage transition on budget exhaustion
             # If budget is exhausted and coverage is insufficient, explicitly
-            # transition to "partial" state before invoking TerminalStage.
-            if budget_exhausted and ctx.get(ContextKeys.OVERALL_STATUS) != "sufficient":
+            # transition to "partial" state before invoking TerminalStage (unless already in a terminal state).
+            TERMINAL_STATES = ("completed", "partial", "failed", "cancelled")
+            if (
+                budget_exhausted
+                and current_state not in TERMINAL_STATES
+                and ctx.get(ContextKeys.OVERALL_STATUS) != "sufficient"
+            ):
                 if "_terminal_outcome" not in ctx:
                     ctx["_terminal_outcome"] = "partial"
-                    ctx["_terminal_reason"] = "budget exhausted with insufficient coverage"
+                    ctx["_terminal_reason"] = (
+                        "budget exhausted with insufficient coverage"
+                    )
                 try:
                     self.run_service.partial(
                         run_id,
@@ -1451,7 +1454,9 @@ class ResearchOrchestrator:
                         outcome="partial",
                     )
                 except (RunStateError, StaleRunRevisionError) as exc:
-                    logger.warning("budget exhaustion partial transition failed: %s", exc)
+                    logger.warning(
+                        "budget exhaustion partial transition failed: %s", exc
+                    )
                 # Update revision after explicit partial transition
                 run_status = self.run_service.status(run_id=run_id)
                 current_revision = run_status.lifecycle_revision
@@ -1615,7 +1620,9 @@ class ResearchOrchestrator:
                 idempotency_key=f"invocation:{stage_name}:{run_id}:w{wave_count}",
             )
         except Exception as exc:
-            logger.debug("stage invocation recording failed for %s: %s", stage_name, exc)
+            logger.debug(
+                "stage invocation recording failed for %s: %s", stage_name, exc
+            )
 
         start = time.monotonic()
         result = stage.execute(
@@ -1648,7 +1655,9 @@ class ResearchOrchestrator:
     def _check_budget(self, context: dict[str, Any], run_id: UUID) -> bool:
         """Check if the hard budget has been exhausted."""
         wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
-        max_cycles = self.config.max_adaptive_cycles
+        max_cycles = context.get(
+            "_max_adaptive_cycles", self.config.max_adaptive_cycles
+        )
         return wave_count >= max_cycles
 
     def _check_no_progress(self, context: dict[str, Any], run_id: UUID) -> bool:
