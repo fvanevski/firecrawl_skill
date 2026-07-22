@@ -227,3 +227,24 @@ def build_claim_service(config: StoreConfig | None = None):
             config.chunker_version,
         )
     )
+
+
+def build_audit_service(config: StoreConfig | None = None):
+    """Build an AuditService wired to the PostgreSQL database."""
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    from .service import AuditService
+
+    return AuditService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
+    )

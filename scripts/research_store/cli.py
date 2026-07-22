@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 from .blob import ContentAddressedBlobStore
 from .compat import export_json, import_scratch
 from .config import StoreConfig
-from .container import build_run_service, build_service
+from .container import build_run_service, build_service, build_audit_service
 from .domain import IngestRequest
 from .indexing import IndexWorker, OpenAICompatibleEmbedder
 from .postgres import PostgresUnitOfWork, connect
@@ -298,7 +298,9 @@ def parser():
     packet.add_argument("ids", nargs="+")
     packet.add_argument("--max-tokens", type=int, default=3000)
 
+    # ------------------------------------------------------------------
     # Claim manifest commands (issue #32)
+    # ------------------------------------------------------------------
     claim = sub.add_parser("claim-manifest")
     claim_sub = claim.add_subparsers(dest="claim_command", required=True)
 
@@ -313,6 +315,42 @@ def parser():
 
     claim_list = claim_sub.add_parser("list")
     claim_list.add_argument("external_id")
+
+    # ------------------------------------------------------------------
+    # Audit subcommands (issue #33)
+    # ------------------------------------------------------------------
+    audit = sub.add_parser("audit")
+    audit.add_argument("external_id")
+    audit.add_argument("--target-hash", required=True)
+    audit.add_argument("--evaluator-version", default="catalog-v5.0")
+    audit.add_argument("--prompt-template-version", default="staged-research-audit-v1")
+    audit.add_argument("--policy-version", default="audit-policy-v1")
+    audit.add_argument("--stages", default="rubric,acquisition,evidence,synthesis")
+    audit.add_argument("--status", default="partial", choices=["completed", "partial", "failed"])
+    audit.add_argument("--provider", default="local")
+    audit.add_argument("--model")
+    audit.add_argument("--prompt-hash")
+    audit.add_argument("--model-fingerprint")
+    audit.add_argument("--elapsed-ms", type=int, default=0)
+    audit.add_argument("--packet-manifest-file")
+
+    audit_status = sub.add_parser("audit-status")
+    audit_status.add_argument("external_id")
+    audit_status.description = "Show the latest audit assessment for a research run"
+
+    audit_query = sub.add_parser("audit-query")
+    audit_query.add_argument("external_id")
+    audit_query.add_argument("--status-filter")
+    audit_query.add_argument("--limit", type=int, default=100)
+    audit_query.add_argument("--offset", type=int, default=0)
+
+    audit_export = sub.add_parser("audit-export")
+    audit_export.add_argument("assessment_id")
+    audit_export.add_argument("--output", default="-")
+
+    audit_staleness = sub.add_parser("audit-staleness")
+    audit_staleness.add_argument("external_id")
+    audit_staleness.add_argument("--target-hash", required=True)
 
     return root
 
@@ -1668,6 +1706,10 @@ def main(argv=None):
         result = service.build_evidence_packet(
             [UUID(value) for value in args.ids], max_tokens=args.max_tokens
         )
+
+    # ------------------------------------------------------------------
+    # Claim manifest commands (issue #32)
+    # ------------------------------------------------------------------
     elif args.command == "claim-manifest":
         from .container import build_claim_service
 
@@ -1725,8 +1767,113 @@ def main(argv=None):
             }
         else:
             raise SystemExit(f"unknown claim-manifest command: {args.claim_command}")
+
+    # ------------------------------------------------------------------
+    # Audit commands (issue #33)
+    # ------------------------------------------------------------------
+    elif args.command == "audit":
+        config.require_database()
+        audit_svc = build_audit_service(config)
+        run_id = _resolve_run_id(config, args.external_id)
+        if run_id is None:
+            raise SystemExit(f"research run not found or not running: {args.external_id}")
+
+        stage_set = [s.strip() for s in args.stages.split(",") if s.strip()]
+        manifest = None
+        if args.packet_manifest_file:
+            with open(args.packet_manifest_file, "r") as f:
+                manifest = json.load(f)
+
+        assessment = audit_svc.assess_run(
+            run_id=run_id,
+            external_run_id=args.external_id,
+            target_hash=args.target_hash,
+            evaluator_version=args.evaluator_version,
+            prompt_template_version=args.prompt_template_version,
+            policy_version=args.policy_version,
+            stage_set=stage_set,
+            status=args.status,
+            provider=args.provider,
+            model=args.model,
+            prompt_hash=args.prompt_hash,
+            model_fingerprint=args.model_fingerprint,
+            elapsed_ms=args.elapsed_ms,
+            audit_packet_manifest=manifest,
+        )
+        print(dumps(assessment))
+
+    elif args.command == "audit-status":
+        config.require_database()
+        audit_svc = build_audit_service(config)
+        run_id = _resolve_any_run_id(config, args.external_id)
+        if run_id is None:
+            raise SystemExit(f"research run not found: {args.external_id}")
+
+        # Return only the latest assessment
+        assessments = audit_svc.list_assessments(
+            run_id=run_id,
+            limit=1,
+            offset=0,
+        )
+        result = assessments[0] if assessments else None
+        if result is None:
+            raise SystemExit(f"no assessments found for run: {args.external_id}")
         print(dumps(result))
-        return 0
+
+    elif args.command == "audit-query":
+        config.require_database()
+        audit_svc = build_audit_service(config)
+        run_id = _resolve_any_run_id(config, args.external_id)
+        if run_id is None:
+            raise SystemExit(f"research run not found: {args.external_id}")
+
+        assessments = audit_svc.list_assessments(
+            run_id=run_id,
+            status=args.status_filter,
+            limit=args.limit,
+            offset=args.offset,
+        )
+        result = {"run_id": str(run_id), "assessments": assessments}
+        print(dumps(result))
+
+    elif args.command == "audit-export":
+        config.require_database()
+        audit_svc = build_audit_service(config)
+        export = audit_svc.export_assessment(UUID(args.assessment_id))
+        if export is None:
+            raise SystemExit(f"assessment not found: {args.assessment_id}")
+        if args.output == "-":
+            print(dumps(export))
+        else:
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(output_path.parent), suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(export, f, indent=2, default=json_default)
+                os.replace(tmp_path, str(output_path))
+            except BaseException:
+                os.unlink(tmp_path)
+                raise
+
+    elif args.command == "audit-staleness":
+        config.require_database()
+        audit_svc = build_audit_service(config)
+        run_id = _resolve_run_id(config, args.external_id)
+        if run_id is None:
+            raise SystemExit(f"research run not found or not running: {args.external_id}")
+
+        stale = audit_svc.detect_stale_assessments(
+            run_id=run_id,
+            target_type="run",
+            target_id=run_id,
+            current_hash=args.target_hash,
+        )
+        result = {"run_id": str(run_id), "stale_assessments": stale}
+        print(dumps(result))
+
     else:
         raise AssertionError(args.command)
 

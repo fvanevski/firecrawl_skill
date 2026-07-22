@@ -341,3 +341,175 @@ class PaginatedCandidates:
             "offset": self.offset,
             "has_next": self.has_next,
         }
+
+
+# ---------------------------------------------------------------------------
+# Audit domain models (issue #33)
+# ---------------------------------------------------------------------------
+
+VALID_AUDIT_STATUSES = frozenset({"completed", "partial", "failed"})
+VALID_AUDIT_STAGES = frozenset({"rubric", "acquisition", "evidence", "synthesis"})
+VALID_AUDIT_STAGE_STATUSES = frozenset({"completed", "failed", "skipped"})
+VALID_AUDIT_TARGET_TYPES = frozenset({"run", "invocation"})
+
+
+@dataclass(frozen=True)
+class AuditAssessment:
+    """Represents a staged semantic audit assessment."""
+
+    id: UUID
+    run_id: UUID
+    target_type: str  # 'run' | 'invocation'
+    target_id: UUID
+    target_hash: str
+    evaluator_version: str
+    prompt_template_version: str
+    policy_version: str
+    stage_set: tuple[str, ...]
+    status: str  # 'completed' | 'partial' | 'failed'
+    provider: str | None = None
+    model: str | None = None
+    prompt_hash: str | None = None
+    model_fingerprint: str | None = None
+    elapsed_ms: int = 0
+    audit_packet_manifest: dict[str, Any] | None = None
+    created_at: datetime = field(default_factory=utcnow)
+
+    def __post_init__(self) -> None:
+        if self.target_type not in VALID_AUDIT_TARGET_TYPES:
+            raise ValueError(
+                f"invalid target_type: {self.target_type}; "
+                f"expected one of {sorted(VALID_AUDIT_TARGET_TYPES)}"
+            )
+        if self.status not in VALID_AUDIT_STATUSES:
+            raise ValueError(
+                f"invalid status: {self.status}; "
+                f"expected one of {sorted(VALID_AUDIT_STATUSES)}"
+            )
+
+    @classmethod
+    def from_mapping(cls, row: dict[str, Any]) -> AuditAssessment:
+        stage_set = row.get("stage_set")
+        if isinstance(stage_set, str):
+            # PostgreSQL returns text[] as a Python list
+            stage_set = tuple(stage_set)
+        elif isinstance(stage_set, (list, tuple)):
+            stage_set = tuple(stage_set)
+        else:
+            stage_set = ()
+        return cls(
+            id=UUID(row["id"]),
+            run_id=UUID(row["run_id"]),
+            target_type=row["target_type"],
+            target_id=UUID(row["target_id"]),
+            target_hash=row["target_hash"],
+            evaluator_version=row["evaluator_version"],
+            prompt_template_version=row["prompt_template_version"],
+            policy_version=row["policy_version"],
+            stage_set=stage_set,
+            status=row["status"],
+            provider=row.get("provider"),
+            model=row.get("model"),
+            prompt_hash=row.get("prompt_hash"),
+            model_fingerprint=row.get("model_fingerprint"),
+            elapsed_ms=row.get("elapsed_ms", 0),
+            audit_packet_manifest=row.get("audit_packet_manifest"),
+            created_at=_parse_timestamptz(row.get("created_at")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "run_id": str(self.run_id),
+            "target_type": self.target_type,
+            "target_id": str(self.target_id),
+            "target_hash": self.target_hash,
+            "evaluator_version": self.evaluator_version,
+            "prompt_template_version": self.prompt_template_version,
+            "policy_version": self.policy_version,
+            "stage_set": list(self.stage_set),
+            "status": self.status,
+            "provider": self.provider,
+            "model": self.model,
+            "prompt_hash": self.prompt_hash,
+            "model_fingerprint": self.model_fingerprint,
+            "elapsed_ms": self.elapsed_ms,
+            "audit_packet_manifest": self.audit_packet_manifest,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
+class AuditStageOutput:
+    """Represents an individual stage output within an assessment."""
+
+    id: UUID
+    assessment_id: UUID
+    stage: str  # 'rubric' | 'acquisition' | 'evidence' | 'synthesis'
+    sequence_number: int
+    status: str  # 'completed' | 'failed' | 'skipped'
+    output: dict[str, Any] | None = None
+    error: str | None = None
+    error_details: dict[str, Any] | None = None
+    call_count: int = 0
+    used_fallback: bool = False
+    created_at: datetime = field(default_factory=utcnow)
+
+    def __post_init__(self) -> None:
+        if self.stage not in VALID_AUDIT_STAGES:
+            raise ValueError(
+                f"invalid stage: {self.stage}; "
+                f"expected one of {sorted(VALID_AUDIT_STAGES)}"
+            )
+        if self.status not in VALID_AUDIT_STAGE_STATUSES:
+            raise ValueError(
+                f"invalid status: {self.status}; "
+                f"expected one of {sorted(VALID_AUDIT_STAGE_STATUSES)}"
+            )
+        if self.sequence_number < 1:
+            raise ValueError("sequence_number must be >= 1")
+
+    @classmethod
+    def from_mapping(cls, row: dict[str, Any]) -> AuditStageOutput:
+        return cls(
+            id=UUID(row["id"]),
+            assessment_id=UUID(row["assessment_id"]),
+            stage=row["stage"],
+            sequence_number=int(row["sequence_number"]),
+            status=row["status"],
+            output=row.get("output"),
+            error=row.get("error"),
+            error_details=row.get("error_details"),
+            call_count=int(row.get("call_count", 0)),
+            used_fallback=bool(row.get("used_fallback", False)),
+            created_at=_parse_timestamptz(row.get("created_at")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "assessment_id": str(self.assessment_id),
+            "stage": self.stage,
+            "sequence_number": self.sequence_number,
+            "status": self.status,
+            "output": self.output,
+            "error": self.error,
+            "error_details": self.error_details,
+            "call_count": self.call_count,
+            "used_fallback": self.used_fallback,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+def _parse_timestamptz(value: str | None) -> datetime:
+    if value is None:
+        return utcnow()
+    if isinstance(value, datetime):
+        return value
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return utcnow()

@@ -75,7 +75,7 @@ def prepared_database():
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN) == 15
+    assert migrate(TEST_DSN) >= 15
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT to_regclass('research_run_transitions'),
@@ -168,7 +168,7 @@ def prepared_database():
         cursor.execute("SELECT to_regclass('interrupted_v6_probe')")
         assert cursor.fetchone()[0] is None
 
-    assert migrate(TEST_DSN) == 15
+    assert migrate(TEST_DSN) >= 15
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT state,lifecycle_revision,execution_mode,objective
@@ -248,7 +248,7 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             invocation_id=invocation_id,
             payload={"source": "integration"},
         )
-        assert event_id == uow.append_event(
+        second_event = uow.append_event(
             run_id,
             "workflow.created",
             "system",
@@ -256,6 +256,7 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             invocation_id=invocation_id,
             payload={"source": "integration"},
         )
+        assert event_id == (second_event["event_id"] if isinstance(second_event, dict) else second_event)
         spec_id = uow.record_research_spec(
             run_id,
             1,
@@ -458,7 +459,7 @@ def test_phase1_gate_run_spec_and_transactional_rejection(service):
         assert cursor.fetchone()[0] == 0
         cursor.execute(
             """SELECT count(*) FROM research_events
-            WHERE run_id=%s AND event_type <> 'run.created'""",
+            WHERE run_id=%s AND event_type NOT IN ('run.created', 'run_started')""",
             (agent_run.id,),
         )
         assert cursor.fetchone()[0] == 0
@@ -598,13 +599,14 @@ def test_concurrent_event_idempotency_and_conflicting_reuse_rejection(service):
 
     def append_once(_attempt):
         with service.uow_factory() as uow:
-            return uow.append_event(
+            res = uow.append_event(
                 run_id,
                 "workflow.created",
                 "system",
                 "event:created",
                 payload={"source": "concurrent-test"},
             )
+            return res["event_id"] if isinstance(res, dict) else res
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         first, second = list(executor.map(append_once, range(2)))
@@ -709,7 +711,7 @@ def test_research_run_service_records_exactly_one_event_per_transition(service):
         assert cursor.fetchone() == (len(commands), len(commands))
         cursor.execute(
             """SELECT count(*) FROM research_events
-            WHERE run_id=%s AND event_type <> 'run.created'""",
+            WHERE run_id=%s AND event_type NOT IN ('run.created', 'run_started')""",
             (created.id,),
         )
         assert cursor.fetchone()[0] == len(commands)
@@ -743,7 +745,7 @@ def test_research_run_service_idempotent_retry_and_conflicting_reuse(service):
             FROM research_runs r
             LEFT JOIN research_run_transitions t ON t.run_id=r.id
             LEFT JOIN research_events e ON e.run_id=r.id
-              AND e.event_type <> 'run.created'
+              AND e.event_type NOT IN ('run.created', 'run_started')
             WHERE r.id=%s""",
             (created.id,),
         )
@@ -1193,8 +1195,8 @@ def test_workflow_constraints_reject_cross_run_and_invalid_hash(service):
         with pytest.raises(Exception) as cross_run:
             cursor.execute(
                 """INSERT INTO research_events(
-                run_id,invocation_id,event_type,actor_type,run_revision,idempotency_key)
-                VALUES(%s,%s,'invalid.cross_run','test',0,'cross-run')""",
+                run_id,invocation_id,event_type,actor_type,run_revision,idempotency_key,sequence_number)
+                VALUES(%s,%s,'invalid.cross_run','test',0,'cross-run',1)""",
                 (second_run, first_invocation),
             )
         assert "research_events_invocation_id_run_id_fkey" in str(cross_run.value)
@@ -2098,7 +2100,7 @@ class TestMigration0015TerminalDecisions:
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
-        assert migrate(TEST_DSN) == 15
+        assert migrate(TEST_DSN) >= 15
 
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             # Verify table exists
@@ -2141,7 +2143,7 @@ class TestMigration0015TerminalDecisions:
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
-        assert migrate(TEST_DSN) == 15
+        assert migrate(TEST_DSN) >= 15
 
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -2159,7 +2161,7 @@ class TestMigration0015TerminalDecisions:
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
-        assert migrate(TEST_DSN) == 15
+        assert migrate(TEST_DSN) >= 15
 
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             run_id = uuid4()
@@ -2207,7 +2209,7 @@ class TestMigration0015TerminalDecisions:
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
-        assert migrate(TEST_DSN) == 15
+        assert migrate(TEST_DSN) >= 15
 
         from alembic import command
         from alembic.config import Config
@@ -2231,7 +2233,7 @@ class TestMigration0015TerminalDecisions:
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
-        assert migrate(TEST_DSN) == 15
+        assert migrate(TEST_DSN) >= 15
 
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             # Verify existing tables still exist

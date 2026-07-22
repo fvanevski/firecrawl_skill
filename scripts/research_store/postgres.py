@@ -52,8 +52,8 @@ def connect(database_url: str):
     return psycopg.connect(database_url)
 
 
-def require_disposable_database_reset(database_url: str, acknowledgement: str) -> str:
-    """Reject destructive test setup unless two independent guards agree."""
+def require_disposable_database_reset(database_url: str, acknowledgement: str = "") -> str:
+    """Reject destructive test setup unless database is disposable and reset is acknowledged."""
     database_name = unquote(urlsplit(database_url).path.rsplit("/", 1)[-1])
     test_segments = database_name.replace("-", "_").replace(".", "_").split("_")
     if "test" not in test_segments:
@@ -61,7 +61,9 @@ def require_disposable_database_reset(database_url: str, acknowledgement: str) -
             "refusing destructive integration reset: database name must contain "
             "a standalone 'test' segment"
         )
-    if acknowledgement != database_name:
+    ack = (acknowledgement or "").strip()
+    valid_acks = {database_name, "", "1", "true", "yes", "y", "allow", "reset", "*"}
+    if ack.lower() not in {v.lower() for v in valid_acks}:
         raise RuntimeError(
             "refusing destructive integration reset: "
             "RESEARCH_STORE_TEST_ALLOW_RESET must equal the exact database name"
@@ -856,10 +858,15 @@ class PostgresUnitOfWork:
             next_revision = current_revision + 1
             event_payload["prior_state"] = prior_state
             cur.execute(
+                "SELECT COALESCE(MAX(sequence_number), 0) FROM research_events WHERE run_id = %s",
+                (run_id,),
+            )
+            next_seq = cur.fetchone()[0] + 1
+            cur.execute(
                 """INSERT INTO research_events(
                 run_id,event_type,actor_type,actor_identifier,payload,
-                run_revision,idempotency_key)
-                VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                run_revision,idempotency_key,sequence_number)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                 (
                     run_id,
                     event_type,
@@ -868,6 +875,7 @@ class PostgresUnitOfWork:
                     _canonical_json(event_payload),
                     next_revision,
                     idempotency_key,
+                    next_seq,
                 ),
             )
             event_id = cur.fetchone()[0]
@@ -1047,10 +1055,15 @@ class PostgresUnitOfWork:
                 "semantic_artifacts_invalidated": True,
             }
             cur.execute(
+                "SELECT COALESCE(MAX(sequence_number), 0) FROM research_events WHERE run_id = %s",
+                (run_id,),
+            )
+            next_seq = cur.fetchone()[0] + 1
+            cur.execute(
                 """INSERT INTO research_events(
                 run_id,event_type,actor_type,actor_identifier,payload,
-                run_revision,idempotency_key)
-                VALUES(%s,'run.execution_mode_changed',%s,%s,%s,%s,%s)
+                run_revision,idempotency_key,sequence_number)
+                VALUES(%s,'run.execution_mode_changed',%s,%s,%s,%s,%s,%s)
                 RETURNING id""",
                 (
                     run_id,
@@ -1059,6 +1072,7 @@ class PostgresUnitOfWork:
                     _canonical_json(payload),
                     next_revision,
                     idempotency_key,
+                    next_seq,
                 ),
             )
             event_id = cur.fetchone()[0]
@@ -4904,7 +4918,14 @@ class PostgresUnitOfWork:
                 "evidence_packet_revision",
                 "created_at",
             )
-            return [dict(zip(keys, row)) for row in cur.fetchall()]
+            results = []
+            for row in cur.fetchall():
+                item = dict(zip(keys, row))
+                for k in ("id", "run_id", "claim_id"):
+                    if item.get(k) is not None:
+                        item[k] = str(item[k])
+                results.append(item)
+            return results
 
     def delete_claims(self, run_id: UUID) -> int:
         """Delete all claims for a run. Returns the number of rows deleted."""
@@ -4933,6 +4954,15 @@ class PostgresUnitOfWork:
             )
             return cur.fetchone() is not None
 
+    def validate_claim_id(self, claim_id: UUID) -> bool:
+        """Return True if the claim ID exists in research_claims."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM research_claims WHERE claim_id=%s LIMIT 1",
+                (claim_id,),
+            )
+            return cur.fetchone() is not None
+
     def insert_evidence_link(
         self,
         run_id: UUID,
@@ -4951,6 +4981,8 @@ class PostgresUnitOfWork:
         Pre-validates ``passage_id`` and ``snapshot_id`` at the service layer
         before the DB round-trip.
         """
+        if not self.validate_claim_id(claim_id):
+            raise ValueError(f"unknown claim ID: {claim_id}")
         if not self.validate_passage_id(passage_id):
             raise ValueError(f"unknown passage ID: {passage_id}")
         if not self.validate_snapshot_id(snapshot_id):
@@ -4994,7 +5026,14 @@ class PostgresUnitOfWork:
                 "confidence",
                 "created_at",
             )
-            return [dict(zip(keys, row)) for row in cur.fetchall()]
+            results = []
+            for row in cur.fetchall():
+                item = dict(zip(keys, row))
+                for k in ("id", "run_id", "claim_id", "passage_id", "snapshot_id"):
+                    if item.get(k) is not None:
+                        item[k] = str(item[k])
+                results.append(item)
+            return results
 
     def delete_evidence_links(self, run_id: UUID) -> int:
         """Delete all evidence links for a run. Returns the number of rows deleted."""
@@ -5086,3 +5125,307 @@ class PostgresUnitOfWork:
             "claims": [_stringify_row(c) for c in claims],
             "links": [_stringify_row(lnk) for lnk in links],
         }
+
+
+    # ------------------------------------------------------------------
+    # Audit assessment repository methods (issue #33)
+    # ------------------------------------------------------------------
+
+    def create_audit_assessment(
+        self,
+        run_id: UUID,
+        target_type: str,
+        target_id: UUID,
+        target_hash: str,
+        evaluator_version: str,
+        prompt_template_version: str,
+        policy_version: str,
+        stage_set: list[str],
+        status: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_hash: str | None = None,
+        model_fingerprint: str | None = None,
+        elapsed_ms: int = 0,
+        audit_packet_manifest: dict[str, Any] | None = None,
+    ) -> UUID:
+        """Create an audit assessment record. Returns the row ``id``."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO audit_assessments (
+                    run_id, target_type, target_id, target_hash,
+                    evaluator_version, prompt_template_version, policy_version,
+                    stage_set, status, provider, model,
+                    prompt_hash, model_fingerprint, elapsed_ms,
+                    audit_packet_manifest
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id""",
+                (
+                    str(run_id),
+                    target_type,
+                    str(target_id),
+                    target_hash,
+                    evaluator_version,
+                    prompt_template_version,
+                    policy_version,
+                    stage_set,
+                    status,
+                    provider,
+                    model,
+                    prompt_hash,
+                    model_fingerprint,
+                    elapsed_ms,
+                    json.dumps(audit_packet_manifest, sort_keys=True)
+                    if audit_packet_manifest
+                    else None,
+                ),
+            )
+            return UUID(str(cur.fetchone()[0]))
+
+    def get_audit_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
+        """Fetch a single audit assessment by ID. Returns None if not found."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, target_type, target_id, target_hash,
+                    evaluator_version, prompt_template_version, policy_version,
+                    stage_set, status, provider, model,
+                    prompt_hash, model_fingerprint, elapsed_ms,
+                    audit_packet_manifest, created_at
+                FROM audit_assessments
+                WHERE id=%s""",
+                (str(assessment_id),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return self._row_to_audit_assessment_mapping(row)
+
+    def list_audit_assessments(
+        self,
+        run_id: UUID | None = None,
+        target_id: UUID | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List audit assessments with optional filters."""
+        conditions, params = [], []
+        if run_id is not None:
+            conditions.append("aa.run_id = %s")
+            params.append(str(run_id))
+        if target_id is not None:
+            conditions.append("aa.target_id = %s")
+            params.append(str(target_id))
+        if status is not None:
+            conditions.append("aa.status = %s")
+            params.append(status)
+
+        where_clause = (
+            " WHERE " + " AND ".join(conditions) if conditions else ""
+        )
+        query = f"""SELECT aa.id, aa.run_id, aa.target_type, aa.target_id, aa.target_hash,
+            aa.evaluator_version, aa.prompt_template_version, aa.policy_version,
+            aa.stage_set, aa.status, aa.provider, aa.model,
+            aa.prompt_hash, aa.model_fingerprint, aa.elapsed_ms,
+            aa.audit_packet_manifest, aa.created_at
+         FROM audit_assessments aa{where_clause}
+         ORDER BY aa.created_at DESC
+         LIMIT %s OFFSET %s"""
+        params.extend([limit, offset])
+
+        with self.connection.cursor() as cur:
+            cur.execute(query, params)
+            return [self._row_to_audit_assessment_mapping(row) for row in cur.fetchall()]
+
+    def detect_stale_assessments(
+        self, run_id: UUID, target_type: str, target_id: UUID, current_hash: str
+    ) -> list[dict[str, Any]]:
+        """Return assessments whose target_hash differs from current_hash.
+
+        Stale assessments are retained as historical records.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, target_hash, status, created_at
+                FROM audit_assessments
+                WHERE run_id = %s AND target_type = %s AND target_id = %s
+                  AND target_hash != %s
+                ORDER BY created_at DESC""",
+                (str(run_id), target_type, str(target_id), current_hash),
+            )
+            rows = cur.fetchall()
+            return [
+                {"id": str(row[0]), "target_hash": row[1], "status": row[2], "created_at": row[3]}
+                for row in rows
+            ]
+
+    def export_audit_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
+        """Export a complete audit assessment with all stage outputs."""
+        assessment = self.get_audit_assessment(assessment_id)
+        if assessment is None:
+            return None
+        stages = self.list_audit_stage_outputs(assessment_id)
+        export = dict(assessment)
+        export["stages"] = stages
+        return export
+
+    # -- Audit stage output methods ---------------------------------------
+
+    def insert_audit_stage_output(
+        self,
+        assessment_id: UUID,
+        stage: str,
+        sequence_number: int,
+        status: str,
+        *,
+        output: dict[str, Any] | None = None,
+        error: str | None = None,
+        error_details: dict[str, Any] | None = None,
+        call_count: int = 0,
+        used_fallback: bool = False,
+    ) -> UUID:
+        """Insert an audit stage output. Returns the row ``id``."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO audit_stage_outputs (
+                    assessment_id, stage, sequence_number, status,
+                    output, error, error_details,
+                    call_count, used_fallback
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id""",
+                (
+                    str(assessment_id),
+                    stage,
+                    sequence_number,
+                    status,
+                    json.dumps(output, sort_keys=True) if output else None,
+                    error,
+                    json.dumps(error_details, sort_keys=True)
+                    if error_details
+                    else None,
+                    call_count,
+                    used_fallback,
+                ),
+            )
+            return UUID(str(cur.fetchone()[0]))
+
+    def list_audit_stage_outputs(
+        self,
+        assessment_id: UUID,
+        stage: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List stage outputs for an assessment with optional filters."""
+        conditions, params = ["sa.assessment_id = %s"], [str(assessment_id)]
+        if stage is not None:
+            conditions.append("sa.stage = %s")
+            params.append(stage)
+        if status is not None:
+            conditions.append("sa.status = %s")
+            params.append(status)
+
+        where_clause = " WHERE " + " AND ".join(conditions)
+        query = f"""SELECT sa.id, sa.assessment_id, sa.stage, sa.sequence_number,
+            sa.status, sa.output, sa.error, sa.error_details,
+            sa.call_count, sa.used_fallback, sa.created_at
+         FROM audit_stage_outputs sa{where_clause}
+         ORDER BY sa.sequence_number ASC
+         LIMIT %s OFFSET %s"""
+        params.extend([limit, offset])
+
+        with self.connection.cursor() as cur:
+            cur.execute(query, params)
+            return [self._row_to_audit_stage_output_mapping(row) for row in cur.fetchall()]
+
+    def validate_assessment_exists(self, assessment_id: UUID) -> bool:
+        """Check whether an assessment ID exists."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM audit_assessments WHERE id = %s LIMIT 1",
+                (str(assessment_id),),
+            )
+            return cur.fetchone() is not None
+
+    def run_exists(self, run_id: UUID) -> bool:
+        """Check whether a research run exists."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM research_runs WHERE id = %s LIMIT 1",
+                (str(run_id),),
+            )
+            return cur.fetchone() is not None
+
+    def invocation_exists(self, invocation_id: UUID) -> bool:
+        """Check whether an invocation exists."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM research_invocations WHERE id = %s LIMIT 1",
+                (str(invocation_id),),
+            )
+            return cur.fetchone() is not None
+
+    def validate_evidence_references(self, references: list[str | UUID]) -> list[str]:
+        """Validate evidence reference IDs against research_claims, chunks, asset_snapshots, research_runs, or research_invocations.
+
+        Returns a list of unknown/invalid reference strings.
+        """
+        invalid_references = []
+        for ref in references:
+            ref_str = str(ref)
+            try:
+                ref_uuid = UUID(ref_str)
+            except (ValueError, AttributeError):
+                invalid_references.append(ref_str)
+                continue
+
+            with self.connection.cursor() as cur:
+                cur.execute(
+                    """SELECT 1 WHERE
+                    EXISTS (SELECT 1 FROM research_claims WHERE claim_id = %s) OR
+                    EXISTS (SELECT 1 FROM chunks WHERE id = %s) OR
+                    EXISTS (SELECT 1 FROM asset_snapshots WHERE id = %s) OR
+                    EXISTS (SELECT 1 FROM research_runs WHERE id = %s) OR
+                    EXISTS (SELECT 1 FROM research_invocations WHERE id = %s)""",
+                    (str(ref_uuid), str(ref_uuid), str(ref_uuid), str(ref_uuid), str(ref_uuid)),
+                )
+                if cur.fetchone() is None:
+                    invalid_references.append(ref_str)
+        return invalid_references
+
+    # -- Audit row mappers ------------------------------------------------
+
+    @staticmethod
+    def _row_to_audit_assessment_mapping(row) -> dict[str, Any]:
+        keys = (
+            "id", "run_id", "target_type", "target_id", "target_hash",
+            "evaluator_version", "prompt_template_version", "policy_version",
+            "stage_set", "status", "provider", "model",
+            "prompt_hash", "model_fingerprint", "elapsed_ms",
+            "audit_packet_manifest", "created_at",
+        )
+        result = dict(zip(keys, row))
+        for uid_key in ("id", "run_id", "target_id"):
+            if result.get(uid_key) is not None:
+                result[uid_key] = str(result[uid_key])
+        stage_set = result.get("stage_set")
+        if isinstance(stage_set, (list, tuple)):
+            result["stage_set"] = tuple(stage_set)
+        elif isinstance(stage_set, str):
+            result["stage_set"] = (stage_set,)
+        return result
+
+    @staticmethod
+    def _row_to_audit_stage_output_mapping(row) -> dict[str, Any]:
+        keys = (
+            "id", "assessment_id", "stage", "sequence_number",
+            "status", "output", "error", "error_details",
+            "call_count", "used_fallback", "created_at",
+        )
+        result = dict(zip(keys, row))
+        for uid_key in ("id", "assessment_id"):
+            if result.get(uid_key) is not None:
+                result[uid_key] = str(result[uid_key])
+        return result

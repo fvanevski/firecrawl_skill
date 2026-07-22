@@ -101,6 +101,8 @@ def _make_uow_mock(claims=None, passages=None, snapshots=None):
             return uuid4()
 
         def insert_evidence_link(self, run_id, claim_id, passage_id, snapshot_id, **kw):
+            if claim_id not in claims:
+                raise ValueError(f"unknown claim ID: {claim_id}")
             if passage_id not in passages:
                 raise ValueError(f"unknown passage ID: {passage_id}")
             if snapshot_id not in snapshots:
@@ -419,6 +421,8 @@ def test_domain_model_evidence_link_rejects_out_of_range_confidence():
 # Integration tests (require PostgreSQL)
 # ---------------------------------------------------------------------------
 
+from conftest import ensure_run_exists, ensure_passage_and_snapshot_exist
+
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 INTEGRATION_MARK = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
@@ -439,9 +443,11 @@ def test_claims_survive_filesystem_deletion(tmp_path, prepared_database_for_clai
     )
     svc = build_claim_service(config)
     run_id = uuid4()
+    ensure_run_exists(TEST_DSN, run_id)
     claim_id = uuid4()
     passage_id = uuid4()
     snapshot_id = uuid4()
+    ensure_passage_and_snapshot_exist(TEST_DSN, passage_id, snapshot_id)
 
     # Insert a claim and link
     svc.create_claim(run_id, claim_id, "Test claim")
@@ -480,9 +486,11 @@ def test_unknown_claim_id_is_rejected_in_service(
     )
     svc = build_claim_service(config)
     run_id = uuid4()
+    ensure_run_exists(TEST_DSN, run_id)
     claim_id = uuid4()
     passage_id = uuid4()
     snapshot_id = uuid4()
+    ensure_passage_and_snapshot_exist(TEST_DSN, passage_id, snapshot_id)
 
     # Create a valid claim first
     svc.create_claim(run_id, claim_id, "Test claim")
@@ -514,9 +522,11 @@ def test_round_trip_export_import(tmp_path, prepared_database_for_claims):
     )
     svc = build_claim_service(config)
     run_id = uuid4()
+    ensure_run_exists(TEST_DSN, run_id)
     claim_id = uuid4()
     passage_id = uuid4()
     snapshot_id = uuid4()
+    ensure_passage_and_snapshot_exist(TEST_DSN, passage_id, snapshot_id)
 
     # Insert claim and link
     svc.create_claim(run_id, claim_id, "Round-trip claim")
@@ -561,6 +571,7 @@ def test_idempotent_claim_upsert(tmp_path, prepared_database_for_claims):
     )
     svc = build_claim_service(config)
     run_id = uuid4()
+    ensure_run_exists(TEST_DSN, run_id)
     claim_id = uuid4()
 
     svc.create_claim(run_id, claim_id, "Original")
@@ -585,9 +596,11 @@ def test_duplicate_evidence_link_rejected(tmp_path, prepared_database_for_claims
     )
     svc = build_claim_service(config)
     run_id = uuid4()
+    ensure_run_exists(TEST_DSN, run_id)
     claim_id = uuid4()
     passage_id = uuid4()
     snapshot_id = uuid4()
+    ensure_passage_and_snapshot_exist(TEST_DSN, passage_id, snapshot_id)
 
     svc.create_claim(run_id, claim_id, "Test claim")
     svc.create_evidence_link(
@@ -615,9 +628,11 @@ def test_confidence_edge_values_accepted(tmp_path, prepared_database_for_claims)
     )
     svc = build_claim_service(config)
     run_id = uuid4()
+    ensure_run_exists(TEST_DSN, run_id)
     claim_id = uuid4()
     passage_id = uuid4()
     snapshot_id = uuid4()
+    ensure_passage_and_snapshot_exist(TEST_DSN, passage_id, snapshot_id)
 
     svc.create_claim(run_id, claim_id, "Test claim")
 
@@ -627,8 +642,12 @@ def test_confidence_edge_values_accepted(tmp_path, prepared_database_for_claims)
     )
     assert link_id_0 is not None
 
+    passage_id_2 = uuid4()
+    snapshot_id_2 = uuid4()
+    ensure_passage_and_snapshot_exist(TEST_DSN, passage_id_2, snapshot_id_2)
+
     link_id_1 = svc.create_evidence_link(
-        run_id, claim_id, passage_id, snapshot_id, confidence=1.0
+        run_id, claim_id, passage_id_2, snapshot_id_2, confidence=1.0
     )
     assert link_id_1 is not None
 
