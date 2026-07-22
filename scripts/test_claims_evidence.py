@@ -287,6 +287,137 @@ def test_claim_manifest_parser_has_list():
     assert args.claim_command == "list"
 
 
+def test_import_dry_run_accepts_new_claim_ids():
+    """New claim IDs (not yet in DB) should pass dry-run — B2 fix."""
+    passage = uuid4()
+    snapshot = uuid4()
+    uow = _make_uow_mock(passages={passage}, snapshots={snapshot})
+    svc = ClaimManifestService(lambda: uow)
+    new_claim = uuid4()
+    manifest = {
+        "claims": [{"claim_id": str(new_claim), "statement": "New claim"}],
+        "links": [
+            {
+                "claim_id": str(new_claim),
+                "passage_id": str(passage),
+                "snapshot_id": str(snapshot),
+            }
+        ],
+    }
+    result = svc.import_manifest(uuid4(), manifest, dry_run=True)
+    assert result["valid"] is True
+    assert result["malformed_claim_ids"] == []
+
+
+def test_import_dry_run_detects_malformed_claim_ids():
+    """Non-UUID claim IDs should be detected as malformed."""
+    uow = _make_uow_mock()
+    svc = ClaimManifestService(lambda: uow)
+    manifest = {
+        "claims": [{"claim_id": "not-a-uuid", "statement": "Bad claim"}],
+        "links": [],
+    }
+    result = svc.import_manifest(uuid4(), manifest, dry_run=True)
+    assert result["valid"] is False
+    assert result["malformed_claim_ids"] == ["not-a-uuid"]
+
+
+def test_import_apply_reports_failed_claims():
+    """Import should collect and report failures, not silently pass."""
+    passage = uuid4()
+    snapshot = uuid4()
+    uow = _make_uow_mock(passages={passage}, snapshots={snapshot})
+    svc = ClaimManifestService(lambda: uow)
+
+    # Mock upsert_evidence_link to fail
+
+    def failing_upsert(*args, **kw):
+        raise RuntimeError("simulated FK violation")
+
+    uow.upsert_evidence_link = failing_upsert
+
+    manifest = {
+        "claims": [{"claim_id": str(uuid4()), "statement": "Valid claim"}],
+        "links": [
+            {
+                "claim_id": str(uuid4()),
+                "passage_id": str(passage),
+                "snapshot_id": str(snapshot),
+            }
+        ],
+    }
+    result = svc.import_manifest(uuid4(), manifest)
+    assert result["valid"] is False
+    assert len(result["failed_links"]) == 1
+    assert result["failed_links"][0]["error"] == "simulated FK violation"
+
+
+def test_domain_model_claim_record_rejects_empty_statement():
+    from research_store.domain import ClaimRecord
+
+    with pytest.raises(ValueError, match="non-empty"):
+        ClaimRecord(
+            id=uuid4(),
+            run_id=uuid4(),
+            claim_id=uuid4(),
+            statement="   ",
+            semantic_status="supported",
+            uncertainty=None,
+            evidence_packet_revision=1,
+            created_at="2025-01-01T00:00:00+00:00",
+        )
+
+
+def test_domain_model_claim_record_rejects_invalid_status():
+    from research_store.domain import ClaimRecord
+
+    with pytest.raises(ValueError, match="invalid semantic_status"):
+        ClaimRecord(
+            id=uuid4(),
+            run_id=uuid4(),
+            claim_id=uuid4(),
+            statement="A claim",
+            semantic_status="bogus",
+            uncertainty=None,
+            evidence_packet_revision=1,
+            created_at="2025-01-01T00:00:00+00:00",
+        )
+
+
+def test_domain_model_evidence_link_rejects_invalid_relationship():
+    from research_store.domain import ClaimEvidenceLink
+
+    with pytest.raises(ValueError, match="invalid relationship"):
+        ClaimEvidenceLink(
+            id=uuid4(),
+            run_id=uuid4(),
+            claim_id=uuid4(),
+            passage_id=uuid4(),
+            snapshot_id=uuid4(),
+            source_url="",
+            relationship="bogus",
+            confidence=1.0,
+            created_at="2025-01-01T00:00:00+00:00",
+        )
+
+
+def test_domain_model_evidence_link_rejects_out_of_range_confidence():
+    from research_store.domain import ClaimEvidenceLink
+
+    with pytest.raises(ValueError, match="confidence must be in"):
+        ClaimEvidenceLink(
+            id=uuid4(),
+            run_id=uuid4(),
+            claim_id=uuid4(),
+            passage_id=uuid4(),
+            snapshot_id=uuid4(),
+            source_url="",
+            relationship="supports",
+            confidence=1.5,
+            created_at="2025-01-01T00:00:00+00:00",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Integration tests (require PostgreSQL)
 # ---------------------------------------------------------------------------
@@ -448,8 +579,56 @@ def test_idempotent_claim_upsert(tmp_path, prepared_database_for_claims):
 # ---------------------------------------------------------------------------
 
 if TEST_DSN:
+    from research_store.postgres import connect
 
     @pytest.fixture(scope="session")
     def prepared_database_for_claims():
         """Prepare database with migration 0017."""
         pass
+
+    def test_migration_0017_creates_tables():
+        """Verify migration 0017 creates research_claims and claim_evidence_links."""
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT tablename FROM pg_tables
+                WHERE schemaname='public'
+                AND tablename IN ('research_claims', 'claim_evidence_links')
+                ORDER BY tablename"""
+            )
+            tables = {row[0] for row in cur.fetchall()}
+            assert "claim_evidence_links" in tables
+            assert "research_claims" in tables
+
+    def test_migration_0017_has_updated_at_column():
+        """Verify research_claims has the updated_at column (B1 fix)."""
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT column_name FROM information_schema.columns
+                WHERE table_name='research_claims'
+                AND column_name='updated_at'"""
+            )
+            rows = cur.fetchall()
+            assert len(rows) == 1
+
+    def test_migration_0017_enum_types_exist():
+        """Verify the claim_semantic_status and claim_evidence_relationship enums exist."""
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT typname FROM pg_type
+                WHERE typname IN ('claim_semantic_status', 'claim_evidence_relationship')
+                ORDER BY typname"""
+            )
+            types = {row[0] for row in cur.fetchall()}
+            assert "claim_evidence_relationship" in types
+            assert "claim_semantic_status" in types
+
+    def test_migration_0017_unique_constraint_exists():
+        """Verify research_claims has the (run_id, claim_id) unique constraint."""
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT conname FROM pg_constraint
+                WHERE conrelid='research_claims'::regclass
+                AND conname='uk_research_claims_run_claim'"""
+            )
+            rows = cur.fetchall()
+            assert len(rows) == 1

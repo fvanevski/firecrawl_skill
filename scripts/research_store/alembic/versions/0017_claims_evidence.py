@@ -164,6 +164,7 @@ def upgrade():
           uncertainty                 text,
           evidence_packet_revision    bigint NOT NULL DEFAULT 1,
           created_at                  timestamptz NOT NULL DEFAULT now(),
+          updated_at                  timestamptz NOT NULL DEFAULT now(),
 
           PRIMARY KEY (id),
           CONSTRAINT uk_research_claims_run_claim

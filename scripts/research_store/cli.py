@@ -1661,11 +1661,11 @@ def main(argv=None):
             import json as _json
 
             manifest_file = args.file
-            if Path(manifest_file).is_file():
-                with open(manifest_file, "r") as f:
-                    manifest = _json.load(f)
-            else:
-                manifest = _json.load(sys.stdin)
+            manifest_path = Path(manifest_file)
+            if not manifest_path.is_file():
+                raise SystemExit(f"manifest file not found: {manifest_file}")
+            with open(manifest_path, "r") as f:
+                manifest = _json.load(f)
             result = claim_svc.import_manifest(
                 run_id, manifest, dry_run=getattr(args, "dry_run", False)
             )
@@ -1675,8 +1675,18 @@ def main(argv=None):
             if output == "-":
                 print(dumps(manifest))
             else:
-                with open(output, "w") as f:
-                    f.write(dumps(manifest))
+                output_path = Path(output)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=str(output_path.parent), suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(fd, "w") as f:
+                        f.write(dumps(manifest))
+                    os.replace(tmp_path, str(output_path))
+                except BaseException:
+                    os.unlink(tmp_path)
+                    raise
                 result = {
                     "exported_to": output,
                     "claim_count": manifest.get("claim_count", 0),

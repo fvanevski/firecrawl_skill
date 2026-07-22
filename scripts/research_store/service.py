@@ -481,19 +481,17 @@ class ClaimManifestService:
         links = manifest.get("links", [])
 
         # Dry-run phase: validate all references
-        unknown_claims = []
         unknown_passages = []
         unknown_snapshots = []
+        malformed_claim_ids = []
 
         for claim in claims:
             cid = claim.get("claim_id")
             if cid:
                 try:
-                    uid = UUID(str(cid))
-                    if not self._claim_id_valid(run_id, uid):
-                        unknown_claims.append(str(cid))
+                    UUID(str(cid))
                 except ValueError:
-                    unknown_claims.append(str(cid))
+                    malformed_claim_ids.append(str(cid))
 
         for link in links:
             pid = link.get("passage_id")
@@ -518,20 +516,22 @@ class ClaimManifestService:
             "run_id": str(run_id),
             "claims_count": len(claims),
             "links_count": len(links),
-            "unknown_claim_ids": unknown_claims,
+            "malformed_claim_ids": malformed_claim_ids,
             "unknown_passage_ids": unknown_passages,
             "unknown_snapshot_ids": unknown_snapshots,
-            "valid": not unknown_claims
+            "valid": not malformed_claim_ids
             and not unknown_passages
             and not unknown_snapshots,
         }
 
-        if dry_run or (unknown_claims or unknown_passages or unknown_snapshots):
+        if dry_run or (malformed_claim_ids or unknown_passages or unknown_snapshots):
             return dry_run_result
 
         # Apply phase: commit claims and links
+        failed_claims = []
+        failed_links = []
+        inserted_claims = 0
         with self.uow_factory() as uow:
-            inserted_claims = 0
             for claim in claims:
                 try:
                     uow.upsert_claim(
@@ -545,8 +545,13 @@ class ClaimManifestService:
                         ),
                     )
                     inserted_claims += 1
-                except Exception:
-                    pass  # Skip invalid claims, continue with others
+                except Exception as exc:
+                    failed_claims.append(
+                        {
+                            "claim_id": str(claim.get("claim_id", "unknown")),
+                            "error": str(exc),
+                        }
+                    )
 
             inserted_links = 0
             for link in links:
@@ -561,9 +566,16 @@ class ClaimManifestService:
                         confidence=link.get("confidence", 1.0),
                     )
                     inserted_links += 1
-                except Exception:
-                    pass  # Skip invalid links, continue with others
+                except Exception as exc:
+                    failed_links.append(
+                        {
+                            "claim_id": str(link.get("claim_id", "unknown")),
+                            "passage_id": str(link.get("passage_id", "unknown")),
+                            "error": str(exc),
+                        }
+                    )
 
+        has_failures = bool(failed_claims) or bool(failed_links)
         return {
             "dry_run": False,
             "run_id": str(run_id),
@@ -571,18 +583,16 @@ class ClaimManifestService:
             "links_count": len(links),
             "inserted_claims": inserted_claims,
             "inserted_links": inserted_links,
-            "unknown_claim_ids": unknown_claims,
+            "malformed_claim_ids": malformed_claim_ids,
             "unknown_passage_ids": unknown_passages,
             "unknown_snapshot_ids": unknown_snapshots,
-            "valid": not unknown_claims
+            "failed_claims": failed_claims,
+            "failed_links": failed_links,
+            "valid": not has_failures
+            and not malformed_claim_ids
             and not unknown_passages
             and not unknown_snapshots,
         }
-
-    def _claim_id_valid(self, run_id: UUID, claim_id: UUID) -> bool:
-        """Check if claim_id exists in research_claims for the given run."""
-        with self.uow_factory() as uow:
-            return uow.claim_exists(run_id, claim_id)
 
     def _passage_id_valid(self, passage_id: UUID) -> bool:
         """Check if passage_id exists in chunks."""

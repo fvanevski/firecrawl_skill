@@ -164,6 +164,23 @@ class ClaimRecord:
     evidence_packet_revision: int
     created_at: datetime
 
+    _VALID_STATUSES = frozenset(
+        {
+            "supported",
+            "contradicted",
+            "qualified",
+            "unsupported",
+            "uncertain",
+            "unassessed",
+        }
+    )
+
+    def __post_init__(self):
+        if not self.statement.strip():
+            raise ValueError("claim statement must be non-empty")
+        if self.semantic_status not in self._VALID_STATUSES:
+            raise ValueError(f"invalid semantic_status: {self.semantic_status}")
+
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "ClaimRecord":
         def _uuid(v):
@@ -213,6 +230,16 @@ class ClaimEvidenceLink:
     relationship: str
     confidence: float
     created_at: datetime
+
+    _VALID_RELATIONSHIPS = frozenset(
+        {"supports", "contradicts", "qualifies", "context"}
+    )
+
+    def __post_init__(self):
+        if self.relationship not in self._VALID_RELATIONSHIPS:
+            raise ValueError(f"invalid relationship: {self.relationship}")
+        if not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(f"confidence must be in [0, 1], got {self.confidence}")
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "ClaimEvidenceLink":
