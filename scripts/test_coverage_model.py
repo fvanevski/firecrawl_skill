@@ -1487,7 +1487,16 @@ class TestAssetAcquired:
         assert ledger.items[0].independent_source_count == 1
 
     def test_duplicate_source_url_not_doubled(self):
-        """Duplicate source URLs must NOT inflate independent_source_count."""
+        """Duplicate source URLs must NOT inflate independent_source_count.
+
+        Note: This test uses different idempotency keys ("acq:1" vs "acq:2"),
+        so two separate events are created at the event level (not deduplicated
+        by the idempotency mechanism). The deduplication happens in the
+        projection layer — when rebuild_projection processes both events, it
+        collects all source URLs into a set and counts unique values. This
+        verifies that projection-level deduplication works correctly even when
+        the same source URL appears in multiple distinct events.
+        """
         repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
@@ -1677,7 +1686,8 @@ class TestSourceClassObserved:
         ledger = service.rebuild_projection(run_id)
         assert ledger.items[0].authority_classes_present.count("primary") == 1
 
-    def test_rejects_missing_authority_class(self):
+    def test_rejects_empty_authority_class(self):
+        """Empty string authority_class must be rejected."""
         repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
@@ -1688,7 +1698,23 @@ class TestSourceClassObserved:
         with pytest.raises(CoverageError, match="authority_class is required"):
             service.apply_source_class_observed(
                 run_id, UUID(item_id), authority_class=""
-            )  # type: ignore[arg-type]
+            )
+
+    def test_rejects_none_authority_class(self):
+        """None authority_class must also be rejected (not just empty string)."""
+        repo, service = coverage_fixture()
+        run_id = uuid4()
+        service.create_items_from_spec(
+            run_id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = list(repo.items.keys())[0]
+        with pytest.raises(CoverageError, match="authority_class is required"):
+            service.apply_source_class_observed(
+                run_id,
+                UUID(item_id),
+                authority_class=None,  # type: ignore[arg-type]
+            )
 
 
 class TestFreshnessObserved:

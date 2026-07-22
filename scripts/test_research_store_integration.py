@@ -40,7 +40,11 @@ from research_domain import load_model, schema_registry, serialize_model
 
 ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
-VALID = json.loads((FIXTURES / "valid.json").read_text()) if (FIXTURES / "valid.json").exists() else {}
+VALID = (
+    json.loads((FIXTURES / "valid.json").read_text())
+    if (FIXTURES / "valid.json").exists()
+    else {}
+)
 
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
@@ -874,25 +878,39 @@ def test_semantic_call_service_retains_failures_and_host_provenance(service):
         execution_mode="autonomous_local",
     )
     schema = {
-        "type": "object", "additionalProperties": False,
-        "properties": {"result": {"type": "string"}}, "required": ["result"],
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"result": {"type": "string"}},
+        "required": ["result"],
     }
     failed_context = {
-        "run_id": created.id, "stage": "planning", "schema_name": "test-result",
-        "schema_version": 1, "artifact_type": "test_result",
+        "run_id": created.id,
+        "stage": "planning",
+        "schema_name": "test-result",
+        "schema_version": 1,
+        "artifact_type": "test_result",
         "run_revision": 0,
         "idempotency_key": "semantic:model:timeout",
     }
     call_id = semantic.start_model_call(
-        failed_context, provider="local", requested_model="chat", model_revision="rev-1",
-        endpoint_alias="local", prompt_version="test-v1", prompt_hash="a" * 64,
-        schema=schema, input_token_estimate=12,
+        failed_context,
+        provider="local",
+        requested_model="chat",
+        model_revision="rev-1",
+        endpoint_alias="local",
+        prompt_version="test-v1",
+        prompt_hash="a" * 64,
+        schema=schema,
+        input_token_estimate=12,
     )
     semantic.finish_model_call(
-        failed_context, call_id, status="failed",
+        failed_context,
+        call_id,
+        status="failed",
         provenance={"provider": "local", "requested_model": "chat"},
         attempts=[{"attempt": 1, "latency_ms": 50, "error": "TimeoutError"}],
-        artifacts=[], error="TimeoutError",
+        artifacts=[],
+        error="TimeoutError",
     )
     failed = semantic.inspect(created.id, call_id)
     assert failed["status"] == "failed"
@@ -913,7 +931,9 @@ def test_semantic_call_service_retains_failures_and_host_provenance(service):
     accepted = semantic.ingest_host_artifact(
         host_context, {"result": "accepted"}, schema, actor_identifier="codex"
     )
-    stored = semantic.inspect(host_run.id, UUID(accepted.provenance["semantic_call_id"]))
+    stored = semantic.inspect(
+        host_run.id, UUID(accepted.provenance["semantic_call_id"])
+    )
     assert stored["provider"] == "host-agent"
     assert stored["model"] == ""
     assert stored["request"]["authority"] == "host-agent"
@@ -958,12 +978,8 @@ def test_explicit_mode_change_records_approval_and_invalidates_prior_authority(s
         "actor_type": "operator",
         "actor_identifier": "operator-b",
     }
-    changed = runs.change_execution_mode(
-        created.id, "autonomous_local", **command
-    )
-    replay = runs.change_execution_mode(
-        created.id, "autonomous_local", **command
-    )
+    changed = runs.change_execution_mode(created.id, "autonomous_local", **command)
+    replay = runs.change_execution_mode(created.id, "autonomous_local", **command)
     assert replay.event_id == changed.event_id
     assert replay.reused is True
     assert changed.lifecycle_revision == 1
@@ -1017,7 +1033,11 @@ def test_explicit_mode_change_records_approval_and_invalidates_prior_authority(s
 
     with pytest.raises(ValueError, match="requires local-model"):
         semantic.ingest_host_artifact(
-            {**context, "run_revision": 1, "idempotency_key": "semantic:host:stale-authority"},
+            {
+                **context,
+                "run_revision": 1,
+                "idempotency_key": "semantic:host:stale-authority",
+            },
             {"result": "should be rejected"},
             schema,
         )
@@ -1594,7 +1614,9 @@ def test_job_manifest_definition_mismatch_is_rejected(service):
 
 def test_search_plan_persistence_and_queries(service):
     run_svc = ResearchRunService(service.uow_factory)
-    status = run_svc.create("Search Plan persistence integration test", f"plan-run-{uuid4()}")
+    status = run_svc.create(
+        "Search Plan persistence integration test", f"plan-run-{uuid4()}"
+    )
 
     spec_id_uuid = uuid4()
     spec_payload = deepcopy(VALID["research-spec-v1"])
@@ -1612,8 +1634,12 @@ def test_search_plan_persistence_and_queries(service):
 
     plan_payload = deepcopy(VALID["search-plan-v1"])
     plan_payload["research_spec_id"] = str(spec_id_uuid)
-    plan_payload["queries"][0]["target_question_ids"] = [spec_payload["questions"][0]["question_id"]]
-    plan_payload["queries"][0]["target_claim_ids"] = [spec_payload["claims_to_validate"][0]["claim_id"]]
+    plan_payload["queries"][0]["target_question_ids"] = [
+        spec_payload["questions"][0]["question_id"]
+    ]
+    plan_payload["queries"][0]["target_claim_ids"] = [
+        spec_payload["claims_to_validate"][0]["claim_id"]
+    ]
     plan_payload["revision"] = 1
 
     # 1. Normal success path
@@ -1724,3 +1750,232 @@ def test_search_plan_persistence_and_queries(service):
             "plan-idempotency-rev3-invalid",
         )
 
+
+# ---------------------------------------------------------------------------
+# Issue #25 — PostgreSQL integration tests for new workflow observation events
+# ---------------------------------------------------------------------------
+
+
+class TestCoverageWorkflowObservationEvents:
+    """Integration tests for the 6 new coverage event types added in migration 0014.
+
+    These tests verify the actual SQL path (not just the in-memory repository)
+    for candidate_identified, extraction_attempted, asset_acquired,
+    evidence_retrieved, source_class_observed, and freshness_observed.
+    """
+
+    def test_candidate_identified_event(self, service):
+        """Verify candidate_identified event is persisted and projected."""
+        from research_store.coverage_service import CoverageService
+        from research_store.run_service import ResearchRunService
+
+        run_svc = ResearchRunService(service.uow_factory)
+        status = run_svc.create(
+            "Coverage workflow observation test", f"coverage-{uuid4()}"
+        )
+        coverage = CoverageService(service.uow_factory)
+
+        items = coverage.create_items_from_spec(
+            status.id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = items[0].coverage_item_id
+        candidate_id = uuid4()
+
+        event = coverage.apply_candidate_identified(
+            status.id, item_id, candidate_id=candidate_id
+        )
+        assert event.event_type == "candidate_identified"
+        assert event.coverage_revision >= 2
+
+        # Verify projection picks up the candidate_id
+        ledger = coverage.rebuild_projection(status.id)
+        assert len(ledger.items[0].candidate_ids) == 1
+        assert ledger.items[0].candidate_ids[0] == candidate_id
+
+    def test_asset_acquired_event(self, service):
+        """Verify asset_acquired changes status to 'acquired' and tracks source URL."""
+        from research_store.coverage_service import CoverageService
+        from research_store.run_service import ResearchRunService
+
+        run_svc = ResearchRunService(service.uow_factory)
+        status = run_svc.create(
+            "Coverage workflow observation test", f"coverage-{uuid4()}"
+        )
+        coverage = CoverageService(service.uow_factory)
+
+        items = coverage.create_items_from_spec(
+            status.id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = items[0].coverage_item_id
+        url = "https://integration.example.com/source"
+
+        event = coverage.apply_asset_acquired(status.id, item_id, source_url=url)
+        assert event.event_type == "asset_acquired"
+
+        ledger = coverage.rebuild_projection(status.id)
+        assert ledger.items[0].status.value == "acquired"
+        assert ledger.items[0].independent_source_count == 1
+
+    def test_evidence_retrieved_event(self, service):
+        """Verify evidence_retrieved adds passage_ids without changing status."""
+        from research_store.coverage_service import CoverageService
+        from research_store.run_service import ResearchRunService
+
+        run_svc = ResearchRunService(service.uow_factory)
+        status = run_svc.create(
+            "Coverage workflow observation test", f"coverage-{uuid4()}"
+        )
+        coverage = CoverageService(service.uow_factory)
+
+        items = coverage.create_items_from_spec(
+            status.id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = items[0].coverage_item_id
+        passage_ids = [str(uuid4()), str(uuid4())]
+
+        event = coverage.apply_evidence_retrieved(
+            status.id, item_id, passage_ids=passage_ids
+        )
+        assert event.event_type == "evidence_retrieved"
+
+        ledger = coverage.rebuild_projection(status.id)
+        assert len(ledger.items[0].passage_ids) == 2
+        # Status must remain unassessed — evidence retrieval is NOT a support judgment
+        assert ledger.items[0].status.value == "unassessed"
+
+    def test_source_class_observed_event(self, service):
+        """Verify source_class_observed accumulates authority classes."""
+        from research_store.coverage_service import CoverageService
+        from research_store.run_service import ResearchRunService
+
+        run_svc = ResearchRunService(service.uow_factory)
+        status = run_svc.create(
+            "Coverage workflow observation test", f"coverage-{uuid4()}"
+        )
+        coverage = CoverageService(service.uow_factory)
+
+        items = coverage.create_items_from_spec(
+            status.id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = items[0].coverage_item_id
+
+        coverage.apply_source_class_observed(
+            status.id, item_id, authority_class="primary"
+        )
+        coverage.apply_source_class_observed(
+            status.id, item_id, authority_class="authoritative_secondary"
+        )
+
+        ledger = coverage.rebuild_projection(status.id)
+        assert "primary" in ledger.items[0].authority_classes_present
+        assert "authoritative_secondary" in ledger.items[0].authority_classes_present
+
+    def test_freshness_observed_event(self, service):
+        """Verify freshness_observed updates freshness_status."""
+        from research_store.coverage_service import CoverageService
+        from research_domain.models import FreshnessStatus
+        from research_store.run_service import ResearchRunService
+
+        run_svc = ResearchRunService(service.uow_factory)
+        status = run_svc.create(
+            "Coverage workflow observation test", f"coverage-{uuid4()}"
+        )
+        coverage = CoverageService(service.uow_factory)
+
+        items = coverage.create_items_from_spec(
+            status.id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = items[0].coverage_item_id
+
+        coverage.apply_freshness_observed(
+            status.id, item_id, freshness_status="unsatisfied"
+        )
+
+        ledger = coverage.rebuild_projection(status.id)
+        assert ledger.items[0].freshness_status == FreshnessStatus.UNSATISFIED
+
+    def test_extraction_attempted_tracks_source_url(self, service):
+        """Verify extraction_attempted tracks source_url for independent-source counting."""
+        from research_store.coverage_service import CoverageService
+        from research_store.run_service import ResearchRunService
+
+        run_svc = ResearchRunService(service.uow_factory)
+        status = run_svc.create(
+            "Coverage workflow observation test", f"coverage-{uuid4()}"
+        )
+        coverage = CoverageService(service.uow_factory)
+
+        items = coverage.create_items_from_spec(
+            status.id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = items[0].coverage_item_id
+
+        coverage.apply_extraction_attempted(
+            status.id, item_id, source_url="https://integration.example.com"
+        )
+
+        ledger = coverage.rebuild_projection(status.id)
+        # Status must remain unassessed
+        assert ledger.items[0].status.value == "unassessed"
+        # Source URL is tracked for independent-source counting
+        assert ledger.items[0].independent_source_count == 1
+
+    def test_duplicate_source_url_deduplicated_in_projection(self, service):
+        """Two asset_acquired events with the same URL must yield independent_source_count == 1."""
+        from research_store.coverage_service import CoverageService
+        from research_store.run_service import ResearchRunService
+
+        run_svc = ResearchRunService(service.uow_factory)
+        status = run_svc.create(
+            "Coverage workflow observation test", f"coverage-{uuid4()}"
+        )
+        coverage = CoverageService(service.uow_factory)
+
+        items = coverage.create_items_from_spec(
+            status.id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = items[0].coverage_item_id
+        url = "https://integration.example.com/dedup"
+
+        coverage.apply_asset_acquired(
+            status.id, item_id, source_url=url, idempotency_key="dedup:1"
+        )
+        coverage.apply_asset_acquired(
+            status.id, item_id, source_url=url, idempotency_key="dedup:2"
+        )
+
+        ledger = coverage.rebuild_projection(status.id)
+        assert ledger.items[0].independent_source_count == 1
+
+    def test_source_event_id_provenance(self, service):
+        """Verify source_event_id is preserved in the coverage event."""
+        from research_store.coverage_service import CoverageService
+        from research_store.run_service import ResearchRunService
+
+        run_svc = ResearchRunService(service.uow_factory)
+        status = run_svc.create(
+            "Coverage workflow observation test", f"coverage-{uuid4()}"
+        )
+        coverage = CoverageService(service.uow_factory)
+
+        items = coverage.create_items_from_spec(
+            status.id,
+            {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
+        )
+        item_id = items[0].coverage_item_id
+        source_event = uuid4()
+
+        event = coverage.apply_asset_acquired(
+            status.id,
+            item_id,
+            source_url="https://integration.example.com",
+            source_event_id=source_event,
+        )
+        assert str(event.source_event_id) == str(source_event)

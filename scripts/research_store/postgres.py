@@ -3646,6 +3646,11 @@ class PostgresUnitOfWork:
                     if key in items:
                         # Record extraction attempt; does not change status.
                         # Payload may contain source_url, extraction_status.
+                        # Source URL is tracked for independent-source counting
+                        # because an extraction attempt indicates a source was
+                        # engaged, even if the attempt did not result in
+                        # successful acquisition.  The status remains unassessed
+                        # — engagement alone does not imply support.
                         source_url = (payload or {}).get("source_url")
                         if source_url:
                             items[key].setdefault("_source_urls", []).append(
