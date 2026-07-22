@@ -1,0 +1,1776 @@
+{
+  "deterministic_integrity": true,
+  "false_completion_cases": 5,
+  "objective_count": 5,
+  "objectives": [
+    {
+      "coverage_led": {
+        "candidate_count": 6,
+        "candidate_urls": [
+          "https://coverage-led.example.org/obj-simple-focused/item-0",
+          "https://coverage-led.example.org/obj-simple-focused/item-1",
+          "https://coverage-led.example.org/obj-simple-focused/item-2",
+          "https://coverage-led.example.org/obj-simple-focused/item-3",
+          "https://coverage-led.example.org/obj-simple-focused/item-4",
+          "https://coverage-led.example.org/obj-simple-focused/item-5"
+        ],
+        "coverage_items": 2,
+        "coverage_revision": 2,
+        "coverage_status": "sufficient",
+        "error": null,
+        "extracted_urls": [
+          "https://coverage-led.example.org/obj-simple-focused/item-0",
+          "https://coverage-led.example.org/obj-simple-focused/item-1",
+          "https://coverage-led.example.org/obj-simple-focused/item-2",
+          "https://coverage-led.example.org/obj-simple-focused/item-3"
+        ],
+        "final_state": "completed",
+        "query_plan": [
+          {
+            "facet": "facet_0",
+            "query": "Find the current version of the termux-packages repository and its latest release notes facet 0"
+          },
+          {
+            "facet": "facet_1",
+            "query": "Find the current version of the termux-packages repository and its latest release notes facet 1"
+          }
+        ],
+        "run_id": "4bdc5789-29e4-52aa-9498-203e0483686e",
+        "run_revision": 2,
+        "search_revisions": [
+          [
+            {
+              "facet": "facet_0",
+              "query": "Find the current version of the termux-packages repository and its latest release notes facet 0"
+            },
+            {
+              "facet": "facet_1",
+              "query": "Find the current version of the termux-packages repository and its latest release notes facet 1"
+            }
+          ]
+        ],
+        "stop_reason": "coverage_sufficient",
+        "strategy_decisions": 1,
+        "strategy_proposals": 1,
+        "successful_extractions": 4,
+        "wall_clock_seconds": 0.1,
+        "wave_count": 1
+      },
+      "coverage_revision": 2,
+      "deterministic_integrity": true,
+      "divergences": [
+        {
+          "coverage_led_value": [
+            "Find the current version of the termux-packages repository and its latest release notes facet 0",
+            "Find the current version of the termux-packages repository and its latest release notes facet 1"
+          ],
+          "dimension": "query_plan",
+          "explanation": "Query plans differ between legacy and coverage-led. This is expected \u2014 coverage-led may generate adaptive queries based on coverage gaps.",
+          "legacy_value": [
+            "find version termux-packages repository its latest release notes overview",
+            "find version termux-packages repository its latest release notes details",
+            "find version termux-packages repository its latest release notes developments",
+            "find version termux-packages repository its latest release notes analysis",
+            "find version termux-packages repository its latest release notes challenges"
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": {
+            "reason": "coverage_sufficient",
+            "state": "completed"
+          },
+          "dimension": "stop_decision",
+          "explanation": "Stop decisions differ. P0 if one policy completes while the other does not \u2014 this is a false-completion risk.",
+          "legacy_value": {
+            "reason": "page_target_reached",
+            "state": "completed"
+          },
+          "resolved": false,
+          "severity": "P1"
+        },
+        {
+          "coverage_led_value": 6,
+          "dimension": "candidate_count",
+          "explanation": "Candidate count differs \u2014 expected due to different query strategies.",
+          "legacy_value": 20,
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": [
+            "https://coverage-led.example.org/obj-simple-focused/item-0",
+            "https://coverage-led.example.org/obj-simple-focused/item-1",
+            "https://coverage-led.example.org/obj-simple-focused/item-2",
+            "https://coverage-led.example.org/obj-simple-focused/item-3",
+            "https://coverage-led.example.org/obj-simple-focused/item-4",
+            "https://coverage-led.example.org/obj-simple-focused/item-5"
+          ],
+          "dimension": "candidate_set",
+          "explanation": "Candidate URL discovery sets differ between legacy and coverage-led.",
+          "legacy_value": [
+            "https://legacy-search.example.com/obj-simple-focused/cand-0",
+            "https://legacy-search.example.com/obj-simple-focused/cand-1",
+            "https://legacy-search.example.com/obj-simple-focused/cand-10",
+            "https://legacy-search.example.com/obj-simple-focused/cand-11",
+            "https://legacy-search.example.com/obj-simple-focused/cand-12",
+            "https://legacy-search.example.com/obj-simple-focused/cand-13",
+            "https://legacy-search.example.com/obj-simple-focused/cand-14",
+            "https://legacy-search.example.com/obj-simple-focused/cand-15",
+            "https://legacy-search.example.com/obj-simple-focused/cand-16",
+            "https://legacy-search.example.com/obj-simple-focused/cand-17",
+            "https://legacy-search.example.com/obj-simple-focused/cand-18",
+            "https://legacy-search.example.com/obj-simple-focused/cand-19",
+            "https://legacy-search.example.com/obj-simple-focused/cand-2",
+            "https://legacy-search.example.com/obj-simple-focused/cand-3",
+            "https://legacy-search.example.com/obj-simple-focused/cand-4",
+            "https://legacy-search.example.com/obj-simple-focused/cand-5",
+            "https://legacy-search.example.com/obj-simple-focused/cand-6",
+            "https://legacy-search.example.com/obj-simple-focused/cand-7",
+            "https://legacy-search.example.com/obj-simple-focused/cand-8",
+            "https://legacy-search.example.com/obj-simple-focused/cand-9"
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": [
+            "https://coverage-led.example.org/obj-simple-focused/item-0",
+            "https://coverage-led.example.org/obj-simple-focused/item-1",
+            "https://coverage-led.example.org/obj-simple-focused/item-2",
+            "https://coverage-led.example.org/obj-simple-focused/item-3"
+          ],
+          "dimension": "extraction_choices",
+          "explanation": "Extraction choices differ \u2014 the two policies scraped different URL sets.",
+          "legacy_value": [
+            "https://legacy-search.example.com/obj-simple-focused/cand-0",
+            "https://legacy-search.example.com/obj-simple-focused/cand-1",
+            "https://legacy-search.example.com/obj-simple-focused/cand-2",
+            "https://legacy-search.example.com/obj-simple-focused/cand-3",
+            "https://legacy-search.example.com/obj-simple-focused/cand-4",
+            "https://legacy-search.example.com/obj-simple-focused/cand-5",
+            "https://legacy-search.example.com/obj-simple-focused/cand-6",
+            "https://legacy-search.example.com/obj-simple-focused/cand-7",
+            "https://legacy-search.example.com/obj-simple-focused/cand-8",
+            "https://legacy-search.example.com/obj-simple-focused/cand-9"
+          ],
+          "resolved": false,
+          "severity": "P1"
+        },
+        {
+          "coverage_led_value": [
+            [
+              {
+                "facet": "facet_0",
+                "query": "Find the current version of the termux-packages repository and its latest release notes facet 0"
+              },
+              {
+                "facet": "facet_1",
+                "query": "Find the current version of the termux-packages repository and its latest release notes facet 1"
+              }
+            ]
+          ],
+          "dimension": "search_revisions",
+          "explanation": "Search revisions differ \u2014 adaptive query plans diverge across waves.",
+          "legacy_value": [
+            [
+              {
+                "facet": "broad_overview",
+                "query": "find version termux-packages repository its latest release notes overview"
+              },
+              {
+                "facet": "primary_sources",
+                "query": "find version termux-packages repository its latest release notes details"
+              },
+              {
+                "facet": "recent_updates",
+                "query": "find version termux-packages repository its latest release notes developments"
+              },
+              {
+                "facet": "evidence",
+                "query": "find version termux-packages repository its latest release notes analysis"
+              },
+              {
+                "facet": "limitations",
+                "query": "find version termux-packages repository its latest release notes challenges"
+              }
+            ]
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": "N/A",
+          "dimension": "false_completion",
+          "explanation": "LEGACY: Completed with non-sufficient coverage \u2014 false completion detected.",
+          "legacy_value": {
+            "coverage": "unassessed",
+            "state": "completed"
+          },
+          "resolved": false,
+          "severity": "P0"
+        },
+        {
+          "coverage_led_value": 1,
+          "dimension": "strategy_proposals",
+          "explanation": "Coverage-led produced strategy proposals; legacy does not use the strategy revision system.",
+          "legacy_value": 0,
+          "resolved": false,
+          "severity": "P2"
+        }
+      ],
+      "false_completion_coverage_led": false,
+      "false_completion_legacy": true,
+      "legacy": {
+        "candidate_count": 20,
+        "candidate_urls": [
+          "https://legacy-search.example.com/obj-simple-focused/cand-0",
+          "https://legacy-search.example.com/obj-simple-focused/cand-1",
+          "https://legacy-search.example.com/obj-simple-focused/cand-2",
+          "https://legacy-search.example.com/obj-simple-focused/cand-3",
+          "https://legacy-search.example.com/obj-simple-focused/cand-4",
+          "https://legacy-search.example.com/obj-simple-focused/cand-5",
+          "https://legacy-search.example.com/obj-simple-focused/cand-6",
+          "https://legacy-search.example.com/obj-simple-focused/cand-7",
+          "https://legacy-search.example.com/obj-simple-focused/cand-8",
+          "https://legacy-search.example.com/obj-simple-focused/cand-9",
+          "https://legacy-search.example.com/obj-simple-focused/cand-10",
+          "https://legacy-search.example.com/obj-simple-focused/cand-11",
+          "https://legacy-search.example.com/obj-simple-focused/cand-12",
+          "https://legacy-search.example.com/obj-simple-focused/cand-13",
+          "https://legacy-search.example.com/obj-simple-focused/cand-14",
+          "https://legacy-search.example.com/obj-simple-focused/cand-15",
+          "https://legacy-search.example.com/obj-simple-focused/cand-16",
+          "https://legacy-search.example.com/obj-simple-focused/cand-17",
+          "https://legacy-search.example.com/obj-simple-focused/cand-18",
+          "https://legacy-search.example.com/obj-simple-focused/cand-19"
+        ],
+        "coverage_revision": 1,
+        "coverage_status": "unassessed",
+        "error": null,
+        "extracted_urls": [
+          "https://legacy-search.example.com/obj-simple-focused/cand-0",
+          "https://legacy-search.example.com/obj-simple-focused/cand-1",
+          "https://legacy-search.example.com/obj-simple-focused/cand-2",
+          "https://legacy-search.example.com/obj-simple-focused/cand-3",
+          "https://legacy-search.example.com/obj-simple-focused/cand-4",
+          "https://legacy-search.example.com/obj-simple-focused/cand-5",
+          "https://legacy-search.example.com/obj-simple-focused/cand-6",
+          "https://legacy-search.example.com/obj-simple-focused/cand-7",
+          "https://legacy-search.example.com/obj-simple-focused/cand-8",
+          "https://legacy-search.example.com/obj-simple-focused/cand-9"
+        ],
+        "final_state": "completed",
+        "query_plan": [
+          {
+            "facet": "broad_overview",
+            "query": "find version termux-packages repository its latest release notes overview"
+          },
+          {
+            "facet": "primary_sources",
+            "query": "find version termux-packages repository its latest release notes details"
+          },
+          {
+            "facet": "recent_updates",
+            "query": "find version termux-packages repository its latest release notes developments"
+          },
+          {
+            "facet": "evidence",
+            "query": "find version termux-packages repository its latest release notes analysis"
+          },
+          {
+            "facet": "limitations",
+            "query": "find version termux-packages repository its latest release notes challenges"
+          }
+        ],
+        "run_id": "f51440ee-6acd-5e8e-942d-3cdc2c9dbe0d",
+        "run_revision": 1,
+        "search_revisions": [
+          [
+            {
+              "facet": "broad_overview",
+              "query": "find version termux-packages repository its latest release notes overview"
+            },
+            {
+              "facet": "primary_sources",
+              "query": "find version termux-packages repository its latest release notes details"
+            },
+            {
+              "facet": "recent_updates",
+              "query": "find version termux-packages repository its latest release notes developments"
+            },
+            {
+              "facet": "evidence",
+              "query": "find version termux-packages repository its latest release notes analysis"
+            },
+            {
+              "facet": "limitations",
+              "query": "find version termux-packages repository its latest release notes challenges"
+            }
+          ]
+        ],
+        "stop_reason": "page_target_reached",
+        "strategy_proposals": 0,
+        "successful_extractions": 10,
+        "wall_clock_seconds": 0.1,
+        "wave_count": 1
+      },
+      "objective_id": "obj-simple-focused",
+      "run_revision": 2
+    },
+    {
+      "coverage_led": {
+        "candidate_count": 9,
+        "candidate_urls": [
+          "https://coverage-led.example.org/obj-moderate-broad/item-0",
+          "https://coverage-led.example.org/obj-moderate-broad/item-1",
+          "https://coverage-led.example.org/obj-moderate-broad/item-2",
+          "https://coverage-led.example.org/obj-moderate-broad/item-3",
+          "https://coverage-led.example.org/obj-moderate-broad/item-4",
+          "https://coverage-led.example.org/obj-moderate-broad/item-5",
+          "https://coverage-led.example.org/obj-moderate-broad/item-6",
+          "https://coverage-led.example.org/obj-moderate-broad/item-7",
+          "https://coverage-led.example.org/obj-moderate-broad/item-8"
+        ],
+        "coverage_items": 3,
+        "coverage_revision": 2,
+        "coverage_status": "sufficient",
+        "error": null,
+        "extracted_urls": [
+          "https://coverage-led.example.org/obj-moderate-broad/item-0",
+          "https://coverage-led.example.org/obj-moderate-broad/item-1",
+          "https://coverage-led.example.org/obj-moderate-broad/item-2",
+          "https://coverage-led.example.org/obj-moderate-broad/item-3",
+          "https://coverage-led.example.org/obj-moderate-broad/item-4",
+          "https://coverage-led.example.org/obj-moderate-broad/item-5"
+        ],
+        "final_state": "completed",
+        "query_plan": [
+          {
+            "facet": "facet_0",
+            "query": "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 0"
+          },
+          {
+            "facet": "facet_1",
+            "query": "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 1"
+          },
+          {
+            "facet": "facet_2",
+            "query": "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 2"
+          }
+        ],
+        "run_id": "d8b57df5-803f-5acf-90b4-85e7ca8b81df",
+        "run_revision": 2,
+        "search_revisions": [
+          [
+            {
+              "facet": "facet_0",
+              "query": "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 0"
+            },
+            {
+              "facet": "facet_1",
+              "query": "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 1"
+            },
+            {
+              "facet": "facet_2",
+              "query": "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 2"
+            }
+          ]
+        ],
+        "stop_reason": "coverage_sufficient",
+        "strategy_decisions": 1,
+        "strategy_proposals": 1,
+        "successful_extractions": 6,
+        "wall_clock_seconds": 0.1,
+        "wave_count": 1
+      },
+      "coverage_revision": 2,
+      "deterministic_integrity": true,
+      "divergences": [
+        {
+          "coverage_led_value": [
+            "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 0",
+            "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 1",
+            "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 2"
+          ],
+          "dimension": "query_plan",
+          "explanation": "Query plans differ between legacy and coverage-led. This is expected \u2014 coverage-led may generate adaptive queries based on coverage gaps.",
+          "legacy_value": [
+            "research comparison pytorch tensorflow deep learning model training 2026 overview",
+            "research comparison pytorch tensorflow deep learning model training 2026 details",
+            "research comparison pytorch tensorflow deep learning model training 2026 developments",
+            "research comparison pytorch tensorflow deep learning model training 2026 analysis",
+            "research comparison pytorch tensorflow deep learning model training 2026 challenges"
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": {
+            "reason": "coverage_sufficient",
+            "state": "completed"
+          },
+          "dimension": "stop_decision",
+          "explanation": "Stop decisions differ. P0 if one policy completes while the other does not \u2014 this is a false-completion risk.",
+          "legacy_value": {
+            "reason": "page_target_reached",
+            "state": "completed"
+          },
+          "resolved": false,
+          "severity": "P1"
+        },
+        {
+          "coverage_led_value": 9,
+          "dimension": "candidate_count",
+          "explanation": "Candidate count differs \u2014 expected due to different query strategies.",
+          "legacy_value": 20,
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": [
+            "https://coverage-led.example.org/obj-moderate-broad/item-0",
+            "https://coverage-led.example.org/obj-moderate-broad/item-1",
+            "https://coverage-led.example.org/obj-moderate-broad/item-2",
+            "https://coverage-led.example.org/obj-moderate-broad/item-3",
+            "https://coverage-led.example.org/obj-moderate-broad/item-4",
+            "https://coverage-led.example.org/obj-moderate-broad/item-5",
+            "https://coverage-led.example.org/obj-moderate-broad/item-6",
+            "https://coverage-led.example.org/obj-moderate-broad/item-7",
+            "https://coverage-led.example.org/obj-moderate-broad/item-8"
+          ],
+          "dimension": "candidate_set",
+          "explanation": "Candidate URL discovery sets differ between legacy and coverage-led.",
+          "legacy_value": [
+            "https://legacy-search.example.com/obj-moderate-broad/cand-0",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-1",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-10",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-11",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-12",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-13",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-14",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-15",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-16",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-17",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-18",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-19",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-2",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-3",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-4",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-5",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-6",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-7",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-8",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-9"
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": [
+            "https://coverage-led.example.org/obj-moderate-broad/item-0",
+            "https://coverage-led.example.org/obj-moderate-broad/item-1",
+            "https://coverage-led.example.org/obj-moderate-broad/item-2",
+            "https://coverage-led.example.org/obj-moderate-broad/item-3",
+            "https://coverage-led.example.org/obj-moderate-broad/item-4",
+            "https://coverage-led.example.org/obj-moderate-broad/item-5"
+          ],
+          "dimension": "extraction_choices",
+          "explanation": "Extraction choices differ \u2014 the two policies scraped different URL sets.",
+          "legacy_value": [
+            "https://legacy-search.example.com/obj-moderate-broad/cand-0",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-1",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-2",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-3",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-4",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-5",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-6",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-7",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-8",
+            "https://legacy-search.example.com/obj-moderate-broad/cand-9"
+          ],
+          "resolved": false,
+          "severity": "P1"
+        },
+        {
+          "coverage_led_value": [
+            [
+              {
+                "facet": "facet_0",
+                "query": "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 0"
+              },
+              {
+                "facet": "facet_1",
+                "query": "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 1"
+              },
+              {
+                "facet": "facet_2",
+                "query": "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026 facet 2"
+              }
+            ]
+          ],
+          "dimension": "search_revisions",
+          "explanation": "Search revisions differ \u2014 adaptive query plans diverge across waves.",
+          "legacy_value": [
+            [
+              {
+                "facet": "broad_overview",
+                "query": "research comparison pytorch tensorflow deep learning model training 2026 overview"
+              },
+              {
+                "facet": "primary_sources",
+                "query": "research comparison pytorch tensorflow deep learning model training 2026 details"
+              },
+              {
+                "facet": "recent_updates",
+                "query": "research comparison pytorch tensorflow deep learning model training 2026 developments"
+              },
+              {
+                "facet": "evidence",
+                "query": "research comparison pytorch tensorflow deep learning model training 2026 analysis"
+              },
+              {
+                "facet": "limitations",
+                "query": "research comparison pytorch tensorflow deep learning model training 2026 challenges"
+              }
+            ]
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": "N/A",
+          "dimension": "false_completion",
+          "explanation": "LEGACY: Completed with non-sufficient coverage \u2014 false completion detected.",
+          "legacy_value": {
+            "coverage": "unassessed",
+            "state": "completed"
+          },
+          "resolved": false,
+          "severity": "P0"
+        },
+        {
+          "coverage_led_value": 1,
+          "dimension": "strategy_proposals",
+          "explanation": "Coverage-led produced strategy proposals; legacy does not use the strategy revision system.",
+          "legacy_value": 0,
+          "resolved": false,
+          "severity": "P2"
+        }
+      ],
+      "false_completion_coverage_led": false,
+      "false_completion_legacy": true,
+      "legacy": {
+        "candidate_count": 20,
+        "candidate_urls": [
+          "https://legacy-search.example.com/obj-moderate-broad/cand-0",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-1",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-2",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-3",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-4",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-5",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-6",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-7",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-8",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-9",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-10",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-11",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-12",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-13",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-14",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-15",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-16",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-17",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-18",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-19"
+        ],
+        "coverage_revision": 1,
+        "coverage_status": "unassessed",
+        "error": null,
+        "extracted_urls": [
+          "https://legacy-search.example.com/obj-moderate-broad/cand-0",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-1",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-2",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-3",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-4",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-5",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-6",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-7",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-8",
+          "https://legacy-search.example.com/obj-moderate-broad/cand-9"
+        ],
+        "final_state": "completed",
+        "query_plan": [
+          {
+            "facet": "broad_overview",
+            "query": "research comparison pytorch tensorflow deep learning model training 2026 overview"
+          },
+          {
+            "facet": "primary_sources",
+            "query": "research comparison pytorch tensorflow deep learning model training 2026 details"
+          },
+          {
+            "facet": "recent_updates",
+            "query": "research comparison pytorch tensorflow deep learning model training 2026 developments"
+          },
+          {
+            "facet": "evidence",
+            "query": "research comparison pytorch tensorflow deep learning model training 2026 analysis"
+          },
+          {
+            "facet": "limitations",
+            "query": "research comparison pytorch tensorflow deep learning model training 2026 challenges"
+          }
+        ],
+        "run_id": "4cced026-64ae-5ec0-accf-cee440993438",
+        "run_revision": 1,
+        "search_revisions": [
+          [
+            {
+              "facet": "broad_overview",
+              "query": "research comparison pytorch tensorflow deep learning model training 2026 overview"
+            },
+            {
+              "facet": "primary_sources",
+              "query": "research comparison pytorch tensorflow deep learning model training 2026 details"
+            },
+            {
+              "facet": "recent_updates",
+              "query": "research comparison pytorch tensorflow deep learning model training 2026 developments"
+            },
+            {
+              "facet": "evidence",
+              "query": "research comparison pytorch tensorflow deep learning model training 2026 analysis"
+            },
+            {
+              "facet": "limitations",
+              "query": "research comparison pytorch tensorflow deep learning model training 2026 challenges"
+            }
+          ]
+        ],
+        "stop_reason": "page_target_reached",
+        "strategy_proposals": 0,
+        "successful_extractions": 10,
+        "wall_clock_seconds": 0.1,
+        "wave_count": 1
+      },
+      "objective_id": "obj-moderate-broad",
+      "run_revision": 2
+    },
+    {
+      "coverage_led": {
+        "candidate_count": 15,
+        "candidate_urls": [
+          "https://coverage-led.example.org/obj-complex-risk/item-0",
+          "https://coverage-led.example.org/obj-complex-risk/item-1",
+          "https://coverage-led.example.org/obj-complex-risk/item-2",
+          "https://coverage-led.example.org/obj-complex-risk/item-3",
+          "https://coverage-led.example.org/obj-complex-risk/item-4",
+          "https://coverage-led.example.org/obj-complex-risk/item-5",
+          "https://coverage-led.example.org/obj-complex-risk/item-6",
+          "https://coverage-led.example.org/obj-complex-risk/item-7",
+          "https://coverage-led.example.org/obj-complex-risk/item-8",
+          "https://coverage-led.example.org/obj-complex-risk/item-9",
+          "https://coverage-led.example.org/obj-complex-risk/item-10",
+          "https://coverage-led.example.org/obj-complex-risk/item-11",
+          "https://coverage-led.example.org/obj-complex-risk/item-12",
+          "https://coverage-led.example.org/obj-complex-risk/item-13",
+          "https://coverage-led.example.org/obj-complex-risk/item-14"
+        ],
+        "coverage_items": 5,
+        "coverage_revision": 2,
+        "coverage_status": "sufficient",
+        "error": null,
+        "extracted_urls": [
+          "https://coverage-led.example.org/obj-complex-risk/item-0",
+          "https://coverage-led.example.org/obj-complex-risk/item-1",
+          "https://coverage-led.example.org/obj-complex-risk/item-2",
+          "https://coverage-led.example.org/obj-complex-risk/item-3",
+          "https://coverage-led.example.org/obj-complex-risk/item-4",
+          "https://coverage-led.example.org/obj-complex-risk/item-5",
+          "https://coverage-led.example.org/obj-complex-risk/item-6",
+          "https://coverage-led.example.org/obj-complex-risk/item-7",
+          "https://coverage-led.example.org/obj-complex-risk/item-8",
+          "https://coverage-led.example.org/obj-complex-risk/item-9"
+        ],
+        "final_state": "completed",
+        "query_plan": [
+          {
+            "facet": "facet_0",
+            "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 0"
+          },
+          {
+            "facet": "facet_1",
+            "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 1"
+          },
+          {
+            "facet": "facet_2",
+            "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 2"
+          },
+          {
+            "facet": "facet_3",
+            "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 3"
+          },
+          {
+            "facet": "facet_4",
+            "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 4"
+          }
+        ],
+        "run_id": "4a238334-9157-5d5d-91d4-57f25c197499",
+        "run_revision": 2,
+        "search_revisions": [
+          [
+            {
+              "facet": "facet_0",
+              "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 0"
+            },
+            {
+              "facet": "facet_1",
+              "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 1"
+            },
+            {
+              "facet": "facet_2",
+              "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 2"
+            },
+            {
+              "facet": "facet_3",
+              "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 3"
+            },
+            {
+              "facet": "facet_4",
+              "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 4"
+            }
+          ]
+        ],
+        "stop_reason": "coverage_sufficient",
+        "strategy_decisions": 1,
+        "strategy_proposals": 1,
+        "successful_extractions": 10,
+        "wall_clock_seconds": 0.1,
+        "wave_count": 1
+      },
+      "coverage_revision": 2,
+      "deterministic_integrity": true,
+      "divergences": [
+        {
+          "coverage_led_value": [
+            "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 0",
+            "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 1",
+            "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 2",
+            "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 3",
+            "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 4"
+          ],
+          "dimension": "query_plan",
+          "explanation": "Query plans differ between legacy and coverage-led. This is expected \u2014 coverage-led may generate adaptive queries based on coverage gaps.",
+          "legacy_value": [
+            "investigate legal regulatory implications ai-generated content european union under ai act overview",
+            "investigate legal regulatory implications ai-generated content european union under ai act details",
+            "investigate legal regulatory implications ai-generated content european union under ai act developments",
+            "investigate legal regulatory implications ai-generated content european union under ai act analysis",
+            "investigate legal regulatory implications ai-generated content european union under ai act challenges"
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": {
+            "reason": "coverage_sufficient",
+            "state": "completed"
+          },
+          "dimension": "stop_decision",
+          "explanation": "Stop decisions differ. P0 if one policy completes while the other does not \u2014 this is a false-completion risk.",
+          "legacy_value": {
+            "reason": "page_target_reached",
+            "state": "completed"
+          },
+          "resolved": false,
+          "severity": "P1"
+        },
+        {
+          "coverage_led_value": 15,
+          "dimension": "candidate_count",
+          "explanation": "Candidate count differs \u2014 expected due to different query strategies.",
+          "legacy_value": 20,
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": [
+            "https://coverage-led.example.org/obj-complex-risk/item-0",
+            "https://coverage-led.example.org/obj-complex-risk/item-1",
+            "https://coverage-led.example.org/obj-complex-risk/item-10",
+            "https://coverage-led.example.org/obj-complex-risk/item-11",
+            "https://coverage-led.example.org/obj-complex-risk/item-12",
+            "https://coverage-led.example.org/obj-complex-risk/item-13",
+            "https://coverage-led.example.org/obj-complex-risk/item-14",
+            "https://coverage-led.example.org/obj-complex-risk/item-2",
+            "https://coverage-led.example.org/obj-complex-risk/item-3",
+            "https://coverage-led.example.org/obj-complex-risk/item-4",
+            "https://coverage-led.example.org/obj-complex-risk/item-5",
+            "https://coverage-led.example.org/obj-complex-risk/item-6",
+            "https://coverage-led.example.org/obj-complex-risk/item-7",
+            "https://coverage-led.example.org/obj-complex-risk/item-8",
+            "https://coverage-led.example.org/obj-complex-risk/item-9"
+          ],
+          "dimension": "candidate_set",
+          "explanation": "Candidate URL discovery sets differ between legacy and coverage-led.",
+          "legacy_value": [
+            "https://legacy-search.example.com/obj-complex-risk/cand-0",
+            "https://legacy-search.example.com/obj-complex-risk/cand-1",
+            "https://legacy-search.example.com/obj-complex-risk/cand-10",
+            "https://legacy-search.example.com/obj-complex-risk/cand-11",
+            "https://legacy-search.example.com/obj-complex-risk/cand-12",
+            "https://legacy-search.example.com/obj-complex-risk/cand-13",
+            "https://legacy-search.example.com/obj-complex-risk/cand-14",
+            "https://legacy-search.example.com/obj-complex-risk/cand-15",
+            "https://legacy-search.example.com/obj-complex-risk/cand-16",
+            "https://legacy-search.example.com/obj-complex-risk/cand-17",
+            "https://legacy-search.example.com/obj-complex-risk/cand-18",
+            "https://legacy-search.example.com/obj-complex-risk/cand-19",
+            "https://legacy-search.example.com/obj-complex-risk/cand-2",
+            "https://legacy-search.example.com/obj-complex-risk/cand-3",
+            "https://legacy-search.example.com/obj-complex-risk/cand-4",
+            "https://legacy-search.example.com/obj-complex-risk/cand-5",
+            "https://legacy-search.example.com/obj-complex-risk/cand-6",
+            "https://legacy-search.example.com/obj-complex-risk/cand-7",
+            "https://legacy-search.example.com/obj-complex-risk/cand-8",
+            "https://legacy-search.example.com/obj-complex-risk/cand-9"
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": [
+            "https://coverage-led.example.org/obj-complex-risk/item-0",
+            "https://coverage-led.example.org/obj-complex-risk/item-1",
+            "https://coverage-led.example.org/obj-complex-risk/item-2",
+            "https://coverage-led.example.org/obj-complex-risk/item-3",
+            "https://coverage-led.example.org/obj-complex-risk/item-4",
+            "https://coverage-led.example.org/obj-complex-risk/item-5",
+            "https://coverage-led.example.org/obj-complex-risk/item-6",
+            "https://coverage-led.example.org/obj-complex-risk/item-7",
+            "https://coverage-led.example.org/obj-complex-risk/item-8",
+            "https://coverage-led.example.org/obj-complex-risk/item-9"
+          ],
+          "dimension": "extraction_choices",
+          "explanation": "Extraction choices differ \u2014 the two policies scraped different URL sets.",
+          "legacy_value": [
+            "https://legacy-search.example.com/obj-complex-risk/cand-0",
+            "https://legacy-search.example.com/obj-complex-risk/cand-1",
+            "https://legacy-search.example.com/obj-complex-risk/cand-2",
+            "https://legacy-search.example.com/obj-complex-risk/cand-3",
+            "https://legacy-search.example.com/obj-complex-risk/cand-4",
+            "https://legacy-search.example.com/obj-complex-risk/cand-5",
+            "https://legacy-search.example.com/obj-complex-risk/cand-6",
+            "https://legacy-search.example.com/obj-complex-risk/cand-7",
+            "https://legacy-search.example.com/obj-complex-risk/cand-8",
+            "https://legacy-search.example.com/obj-complex-risk/cand-9"
+          ],
+          "resolved": false,
+          "severity": "P1"
+        },
+        {
+          "coverage_led_value": [
+            [
+              {
+                "facet": "facet_0",
+                "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 0"
+              },
+              {
+                "facet": "facet_1",
+                "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 1"
+              },
+              {
+                "facet": "facet_2",
+                "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 2"
+              },
+              {
+                "facet": "facet_3",
+                "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 3"
+              },
+              {
+                "facet": "facet_4",
+                "query": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act facet 4"
+              }
+            ]
+          ],
+          "dimension": "search_revisions",
+          "explanation": "Search revisions differ \u2014 adaptive query plans diverge across waves.",
+          "legacy_value": [
+            [
+              {
+                "facet": "broad_overview",
+                "query": "investigate legal regulatory implications ai-generated content european union under ai act overview"
+              },
+              {
+                "facet": "primary_sources",
+                "query": "investigate legal regulatory implications ai-generated content european union under ai act details"
+              },
+              {
+                "facet": "recent_updates",
+                "query": "investigate legal regulatory implications ai-generated content european union under ai act developments"
+              },
+              {
+                "facet": "evidence",
+                "query": "investigate legal regulatory implications ai-generated content european union under ai act analysis"
+              },
+              {
+                "facet": "limitations",
+                "query": "investigate legal regulatory implications ai-generated content european union under ai act challenges"
+              }
+            ]
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": "N/A",
+          "dimension": "false_completion",
+          "explanation": "LEGACY: Completed with non-sufficient coverage \u2014 false completion detected.",
+          "legacy_value": {
+            "coverage": "unassessed",
+            "state": "completed"
+          },
+          "resolved": false,
+          "severity": "P0"
+        },
+        {
+          "coverage_led_value": 1,
+          "dimension": "strategy_proposals",
+          "explanation": "Coverage-led produced strategy proposals; legacy does not use the strategy revision system.",
+          "legacy_value": 0,
+          "resolved": false,
+          "severity": "P2"
+        }
+      ],
+      "false_completion_coverage_led": false,
+      "false_completion_legacy": true,
+      "legacy": {
+        "candidate_count": 20,
+        "candidate_urls": [
+          "https://legacy-search.example.com/obj-complex-risk/cand-0",
+          "https://legacy-search.example.com/obj-complex-risk/cand-1",
+          "https://legacy-search.example.com/obj-complex-risk/cand-2",
+          "https://legacy-search.example.com/obj-complex-risk/cand-3",
+          "https://legacy-search.example.com/obj-complex-risk/cand-4",
+          "https://legacy-search.example.com/obj-complex-risk/cand-5",
+          "https://legacy-search.example.com/obj-complex-risk/cand-6",
+          "https://legacy-search.example.com/obj-complex-risk/cand-7",
+          "https://legacy-search.example.com/obj-complex-risk/cand-8",
+          "https://legacy-search.example.com/obj-complex-risk/cand-9",
+          "https://legacy-search.example.com/obj-complex-risk/cand-10",
+          "https://legacy-search.example.com/obj-complex-risk/cand-11",
+          "https://legacy-search.example.com/obj-complex-risk/cand-12",
+          "https://legacy-search.example.com/obj-complex-risk/cand-13",
+          "https://legacy-search.example.com/obj-complex-risk/cand-14",
+          "https://legacy-search.example.com/obj-complex-risk/cand-15",
+          "https://legacy-search.example.com/obj-complex-risk/cand-16",
+          "https://legacy-search.example.com/obj-complex-risk/cand-17",
+          "https://legacy-search.example.com/obj-complex-risk/cand-18",
+          "https://legacy-search.example.com/obj-complex-risk/cand-19"
+        ],
+        "coverage_revision": 1,
+        "coverage_status": "unassessed",
+        "error": null,
+        "extracted_urls": [
+          "https://legacy-search.example.com/obj-complex-risk/cand-0",
+          "https://legacy-search.example.com/obj-complex-risk/cand-1",
+          "https://legacy-search.example.com/obj-complex-risk/cand-2",
+          "https://legacy-search.example.com/obj-complex-risk/cand-3",
+          "https://legacy-search.example.com/obj-complex-risk/cand-4",
+          "https://legacy-search.example.com/obj-complex-risk/cand-5",
+          "https://legacy-search.example.com/obj-complex-risk/cand-6",
+          "https://legacy-search.example.com/obj-complex-risk/cand-7",
+          "https://legacy-search.example.com/obj-complex-risk/cand-8",
+          "https://legacy-search.example.com/obj-complex-risk/cand-9"
+        ],
+        "final_state": "completed",
+        "query_plan": [
+          {
+            "facet": "broad_overview",
+            "query": "investigate legal regulatory implications ai-generated content european union under ai act overview"
+          },
+          {
+            "facet": "primary_sources",
+            "query": "investigate legal regulatory implications ai-generated content european union under ai act details"
+          },
+          {
+            "facet": "recent_updates",
+            "query": "investigate legal regulatory implications ai-generated content european union under ai act developments"
+          },
+          {
+            "facet": "evidence",
+            "query": "investigate legal regulatory implications ai-generated content european union under ai act analysis"
+          },
+          {
+            "facet": "limitations",
+            "query": "investigate legal regulatory implications ai-generated content european union under ai act challenges"
+          }
+        ],
+        "run_id": "db536c33-7f07-5be5-a0f3-fbd70bec0171",
+        "run_revision": 1,
+        "search_revisions": [
+          [
+            {
+              "facet": "broad_overview",
+              "query": "investigate legal regulatory implications ai-generated content european union under ai act overview"
+            },
+            {
+              "facet": "primary_sources",
+              "query": "investigate legal regulatory implications ai-generated content european union under ai act details"
+            },
+            {
+              "facet": "recent_updates",
+              "query": "investigate legal regulatory implications ai-generated content european union under ai act developments"
+            },
+            {
+              "facet": "evidence",
+              "query": "investigate legal regulatory implications ai-generated content european union under ai act analysis"
+            },
+            {
+              "facet": "limitations",
+              "query": "investigate legal regulatory implications ai-generated content european union under ai act challenges"
+            }
+          ]
+        ],
+        "stop_reason": "page_target_reached",
+        "strategy_proposals": 0,
+        "successful_extractions": 10,
+        "wall_clock_seconds": 0.1,
+        "wave_count": 1
+      },
+      "objective_id": "obj-complex-risk",
+      "run_revision": 2
+    },
+    {
+      "coverage_led": {
+        "candidate_count": 9,
+        "candidate_urls": [
+          "https://coverage-led.example.org/obj-breaking-news/item-0",
+          "https://coverage-led.example.org/obj-breaking-news/item-1",
+          "https://coverage-led.example.org/obj-breaking-news/item-2",
+          "https://coverage-led.example.org/obj-breaking-news/item-3",
+          "https://coverage-led.example.org/obj-breaking-news/item-4",
+          "https://coverage-led.example.org/obj-breaking-news/item-5",
+          "https://coverage-led.example.org/obj-breaking-news/item-6",
+          "https://coverage-led.example.org/obj-breaking-news/item-7",
+          "https://coverage-led.example.org/obj-breaking-news/item-8"
+        ],
+        "coverage_items": 3,
+        "coverage_revision": 2,
+        "coverage_status": "sufficient",
+        "error": null,
+        "extracted_urls": [
+          "https://coverage-led.example.org/obj-breaking-news/item-0",
+          "https://coverage-led.example.org/obj-breaking-news/item-1",
+          "https://coverage-led.example.org/obj-breaking-news/item-2",
+          "https://coverage-led.example.org/obj-breaking-news/item-3",
+          "https://coverage-led.example.org/obj-breaking-news/item-4",
+          "https://coverage-led.example.org/obj-breaking-news/item-5"
+        ],
+        "final_state": "completed",
+        "query_plan": [
+          {
+            "facet": "facet_0",
+            "query": "Find the latest developments in quantum computing breakthroughs from the past week facet 0"
+          },
+          {
+            "facet": "facet_1",
+            "query": "Find the latest developments in quantum computing breakthroughs from the past week facet 1"
+          },
+          {
+            "facet": "facet_2",
+            "query": "Find the latest developments in quantum computing breakthroughs from the past week facet 2"
+          }
+        ],
+        "run_id": "fed77a77-741c-5a91-9d15-c6fd41229866",
+        "run_revision": 2,
+        "search_revisions": [
+          [
+            {
+              "facet": "facet_0",
+              "query": "Find the latest developments in quantum computing breakthroughs from the past week facet 0"
+            },
+            {
+              "facet": "facet_1",
+              "query": "Find the latest developments in quantum computing breakthroughs from the past week facet 1"
+            },
+            {
+              "facet": "facet_2",
+              "query": "Find the latest developments in quantum computing breakthroughs from the past week facet 2"
+            }
+          ]
+        ],
+        "stop_reason": "coverage_sufficient",
+        "strategy_decisions": 1,
+        "strategy_proposals": 1,
+        "successful_extractions": 6,
+        "wall_clock_seconds": 0.1,
+        "wave_count": 1
+      },
+      "coverage_revision": 2,
+      "deterministic_integrity": true,
+      "divergences": [
+        {
+          "coverage_led_value": [
+            "Find the latest developments in quantum computing breakthroughs from the past week facet 0",
+            "Find the latest developments in quantum computing breakthroughs from the past week facet 1",
+            "Find the latest developments in quantum computing breakthroughs from the past week facet 2"
+          ],
+          "dimension": "query_plan",
+          "explanation": "Query plans differ between legacy and coverage-led. This is expected \u2014 coverage-led may generate adaptive queries based on coverage gaps.",
+          "legacy_value": [
+            "find latest developments quantum computing breakthroughs past week overview",
+            "find latest developments quantum computing breakthroughs past week details",
+            "find latest developments quantum computing breakthroughs past week developments",
+            "find latest developments quantum computing breakthroughs past week analysis",
+            "find latest developments quantum computing breakthroughs past week challenges"
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": {
+            "reason": "coverage_sufficient",
+            "state": "completed"
+          },
+          "dimension": "stop_decision",
+          "explanation": "Stop decisions differ. P0 if one policy completes while the other does not \u2014 this is a false-completion risk.",
+          "legacy_value": {
+            "reason": "page_target_reached",
+            "state": "completed"
+          },
+          "resolved": false,
+          "severity": "P1"
+        },
+        {
+          "coverage_led_value": 9,
+          "dimension": "candidate_count",
+          "explanation": "Candidate count differs \u2014 expected due to different query strategies.",
+          "legacy_value": 20,
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": [
+            "https://coverage-led.example.org/obj-breaking-news/item-0",
+            "https://coverage-led.example.org/obj-breaking-news/item-1",
+            "https://coverage-led.example.org/obj-breaking-news/item-2",
+            "https://coverage-led.example.org/obj-breaking-news/item-3",
+            "https://coverage-led.example.org/obj-breaking-news/item-4",
+            "https://coverage-led.example.org/obj-breaking-news/item-5",
+            "https://coverage-led.example.org/obj-breaking-news/item-6",
+            "https://coverage-led.example.org/obj-breaking-news/item-7",
+            "https://coverage-led.example.org/obj-breaking-news/item-8"
+          ],
+          "dimension": "candidate_set",
+          "explanation": "Candidate URL discovery sets differ between legacy and coverage-led.",
+          "legacy_value": [
+            "https://legacy-search.example.com/obj-breaking-news/cand-0",
+            "https://legacy-search.example.com/obj-breaking-news/cand-1",
+            "https://legacy-search.example.com/obj-breaking-news/cand-10",
+            "https://legacy-search.example.com/obj-breaking-news/cand-11",
+            "https://legacy-search.example.com/obj-breaking-news/cand-12",
+            "https://legacy-search.example.com/obj-breaking-news/cand-13",
+            "https://legacy-search.example.com/obj-breaking-news/cand-14",
+            "https://legacy-search.example.com/obj-breaking-news/cand-15",
+            "https://legacy-search.example.com/obj-breaking-news/cand-16",
+            "https://legacy-search.example.com/obj-breaking-news/cand-17",
+            "https://legacy-search.example.com/obj-breaking-news/cand-18",
+            "https://legacy-search.example.com/obj-breaking-news/cand-19",
+            "https://legacy-search.example.com/obj-breaking-news/cand-2",
+            "https://legacy-search.example.com/obj-breaking-news/cand-3",
+            "https://legacy-search.example.com/obj-breaking-news/cand-4",
+            "https://legacy-search.example.com/obj-breaking-news/cand-5",
+            "https://legacy-search.example.com/obj-breaking-news/cand-6",
+            "https://legacy-search.example.com/obj-breaking-news/cand-7",
+            "https://legacy-search.example.com/obj-breaking-news/cand-8",
+            "https://legacy-search.example.com/obj-breaking-news/cand-9"
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": [
+            "https://coverage-led.example.org/obj-breaking-news/item-0",
+            "https://coverage-led.example.org/obj-breaking-news/item-1",
+            "https://coverage-led.example.org/obj-breaking-news/item-2",
+            "https://coverage-led.example.org/obj-breaking-news/item-3",
+            "https://coverage-led.example.org/obj-breaking-news/item-4",
+            "https://coverage-led.example.org/obj-breaking-news/item-5"
+          ],
+          "dimension": "extraction_choices",
+          "explanation": "Extraction choices differ \u2014 the two policies scraped different URL sets.",
+          "legacy_value": [
+            "https://legacy-search.example.com/obj-breaking-news/cand-0",
+            "https://legacy-search.example.com/obj-breaking-news/cand-1",
+            "https://legacy-search.example.com/obj-breaking-news/cand-2",
+            "https://legacy-search.example.com/obj-breaking-news/cand-3",
+            "https://legacy-search.example.com/obj-breaking-news/cand-4",
+            "https://legacy-search.example.com/obj-breaking-news/cand-5",
+            "https://legacy-search.example.com/obj-breaking-news/cand-6",
+            "https://legacy-search.example.com/obj-breaking-news/cand-7",
+            "https://legacy-search.example.com/obj-breaking-news/cand-8",
+            "https://legacy-search.example.com/obj-breaking-news/cand-9"
+          ],
+          "resolved": false,
+          "severity": "P1"
+        },
+        {
+          "coverage_led_value": [
+            [
+              {
+                "facet": "facet_0",
+                "query": "Find the latest developments in quantum computing breakthroughs from the past week facet 0"
+              },
+              {
+                "facet": "facet_1",
+                "query": "Find the latest developments in quantum computing breakthroughs from the past week facet 1"
+              },
+              {
+                "facet": "facet_2",
+                "query": "Find the latest developments in quantum computing breakthroughs from the past week facet 2"
+              }
+            ]
+          ],
+          "dimension": "search_revisions",
+          "explanation": "Search revisions differ \u2014 adaptive query plans diverge across waves.",
+          "legacy_value": [
+            [
+              {
+                "facet": "broad_overview",
+                "query": "find latest developments quantum computing breakthroughs past week overview"
+              },
+              {
+                "facet": "primary_sources",
+                "query": "find latest developments quantum computing breakthroughs past week details"
+              },
+              {
+                "facet": "recent_updates",
+                "query": "find latest developments quantum computing breakthroughs past week developments"
+              },
+              {
+                "facet": "evidence",
+                "query": "find latest developments quantum computing breakthroughs past week analysis"
+              },
+              {
+                "facet": "limitations",
+                "query": "find latest developments quantum computing breakthroughs past week challenges"
+              }
+            ]
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": "N/A",
+          "dimension": "false_completion",
+          "explanation": "LEGACY: Completed with non-sufficient coverage \u2014 false completion detected.",
+          "legacy_value": {
+            "coverage": "unassessed",
+            "state": "completed"
+          },
+          "resolved": false,
+          "severity": "P0"
+        },
+        {
+          "coverage_led_value": 1,
+          "dimension": "strategy_proposals",
+          "explanation": "Coverage-led produced strategy proposals; legacy does not use the strategy revision system.",
+          "legacy_value": 0,
+          "resolved": false,
+          "severity": "P2"
+        }
+      ],
+      "false_completion_coverage_led": false,
+      "false_completion_legacy": true,
+      "legacy": {
+        "candidate_count": 20,
+        "candidate_urls": [
+          "https://legacy-search.example.com/obj-breaking-news/cand-0",
+          "https://legacy-search.example.com/obj-breaking-news/cand-1",
+          "https://legacy-search.example.com/obj-breaking-news/cand-2",
+          "https://legacy-search.example.com/obj-breaking-news/cand-3",
+          "https://legacy-search.example.com/obj-breaking-news/cand-4",
+          "https://legacy-search.example.com/obj-breaking-news/cand-5",
+          "https://legacy-search.example.com/obj-breaking-news/cand-6",
+          "https://legacy-search.example.com/obj-breaking-news/cand-7",
+          "https://legacy-search.example.com/obj-breaking-news/cand-8",
+          "https://legacy-search.example.com/obj-breaking-news/cand-9",
+          "https://legacy-search.example.com/obj-breaking-news/cand-10",
+          "https://legacy-search.example.com/obj-breaking-news/cand-11",
+          "https://legacy-search.example.com/obj-breaking-news/cand-12",
+          "https://legacy-search.example.com/obj-breaking-news/cand-13",
+          "https://legacy-search.example.com/obj-breaking-news/cand-14",
+          "https://legacy-search.example.com/obj-breaking-news/cand-15",
+          "https://legacy-search.example.com/obj-breaking-news/cand-16",
+          "https://legacy-search.example.com/obj-breaking-news/cand-17",
+          "https://legacy-search.example.com/obj-breaking-news/cand-18",
+          "https://legacy-search.example.com/obj-breaking-news/cand-19"
+        ],
+        "coverage_revision": 1,
+        "coverage_status": "unassessed",
+        "error": null,
+        "extracted_urls": [
+          "https://legacy-search.example.com/obj-breaking-news/cand-0",
+          "https://legacy-search.example.com/obj-breaking-news/cand-1",
+          "https://legacy-search.example.com/obj-breaking-news/cand-2",
+          "https://legacy-search.example.com/obj-breaking-news/cand-3",
+          "https://legacy-search.example.com/obj-breaking-news/cand-4",
+          "https://legacy-search.example.com/obj-breaking-news/cand-5",
+          "https://legacy-search.example.com/obj-breaking-news/cand-6",
+          "https://legacy-search.example.com/obj-breaking-news/cand-7",
+          "https://legacy-search.example.com/obj-breaking-news/cand-8",
+          "https://legacy-search.example.com/obj-breaking-news/cand-9"
+        ],
+        "final_state": "completed",
+        "query_plan": [
+          {
+            "facet": "broad_overview",
+            "query": "find latest developments quantum computing breakthroughs past week overview"
+          },
+          {
+            "facet": "primary_sources",
+            "query": "find latest developments quantum computing breakthroughs past week details"
+          },
+          {
+            "facet": "recent_updates",
+            "query": "find latest developments quantum computing breakthroughs past week developments"
+          },
+          {
+            "facet": "evidence",
+            "query": "find latest developments quantum computing breakthroughs past week analysis"
+          },
+          {
+            "facet": "limitations",
+            "query": "find latest developments quantum computing breakthroughs past week challenges"
+          }
+        ],
+        "run_id": "d06926a3-d2ff-53dc-aa09-127203c47ed5",
+        "run_revision": 1,
+        "search_revisions": [
+          [
+            {
+              "facet": "broad_overview",
+              "query": "find latest developments quantum computing breakthroughs past week overview"
+            },
+            {
+              "facet": "primary_sources",
+              "query": "find latest developments quantum computing breakthroughs past week details"
+            },
+            {
+              "facet": "recent_updates",
+              "query": "find latest developments quantum computing breakthroughs past week developments"
+            },
+            {
+              "facet": "evidence",
+              "query": "find latest developments quantum computing breakthroughs past week analysis"
+            },
+            {
+              "facet": "limitations",
+              "query": "find latest developments quantum computing breakthroughs past week challenges"
+            }
+          ]
+        ],
+        "stop_reason": "page_target_reached",
+        "strategy_proposals": 0,
+        "successful_extractions": 10,
+        "wall_clock_seconds": 0.1,
+        "wave_count": 1
+      },
+      "objective_id": "obj-breaking-news",
+      "run_revision": 2
+    },
+    {
+      "coverage_led": {
+        "candidate_count": 15,
+        "candidate_urls": [
+          "https://coverage-led.example.org/obj-false-completion-risk/item-0",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-1",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-2",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-3",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-4",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-5",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-6",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-7",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-8",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-9",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-10",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-11",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-12",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-13",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-14"
+        ],
+        "coverage_items": 5,
+        "coverage_revision": 2,
+        "coverage_status": "sufficient",
+        "error": null,
+        "extracted_urls": [
+          "https://coverage-led.example.org/obj-false-completion-risk/item-0",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-1",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-2",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-3",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-4",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-5",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-6",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-7",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-8",
+          "https://coverage-led.example.org/obj-false-completion-risk/item-9"
+        ],
+        "final_state": "completed",
+        "query_plan": [
+          {
+            "facet": "facet_0",
+            "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 0"
+          },
+          {
+            "facet": "facet_1",
+            "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 1"
+          },
+          {
+            "facet": "facet_2",
+            "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 2"
+          },
+          {
+            "facet": "facet_3",
+            "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 3"
+          },
+          {
+            "facet": "facet_4",
+            "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 4"
+          }
+        ],
+        "run_id": "0ff61946-4d14-59f5-b3f6-4fd27f814e9c",
+        "run_revision": 2,
+        "search_revisions": [
+          [
+            {
+              "facet": "facet_0",
+              "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 0"
+            },
+            {
+              "facet": "facet_1",
+              "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 1"
+            },
+            {
+              "facet": "facet_2",
+              "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 2"
+            },
+            {
+              "facet": "facet_3",
+              "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 3"
+            },
+            {
+              "facet": "facet_4",
+              "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 4"
+            }
+          ]
+        ],
+        "stop_reason": "coverage_sufficient",
+        "strategy_decisions": 1,
+        "strategy_proposals": 1,
+        "successful_extractions": 10,
+        "wall_clock_seconds": 0.1,
+        "wave_count": 1
+      },
+      "coverage_revision": 2,
+      "deterministic_integrity": true,
+      "divergences": [
+        {
+          "coverage_led_value": [
+            "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 0",
+            "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 1",
+            "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 2",
+            "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 3",
+            "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 4"
+          ],
+          "dimension": "query_plan",
+          "explanation": "Query plans differ between legacy and coverage-led. This is expected \u2014 coverage-led may generate adaptive queries based on coverage gaps.",
+          "legacy_value": [
+            "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 overview",
+            "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 details",
+            "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 developments",
+            "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 analysis",
+            "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 challenges"
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": {
+            "reason": "coverage_sufficient",
+            "state": "completed"
+          },
+          "dimension": "stop_decision",
+          "explanation": "Stop decisions differ. P0 if one policy completes while the other does not \u2014 this is a false-completion risk.",
+          "legacy_value": {
+            "reason": "page_target_reached",
+            "state": "completed"
+          },
+          "resolved": false,
+          "severity": "P1"
+        },
+        {
+          "coverage_led_value": 15,
+          "dimension": "candidate_count",
+          "explanation": "Candidate count differs \u2014 expected due to different query strategies.",
+          "legacy_value": 20,
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": [
+            "https://coverage-led.example.org/obj-false-completion-risk/item-0",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-1",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-10",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-11",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-12",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-13",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-14",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-2",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-3",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-4",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-5",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-6",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-7",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-8",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-9"
+          ],
+          "dimension": "candidate_set",
+          "explanation": "Candidate URL discovery sets differ between legacy and coverage-led.",
+          "legacy_value": [
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-0",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-1",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-10",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-11",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-12",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-13",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-14",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-15",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-16",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-17",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-18",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-19",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-2",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-3",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-4",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-5",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-6",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-7",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-8",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-9"
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": [
+            "https://coverage-led.example.org/obj-false-completion-risk/item-0",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-1",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-2",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-3",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-4",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-5",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-6",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-7",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-8",
+            "https://coverage-led.example.org/obj-false-completion-risk/item-9"
+          ],
+          "dimension": "extraction_choices",
+          "explanation": "Extraction choices differ \u2014 the two policies scraped different URL sets.",
+          "legacy_value": [
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-0",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-1",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-2",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-3",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-4",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-5",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-6",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-7",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-8",
+            "https://legacy-search.example.com/obj-false-completion-risk/cand-9"
+          ],
+          "resolved": false,
+          "severity": "P1"
+        },
+        {
+          "coverage_led_value": [
+            [
+              {
+                "facet": "facet_0",
+                "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 0"
+              },
+              {
+                "facet": "facet_1",
+                "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 1"
+              },
+              {
+                "facet": "facet_2",
+                "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 2"
+              },
+              {
+                "facet": "facet_3",
+                "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 3"
+              },
+              {
+                "facet": "facet_4",
+                "query": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60 facet 4"
+              }
+            ]
+          ],
+          "dimension": "search_revisions",
+          "explanation": "Search revisions differ \u2014 adaptive query plans diverge across waves.",
+          "legacy_value": [
+            [
+              {
+                "facet": "broad_overview",
+                "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 overview"
+              },
+              {
+                "facet": "primary_sources",
+                "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 details"
+              },
+              {
+                "facet": "recent_updates",
+                "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 developments"
+              },
+              {
+                "facet": "evidence",
+                "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 analysis"
+              },
+              {
+                "facet": "limitations",
+                "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 challenges"
+              }
+            ]
+          ],
+          "resolved": false,
+          "severity": "P2"
+        },
+        {
+          "coverage_led_value": "N/A",
+          "dimension": "false_completion",
+          "explanation": "LEGACY: Completed with non-sufficient coverage \u2014 false completion detected.",
+          "legacy_value": {
+            "coverage": "unassessed",
+            "state": "completed"
+          },
+          "resolved": false,
+          "severity": "P0"
+        },
+        {
+          "coverage_led_value": 1,
+          "dimension": "strategy_proposals",
+          "explanation": "Coverage-led produced strategy proposals; legacy does not use the strategy revision system.",
+          "legacy_value": 0,
+          "resolved": false,
+          "severity": "P2"
+        }
+      ],
+      "false_completion_coverage_led": false,
+      "false_completion_legacy": true,
+      "legacy": {
+        "candidate_count": 20,
+        "candidate_urls": [
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-0",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-1",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-2",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-3",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-4",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-5",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-6",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-7",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-8",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-9",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-10",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-11",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-12",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-13",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-14",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-15",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-16",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-17",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-18",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-19"
+        ],
+        "coverage_revision": 1,
+        "coverage_status": "unassessed",
+        "error": null,
+        "extracted_urls": [
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-0",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-1",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-2",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-3",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-4",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-5",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-6",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-7",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-8",
+          "https://legacy-search.example.com/obj-false-completion-risk/cand-9"
+        ],
+        "final_state": "completed",
+        "query_plan": [
+          {
+            "facet": "broad_overview",
+            "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 overview"
+          },
+          {
+            "facet": "primary_sources",
+            "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 details"
+          },
+          {
+            "facet": "recent_updates",
+            "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 developments"
+          },
+          {
+            "facet": "evidence",
+            "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 analysis"
+          },
+          {
+            "facet": "limitations",
+            "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 challenges"
+          }
+        ],
+        "run_id": "aedd28f3-f3ca-58a3-9408-50bcfdcdb80f",
+        "run_revision": 1,
+        "search_revisions": [
+          [
+            {
+              "facet": "broad_overview",
+              "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 overview"
+            },
+            {
+              "facet": "primary_sources",
+              "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 details"
+            },
+            {
+              "facet": "recent_updates",
+              "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 developments"
+            },
+            {
+              "facet": "evidence",
+              "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 analysis"
+            },
+            {
+              "facet": "limitations",
+              "query": "find peer-reviewed evidence intermittent fasting improves cognitive function adults over 60 challenges"
+            }
+          ]
+        ],
+        "stop_reason": "page_target_reached",
+        "strategy_proposals": 0,
+        "successful_extractions": 10,
+        "wall_clock_seconds": 0.1,
+        "wave_count": 1
+      },
+      "objective_id": "obj-false-completion-risk",
+      "run_revision": 2
+    }
+  ],
+  "p0_divergences": 5,
+  "p1_divergences": 10,
+  "recommendation": "further_review_required",
+  "schema_version": "shadow-comparison-report-v1",
+  "total_divergences": 40
+}

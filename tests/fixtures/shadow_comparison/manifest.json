@@ -1,0 +1,41 @@
+{
+  "schema_version": "shadow-comparison-manifest-v1",
+  "description": "Benchmark objectives for shadow comparison of legacy and coverage-led control policies",
+  "objectives": [
+    {
+      "objective_id": "obj-simple-focused",
+      "objective": "Find the current version of the termux-packages repository and its latest release notes",
+      "research_archetype": "technical_docs",
+      "expected_complexity": "simple",
+      "expected_behavior": "legacy should use 2 queries; coverage-led should create 1-2 coverage items and stop after 1-2 waves if sufficient"
+    },
+    {
+      "objective_id": "obj-moderate-broad",
+      "objective": "Research the comparison between PyTorch and TensorFlow for deep learning model training in 2026",
+      "research_archetype": "general",
+      "expected_complexity": "moderate",
+      "expected_behavior": "legacy uses 3 queries; coverage-led should create coverage items for comparison, evidence, and limitations"
+    },
+    {
+      "objective_id": "obj-complex-risk",
+      "objective": "Investigate the legal and regulatory implications of AI-generated content in the European Union under the AI Act",
+      "research_archetype": "legislative_legal",
+      "expected_complexity": "complex",
+      "expected_behavior": "legacy uses 5 queries with high risk; coverage-led should create coverage items for legal authority, corroboration, and contradiction"
+    },
+    {
+      "objective_id": "obj-breaking-news",
+      "objective": "Find the latest developments in quantum computing breakthroughs from the past week",
+      "research_archetype": "breaking_news",
+      "expected_complexity": "moderate",
+      "expected_behavior": "legacy uses freshness-sensitive queries; coverage-led should enforce freshness requirements"
+    },
+    {
+      "objective_id": "obj-false-completion-risk",
+      "objective": "Find peer-reviewed evidence that intermittent fasting improves cognitive function in adults over 60",
+      "research_archetype": "general",
+      "expected_complexity": "complex",
+      "expected_behavior": "legacy may complete after enough pages; coverage-led should require sufficient coverage across all items"
+    }
+  ]
+}
