@@ -397,6 +397,218 @@ class CoverageService:
         return CoverageEvent.from_mapping(result)
 
     # ------------------------------------------------------------------
+    # Workflow observation event helpers (FR-012, FR-013)
+    # These record deterministic observations, NOT semantic support.
+    # ------------------------------------------------------------------
+
+    def apply_candidate_identified(
+        self,
+        run_id: UUID,
+        item_id: UUID,
+        *,
+        candidate_id: UUID,
+        idempotency_key: str | None = None,
+        source_event_id: UUID | None = None,
+        source_invocation_id: UUID | None = None,
+    ) -> CoverageEvent:
+        """Record that a candidate was identified for a coverage item.
+
+        This is a deterministic observation — it does NOT imply semantic
+        support for any claim.  The candidate_id is stored in the event
+        payload and will be picked up by projection rebuilding.
+        """
+        if not run_id:
+            raise CoverageError("run_id is required")
+        if not item_id:
+            raise CoverageError("item_id is required for candidate_identified")
+        if not candidate_id:
+            raise CoverageError("candidate_id is required")
+        return self.apply_event(
+            run_id,
+            "candidate_identified",
+            item_id=item_id,
+            item_type="claim",
+            subject_id=str(candidate_id),
+            payload={
+                "candidate_id": str(candidate_id),
+            },
+            idempotency_key=idempotency_key or f"candidate:{run_id}:{candidate_id}",
+            source_event_id=source_event_id,
+            source_invocation_id=source_invocation_id,
+        )
+
+    def apply_extraction_attempted(
+        self,
+        run_id: UUID,
+        item_id: UUID,
+        *,
+        source_url: str,
+        extraction_status: str = "attempted",
+        idempotency_key: str | None = None,
+        source_event_id: UUID | None = None,
+        source_invocation_id: UUID | None = None,
+    ) -> CoverageEvent:
+        """Record that extraction was attempted for a source.
+
+        This is a process observation — it does NOT imply successful
+        acquisition or semantic support.
+        """
+        if not run_id:
+            raise CoverageError("run_id is required")
+        if not item_id:
+            raise CoverageError("item_id is required for extraction_attempted")
+        if not source_url:
+            raise CoverageError("source_url is required for extraction_attempted")
+        return self.apply_event(
+            run_id,
+            "extraction_attempted",
+            item_id=item_id,
+            item_type="source_requirement",
+            subject_id=source_url,
+            payload={
+                "source_url": source_url,
+                "extraction_status": extraction_status,
+            },
+            idempotency_key=idempotency_key or f"extract:{run_id}:{source_url}",
+            source_event_id=source_event_id,
+            source_invocation_id=source_invocation_id,
+        )
+
+    def apply_asset_acquired(
+        self,
+        run_id: UUID,
+        item_id: UUID,
+        *,
+        source_url: str,
+        idempotency_key: str | None = None,
+        source_event_id: UUID | None = None,
+        source_invocation_id: UUID | None = None,
+    ) -> CoverageEvent:
+        """Record that content was successfully acquired from a source.
+
+        This updates the item status to ``acquired`` and tracks the source
+        URL for independent-source counting.  Acquisition is a deterministic
+        fact — it does NOT imply that a claim is semantically supported.
+        """
+        if not run_id:
+            raise CoverageError("run_id is required")
+        if not item_id:
+            raise CoverageError("item_id is required for asset_acquired")
+        if not source_url:
+            raise CoverageError("source_url is required for asset_acquired")
+        return self.apply_event(
+            run_id,
+            "asset_acquired",
+            item_id=item_id,
+            item_type="source_requirement",
+            subject_id=source_url,
+            payload={
+                "source_url": source_url,
+            },
+            idempotency_key=idempotency_key or f"acquired:{run_id}:{source_url}",
+            source_event_id=source_event_id,
+            source_invocation_id=source_invocation_id,
+        )
+
+    def apply_evidence_retrieved(
+        self,
+        run_id: UUID,
+        item_id: UUID,
+        *,
+        passage_ids: list[str],
+        idempotency_key: str | None = None,
+        source_event_id: UUID | None = None,
+        source_invocation_id: UUID | None = None,
+    ) -> CoverageEvent:
+        """Record that evidence passages were retrieved.
+
+        This is an observation — it does NOT change the item status to
+        supported.  Semantic support is a separate judgment.
+        """
+        if not run_id:
+            raise CoverageError("run_id is required")
+        if not item_id:
+            raise CoverageError("item_id is required for evidence_retrieved")
+        if not passage_ids:
+            raise CoverageError("passage_ids is required for evidence_retrieved")
+        return self.apply_event(
+            run_id,
+            "evidence_retrieved",
+            item_id=item_id,
+            item_type="claim",
+            subject_id=str(item_id),
+            payload={
+                "passage_ids": [str(pid) for pid in passage_ids],
+            },
+            idempotency_key=idempotency_key or f"evidence:{run_id}:{item_id}",
+            source_event_id=source_event_id,
+            source_invocation_id=source_invocation_id,
+        )
+
+    def apply_source_class_observed(
+        self,
+        run_id: UUID,
+        item_id: UUID,
+        *,
+        authority_class: str,
+        idempotency_key: str | None = None,
+        source_event_id: UUID | None = None,
+        source_invocation_id: UUID | None = None,
+    ) -> CoverageEvent:
+        """Record that an authority class was observed for a source."""
+        if not run_id:
+            raise CoverageError("run_id is required")
+        if not item_id:
+            raise CoverageError("item_id is required for source_class_observed")
+        if not authority_class:
+            raise CoverageError("authority_class is required")
+        return self.apply_event(
+            run_id,
+            "source_class_observed",
+            item_id=item_id,
+            item_type="source_requirement",
+            subject_id=authority_class,
+            payload={
+                "authority_class": authority_class,
+            },
+            idempotency_key=idempotency_key
+            or f"source_class:{run_id}:{authority_class}",
+            source_event_id=source_event_id,
+            source_invocation_id=source_invocation_id,
+        )
+
+    def apply_freshness_observed(
+        self,
+        run_id: UUID,
+        item_id: UUID,
+        *,
+        freshness_status: str,
+        idempotency_key: str | None = None,
+        source_event_id: UUID | None = None,
+        source_invocation_id: UUID | None = None,
+    ) -> CoverageEvent:
+        """Record that freshness information was observed."""
+        if not run_id:
+            raise CoverageError("run_id is required")
+        if not item_id:
+            raise CoverageError("item_id is required for freshness_observed")
+        if not freshness_status:
+            raise CoverageError("freshness_status is required")
+        return self.apply_event(
+            run_id,
+            "freshness_observed",
+            item_id=item_id,
+            item_type="freshness_requirement",
+            subject_id=str(item_id),
+            payload={
+                "freshness_status": freshness_status,
+            },
+            idempotency_key=idempotency_key or f"freshness:{run_id}:{item_id}",
+            source_event_id=source_event_id,
+            source_invocation_id=source_invocation_id,
+        )
+
+    # ------------------------------------------------------------------
     # Projection rebuilding
     # ------------------------------------------------------------------
 
