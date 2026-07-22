@@ -42,6 +42,11 @@ from .stages import (
     StageOutcome,
     StageResult,
     _coverage_decision,
+    decision_to_state,
+    STRATEGY_DECISION_SYNTHESIZE,
+    STRATEGY_DECISION_SEARCH,
+    STRATEGY_DECISION_PARTIAL,
+    STRATEGY_DECISION_FAIL,
 )
 from .strategy_service import StrategyRevisionService
 
@@ -109,7 +114,7 @@ class OrchestratorResult:
             "outcome": self.outcome,
             "coverage_revision": self.coverage_revision,
             "wave_count": self.wave_count,
-            "successful_urls": self.wave_count,
+            "successful_urls": self.successful_urls,
             "strategy_proposals": self.strategy_proposals,
             "strategy_decisions": self.strategy_decisions,
             "error": self.error,
@@ -685,40 +690,54 @@ class CoverageReviewStage:
         budget_exhausted = context.get("_budget_exhausted", False)
         no_progress = context.get("_no_progress", False)
 
-        action, reason = _coverage_decision(
+        decision_type, reason = _coverage_decision(
             overall_status,
             budget_exhausted=budget_exhausted,
             no_progress=no_progress,
         )
 
+        # Map decision type to run state name for transitions
+        state_name = decision_to_state(decision_type)
+
         # Propose the next action through the strategy service
         proposal_id = self._propose_next_action(
-            run_id, run_revision, new_coverage_revision, action, reason, context
+            run_id, run_revision, new_coverage_revision, decision_type, reason, context
         )
+
+        # If authorization was rejected for a non-terminal decision, fail.
+        # Terminal decisions (partial/failed) do not require a proposal.
+        if proposal_id is None and state_name not in ("partial", "failed"):
+            return StageResult.failed(
+                "coverage_review",
+                "strategy authorization rejected — cannot proceed",
+            )
 
         # Transition to the appropriate state
         try:
             self.run_service.transition(
                 run_id,
-                action,
+                state_name,
                 expected_revision=run_revision + 1,
                 idempotency_key=f"stage:coverage_review:{run_id}:{uuid4()}",
                 actor_type="orchestrator",
                 actor_identifier="CoverageReviewStage",
                 triggering_event="run.coverage_review_decision",
-                reason=f"coverage {overall_status} -> {action} ({reason})",
-                completion={"coverage_status": overall_status, "next_action": action},
+                reason=f"coverage {overall_status} -> {state_name} ({reason})",
+                completion={
+                    "coverage_status": overall_status,
+                    "next_action": state_name,
+                },
             )
         except (RunStateError, StaleRunRevisionError) as exc:
             return StageResult.failed("coverage_review", str(exc))
 
         result = StageResult.ok(
             "coverage_review",
-            f"coverage {overall_status}, next action: {action} ({reason})",
+            f"coverage {overall_status}, next action: {state_name} ({reason})",
             details={
                 ContextKeys.COVERAGE_STATUS: overall_status,
                 ContextKeys.OVERALL_STATUS: overall_status,
-                ContextKeys.NEXT_ACTION: action,
+                ContextKeys.NEXT_ACTION: state_name,
                 ContextKeys.STRATEGY_PROPOSAL_ID: str(proposal_id)
                 if proposal_id
                 else None,
@@ -727,14 +746,14 @@ class CoverageReviewStage:
         )
 
         # If terminal, return a terminal result
-        if action in ("synthesizing", "partial", "failed"):
+        if state_name in ("synthesizing", "partial", "failed"):
             return StageResult.terminal(
                 "coverage_review",
-                f"coverage {overall_status}, next action: {action} ({reason})",
+                f"coverage {overall_status}, next action: {state_name} ({reason})",
                 details={
                     ContextKeys.COVERAGE_STATUS: overall_status,
                     ContextKeys.OVERALL_STATUS: overall_status,
-                    ContextKeys.NEXT_ACTION: action,
+                    ContextKeys.NEXT_ACTION: state_name,
                     ContextKeys.STRATEGY_PROPOSAL_ID: str(proposal_id)
                     if proposal_id
                     else None,
@@ -748,11 +767,15 @@ class CoverageReviewStage:
         run_id: UUID,
         run_revision: int,
         coverage_revision: int,
-        action: str,
+        decision_type: str,
         reason: str,
         context: dict[str, Any],
     ) -> UUID | None:
-        """Create a strategy proposal for the next action."""
+        """Create and authorize a strategy proposal for the next action.
+
+        Returns the proposal ID if authorized, or None if authorization
+        is rejected or authorization fails.
+        """
         target_items = []
         ledger = context.get(ContextKeys.COVERAGE_LEDGER)
         if ledger:
@@ -762,22 +785,48 @@ class CoverageReviewStage:
                 if item.status.value not in ("satisfied", "waived")
             ]
 
-        if not target_items and action == "acquiring":
-            return None  # No targeted items to propose
+        if not target_items and decision_type == STRATEGY_DECISION_SEARCH:
+            return None  # No targeted items to propose for search actions
 
         try:
             proposal = self.strategy_service.create_proposal(
                 run_id=run_id,
                 run_revision=run_revision,
                 coverage_revision=coverage_revision,
-                decision_type=action,
+                decision_type=decision_type,
                 target_coverage_item_ids=[UUID(tid) for tid in target_items[:10]],
                 proposed_queries=[],
                 expected_contribution=f"coverage_{reason}",
-                rationale=f"Next action: {action} because {reason}",
+                rationale=f"Next action: {decision_type} because {reason}",
                 confidence=0.5,
-                idempotency_key=f"proposal:{run_id}:{action}:{coverage_revision}",
+                idempotency_key=f"proposal:{run_id}:{decision_type}:{coverage_revision}",
             )
+
+            # Authorize the proposal before returning — no adaptive action
+            # executes without a recorded authorization decision.
+            decision = self.strategy_service.authorize(
+                run_id=run_id,
+                proposal_id=proposal.proposal_id,
+                current_run_revision=run_revision,
+                current_coverage_revision=coverage_revision,
+                run_state="coverage_review",
+                is_terminal=decision_type
+                in (
+                    STRATEGY_DECISION_PARTIAL,
+                    STRATEGY_DECISION_FAIL,
+                ),
+                run_exists=True,
+                coverage_items_exist=True,
+            )
+
+            if decision.outcome != "accepted":
+                logger.warning(
+                    "strategy proposal %s rejected: %s",
+                    proposal.proposal_id,
+                    decision.rejection_reasons,
+                )
+                return None
+
             return proposal.proposal_id
         except Exception as exc:
             logger.warning("strategy proposal creation failed: %s", exc)
@@ -1142,7 +1191,7 @@ class ResearchOrchestrator:
             if result.error:
                 return self._failed_result(run_id, result.error)
 
-            current_state = "planning"
+            current_state = "corpus_review"
             current_revision += 1
 
             # Stage 2: Corpus review (create coverage items)
@@ -1176,12 +1225,9 @@ class ResearchOrchestrator:
                 if result.error:
                     return self._failed_result(run_id, result.error)
 
-                wave_count = ctx.get(ContextKeys.WAVE_COUNT, 0)
-                if result.details:
-                    wave_count = max(
-                        wave_count, result.details.get(ContextKeys.WAVE_COUNT, 0)
-                    )
-                    ctx[ContextKeys.WAVE_COUNT] = wave_count
+                # Track wave count — increment after each successful acquisition
+                wave_count += 1
+                ctx[ContextKeys.WAVE_COUNT] = wave_count
 
                 if result.outcome == StageOutcome.TERMINAL:
                     break
@@ -1250,6 +1296,15 @@ class ResearchOrchestrator:
             if current_state == "synthesizing" or (
                 ctx.get(ContextKeys.OVERALL_STATUS) == "sufficient"
             ):
+                # Set terminal outcome — sufficient coverage completes,
+                # insufficient coverage yields partial
+                if ctx.get(ContextKeys.OVERALL_STATUS) == "sufficient":
+                    ctx["_terminal_outcome"] = "completed"
+                    ctx["_terminal_reason"] = "sufficient coverage"
+                elif "_terminal_outcome" not in ctx:
+                    ctx["_terminal_outcome"] = "partial"
+                    ctx["_terminal_reason"] = "partial coverage"
+
                 result = self._execute_stage(
                     "synthesis",
                     run_id,
@@ -1422,14 +1477,7 @@ class ResearchOrchestrator:
     def _check_budget(self, context: dict[str, Any], run_id: UUID) -> bool:
         """Check if the hard budget has been exhausted."""
         wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
-        budget = context.get("_budget")
-        if budget is None:
-            from budget_policy import DEFAULT_POLICY
-
-            budget = DEFAULT_POLICY
-
-        max_cycles = budget.get("max_adaptive_cycles", 10)
-        context["_budget"] = budget
+        max_cycles = self.config.max_adaptive_cycles
         return wave_count >= max_cycles
 
     def _check_no_progress(self, context: dict[str, Any], run_id: UUID) -> bool:
@@ -1471,4 +1519,9 @@ __all__ = [
     "TerminalStage",
     "ContextKeys",
     "_coverage_decision",
+    "decision_to_state",
+    "STRATEGY_DECISION_SYNTHESIZE",
+    "STRATEGY_DECISION_SEARCH",
+    "STRATEGY_DECISION_PARTIAL",
+    "STRATEGY_DECISION_FAIL",
 ]

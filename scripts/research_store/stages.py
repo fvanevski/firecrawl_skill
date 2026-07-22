@@ -206,6 +206,22 @@ class ContextKeys:
 # ---------------------------------------------------------------------------
 
 
+# Strategy decision types — distinct from run state names.
+# These are the values persisted on StrategyRevisionProposal.decision_type.
+STRATEGY_DECISION_SYNTHESIZE = "synthesize"
+STRATEGY_DECISION_SEARCH = "search"
+STRATEGY_DECISION_PARTIAL = "partial"
+STRATEGY_DECISION_FAIL = "fail"
+
+# Mapping from strategy decision type to run state name.
+_DECISION_TO_STATE: dict[str, str] = {
+    STRATEGY_DECISION_SYNTHESIZE: "synthesizing",
+    STRATEGY_DECISION_SEARCH: "acquiring",
+    STRATEGY_DECISION_PARTIAL: "partial",
+    STRATEGY_DECISION_FAIL: "failed",
+}
+
+
 def _coverage_decision(
     overall_status: str,
     budget_exhausted: bool = False,
@@ -214,26 +230,35 @@ def _coverage_decision(
     """Determine the next action based on coverage status.
 
     Returns:
-        (action, reason) — one of:
-        ("synthesizing", ...) | ("acquiring", ...) | ("partial", ...) |
-        ("failed", ...)
+        (decision_type, reason) — one of:
+        (``STRATEGY_DECISION_SYNTHESIZE``, ...) |
+        (``STRATEGY_DECISION_SEARCH``, ...) |
+        (``STRATEGY_DECISION_PARTIAL``, ...) |
+        (``STRATEGY_DECISION_FAIL``, ...)
     """
     if no_progress:
-        return ("failed", "no_progress")
+        return (STRATEGY_DECISION_FAIL, "no_progress")
 
     if budget_exhausted:
         if overall_status == "sufficient":
-            return ("synthesizing", "budget_exhausted_sufficient")
-        return ("partial", "budget_exhausted_insufficient")
+            return (STRATEGY_DECISION_SYNTHESIZE, "budget_exhausted_sufficient")
+        return (STRATEGY_DECISION_PARTIAL, "budget_exhausted_insufficient")
 
     if overall_status == "sufficient":
-        return ("synthesizing", "coverage_sufficient")
+        return (STRATEGY_DECISION_SYNTHESIZE, "coverage_sufficient")
 
     if overall_status == "blocked":
-        return ("failed", "coverage_blocked")
+        return (STRATEGY_DECISION_FAIL, "coverage_blocked")
 
     # partial or insufficient — continue acquiring
     if overall_status in ("partial", "insufficient", "unassessed"):
-        return ("acquiring", f"coverage_{overall_status}")
+        return (STRATEGY_DECISION_SEARCH, f"coverage_{overall_status}")
 
-    return ("partial", f"unknown_coverage_{overall_status}")
+    return (STRATEGY_DECISION_PARTIAL, f"unknown_coverage_{overall_status}")
+
+
+def decision_to_state(decision_type: str) -> str:
+    """Map a strategy decision type to the corresponding run state name."""
+    return _DECISION_TO_STATE.get(
+        decision_type, _DECISION_TO_STATE[STRATEGY_DECISION_PARTIAL]
+    )

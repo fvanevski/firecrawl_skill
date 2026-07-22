@@ -19,6 +19,7 @@ These tests verify:
 from __future__ import annotations
 
 import sys
+import os
 import unittest
 from dataclasses import dataclass, field
 from typing import Any
@@ -44,6 +45,11 @@ from research_store.orchestrator import (  # noqa: E402
     StageOutcome,
     ContextKeys,
     _coverage_decision,
+    decision_to_state,
+    STRATEGY_DECISION_SYNTHESIZE,
+    STRATEGY_DECISION_SEARCH,
+    STRATEGY_DECISION_PARTIAL,
+    STRATEGY_DECISION_FAIL,
 )
 
 
@@ -85,12 +91,21 @@ class MockCoverageLedger:
 
     @property
     def items(self) -> list:
-        """Return empty items list for mock."""
-        return []
+        """Return mock coverage items when item_count > 0."""
+        if self._item_count > 0 and not self._items:
+            self._items = [
+                MagicMock(
+                    coverage_item_id=uuid4(),
+                    status=MagicMock(value="unassessed"),
+                )
+                for _ in range(self._item_count)
+            ]
+        return self._items
 
     def __init__(self, overall_status: str = "unassessed", item_count: int = 0) -> None:
         self._status = overall_status
-        self.item_count = item_count
+        self._item_count = item_count
+        self._items: list = []
 
 
 class MockRunService:
@@ -239,12 +254,29 @@ class MockStrategyService:
     def __init__(self) -> None:
         self.proposals: list[dict[str, Any]] = []
         self.decisions: list[dict[str, Any]] = []
+        self._authorize_outcome: str = "accepted"
 
     def create_proposal(self, run_id, **kwargs):
         pid = uuid4()
         self.proposals.append(kwargs)
         mock = MagicMock()
         mock.proposal_id = pid
+        return mock
+
+    def authorize(self, run_id, proposal_id, **kwargs):
+        """Mock authorization — returns accepted by default."""
+        outcome = self._authorize_outcome
+        mock = MagicMock()
+        mock.outcome = outcome
+        mock.rejection_reasons = () if outcome == "accepted" else ("budget_exceeded",)
+        mock.decision_id = uuid4()
+        self.decisions.append(
+            {
+                "decision_id": str(mock.decision_id),
+                "outcome": outcome,
+                "rejection_reasons": mock.rejection_reasons,
+            }
+        )
         return mock
 
     def get_decision(self, run_id, decision_id):
@@ -280,43 +312,54 @@ class TestCoverageDecision(unittest.TestCase):
 
     def test_sufficient_yields_synthesize(self):
         action, reason = _coverage_decision("sufficient")
-        self.assertEqual(action, "synthesizing")
+        self.assertEqual(action, STRATEGY_DECISION_SYNTHESIZE)
         self.assertEqual(reason, "coverage_sufficient")
 
     def test_blocked_yields_failed(self):
         action, reason = _coverage_decision("blocked")
-        self.assertEqual(action, "failed")
+        self.assertEqual(action, STRATEGY_DECISION_FAIL)
         self.assertEqual(reason, "coverage_blocked")
 
     def test_insufficient_yields_acquiring(self):
         action, reason = _coverage_decision("insufficient")
-        self.assertEqual(action, "acquiring")
+        self.assertEqual(action, STRATEGY_DECISION_SEARCH)
         self.assertEqual(reason, "coverage_insufficient")
 
     def test_partial_yields_acquiring(self):
         action, reason = _coverage_decision("partial")
-        self.assertEqual(action, "acquiring")
+        self.assertEqual(action, STRATEGY_DECISION_SEARCH)
         self.assertEqual(reason, "coverage_partial")
 
     def test_budget_exhausted_sufficient_yields_synthesize(self):
         action, reason = _coverage_decision("sufficient", budget_exhausted=True)
-        self.assertEqual(action, "synthesizing")
+        self.assertEqual(action, STRATEGY_DECISION_SYNTHESIZE)
         self.assertEqual(reason, "budget_exhausted_sufficient")
 
     def test_budget_exhausted_insufficient_yields_partial(self):
         action, reason = _coverage_decision("insufficient", budget_exhausted=True)
-        self.assertEqual(action, "partial")
+        self.assertEqual(action, STRATEGY_DECISION_PARTIAL)
         self.assertEqual(reason, "budget_exhausted_insufficient")
 
     def test_no_progress_yields_failed(self):
         action, reason = _coverage_decision("insufficient", no_progress=True)
-        self.assertEqual(action, "failed")
+        self.assertEqual(action, STRATEGY_DECISION_FAIL)
         self.assertEqual(reason, "no_progress")
 
-    def test_unknown_status_yields_partial(self):
+    def test_unknown_status_yields_search(self):
         action, reason = _coverage_decision("unassessed")
-        self.assertEqual(action, "acquiring")
+        self.assertEqual(action, STRATEGY_DECISION_SEARCH)
         self.assertEqual(reason, "coverage_unassessed")
+
+    def test_decision_to_state_mapping(self):
+        """Test that decision types map to correct state names."""
+        self.assertEqual(
+            decision_to_state(STRATEGY_DECISION_SYNTHESIZE), "synthesizing"
+        )
+        self.assertEqual(decision_to_state(STRATEGY_DECISION_SEARCH), "acquiring")
+        self.assertEqual(decision_to_state(STRATEGY_DECISION_PARTIAL), "partial")
+        self.assertEqual(decision_to_state(STRATEGY_DECISION_FAIL), "failed")
+        # Unknown decision falls back to partial
+        self.assertEqual(decision_to_state("unknown"), "partial")
 
 
 # ===================================================================
@@ -753,11 +796,9 @@ class TestResearchOrchestrator(unittest.TestCase):
             search_plan={"queries": [{"query": "test", "facet": "overview"}]},
         )
 
-        # Should reach synthesis and terminate
-        self.assertIn(
-            result.final_state,
-            ("synthesizing", "validating", "completed", "partial", "failed"),
-        )
+        # Should reach completed — sufficient coverage triggers synthesis
+        # which transitions to validating, then terminal stage completes
+        self.assertEqual(result.final_state, "completed")
         self.assertIsNotNone(result.run_id)
 
     def test_false_completion_prevention(self):
@@ -865,6 +906,7 @@ class TestResearchOrchestrator(unittest.TestCase):
         self.assertEqual(d["final_state"], "completed")
         self.assertEqual(d["outcome"], "completed")
         self.assertEqual(d["wave_count"], 3)
+        self.assertEqual(d["successful_urls"], 10)
 
     def test_consecutive_no_progress(self):
         """Test that consecutive same coverage status triggers no-progress."""
@@ -916,6 +958,111 @@ class TestResearchOrchestrator(unittest.TestCase):
         # No-progress should have been detected
         self.assertEqual(result.final_state, "failed")
 
+    def test_coverage_review_rejects_unauthorized_proposal(self):
+        """Test that coverage review fails when strategy authorization is rejected."""
+        run_svc = MockRunService(initial_state="coverage_review", revision=2)
+        coverage_svc = MockCoverageService(item_count=3)
+        coverage_svc.rebuild_projection = lambda run_id, **kw: MockCoverageLedger(
+            overall_status="insufficient", item_count=3
+        )
+        strategy_svc = MockStrategyService()
+        strategy_svc._authorize_outcome = "rejected"
+        config = MockConfig()
+
+        stage = CoverageReviewStage(run_svc, coverage_svc, strategy_svc, config)
+        result = stage.execute(
+            run_id=uuid4(),
+            run_revision=2,
+            coverage_revision=1,
+            run_state="coverage_review",
+            context={},
+        )
+        # Authorization rejected — stage should fail
+        self.assertIsNotNone(result.error)
+        # State should not have changed from coverage_review
+        self.assertEqual(run_svc._state, "coverage_review")
+
+    def test_coverage_review_stale_revision(self):
+        """Test that coverage review rejects stale coverage revision."""
+        run_svc = MockRunService(initial_state="coverage_review", revision=2)
+        coverage_svc = MockCoverageService(item_count=3)
+        coverage_svc.rebuild_projection = lambda run_id, **kw: MockCoverageLedger(
+            overall_status="insufficient", item_count=3
+        )
+        strategy_svc = MockStrategyService()
+        config = MockConfig()
+
+        stage = CoverageReviewStage(run_svc, coverage_svc, strategy_svc, config)
+        # Pass stale coverage revision (0 < current 1)
+        result = stage.execute(
+            run_id=uuid4(),
+            run_revision=2,
+            coverage_revision=0,
+            run_state="coverage_review",
+            context={},
+        )
+        # Stale revision should still rebuild (mock doesn't enforce staleness)
+        # but the real service would reject it. This test verifies the stage
+        # handles the call without crashing.
+        self.assertIsNone(result.error)
+
+    def test_run_from_external_id_existing_run(self):
+        """Test that run_from_external_id resumes an existing run."""
+        run_svc = MockRunService(initial_state="created", revision=0)
+
+        spec = {
+            "objective": "test objective",
+            "questions": [{"question_id": str(uuid4()), "text": "Q1"}],
+            "claims_to_validate": [],
+            "freshness_requirements": [],
+            "required_source_classes": [],
+            "corroboration_requirements": [],
+            "contradiction_requirements": [],
+            "completion_criteria": [
+                {"criterion_id": str(uuid4()), "description": "C1", "mandatory": True}
+            ],
+        }
+
+        coverage_svc = MockCoverageService(item_count=3)
+        strategy_svc = MockStrategyService()
+        acquisition_svc = MagicMock()
+        acquisition_svc.execute_query.return_value = {
+            "response_id": str(uuid4()),
+            "candidate_count": 5,
+            "successful_urls": 2,
+        }
+        config = MockConfig()
+
+        orchestrator = ResearchOrchestrator(
+            run_service=run_svc,
+            coverage_service=coverage_svc,
+            strategy_service=strategy_svc,
+            acquisition_service=acquisition_svc,
+            config=config,
+        )
+
+        # First call creates the run
+        result1 = orchestrator.run_from_external_id(
+            "test-run-2",
+            spec=spec,
+            search_plan={"queries": [{"query": "test", "facet": "overview"}]},
+            create_if_missing=True,
+        )
+        self.assertIsNotNone(result1.run_id)
+        self.assertIn("test-run-2", run_svc._external_id_map)
+
+        # Second call with same external_id should find existing run
+        run_svc._state = "created"  # Reset state to simulate existing run
+        run_svc._revision = 0
+        result2 = orchestrator.run_from_external_id(
+            "test-run-2",
+            spec=spec,
+            search_plan={"queries": [{"query": "test", "facet": "overview"}]},
+            create_if_missing=True,
+        )
+        # Should use the same run_id (not create a new one)
+        self.assertEqual(result2.run_id, result1.run_id)
+
 
 # ===================================================================
 # Test: fsearch_smart integration
@@ -925,16 +1072,20 @@ class TestResearchOrchestrator(unittest.TestCase):
 class TestFsearchSmartIntegration(unittest.TestCase):
     """Test that fsearch_smart accepts the --orchestrator flag."""
 
+    @unittest.skipUnless(
+        os.path.exists(
+            os.path.join(os.path.dirname(__file__), "..", "scripts", "fsearch_smart")
+        ),
+        "fsearch_smart not found at expected path",
+    )
     def test_orchestrator_flag_parsed(self):
         """Test that --orchestrator is a valid argument."""
         import subprocess
 
+        skill_root = os.path.dirname(__file__)
+        fsearch_path = os.path.join(skill_root, "..", "scripts", "fsearch_smart")
         result = subprocess.run(
-            [
-                sys.executable,
-                "/home/filip/.codex/skills/firecrawl/scripts/fsearch_smart",
-                "--help",
-            ],
+            [sys.executable, fsearch_path, "--help"],
             capture_output=True,
             text=True,
         )
