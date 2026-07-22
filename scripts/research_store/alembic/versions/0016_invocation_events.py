@@ -9,7 +9,7 @@ migration 0006 (workflow state) by adding:
 * ``sequence_number`` — a ``bigint`` column that provides stable,
   queryable ordering of events within a run, independent of timestamps.
 * ``invocation_id`` — backfilled for invocation-level events;
-  remains nullable for run-level events (``run.created``, etc.)
+  remains nullable for run-level events (``run_started``, etc.)
 * A unique index on ``(run_id, sequence_number)`` for deterministic
   replay and ordering.
 
@@ -31,8 +31,8 @@ Key invariants enforced by DDL:
 - ``sequence_number`` — ``bigint NOT NULL``, defaults to next value
   from a per-run sequence.
 - ``invocation_id`` — backfilled for invocation-level events;
-  remains nullable for run-level events (``run.created``,
-  ``run.transitioned``, ``run.execution_mode_changed``) that are
+  remains nullable for run-level events (``run_started``,
+  ``run_finished``, ``run_reopened``) that are
   not associated with a specific invocation.
 
 ### research_event_type enum values
@@ -219,7 +219,7 @@ def upgrade():
     # ----------------------------------------------------------------
     # 8. Strengthen invocation_id FK
     #    Backfill NULLs with the first invocation's id for the run.
-    #    Keep nullable for run-level events (run.created, etc.)
+    #    Keep nullable for run-level events (run_started, run_finished, etc.)
     # ----------------------------------------------------------------
     op.execute(
         """
@@ -231,7 +231,7 @@ def upgrade():
           LIMIT 1
         )
         WHERE invocation_id IS NULL
-          AND event_type NOT IN ('run.created', 'run.transitioned', 'run.execution_mode_changed');
+          AND event_type NOT IN ('run_started', 'run_finished', 'run_reopened');
         """
     )
 

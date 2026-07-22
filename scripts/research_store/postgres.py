@@ -1270,7 +1270,8 @@ class PostgresUnitOfWork:
             _state, revision = self._lock_workflow_run(cur, run_id)
             payload_json = _canonical_json(payload or {})
             cur.execute(
-                """SELECT id,invocation_id,event_type,actor_type,actor_identifier,payload
+                """SELECT id,invocation_id,event_type,actor_type,actor_identifier,payload,
+                sequence_number
                 FROM research_events
                 WHERE run_id=%s AND idempotency_key=%s""",
                 (run_id, idempotency_key),
@@ -1284,15 +1285,22 @@ class PostgresUnitOfWork:
                     actor_identifier,
                     json.loads(payload_json),
                 )
-                if existing[1:] != expected:
+                if existing[1:5] != expected:
                     raise ValueError("idempotency key was used for another event")
                 return existing[0]
+            # Compute the next sequence number (safe under advisory lock)
+            cur.execute(
+                "SELECT COALESCE(MAX(sequence_number), 0) FROM research_events "
+                "WHERE run_id = %s",
+                (run_id,),
+            )
+            next_seq = cur.fetchone()[0] + 1
             cur.execute(
                 """INSERT INTO research_events(
                 run_id,invocation_id,event_type,actor_type,actor_identifier,payload,
-                run_revision,idempotency_key)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
-                RETURNING id,event_type,run_revision""",
+                run_revision,idempotency_key,sequence_number)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id,event_type,run_revision,sequence_number""",
                 (
                     run_id,
                     invocation_id,
@@ -1302,9 +1310,10 @@ class PostgresUnitOfWork:
                     payload_json,
                     revision,
                     idempotency_key,
+                    next_seq,
                 ),
             )
-            event_id, stored_type, stored_revision = cur.fetchone()
+            event_id, stored_type, stored_revision, stored_seq = cur.fetchone()
             if (stored_type, stored_revision) != (event_type, revision):
                 raise ValueError("idempotency key was used for another event")
             return event_id

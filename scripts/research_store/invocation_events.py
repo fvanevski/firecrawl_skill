@@ -308,15 +308,30 @@ class EventService:
         sanitized_payload = _sanitize(payload or {})
 
         with self.uow_factory() as uow:
-            event_id = uow.runs.append_event(
-                run_id,
-                event_type,
-                actor_type,
-                idempotency_key,
-                invocation_id=invocation_id,
-                actor_identifier=actor_identifier,
-                payload=sanitized_payload,
+            # Validate that the run exists before attempting to append
+            cur = uow.connection.cursor()
+            cur.execute(
+                "SELECT id FROM research_runs WHERE id = %s", (run_id,),
             )
+            if cur.fetchone() is None:
+                raise KeyError(f"run {run_id} not found")
+            try:
+                event_id = uow.runs.append_event(
+                    run_id,
+                    event_type,
+                    actor_type,
+                    idempotency_key,
+                    invocation_id=invocation_id,
+                    actor_identifier=actor_identifier,
+                    payload=sanitized_payload,
+                )
+            except ValueError as exc:
+                if "idempotency key was used for another event" in str(exc):
+                    raise DuplicateEventKey(
+                        f"idempotency key {idempotency_key!r} was used for a "
+                        f"different event: {exc}"
+                    ) from exc
+                raise
             # Fetch the full result including sequence_number
             row = uow.runs.get_event_by_id(run_id, event_id)
             return EventAppendResult.from_mapping(row)
@@ -438,6 +453,17 @@ class EventService:
             if not evt.get("payload"):
                 raise ValueError("each event must have a payload")
 
+        # Check for duplicate idempotency keys within the batch
+        seen_keys: dict[str, int] = {}
+        for idx, evt in enumerate(events):
+            key = evt.get("idempotency_key", f"batch:{run_id}:{idx}:{uuid4()}")
+            if key in seen_keys:
+                raise DuplicateEventKey(
+                    f"duplicate idempotency key {key!r} in batch at positions "
+                    f"{seen_keys[key]} and {idx}"
+                )
+            seen_keys[key] = idx
+
         with self.uow_factory() as uow:
             results = []
             for idx, evt in enumerate(events):
@@ -445,15 +471,23 @@ class EventService:
                     "idempotency_key",
                     f"batch:{run_id}:{idx}:{uuid4()}",
                 )
-                event_id = uow.runs.append_event(
-                    run_id,
-                    evt["event_type"],
-                    actor_type,
-                    idempotency_key,
-                    invocation_id=evt.get("invocation_id"),
-                    actor_identifier=evt.get("actor_identifier"),
-                    payload=_sanitize(evt.get("payload", {})),
-                )
+                try:
+                    event_id = uow.runs.append_event(
+                        run_id,
+                        evt["event_type"],
+                        actor_type,
+                        idempotency_key,
+                        invocation_id=evt.get("invocation_id"),
+                        actor_identifier=evt.get("actor_identifier"),
+                        payload=_sanitize(evt.get("payload", {})),
+                    )
+                except ValueError as exc:
+                    if "idempotency key was used for another event" in str(exc):
+                        raise DuplicateEventKey(
+                            f"idempotency key {idempotency_key!r} was used for a "
+                            f"different event: {exc}"
+                        ) from exc
+                    raise
                 row = uow.runs.get_event_by_id(run_id, event_id)
                 results.append(EventAppendResult.from_mapping(row))
             return results

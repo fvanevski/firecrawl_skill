@@ -205,9 +205,9 @@ class ResearchRunService:
         )
         with self.uow_factory() as uow:
             run_id = uow.runs.start_run(objective, run_metadata)
-            uow.runs.append_event(
+            self.event_service.append(
                 run_id,
-                "run.created",
+                "run_started",
                 actor_type,
                 command_key,
                 actor_identifier=actor_identifier,

@@ -29,6 +29,7 @@ sys.path.insert(0, str(SCRIPTS))  # noqa: E402
 import pytest  # noqa: E402
 
 from research_store.invocation_events import (  # noqa: E402
+    DuplicateEventKey,
     EventAppendResult,
     EventService,
     InvocationEvent,
@@ -292,10 +293,13 @@ class TestSanitization:
                 "safe_field": "public_value",
             },
         )
+        # Verify sequence_number is populated
+        assert result.sequence_number > 0
         event = event_service.get_event(run_id, result.event_id)
         assert event.payload["api_key"] == "[REDACTED]"
         assert event.payload["auth_header"] == "Bearer [REDACTED]"
         assert event.payload["safe_field"] == "public_value"
+        assert event.sequence_number == result.sequence_number
 
 
 # ------------------------------------------------------------------
@@ -324,7 +328,9 @@ class TestIdempotency:
             run_id, "pivot", "system", key,
             payload={"query": "original"},
         )
-        with pytest.raises(Exception):  # DuplicateEventKey or similar
+        with pytest.raises(
+            DuplicateEventKey, match="idempotency key"
+        ):
             event_service.append(
                 run_id, "pivot", "system", key,
                 payload={"query": "different"},
@@ -406,7 +412,7 @@ class TestInvalidIds:
 
     def test_unknown_run_id_rejected(self, event_service):
         fake_run_id = uuid4()
-        with pytest.raises(KeyError):
+        with pytest.raises(KeyError, match="not found"):
             event_service.append(
                 fake_run_id, "pivot", "system", f"test:unknown:{uuid4()}",
                 payload={"query": "test"},
@@ -523,6 +529,37 @@ class TestBatchAppend:
         results = event_service.append_batch(run_id, [])
         assert results == []
 
+    def test_batch_duplicate_key_rejected(self, run_id, event_service):
+        events = [
+            {
+                "event_type": "pivot",
+                "payload": {"query": "first"},
+                "idempotency_key": "same-key",
+            },
+            {
+                "event_type": "retry",
+                "payload": {"query": "second"},
+                "idempotency_key": "same-key",
+            },
+        ]
+        with pytest.raises(DuplicateEventKey, match="duplicate idempotency key"):
+            event_service.append_batch(run_id, events)
+
+    def test_batch_duplicate_key_with_existing_rejected(self, run_id, event_service):
+        key = f"test:batch-conflict:{uuid4()}"
+        event_service.append(
+            run_id, "pivot", "system", key, payload={"query": "existing"}
+        )
+        events = [
+            {
+                "event_type": "retry",
+                "payload": {"query": "new"},
+                "idempotency_key": key,
+            },
+        ]
+        with pytest.raises(DuplicateEventKey, match="idempotency key"):
+            event_service.append_batch(run_id, events)
+
 
 # ------------------------------------------------------------------
 # Export failure isolation tests
@@ -554,3 +591,86 @@ class TestExportFailureIsolation:
         # Verify state is in PostgreSQL
         status = catalog_service.status(invocation_id=record.id)
         assert status.status == "running"
+
+
+# ------------------------------------------------------------------
+# next_event_sequence tests
+# ------------------------------------------------------------------
+
+class TestNextEventSequence:
+    """The next_event_sequence method returns the correct next number."""
+
+    def test_next_sequence_after_no_events(self, run_id, database_url):
+        from research_store.postgres import PostgresUnitOfWork
+
+        with PostgresUnitOfWork(
+            database_url, "test_invocation_events", "test", "1", 3,
+            "markdown-v1", "cleanup-v1", "structural-v1"
+        ) as uow:
+            next_seq = uow.runs.next_event_sequence(run_id)
+            assert next_seq == 1  # No events, so next is 1
+
+    def test_next_sequence_after_events(self, run_id, event_service):
+        from research_store.postgres import PostgresUnitOfWork
+
+        event_service.append(run_id, "annotation", "system", "test:seq:1", payload={})
+        event_service.append(run_id, "annotation", "system", "test:seq:2", payload={})
+
+        with PostgresUnitOfWork(
+            database_url, "test_invocation_events", "test", "1", 3,
+            "markdown-v1", "cleanup-v1", "structural-v1"
+        ) as uow:
+            next_seq = uow.runs.next_event_sequence(run_id)
+            assert next_seq == 3  # Two events exist, so next is 3
+
+
+# ------------------------------------------------------------------
+# export_to_catalog_format tests
+# ------------------------------------------------------------------
+
+class TestExportCatalogFormat:
+    """Export produces correct Catalog v5-compatible format."""
+
+    def test_export_format_fields(self, run_id, database_url):
+        from research_store.config import StoreConfig
+        from research_store.container import build_run_service
+        from research_store.invocation_catalog import InvocationCatalogService
+
+        config = StoreConfig.from_env()
+        config.database_url = database_url
+
+        service = build_run_service(config)
+        catalog_service = InvocationCatalogService(
+            service.uow_factory, event_service=service.event_service
+        )
+
+        inv = catalog_service.begin(
+            run_id, f"fc_{uuid4().hex[:32]}", "search", {"query": "test"}
+        )
+        catalog_service.add_event(
+            run_id, inv.id, "pivot", {"query": "pivot query"}
+        )
+        catalog_service.complete(run_id, inv.id, "succeeded", output={"results": []})
+
+        export = catalog_service.export_to_catalog_format(run_id, inv.id)
+
+        # Verify schema version
+        assert export["schema_version"] == 5
+
+        # Verify field mapping
+        assert "invocation_id" in export
+        assert "external_invocation_id" in export
+        assert "research_run_id" in export
+        assert "operation" in export
+        assert export["operation"] == "search"
+
+        # Verify events are serialized
+        assert "events" in export
+        assert len(export["events"]) == 1
+        assert export["events"][0]["event_type"] == "pivot"
+
+        # Verify execution status mapping
+        assert export["execution"]["status"] == "succeeded"
+
+        # Verify completed_at is set
+        assert export["finished_at"] is not None
