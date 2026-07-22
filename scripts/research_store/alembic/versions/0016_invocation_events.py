@@ -184,7 +184,11 @@ def upgrade():
     )
 
     # ----------------------------------------------------------------
-    # 6. Migrate existing event_type values from payload
+    # 6. Migrate existing event_type values from payload.
+    #    Legacy rows stored the event type inside the JSON payload
+    #    (payload->>'event'); new rows written via EventService.append()
+    #    populate the event_type column directly, so this WHERE clause
+    #    limits the update to rows that still need migration.
     # ----------------------------------------------------------------
     op.execute(
         """
@@ -220,6 +224,11 @@ def upgrade():
     # 8. Strengthen invocation_id FK
     #    Backfill NULLs with the first invocation's id for the run.
     #    Keep nullable for run-level events (run_started, run_finished, etc.)
+    #
+    #    Note: For runs with multiple invocations, events belonging to later
+    #    invocations are assigned the first invocation's ID as a best-effort
+    #    approximation. This is acceptable for legacy backfill — new events
+    #    written via EventService.append() set invocation_id correctly.
     # ----------------------------------------------------------------
     op.execute(
         """

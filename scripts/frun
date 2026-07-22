@@ -40,7 +40,7 @@ case "${1:-}" in
       fi
       # Derive filesystem catalog record from committed PostgreSQL state
       if [[ "${FIRECRAWL_CATALOG_DISABLED:-}" != "1" ]]; then
-        "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-start "$run_id" "$objective" >/dev/null 2>&1 || true
+        "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" export-events-to-fs --run-id "$run_id" >/dev/null 2>&1 || true
       fi
     else
       output="$("$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-start "$@")"
@@ -85,7 +85,7 @@ case "${1:-}" in
       "$SCRIPT_DIR/research-db" "${db_args[@]}" >/dev/null
       # Derive filesystem catalog record from committed PostgreSQL state
       if [[ "${FIRECRAWL_CATALOG_DISABLED:-}" != "1" ]]; then
-        "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-finish "$run_id" --outcome "$outcome" >/dev/null 2>&1 || true
+        "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" export-events-to-fs --run-id "$run_id" >/dev/null 2>&1 || true
       fi
     else
       output="$("$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-finish "${catalog_args[@]}")"
@@ -94,9 +94,9 @@ case "${1:-}" in
       --entry-point frun --action finish --status complete \
       --research-run-id "$run_id" \
       --idempotency-key "legacy-adapter:$run_id:frun:finish:$outcome:{workflow_revision}" >/dev/null
-    printf '%s\n' "${output:-}"
+    printf '%s\n' "${run_id:-${output:-}}"
     if [[ "$auto_audit" == "1" ]]; then
-      "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" audit "$run_id"
+      "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit "$run_id"
     fi
     ;;
   reopen)
@@ -107,7 +107,7 @@ case "${1:-}" in
       "$SCRIPT_DIR/research-db" run-reopen "$@" >/dev/null
       # Derive filesystem catalog record from committed PostgreSQL state
       if [[ "${FIRECRAWL_CATALOG_DISABLED:-}" != "1" ]]; then
-        "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-reopen "$run_id" --reason "${*}" >/dev/null 2>&1 || true
+        "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" export-events-to-fs --run-id "$run_id" >/dev/null 2>&1 || true
       fi
     else
       "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-reopen "$@"
@@ -117,15 +117,15 @@ case "${1:-}" in
       --research-run-id "$run_id" \
       --idempotency-key "legacy-adapter:$run_id:frun:reopen:{workflow_revision}" >/dev/null
     ;;
-  annotate) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-annotate "$@" ;;
-  status|show) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-show "$@" ;;
-  verify) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" verify "$@" ;;
-  audit) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" audit "$@" ;;
-  audit-status) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" audit-status "$@" ;;
-  aggregate) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" aggregate "$@" ;;
-  recompute) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" recompute "$@" ;;
-  migrate) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" migrate "$@" ;;
-  compare) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" compare "$@" ;;
-  purge) shift; exec "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" purge "$@" ;;
+  annotate) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" run-annotate "$@" ;;
+  status|show) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" run-show "$@" ;;
+  verify) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" verify "$@" ;;
+  audit) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit "$@" ;;
+  audit-status) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit-status "$@" ;;
+  aggregate) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" aggregate "$@" ;;
+  recompute) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" recompute "$@" ;;
+  migrate) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" migrate "$@" ;;
+  compare) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" compare "$@" ;;
+  purge) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" purge "$@" ;;
   *) echo "Usage: frun {start <objective> [--profile PROFILE]|finish <fr_id> --outcome OUTCOME [--source-manifest FILE] [--answer-file FILE] [--auto-audit]|reopen <fr_id> --reason TEXT|annotate <fr_id> --type TYPE --reason TEXT|status <fr_id>|verify <id>|audit <id> [--llm PROVIDER] [--stages LIST]|audit-status <id>|aggregate|recompute <id>|migrate [--apply]|compare <fr_id>...|purge [filters] [--force]}" >&2; exit 2 ;;
 esac

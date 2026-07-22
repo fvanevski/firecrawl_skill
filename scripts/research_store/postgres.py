@@ -1278,16 +1278,21 @@ class PostgresUnitOfWork:
             )
             existing = cur.fetchone()
             if existing is not None:
-                expected = (
+                # existing columns: id(0), invocation_id(1), event_type(2), actor_type(3),
+                #   actor_identifier(4), payload(5), sequence_number(6)
+                # psycopg3 returns jsonb as dict, so no need to json.loads
+                existing_payload = existing[5] if isinstance(existing[5], dict) else json.loads(existing[5]) if existing[5] else {}
+                incoming_payload = json.loads(payload_json)
+                if (existing[1], existing[2], existing[3], existing[4], existing_payload) != (
                     invocation_id,
                     event_type,
                     actor_type,
                     actor_identifier,
-                    json.loads(payload_json),
-                )
-                if existing[1:5] != expected:
+                    incoming_payload,
+                ):
                     raise ValueError("idempotency key was used for another event")
-                return existing[0]
+                # Return event_id with reused=True
+                return {"event_id": existing[0], "reused": True}
             # Compute the next sequence number (safe under advisory lock)
             cur.execute(
                 "SELECT COALESCE(MAX(sequence_number), 0) FROM research_events "
@@ -4138,7 +4143,7 @@ class PostgresUnitOfWork:
         )
         return dict(zip(keys, row))
 
-    def list_events(
+    def list_coverage_events(
         self,
         run_id,
         item_id=None,

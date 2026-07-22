@@ -170,7 +170,11 @@ class ResearchRunService:
 
     @property
     def event_service(self):
-        """Lazily initialized EventService to avoid circular imports."""
+        """Lazily initialized EventService to avoid circular imports.
+
+        The EventService is created on first access and cached in ``_event_service``.
+        The ``uow_factory`` is captured at creation time and never changes.
+        """
         if self._event_service is None:
             from .invocation_events import EventService
             self._event_service = EventService(self.uow_factory)

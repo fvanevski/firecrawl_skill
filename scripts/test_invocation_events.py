@@ -67,14 +67,9 @@ def uow_factory(database_url):
     """Return a PostgresUnitOfWork factory for tests."""
     def factory():
         return PostgresUnitOfWork(
-            database_url,
-            physical_collection="test_invocation_events",
-            embedding_model="test",
-            embedding_revision="1",
-            embedding_dimension=3,
-            parser_version="markdown-v1",
-            normalization_version="cleanup-v1",
-            chunker_version="structural-v1",
+            database_url, "test_invocation_events",
+            "test", "1", 3, "markdown-v1",
+            "cleanup-v1", "structural-v1",
         )
     return factory
 
@@ -89,6 +84,7 @@ def run_id(database_url):
             "test invocation events objective",
             {"skill_version": "test", "llm_model": "test"},
         )
+        uow.commit()
         yield run_id
 
 
@@ -157,8 +153,10 @@ class TestEventParity:
             run_id, inv.id, "pivot", {"query": "pivot query"}
         )
         events = catalog_service.list_events(run_id, invocation_id=inv.id)
-        assert len(events) == 1
-        assert events[0].event_type == "pivot"
+        # begin() creates invocation_started event, add_event creates pivot event
+        assert len(events) == 2
+        types = {e.event_type for e in events}
+        assert types == {"invocation_started", "pivot"}
 
     def test_all_event_types_are_valid(self):
         from research_store.invocation_events import EVENT_TYPES
@@ -346,9 +344,9 @@ class TestFilesystemDerivation:
 
     def test_export_invocation_to_filesystem(self, run_id, database_url, tmp_path):
         from research_store.config import StoreConfig
+        import dataclasses
 
-        config = StoreConfig.from_env()
-        config.database_url = database_url
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
         from research_store.container import build_run_service
         from research_store.invocation_catalog import InvocationCatalogService
@@ -374,17 +372,19 @@ class TestFilesystemDerivation:
         )
         assert catalog_record["schema_version"] == 5
         assert catalog_record["operation"] == "search"
-        assert len(catalog_record["events"]) == 1
-        assert catalog_record["events"][0]["event_type"] == "pivot"
+        # begin() creates invocation_started, add_event creates pivot
+        assert len(catalog_record["events"]) == 2
+        assert catalog_record["events"][0]["event_type"] == "invocation_started"
+        assert catalog_record["events"][1]["event_type"] == "pivot"
 
     def test_filesystem_not_read_for_state(self, run_id, database_url):
         """Verify that current state is determined from PostgreSQL, not filesystem."""
         from research_store.container import build_run_service
         from research_store.invocation_catalog import InvocationCatalogService
         from research_store.config import StoreConfig
+        import dataclasses
 
-        config = StoreConfig.from_env()
-        config.database_url = database_url
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
         service = build_run_service(config)
         catalog_service = InvocationCatalogService(
@@ -573,9 +573,9 @@ class TestExportFailureIsolation:
         from research_store.container import build_run_service
         from research_store.invocation_catalog import InvocationCatalogService
         from research_store.config import StoreConfig
+        import dataclasses
 
-        config = StoreConfig.from_env()
-        config.database_url = database_url
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
         service = build_run_service(config)
         catalog_service = InvocationCatalogService(
@@ -610,7 +610,7 @@ class TestNextEventSequence:
             next_seq = uow.runs.next_event_sequence(run_id)
             assert next_seq == 1  # No events, so next is 1
 
-    def test_next_sequence_after_events(self, run_id, event_service):
+    def test_next_sequence_after_events(self, run_id, event_service, database_url):
         from research_store.postgres import PostgresUnitOfWork
 
         event_service.append(run_id, "annotation", "system", "test:seq:1", payload={})
@@ -635,9 +635,9 @@ class TestExportCatalogFormat:
         from research_store.config import StoreConfig
         from research_store.container import build_run_service
         from research_store.invocation_catalog import InvocationCatalogService
+        import dataclasses
 
-        config = StoreConfig.from_env()
-        config.database_url = database_url
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
         service = build_run_service(config)
         catalog_service = InvocationCatalogService(
@@ -666,8 +666,10 @@ class TestExportCatalogFormat:
 
         # Verify events are serialized
         assert "events" in export
-        assert len(export["events"]) == 1
-        assert export["events"][0]["event_type"] == "pivot"
+        # begin() creates invocation_started, add_event creates pivot, complete creates invocation_finished
+        assert len(export["events"]) == 3
+        event_types = {e["event_type"] for e in export["events"]}
+        assert event_types == {"invocation_started", "pivot", "invocation_finished"}
 
         # Verify execution status mapping
         assert export["execution"]["status"] == "succeeded"

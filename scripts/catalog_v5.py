@@ -987,11 +987,13 @@ def export_run_events_to_filesystem(run_id):
         root = catalog_root()
         root.mkdir(parents=True, exist_ok=True)
         events_path = root / "events.jsonl"
-        with events_path.open("a", encoding="utf-8") as handle:
+        # Truncate and rebuild to avoid duplicates on repeated exports.
+        # Each event gets a deterministic event_id derived from the DB UUID.
+        with events_path.open("w", encoding="utf-8") as handle:
             for event in events:
                 entry = {
                     "schema_version": SCHEMA_VERSION,
-                    "event_id": "fe_" + uuid4().hex,
+                    "event_id": "fe_" + event.id.hex,
                     "at": event.created_at.isoformat(),
                     "event": event.event_type,
                     "invocation_id": str(event.invocation_id),
@@ -1028,3 +1030,7 @@ def main():
     item = sub.add_parser("export-to-fs"); item.add_argument("--invocation-id", required=True); item.add_argument("--run-id"); item.set_defaults(func=lambda a: print(export_invocation_to_filesystem(a.invocation_id, a.run_id) or "", end=""))
     item = sub.add_parser("export-events-to-fs"); item.add_argument("--run-id", required=True); item.set_defaults(func=lambda a: print(export_run_events_to_filesystem(a.run_id) or "", end=""))
     args = parser.parse_args(); args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -30,6 +30,7 @@ Event types supported (mapped from Catalog v5):
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -194,6 +195,7 @@ class InvocationCatalogService:
 
         sanitized_input = _sanitize(input_data)
         idempotency_key = idempotency_key or f"invocation:begin:{external_invocation_id}"
+        input_json = json.dumps(sanitized_input)
 
         with self.uow_factory() as uow:
             # Check for existing running invocation with same external ID
@@ -237,8 +239,8 @@ class InvocationCatalogService:
                     "running",
                     revision,
                     idempotency_key,
-                    sanitized_input,
-                    {"actor_type": actor_type},
+                    input_json,
+                    json.dumps({"actor_type": actor_type}),
                 ),
             )
             invocation_id = cur.fetchone()[0]
@@ -347,12 +349,13 @@ class InvocationCatalogService:
 
             # Update invocation record
             db_status = "complete" if status == "succeeded" else "failed"
+            output_json = json.dumps(_sanitize(output or {}))
             cur.execute(
                 """UPDATE research_invocations
                 SET status = %s, completed_at = %s, output = %s, error = %s,
                     metadata = metadata || jsonb_build_object(
-                        'terminal_status', %s,
-                        'duration_ms', %s
+                        'terminal_status', %s::text,
+                        'duration_ms', %s::bigint
                     )
                 WHERE id = %s AND run_id = %s
                 RETURNING id, run_id, parent_invocation_id, external_invocation_id,
@@ -361,7 +364,7 @@ class InvocationCatalogService:
                 (
                     db_status,
                     completed_at,
-                    _sanitize(output or {}),
+                    output_json,
                     error,
                     status,
                     duration_ms,

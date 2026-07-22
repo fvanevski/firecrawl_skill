@@ -159,7 +159,7 @@ class EventAppendResult:
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "EventAppendResult":
         return cls(
-            event_id=value["event_id"],
+            event_id=value.get("event_id") or value["id"],
             sequence_number=value["sequence_number"],
             run_revision=value["run_revision"],
             reused=value.get("reused", False),
@@ -316,7 +316,7 @@ class EventService:
             if cur.fetchone() is None:
                 raise KeyError(f"run {run_id} not found")
             try:
-                event_id = uow.runs.append_event(
+                result = uow.runs.append_event(
                     run_id,
                     event_type,
                     actor_type,
@@ -325,6 +325,13 @@ class EventService:
                     actor_identifier=actor_identifier,
                     payload=sanitized_payload,
                 )
+                # append_event returns {"event_id": ..., "reused": True} on idempotent reuse
+                if isinstance(result, dict):
+                    event_id = result["event_id"]
+                    reused = result.get("reused", False)
+                else:
+                    event_id = result
+                    reused = False
             except ValueError as exc:
                 if "idempotency key was used for another event" in str(exc):
                     raise DuplicateEventKey(
@@ -334,7 +341,13 @@ class EventService:
                 raise
             # Fetch the full result including sequence_number
             row = uow.runs.get_event_by_id(run_id, event_id)
-            return EventAppendResult.from_mapping(row)
+            result = EventAppendResult.from_mapping(row)
+            return EventAppendResult(
+                event_id=result.event_id,
+                sequence_number=result.sequence_number,
+                run_revision=result.run_revision,
+                reused=reused,
+            )
 
     def list_events(
         self,
