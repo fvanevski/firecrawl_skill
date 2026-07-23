@@ -191,7 +191,7 @@ class CorpusService:
         ``None`` when the normalized parser also fails.
         """
         try:
-            from .parsing.html_parser import HtmlNormalizedParser
+            from .html_parser import HtmlNormalizedParser
 
             parser = HtmlNormalizedParser()
             parse_result = parser.parse(raw, mime_type=mime_type)
