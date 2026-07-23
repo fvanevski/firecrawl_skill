@@ -513,3 +513,300 @@ def _parse_timestamptz(value: str | None) -> datetime:
         return dt
     except (ValueError, TypeError):
         return utcnow()
+
+
+# ---------------------------------------------------------------------------
+# Extraction-attempt domain models (issue #40)
+# ---------------------------------------------------------------------------
+
+VALID_EXTRACTION_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"})
+VALID_EXTRACTION_FAILURE_CLASSES = frozenset(
+    {
+        "none",
+        "timeout",
+        "network",
+        "http_error",
+        "parser",
+        "schema_validation",
+        "empty_content",
+        "anti_bot",
+        "unsupported_format",
+        "blocked",
+        "content_too_small",
+        "content_too_large",
+        "malformed",
+        "internal",
+    }
+)
+VALID_EXTRACTION_DISPOSITIONS = frozenset(
+    {"acceptable", "poor", "ambiguous", "unassessed"}
+)
+VALID_EXTRACTION_METHODS = frozenset(
+    {
+        "firecrawl_main_content",
+        "firecrawl_full_page",
+        "deterministic_html",
+        "deterministic_markdown",
+        "deterministic_json",
+        "deterministic_plain_text",
+        "browser_capable",
+        "alternate_adapter",
+        "structured_extraction",
+        "semantic_adjudication",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ExtractionQualityMetrics:
+    """Deterministic quality metrics for an extraction attempt.
+
+    Stored separately from the attempt record so that quality
+    evolution can be tracked without mutating the attempt itself.
+    """
+
+    byte_length: int = 0
+    visible_text_length: int = 0
+    paragraph_count: int = 0
+    heading_count: int = 0
+    list_count: int = 0
+    table_count: int = 0
+    link_density: float = 0.0
+    boilerplate_ratio: float = 0.0
+    title_present: bool = False
+    language_confidence: float = 0.0
+    content_type_consistent: bool = True
+    anti_bot_markers: int = 0
+    duplicate_content_similarity: float = 0.0
+    query_term_coverage: float = 0.0
+    required_structured_fields: int = 0
+    parser_warnings: int = 0
+    code_to_prose_ratio: float = 0.0
+    extraction_method_confidence: float = 0.0
+    quality_version: str = "quality-v1"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "byte_length": self.byte_length,
+            "visible_text_length": self.visible_text_length,
+            "paragraph_count": self.paragraph_count,
+            "heading_count": self.heading_count,
+            "list_count": self.list_count,
+            "table_count": self.table_count,
+            "link_density": self.link_density,
+            "boilerplate_ratio": self.boilerplate_ratio,
+            "title_present": self.title_present,
+            "language_confidence": self.language_confidence,
+            "content_type_consistent": self.content_type_consistent,
+            "anti_bot_markers": self.anti_bot_markers,
+            "duplicate_content_similarity": self.duplicate_content_similarity,
+            "query_term_coverage": self.query_term_coverage,
+            "required_structured_fields": self.required_structured_fields,
+            "parser_warnings": self.parser_warnings,
+            "code_to_prose_ratio": self.code_to_prose_ratio,
+            "extraction_method_confidence": self.extraction_method_confidence,
+            "quality_version": self.quality_version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExtractionQualityMetrics":
+        return cls(
+            byte_length=data.get("byte_length", 0),
+            visible_text_length=data.get("visible_text_length", 0),
+            paragraph_count=data.get("paragraph_count", 0),
+            heading_count=data.get("heading_count", 0),
+            list_count=data.get("list_count", 0),
+            table_count=data.get("table_count", 0),
+            link_density=float(data.get("link_density", 0.0)),
+            boilerplate_ratio=float(data.get("boilerplate_ratio", 0.0)),
+            title_present=bool(data.get("title_present", False)),
+            language_confidence=float(data.get("language_confidence", 0.0)),
+            content_type_consistent=bool(data.get("content_type_consistent", True)),
+            anti_bot_markers=data.get("anti_bot_markers", 0),
+            duplicate_content_similarity=float(
+                data.get("duplicate_content_similarity", 0.0)
+            ),
+            query_term_coverage=float(data.get("query_term_coverage", 0.0)),
+            required_structured_fields=data.get("required_structured_fields", 0),
+            parser_warnings=data.get("parser_warnings", 0),
+            code_to_prose_ratio=float(data.get("code_to_prose_ratio", 0.0)),
+            extraction_method_confidence=float(
+                data.get("extraction_method_confidence", 0.0)
+            ),
+            quality_version=data.get("quality_version", "quality-v1"),
+        )
+
+
+@dataclass(frozen=True)
+class ExtractionAttempt:
+    """Represents one extraction method invocation for a candidate.
+
+    One row per extraction method attempt.  Multiple attempts per
+    candidate are ordered by ``attempt_number``.  Retries link to
+    their parent attempt via ``retry_parent_id``.
+    """
+
+    id: UUID
+    candidate_id: UUID
+    run_id: UUID
+    invocation_id: UUID | None
+    attempt_number: int
+    method: str
+    method_version: str
+    requested_format: str | None
+    start_time: datetime
+    end_time: datetime | None
+    exit_status: str  # 'succeeded' | 'partial' | 'failed' | 'cancelled'
+    http_status: int | None
+    backend_status: str | None
+    raw_blob: BlobReference | None
+    normalized_blob: BlobReference | None
+    parser_used: str | None
+    quality_metrics: ExtractionQualityMetrics | None
+    failure_class: str
+    retry_parent_id: UUID | None
+    disposition: str  # 'acceptable' | 'poor' | 'ambiguous' | 'unassessed'
+    error_message: str | None
+    selection_reason: str | None
+    created_at: datetime = field(default_factory=utcnow)
+
+    def __post_init__(self) -> None:
+        if self.method not in VALID_EXTRACTION_METHODS:
+            raise ValueError(
+                f"invalid extraction method: {self.method}; "
+                f"expected one of {sorted(VALID_EXTRACTION_METHODS)}"
+            )
+        if self.exit_status not in VALID_EXTRACTION_STATUSES:
+            raise ValueError(
+                f"invalid exit_status: {self.exit_status}; "
+                f"expected one of {sorted(VALID_EXTRACTION_STATUSES)}"
+            )
+        if self.failure_class not in VALID_EXTRACTION_FAILURE_CLASSES:
+            raise ValueError(
+                f"invalid failure_class: {self.failure_class}; "
+                f"expected one of {sorted(VALID_EXTRACTION_FAILURE_CLASSES)}"
+            )
+        if self.disposition not in VALID_EXTRACTION_DISPOSITIONS:
+            raise ValueError(
+                f"invalid disposition: {self.disposition}; "
+                f"expected one of {sorted(VALID_EXTRACTION_DISPOSITIONS)}"
+            )
+        if self.attempt_number < 1:
+            raise ValueError("attempt_number must be >= 1")
+
+    @classmethod
+    def from_mapping(cls, row: dict[str, Any]) -> "ExtractionAttempt":
+        def _uuid(v):
+            return UUID(v) if not isinstance(v, UUID) and v is not None else v
+
+        raw_blob = None
+        rb = row.get("raw_blob")
+        if rb and isinstance(rb, dict):
+            raw_blob = BlobReference(
+                sha256=rb["sha256"],
+                uri=rb["uri"],
+                byte_length=rb["byte_length"],
+                mime_type=rb.get("mime_type"),
+            )
+
+        normalized_blob = None
+        nb = row.get("normalized_blob")
+        if nb and isinstance(nb, dict):
+            normalized_blob = BlobReference(
+                sha256=nb["sha256"],
+                uri=nb["uri"],
+                byte_length=nb["byte_length"],
+                mime_type=nb.get("mime_type"),
+            )
+
+        quality_metrics = None
+        qm = row.get("quality_metrics")
+        if qm and isinstance(qm, dict):
+            quality_metrics = ExtractionQualityMetrics.from_dict(qm)
+
+        return cls(
+            id=UUID(row["id"]),
+            candidate_id=UUID(row["candidate_id"]),
+            run_id=UUID(row["run_id"]),
+            invocation_id=_uuid(row.get("invocation_id")),
+            attempt_number=int(row["attempt_number"]),
+            method=row["method"],
+            method_version=row["method_version"],
+            requested_format=row.get("requested_format"),
+            start_time=_parse_timestamptz(row.get("start_time")),
+            end_time=_parse_timestamptz(row.get("end_time")),
+            exit_status=row["exit_status"],
+            http_status=row.get("http_status"),
+            backend_status=row.get("backend_status"),
+            raw_blob=raw_blob,
+            normalized_blob=normalized_blob,
+            parser_used=row.get("parser_used"),
+            quality_metrics=quality_metrics,
+            failure_class=row.get("failure_class", "none"),
+            retry_parent_id=_uuid(row.get("retry_parent_id")),
+            disposition=row.get("disposition", "unassessed"),
+            error_message=row.get("error_message"),
+            selection_reason=row.get("selection_reason"),
+            created_at=_parse_timestamptz(row.get("created_at")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "candidate_id": str(self.candidate_id),
+            "run_id": str(self.run_id),
+            "invocation_id": str(self.invocation_id) if self.invocation_id else None,
+            "attempt_number": self.attempt_number,
+            "method": self.method,
+            "method_version": self.method_version,
+            "requested_format": self.requested_format,
+            "start_time": (
+                self.start_time.isoformat()
+                if hasattr(self.start_time, "isoformat")
+                else str(self.start_time)
+            ),
+            "end_time": (
+                self.end_time.isoformat()
+                if self.end_time is not None and hasattr(self.end_time, "isoformat")
+                else None
+            ),
+            "exit_status": self.exit_status,
+            "http_status": self.http_status,
+            "backend_status": self.backend_status,
+            "raw_blob": (
+                {
+                    "sha256": self.raw_blob.sha256,
+                    "uri": self.raw_blob.uri,
+                    "byte_length": self.raw_blob.byte_length,
+                    "mime_type": self.raw_blob.mime_type,
+                }
+                if self.raw_blob
+                else None
+            ),
+            "normalized_blob": (
+                {
+                    "sha256": self.normalized_blob.sha256,
+                    "uri": self.normalized_blob.uri,
+                    "byte_length": self.normalized_blob.byte_length,
+                    "mime_type": self.normalized_blob.mime_type,
+                }
+                if self.normalized_blob
+                else None
+            ),
+            "parser_used": self.parser_used,
+            "quality_metrics": (
+                self.quality_metrics.to_dict() if self.quality_metrics else None
+            ),
+            "failure_class": self.failure_class,
+            "retry_parent_id": str(self.retry_parent_id)
+            if self.retry_parent_id
+            else None,
+            "disposition": self.disposition,
+            "error_message": self.error_message,
+            "selection_reason": self.selection_reason,
+            "created_at": (
+                self.created_at.isoformat()
+                if hasattr(self.created_at, "isoformat")
+                else str(self.created_at)
+            ),
+        }

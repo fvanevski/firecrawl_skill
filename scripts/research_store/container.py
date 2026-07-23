@@ -5,6 +5,7 @@ from functools import partial
 from .acquisition_service import AcquisitionService
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
+from .extraction_service import ExtractionService
 from .postgres import PostgresUnitOfWork
 from .indexing import OpenAICompatibleEmbedder
 from .legacy_adapter import AdapterMode, LegacyEntryPointAdapter
@@ -311,4 +312,34 @@ def build_catalog_import_service(config: StoreConfig | None = None):
             config.normalization_version,
             config.chunker_version,
         )
+    )
+
+
+def build_extraction_service(config: StoreConfig | None = None):
+    """Build an ExtractionService wired to the PostgreSQL database.
+
+    Args:
+        config: Store config. Uses ``StoreConfig.from_env()`` when
+            ``None``.
+
+    Returns:
+        An ``ExtractionService`` instance wired to the configured
+        PostgreSQL connection and blob store.
+    """
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    return ExtractionService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        ),
+        blob_store=ContentAddressedBlobStore(config.blob_root),
+        config=config,
     )

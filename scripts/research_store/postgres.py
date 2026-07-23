@@ -128,7 +128,7 @@ class PostgresUnitOfWork:
             self.retrieval_events
         ) = self.index_jobs = self.search_responses = self.candidates = (
             self.strategy_revisions
-        ) = self.coverage = self.terminal_decisions = self
+        ) = self.coverage = self.terminal_decisions = self.extraction_attempts = self
 
         return self
 
@@ -1324,7 +1324,10 @@ class PostgresUnitOfWork:
                 )
             if expected_revision is not None and cur.rowcount == 0:
                 from .run_service import RunStateError
-                raise RunStateError(f"Concurrency error: expected revision {expected_revision} for run {run_id}")
+
+                raise RunStateError(
+                    f"Concurrency error: expected revision {expected_revision} for run {run_id}"
+                )
             return cur.rowcount
 
     def append_event(
@@ -5649,4 +5652,452 @@ class PostgresUnitOfWork:
         for uid_key in ("id", "assessment_id"):
             if result.get(uid_key) is not None:
                 result[uid_key] = str(result[uid_key])
+        return result
+
+    # -- Extraction-attempt persistence (issue #40) ---------------------
+
+    def create_extraction_attempt(
+        self,
+        candidate_id,
+        run_id,
+        invocation_id,
+        attempt_number,
+        method,
+        method_version,
+        requested_format,
+        start_time,
+        end_time,
+        exit_status,
+        http_status,
+        backend_status,
+        raw_blob_sha256,
+        raw_blob_uri,
+        raw_blob_byte_length,
+        raw_blob_mime_type,
+        normalized_blob_sha256,
+        normalized_blob_uri,
+        normalized_blob_byte_length,
+        normalized_blob_mime_type,
+        parser_used,
+        quality_metrics,
+        failure_class,
+        retry_parent_id,
+        disposition,
+        error_message,
+        selection_reason,
+    ):
+        """Insert an extraction attempt and return its UUID."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO extraction_attempts (
+                    candidate_id, run_id, invocation_id, attempt_number,
+                    method, method_version, requested_format,
+                    start_time, end_time, exit_status,
+                    http_status, backend_status,
+                    raw_blob_sha256, raw_blob_uri, raw_blob_byte_length, raw_blob_mime_type,
+                    normalized_blob_sha256, normalized_blob_uri, normalized_blob_byte_length, normalized_blob_mime_type,
+                    parser_used, quality_metrics,
+                    failure_class, retry_parent_id,
+                    disposition, error_message, selection_reason
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s, %s
+                ) RETURNING id
+                """,
+                (
+                    str(candidate_id),
+                    str(run_id),
+                    str(invocation_id) if invocation_id else None,
+                    attempt_number,
+                    method,
+                    method_version,
+                    requested_format,
+                    start_time,
+                    end_time,
+                    exit_status,
+                    http_status,
+                    backend_status,
+                    raw_blob_sha256,
+                    raw_blob_uri,
+                    raw_blob_byte_length,
+                    raw_blob_mime_type,
+                    normalized_blob_sha256,
+                    normalized_blob_uri,
+                    normalized_blob_byte_length,
+                    normalized_blob_mime_type,
+                    parser_used,
+                    json.dumps(quality_metrics) if quality_metrics else None,
+                    failure_class,
+                    str(retry_parent_id) if retry_parent_id else None,
+                    disposition,
+                    error_message,
+                    selection_reason,
+                ),
+            )
+            row = cur.fetchone()
+            return UUID(str(row[0])) if row else None
+
+    def complete_extraction_attempt(
+        self,
+        attempt_id,
+        exit_status,
+        raw_blob_sha256,
+        raw_blob_uri,
+        raw_blob_byte_length,
+        raw_blob_mime_type,
+        normalized_blob_sha256,
+        normalized_blob_uri,
+        normalized_blob_byte_length,
+        normalized_blob_mime_type,
+        parser_used,
+        quality_metrics,
+        failure_class,
+        http_status,
+        backend_status,
+        end_time,
+        error_message,
+    ):
+        """Update an extraction attempt with actual results."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE extraction_attempts SET
+                    exit_status = %s,
+                    end_time = %s,
+                    http_status = %s,
+                    backend_status = %s,
+                    raw_blob_sha256 = COALESCE(%s, raw_blob_sha256),
+                    raw_blob_uri = COALESCE(%s, raw_blob_uri),
+                    raw_blob_byte_length = COALESCE(%s, raw_blob_byte_length),
+                    raw_blob_mime_type = COALESCE(%s, raw_blob_mime_type),
+                    normalized_blob_sha256 = COALESCE(%s, normalized_blob_sha256),
+                    normalized_blob_uri = COALESCE(%s, normalized_blob_uri),
+                    normalized_blob_byte_length = COALESCE(%s, normalized_blob_byte_length),
+                    normalized_blob_mime_type = COALESCE(%s, normalized_blob_mime_type),
+                    parser_used = COALESCE(%s, parser_used),
+                    quality_metrics = COALESCE(%s, quality_metrics),
+                    failure_class = %s,
+                    error_message = COALESCE(%s, error_message)
+                WHERE id = %s
+                """,
+                (
+                    exit_status,
+                    end_time,
+                    http_status,
+                    backend_status,
+                    raw_blob_sha256,
+                    raw_blob_uri,
+                    raw_blob_byte_length,
+                    raw_blob_mime_type,
+                    normalized_blob_sha256,
+                    normalized_blob_uri,
+                    normalized_blob_byte_length,
+                    normalized_blob_mime_type,
+                    parser_used,
+                    json.dumps(quality_metrics) if quality_metrics else None,
+                    failure_class,
+                    error_message,
+                    str(attempt_id),
+                ),
+            )
+
+    def update_extraction_disposition(self, attempt_id, disposition):
+        """Update the disposition of an extraction attempt."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE extraction_attempts SET disposition = %s
+                WHERE id = %s
+                """,
+                (disposition, str(attempt_id)),
+            )
+
+    def select_final_extraction_attempt(
+        self, candidate_id, attempt_id, selection_reason
+    ):
+        """Mark an attempt as the selected final attempt for a candidate.
+
+        Unselects any previously selected attempt for the same candidate.
+        """
+        with self.connection.cursor() as cur:
+            # Unselect previous
+            cur.execute(
+                """
+                UPDATE extraction_attempts SET selected = false
+                WHERE candidate_id = %s AND selected = true
+                """,
+                (str(candidate_id),),
+            )
+            # Select new
+            cur.execute(
+                """
+                UPDATE extraction_attempts SET
+                    selected = true,
+                    selection_reason = COALESCE(%s, selection_reason)
+                WHERE id = %s AND candidate_id = %s
+                """,
+                (selection_reason, str(attempt_id), str(candidate_id)),
+            )
+
+    def get_selected_extraction_attempt(self, candidate_id):
+        """Return the selected attempt for a candidate, or None."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, candidate_id, run_id, invocation_id, attempt_number,
+                       method, method_version, requested_format,
+                       start_time, end_time, exit_status,
+                       http_status, backend_status,
+                       raw_blob_sha256, raw_blob_uri, raw_blob_byte_length, raw_blob_mime_type,
+                       normalized_blob_sha256, normalized_blob_uri, normalized_blob_byte_length, normalized_blob_mime_type,
+                       parser_used, quality_metrics,
+                       failure_class, retry_parent_id,
+                       disposition, error_message, selection_reason,
+                       selected, created_at
+                FROM extraction_attempts
+                WHERE candidate_id = %s AND selected = true
+                LIMIT 1
+                """,
+                (str(candidate_id),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return self._row_to_extraction_attempt_mapping(row)
+
+    def list_extraction_attempts_for_candidate(
+        self, candidate_id, run_id=None, limit=100, offset=0
+    ):
+        """List all attempts for a candidate, ordered by attempt_number."""
+        with self.connection.cursor() as cur:
+            if run_id:
+                cur.execute(
+                    """
+                    SELECT id, candidate_id, run_id, invocation_id, attempt_number,
+                           method, method_version, requested_format,
+                           start_time, end_time, exit_status,
+                           http_status, backend_status,
+                           raw_blob_sha256, raw_blob_uri, raw_blob_byte_length, raw_blob_mime_type,
+                           normalized_blob_sha256, normalized_blob_uri, normalized_blob_byte_length, normalized_blob_mime_type,
+                           parser_used, quality_metrics,
+                           failure_class, retry_parent_id,
+                           disposition, error_message, selection_reason,
+                           selected, created_at
+                    FROM extraction_attempts
+                    WHERE candidate_id = %s AND run_id = %s
+                    ORDER BY attempt_number ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (str(candidate_id), str(run_id), limit, offset),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, candidate_id, run_id, invocation_id, attempt_number,
+                           method, method_version, requested_format,
+                           start_time, end_time, exit_status,
+                           http_status, backend_status,
+                           raw_blob_sha256, raw_blob_uri, raw_blob_byte_length, raw_blob_mime_type,
+                           normalized_blob_sha256, normalized_blob_uri, normalized_blob_byte_length, normalized_blob_mime_type,
+                           parser_used, quality_metrics,
+                           failure_class, retry_parent_id,
+                           disposition, error_message, selection_reason,
+                           selected, created_at
+                    FROM extraction_attempts
+                    WHERE candidate_id = %s
+                    ORDER BY attempt_number ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (str(candidate_id), limit, offset),
+                )
+            return [
+                self._row_to_extraction_attempt_mapping(row) for row in cur.fetchall()
+            ]
+
+    def list_extraction_attempts_for_run(
+        self,
+        run_id,
+        candidate_id=None,
+        method=None,
+        exit_status=None,
+        disposition=None,
+        limit=100,
+        offset=0,
+    ):
+        """List attempts filtered by run and optional criteria."""
+        conditions = ["run_id = %s"]
+        params = [str(run_id)]
+
+        if candidate_id is not None:
+            conditions.append("candidate_id = %s")
+            params.append(str(candidate_id))
+        if method is not None:
+            conditions.append("method = %s")
+            params.append(method)
+        if exit_status is not None:
+            conditions.append("exit_status = %s")
+            params.append(exit_status)
+        if disposition is not None:
+            conditions.append("disposition = %s")
+            params.append(disposition)
+
+        where = " AND ".join(conditions)
+        with self.connection.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, candidate_id, run_id, invocation_id, attempt_number,
+                       method, method_version, requested_format,
+                       start_time, end_time, exit_status,
+                       http_status, backend_status,
+                       raw_blob_sha256, raw_blob_uri, raw_blob_byte_length, raw_blob_mime_type,
+                       normalized_blob_sha256, normalized_blob_uri, normalized_blob_byte_length, normalized_blob_mime_type,
+                       parser_used, quality_metrics,
+                       failure_class, retry_parent_id,
+                       disposition, error_message, selection_reason,
+                       selected, created_at
+                FROM extraction_attempts
+                WHERE {where}
+                ORDER BY attempt_number ASC
+                LIMIT %s OFFSET %s
+                """,
+                (*params, limit, offset),
+            )
+            return [
+                self._row_to_extraction_attempt_mapping(row) for row in cur.fetchall()
+            ]
+
+    def get_extraction_attempt(self, attempt_id, run_id=None):
+        """Get a single extraction attempt by ID."""
+        with self.connection.cursor() as cur:
+            if run_id:
+                cur.execute(
+                    """
+                    SELECT id, candidate_id, run_id, invocation_id, attempt_number,
+                           method, method_version, requested_format,
+                           start_time, end_time, exit_status,
+                           http_status, backend_status,
+                           raw_blob_sha256, raw_blob_uri, raw_blob_byte_length, raw_blob_mime_type,
+                           normalized_blob_sha256, normalized_blob_uri, normalized_blob_byte_length, normalized_blob_mime_type,
+                           parser_used, quality_metrics,
+                           failure_class, retry_parent_id,
+                           disposition, error_message, selection_reason,
+                           selected, created_at
+                    FROM extraction_attempts
+                    WHERE id = %s AND run_id = %s
+                    LIMIT 1
+                    """,
+                    (str(attempt_id), str(run_id)),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, candidate_id, run_id, invocation_id, attempt_number,
+                           method, method_version, requested_format,
+                           start_time, end_time, exit_status,
+                           http_status, backend_status,
+                           raw_blob_sha256, raw_blob_uri, raw_blob_byte_length, raw_blob_mime_type,
+                           normalized_blob_sha256, normalized_blob_uri, normalized_blob_byte_length, normalized_blob_mime_type,
+                           parser_used, quality_metrics,
+                           failure_class, retry_parent_id,
+                           disposition, error_message, selection_reason,
+                           selected, created_at
+                    FROM extraction_attempts
+                    WHERE id = %s
+                    LIMIT 1
+                    """,
+                    (str(attempt_id),),
+                )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return self._row_to_extraction_attempt_mapping(row)
+
+    @staticmethod
+    def _row_to_extraction_attempt_mapping(row) -> dict[str, Any]:
+        """Map a database row to a dict compatible with ExtractionAttempt.from_mapping()."""
+        keys = (
+            "id",
+            "candidate_id",
+            "run_id",
+            "invocation_id",
+            "attempt_number",
+            "method",
+            "method_version",
+            "requested_format",
+            "start_time",
+            "end_time",
+            "exit_status",
+            "http_status",
+            "backend_status",
+            "raw_blob_sha256",
+            "raw_blob_uri",
+            "raw_blob_byte_length",
+            "raw_blob_mime_type",
+            "normalized_blob_sha256",
+            "normalized_blob_uri",
+            "normalized_blob_byte_length",
+            "normalized_blob_mime_type",
+            "parser_used",
+            "quality_metrics",
+            "failure_class",
+            "retry_parent_id",
+            "disposition",
+            "error_message",
+            "selection_reason",
+            "selected",
+            "created_at",
+        )
+        result = dict(zip(keys, row))
+        for uid_key in (
+            "id",
+            "candidate_id",
+            "run_id",
+            "invocation_id",
+            "retry_parent_id",
+        ):
+            if result.get(uid_key) is not None:
+                result[uid_key] = str(result[uid_key])
+
+        # Reconstruct blob references
+        raw_sha = result.get("raw_blob_sha256")
+        if raw_sha:
+            result["raw_blob"] = {
+                "sha256": raw_sha,
+                "uri": result.get("raw_blob_uri", f"blob://sha256/{raw_sha}"),
+                "byte_length": result.get("raw_blob_byte_length", 0),
+                "mime_type": result.get("raw_blob_mime_type"),
+            }
+        else:
+            result["raw_blob"] = None
+
+        norm_sha = result.get("normalized_blob_sha256")
+        if norm_sha:
+            result["normalized_blob"] = {
+                "sha256": norm_sha,
+                "uri": result.get("normalized_blob_uri", f"blob://sha256/{norm_sha}"),
+                "byte_length": result.get("normalized_blob_byte_length", 0),
+                "mime_type": result.get("normalized_blob_mime_type"),
+            }
+        else:
+            result["normalized_blob"] = None
+
+        # Parse quality_metrics JSONB
+        qm = result.get("quality_metrics")
+        if qm and isinstance(qm, str):
+            try:
+                result["quality_metrics"] = json.loads(qm)
+            except (json.JSONDecodeError, TypeError):
+                result["quality_metrics"] = None
+        elif qm and isinstance(qm, dict):
+            result["quality_metrics"] = qm
+        else:
+            result["quality_metrics"] = None
+
         return result
