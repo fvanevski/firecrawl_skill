@@ -147,6 +147,28 @@ class TestConvenienceFunctions:
         assert all(c in "0123456789abcdef" for c in fp)
 
 
+class TestTiktokenFallback:
+    """Tests for tiktoken availability detection."""
+
+    def test_tiktoken_not_installed_uses_fallback(self):
+        """When tiktoken is unavailable, registry uses BPE fallback."""
+        try:
+            import tiktoken  # noqa: F401
+
+            has_tiktoken = True
+        except ImportError:
+            has_tiktoken = False
+
+        reg = get_registry()
+        tk = reg.get("cl100k_base")
+        # The tokenizer name indicates whether tiktoken was used
+        # If tiktoken is installed, name is "cl100k_base"
+        # If not, name is "cl100k_base_bpe"
+        assert tk.name in ("cl100k_base", "cl100k_base_bpe")
+        if not has_tiktoken:
+            assert "_bpe" in tk.name
+
+
 # ---------------------------------------------------------------------------
 # Hierarchical chunker tests
 # ---------------------------------------------------------------------------

@@ -67,37 +67,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from .domain import Block, Chunk
+from .domain import Block
 from .tokenizer_registry import Tokenizer, get_tokenizer
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Regex patterns for structural boundary detection
-# ---------------------------------------------------------------------------
-
-# Heading: ATX-style (# to ######)
-_RE_HEADING = re.compile(r"^(#{1,6})\s+(.+)$")
-
-# Code fence: ``` or ~~~ with optional language tag
-_RE_CODE_FENCE = re.compile(r"^(`{3,}|~{3,})(.*)$")
-
-# Table row: pipe-delimited (at least 3 pipes for header + 2 data rows)
-_RE_TABLE_ROW = re.compile(r"^\|(.+)\|$")
-
-# List item: bullet or numbered
-_RE_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
-
-# Quotation: > prefix
-_RE_QUOTATION = re.compile(r"^\s*>\s?")
-
-# Caption: ![alt](url)
-_RE_CAPTION = re.compile(r"^!\[[^\]]*\]\(")
 
 
 # ---------------------------------------------------------------------------
@@ -538,66 +514,7 @@ def _validate_chunks(chunks: list[HierarchicalChunk], max_tokens: int) -> None:
             f"{chunk.token_count} > {max_tokens}"
         )
         assert chunk.content_sha256, f"Chunk {chunk.ordinal} has empty content_sha256"
-        assert chunk.first_block_ordinal <= chunk.last_block_ordinal or (
-            chunk.first_block_ordinal is not None
-            and chunk.last_block_ordinal is not None
-        ), f"Chunk {chunk.ordinal} has invalid block ordinals"
-
-
-# ---------------------------------------------------------------------------
-# Compatibility shim for legacy API
-# ---------------------------------------------------------------------------
-
-
-def deterministic_chunks(
-    blocks: list[Block],
-    max_tokens: int = 1000,
-    tokenizer_name: str = "cl100k_base",
-    chunker_version: str = "hierarchical-v1",
-    chunker_name: str = "hierarchical",
-) -> list[Chunk]:
-    """Legacy-compatible chunking function that returns ``Chunk`` instances.
-
-    This function wraps ``hierarchical_chunks`` and converts the results
-    to legacy ``Chunk`` instances for backward compatibility with existing
-    code that expects the ``Chunk`` dataclass from ``domain.py``.
-
-    Args:
-        blocks: List of parsed ``Block`` instances.
-        max_tokens: Hard token maximum per chunk.
-        tokenizer_name: Tokenizer identifier.
-        chunker_version: Chunker version for derivation tracking.
-        chunker_name: Chunker name for derivation tracking.
-
-    Returns:
-        A list of legacy ``Chunk`` instances.
-
-    .. deprecated:: P5-06
-       Use ``hierarchical_chunks`` directly for access to parent-child
-       metadata and tokenizer information.
-    """
-    from .domain import Chunk
-
-    hier_chunks = hierarchical_chunks(
-        blocks,
-        max_tokens=max_tokens,
-        tokenizer_name=tokenizer_name,
-        chunker_version=chunker_version,
-        chunker_name=chunker_name,
-    )
-
-    legacy_chunks: list[Chunk] = []
-    for hc in hier_chunks:
-        legacy_chunks.append(
-            Chunk(
-                ordinal=hc.ordinal,
-                text=hc.text,
-                content_sha256=hc.content_sha256,
-                first_block_ordinal=hc.first_block_ordinal,
-                last_block_ordinal=hc.last_block_ordinal,
-                token_count=hc.token_count,
-                heading_path=hc.heading_path,
-            )
+        assert chunk.first_block_ordinal <= chunk.last_block_ordinal, (
+            f"Chunk {chunk.ordinal} has invalid block ordinals: "
+            f"{chunk.first_block_ordinal} > {chunk.last_block_ordinal}"
         )
-
-    return legacy_chunks
