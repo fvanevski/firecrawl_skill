@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
+import logging
 from typing import Any, Callable
 from uuid import UUID
 
@@ -41,6 +42,8 @@ from .domain import (
     DerivationComparisonReport,
     IngestRequest,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _configuration_sha256(
@@ -172,6 +175,12 @@ class DerivationService:
                 total_noop += 1
             elif status == "failed":
                 total_failed += 1
+                logger.warning(
+                    "Target %s %s failed: %s",
+                    target_result.get("target_type"),
+                    target_result.get("target_id"),
+                    target_result.get("error", "unknown"),
+                )
 
         return {
             "parser_version": parser_version,
@@ -394,6 +403,15 @@ class DerivationService:
                             "existing_parser_version": row.get("parser_version"),
                             "existing_config_sha": row.get("configuration_sha256"),
                         }
+                    )
+
+            # Validate: if both document_id and snapshot_id are provided,
+            # verify the snapshot belongs to the document (consistency check)
+            if snapshot_id is not None and document_id is not None:
+                targets = [t for t in targets if t["document_id"] == document_id]
+                if not targets:
+                    raise ValueError(
+                        f"snapshot {snapshot_id} does not belong to document {document_id}"
                     )
 
             # Filter out targets that already have this exact configuration

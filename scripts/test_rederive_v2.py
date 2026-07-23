@@ -318,6 +318,26 @@ class TestConfigurationSha256:
         )
         assert sha1 != sha2
 
+    def test_different_normalization_produces_different_sha(self):
+        """Different normalization version produces different SHA-256."""
+        sha1 = _configuration_sha256(
+            "markdown-v1", "cleanup-v1", "hierarchical", "v1", "cl100k_base"
+        )
+        sha2 = _configuration_sha256(
+            "markdown-v1", "normalize-v2", "hierarchical", "v1", "cl100k_base"
+        )
+        assert sha1 != sha2
+
+    def test_different_chunker_version_produces_different_sha(self):
+        """Different chunker version produces different SHA-256."""
+        sha1 = _configuration_sha256(
+            "markdown-v1", "cleanup-v1", "hierarchical", "v1", "cl100k_base"
+        )
+        sha2 = _configuration_sha256(
+            "markdown-v1", "cleanup-v1", "hierarchical", "v2", "cl100k_base"
+        )
+        assert sha1 != sha2
+
 
 # ---------------------------------------------------------------------------
 # Integration tests: migration
@@ -616,6 +636,66 @@ class TestDerivationServiceIntegration:
 
         assert "results" in result
         assert "targets" in result
+
+    def test_activation_supersedes_prior_active(
+        self, service, derivation_service, tmp_path
+    ):
+        """Activating a new derivation supersedes the prior active one."""
+        # Seed a document
+        result = _seed_corpus(service)
+        document_id = result.document_id
+
+        # Create first derivation with config A
+        r1 = derivation_service.rederive(
+            document_id=document_id,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_name="hierarchical",
+            chunker_version="hierarchical-v1",
+            tokenizer_name="cl100k_base",
+        )
+        assert r1["total_rederived"] >= 1
+
+        # Create second derivation with config B (different parser)
+        r2 = derivation_service.rederive(
+            document_id=document_id,
+            parser_version="html-normalized-v1",
+            normalization_version="cleanup-v1",
+            chunker_name="hierarchical",
+            chunker_version="hierarchical-v1",
+            tokenizer_name="cl100k_base",
+        )
+        assert r2["total_rederived"] >= 1
+
+        # List pending derivations and activate the second one
+        pending = derivation_service.list_derivations(
+            document_id=document_id,
+            status="pending",
+        )
+        assert len(pending) >= 2
+
+        # Activate the second derivation (config B)
+        latest_pending = [
+            d for d in pending if d["parser_version"] == "html-normalized-v1"
+        ]
+        assert len(latest_pending) == 1
+        activated = derivation_service.activate_derivation(
+            UUID(latest_pending[0]["id"])
+        )
+        assert activated.status == "active"
+
+        # Verify: second derivation is active, first is superseded
+        all_derivs = derivation_service.list_derivations(document_id=document_id)
+        active_derivs = [d for d in all_derivs if d["status"] == "active"]
+        superseded_derivs = [d for d in all_derivs if d["status"] == "superseded"]
+
+        assert len(active_derivs) == 1
+        assert active_derivs[0]["parser_version"] == "html-normalized-v1"
+        assert len(superseded_derivs) >= 1
+
+        # NOTE: Activation does NOT currently create an index job.
+        # A future enhancement should enqueue an index job for the new
+        # active derivation's chunks when activation occurs.
 
 
 # ---------------------------------------------------------------------------
@@ -1197,3 +1277,37 @@ class TestCLI:
                     str(uuid4()),
                 ]
             )
+
+    def test_derivation_activate_with_document(self):
+        """derivation-activate --document flag parses correctly."""
+        from research_store.cli import parser as research_store_parser
+
+        test_uuid = str(uuid4())
+        doc_uuid = str(uuid4())
+        args = research_store_parser().parse_args(
+            [
+                "derivation-activate",
+                test_uuid,
+                "--document",
+                doc_uuid,
+            ]
+        )
+        assert args.command == "derivation-activate"
+        assert args.id == test_uuid
+        assert args.document == doc_uuid
+
+    def test_rederive_v2_report_flag(self):
+        """rederive-v2 --report flag parses correctly."""
+        from research_store.cli import parser as research_store_parser
+
+        args = research_store_parser().parse_args(
+            [
+                "rederive-v2",
+                "--all",
+                "--report",
+                "/tmp/report.json",
+            ]
+        )
+        assert args.command == "rederive-v2"
+        assert args.all is True
+        assert args.report == "/tmp/report.json"

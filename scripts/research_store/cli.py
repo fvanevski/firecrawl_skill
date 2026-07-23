@@ -257,6 +257,10 @@ def parser():
         help="Activate a pending derivation",
     )
     deriv_activate.add_argument("id", help="Derivation UUID to activate")
+    deriv_activate.add_argument(
+        "--document",
+        help="Document UUID to validate derivation ownership before activation",
+    )
 
     deriv_compare = sub.add_parser(
         "derivation-compare",
@@ -763,6 +767,45 @@ def _cmd_derivation_activate(config, args) -> int:
     )
 
     try:
+        derivation = derivation_service.get_derivation(_UUID(args.id))
+        if derivation is None:
+            print(dumps({"error": f"derivation {args.id} not found"}))
+            return 1
+
+        # Print confirmation details before activation
+        print(
+            dumps(
+                {
+                    "confirming": {
+                        "derivation_id": str(derivation.id),
+                        "parser_version": derivation.parser_version,
+                        "normalization_version": derivation.normalization_version,
+                        "chunker_name": derivation.chunker_name,
+                        "chunker_version": derivation.chunker_version,
+                        "tokenizer_name": derivation.tokenizer_name,
+                        "status": derivation.status,
+                        "chunk_count": derivation.chunk_count,
+                        "block_count": derivation.block_count,
+                    }
+                }
+            )
+        )
+
+        if args.document:
+            # Validate document ownership
+            if str(derivation.document_id) != str(_UUID(args.document)):
+                print(
+                    dumps(
+                        {
+                            "error": (
+                                f"derivation {args.id} belongs to document "
+                                f"{derivation.document_id}, not {args.document}"
+                            )
+                        }
+                    )
+                )
+                return 1
+
         activated = derivation_service.activate_derivation(_UUID(args.id))
         print(dumps({"activated": activated.to_dict()}))
         return 0
