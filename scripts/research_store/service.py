@@ -980,9 +980,16 @@ class AuditService:
                 elapsed_ms=elapsed_ms,
                 audit_packet_manifest=audit_packet_manifest,
             )
-        except Exception:
+        except Exception as exc:
             # If the unique constraint fired (concurrent duplicate create),
             # fall through to a lookup and return the existing assessment.
+            exc_str = str(exc).lower()
+            if (
+                "unique" not in exc_str
+                and "duplicate" not in exc_str
+                and "constraint" not in exc_str
+            ):
+                raise
             with self.uow_factory() as uow:
                 existing = uow.lookup_equivalent_assessment(identity_hash)
             if existing is not None:

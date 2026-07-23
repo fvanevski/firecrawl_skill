@@ -100,7 +100,7 @@ case "${1:-}" in
     printf '%s\n' "${run_id:-${output:-}}"
     if [[ "$auto_audit" == "1" ]]; then
       # When PostgreSQL is active, auto-audit is triggered inside
-      # finish_run() (catalog_v5.py line 547) which also persists to
+      # finish_run() (catalog_v5.py line 594) which also persists to
       # PostgreSQL.  Only call the filesystem-based audit when DB is
       # not active (legacy path).
       if [[ "$DB_ACTIVE" != "1" ]]; then

@@ -1875,7 +1875,9 @@ class TestIdempotentScheduling:
         finally:
             conn.close()
 
-    def test_migration_0019_backfill_existing(self, tmp_path):
+    def test_migration_0019_backfill_existing(
+        self, tmp_path, prepared_database_for_audit
+    ):
         """Migration 0019 backfills audit_identity_hash for existing rows."""
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -1944,3 +1946,159 @@ class TestIdempotentScheduling:
         assessment2 = svc.get_assessment(aid2)
         assert assessment2 is not None
         assert assessment2.get("audit_identity_hash") == identity_hash
+
+    def test_schedule_assessment_invocation_target_reuse(
+        self, tmp_path, prepared_database_for_audit
+    ):
+        """Invocation targets (fc_*) are idempotent like run targets."""
+        from research_store.container import build_audit_service
+        from research_store.config import StoreConfig
+        from dataclasses import replace
+        from uuid import uuid4
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            blob_root=tmp_path / "blobs",
+        )
+        svc = build_audit_service(config)
+        run_id = uuid4()
+        _ensure_run_exists(config, run_id)
+
+        # Create an invocation so fc_* resolution works
+        from research_store.postgres import PostgresUnitOfWork
+
+        uow = PostgresUnitOfWork(
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
+        with uow.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_invocations
+                    (id, run_id, external_invocation_id, operation, status, created_at)
+                VALUES (%s, %s, %s, %s, %s, now())
+                RETURNING id""",
+                (
+                    str(uuid4()),
+                    str(run_id),
+                    "fc_test_invocation",
+                    "search",
+                    "complete",
+                ),
+            )
+            uow.connection.commit()
+
+        # Schedule assessment for invocation target
+        result1 = svc.schedule_assessment(
+            run_id=run_id,
+            target_type="invocation",
+            target_id=uuid4(),  # will be created fresh below
+            target_hash="invocation_hash",
+            evaluator_version="catalog-v5.0",
+            prompt_template_version="staged-research-audit-v1",
+            policy_version="audit-policy-v1",
+            stage_set=["rubric"],
+            status="completed",
+            model_fingerprint="fp-42",
+        )
+        assert result1["action"] == "create"
+
+        # Equivalent invocation target → reuse
+        result2 = svc.schedule_assessment(
+            run_id=run_id,
+            target_type="invocation",
+            target_id=result1["assessment"].get(
+                "id", result1.get("assessment_id")
+            ),
+            target_hash="invocation_hash",
+            evaluator_version="catalog-v5.0",
+            prompt_template_version="staged-research-audit-v1",
+            policy_version="audit-policy-v1",
+            stage_set=["rubric"],
+            status="completed",
+            model_fingerprint="fp-42",
+        )
+        assert result2["action"] == "reuse"
+        assert result2["existing"] is True
+
+    def test_postgres_failure_does_not_rollback_filesystem(self, tmp_path):
+        """catalog_v5.py audit_target persists filesystem assessment even
+        when PostgreSQL persistence fails (FR-018 isolation).
+
+        This test creates a minimal catalog target, then mocks
+        research_store.config.StoreConfig.from_env to raise ImportError
+        so both the pre-check and post-write PostgreSQL paths fail,
+        falling through to the filesystem-based audit.
+        """
+        import json as json_mod
+        from unittest.mock import patch
+
+        # Set up a temporary catalog directory
+        catalog_dir = tmp_path / "catalog"
+        os.environ["FIRECRAWL_CATALOG_DIR"] = str(catalog_dir)
+
+        # Create a minimal run target so build_audit_packet succeeds
+        runs_dir = catalog_dir / "runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        identifier = "fr_test_pg_failure"
+        run_file = runs_dir / f"{identifier}.json"
+        run_file.write_text(
+            json_mod.dumps(
+                {
+                    "schema_version": 5,
+                    "research_run_id": identifier,
+                    "objective": "test objective",
+                    "profile": {},
+                    "lifecycle": {"state": "running", "revision": 1},
+                    "record_revision": 1,
+                    "invocation_ids": [],
+                    "claims": [],
+                    "used_sources": [],
+                    "assessment_refs": [],
+                    "audit_status": "stale",
+                    "operational_status": "planning",
+                    "data_completeness": 0.0,
+                    "operational_summary": {},
+                }
+            )
+        )
+
+        from catalog_v5 import audit_target
+
+        # Mock StoreConfig.from_env to raise ImportError (simulates
+        # PostgreSQL unavailable) and mock the LLM calls to return
+        # immediately with empty results.
+        from types import SimpleNamespace
+
+        mock_result = SimpleNamespace(
+            value=None, provenance={}, attempts=[], error=""
+        )
+
+        with patch(
+            "research_store.config.StoreConfig.from_env",
+            side_effect=ImportError("no postgres"),
+        ):
+            with patch(
+                "catalog_v5.call_structured",
+                return_value=mock_result,
+            ):
+                audit_target(identifier, quiet=True)
+
+        # Verify filesystem assessment was written despite PG failure
+        assessment_dir = catalog_dir / "assessments" / identifier
+        assessment_files = list(assessment_dir.glob("*.json"))
+        assert len(assessment_files) > 0, (
+            "filesystem assessment must be written when PostgreSQL fails"
+        )
+        assessment = json_mod.loads(assessment_files[0].read_text())
+        assert assessment["target_id"] == identifier
+        assert assessment["status"] in {"completed", "partial", "failed"}
+
+        # Cleanup
+        del os.environ["FIRECRAWL_CATALOG_DIR"]

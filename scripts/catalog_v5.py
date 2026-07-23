@@ -165,6 +165,52 @@ def stable_excerpt_id(candidate_id, position, text):
     return "fex_" + hashlib.sha256(f"{candidate_id}\0{position}\0{text}".encode()).hexdigest()[:24]
 
 
+def _resolve_audit_target(identifier, config):
+    """Resolve (run_id, target_type, target_id) for an audit target.
+
+    Returns ``(run_id, target_type, target_id)`` when the identifier
+    corresponds to a known research run (``fr_*``) or invocation
+    (``fc_*``), or ``None`` when the identifier is not found in
+    PostgreSQL.
+
+    ``model_fingerprint`` is always ``None`` in this resolution path
+    because ``catalog_v5.py`` does not track model fingerprints at the
+    invocation level.  The identity hash therefore varies across five
+    fields (not six): target_hash, evaluator_version,
+    prompt_template_version, policy_version, and stage_set.
+    """
+    from functools import partial
+
+    if identifier.startswith(RUN_PREFIX):
+        from research_store.container import build_run_service
+
+        run_svc = build_run_service(config)
+        run = run_svc.get_run_by_external_id(identifier)
+        if run:
+            return run.get("id"), "run", run.get("id")
+    elif identifier.startswith("fc_"):
+        from research_store.postgres import PostgresUnitOfWork
+
+        uow_factory = partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
+        with uow_factory() as uow:
+            inv = uow.get_invocation_status(
+                external_invocation_id=identifier
+            )
+            if inv:
+                return inv.get("run_id"), "invocation", inv.get("id")
+    return None
+
+
 def _text_blocks(path):
     if not path or not Path(path).is_file():
         return []
@@ -773,44 +819,9 @@ def audit_target(identifier, provider="local", model=None, force=False, quiet=Fa
         config = StoreConfig.from_env()
         if config.database_url:
             audit_svc = build_audit_service(config)
-            run_id = None
-            target_type = None
-            target_id = None
-            if identifier.startswith("fr_"):
-                # Resolve run_id from research_runs by external_run_id
-                from research_store.container import build_run_service
-                run_svc = build_run_service(config)
-                run = run_svc.get_run_by_external_id(identifier)
-                if run:
-                    run_id = run.get("id")
-                    target_type = "run"
-                    target_id = run_id
-            elif identifier.startswith("fc_"):
-                # Resolve invocation by external_invocation_id
-                from functools import partial
-
-                from research_store.postgres import PostgresUnitOfWork
-
-                uow_factory = partial(
-                    PostgresUnitOfWork,
-                    config.database_url,
-                    config.physical_collection,
-                    config.embedding_model,
-                    config.embedding_revision,
-                    config.embedding_dimension,
-                    config.parser_version,
-                    config.normalization_version,
-                    config.chunker_version,
-                )
-                with uow_factory() as uow:
-                    inv = uow.get_invocation_status(
-                        external_invocation_id=identifier
-                    )
-                    if inv:
-                        run_id = inv.get("run_id")
-                        target_type = "invocation"
-                        target_id = inv.get("id")
-            if run_id and target_type and target_id:
+            resolved = _resolve_audit_target(identifier, config)
+            if resolved is not None:
+                run_id, target_type, target_id = resolved
                 reuse = audit_svc.schedule_assessment(
                     run_id=run_id,
                     target_type=target_type,
@@ -879,56 +890,16 @@ def audit_target(identifier, provider="local", model=None, force=False, quiet=Fa
 
     # -- Persist to PostgreSQL (issue #34 idempotent scheduling) -----------
     try:
-        from functools import partial
-
         from research_store.container import build_audit_service
         from research_store.config import StoreConfig
-        from research_store.postgres import PostgresUnitOfWork
-        from research_store.service import compute_audit_identity_hash
 
         config = StoreConfig.from_env()
         if config.database_url:
-            run_id = None
-            target_type = None
-            target_id = None
-            if identifier.startswith("fr_"):
-                run_svc = build_run_service(config)
-                run = run_svc.get_run_by_external_id(identifier)
-                if run:
-                    run_id = run.get("id")
-                    target_type = "run"
-                    target_id = run_id
-            elif identifier.startswith("fc_"):
-                uow_factory = partial(
-                    PostgresUnitOfWork,
-                    config.database_url,
-                    config.physical_collection,
-                    config.embedding_model,
-                    config.embedding_revision,
-                    config.embedding_dimension,
-                    config.parser_version,
-                    config.normalization_version,
-                    config.chunker_version,
-                )
-                with uow_factory() as uow:
-                    inv = uow.get_invocation_status(
-                        external_invocation_id=identifier
-                    )
-                    if inv:
-                        run_id = inv.get("run_id")
-                        target_type = "invocation"
-                        target_id = inv.get("id")
-            if run_id and target_type and target_id:
+            resolved = _resolve_audit_target(identifier, config)
+            if resolved is not None:
+                run_id, target_type, target_id = resolved
                 audit_svc = build_audit_service(config)
-                audit_identity_hash = compute_audit_identity_hash(
-                    target_hash=packet_hash,
-                    evaluator_version=EVALUATOR_VERSION,
-                    prompt_template_version=PROMPT_TEMPLATE_VERSION,
-                    policy_version=POLICY_VERSION,
-                    stage_set=stages or ["rubric", "acquisition", "evidence", "synthesis"],
-                    model_fingerprint=None,
-                )
-                audit_svc.create_assessment(
+                audit_svc.schedule_assessment(
                     run_id=run_id,
                     target_type=target_type,
                     target_id=target_id,
@@ -938,10 +909,9 @@ def audit_target(identifier, provider="local", model=None, force=False, quiet=Fa
                     policy_version=POLICY_VERSION,
                     stage_set=stages or ["rubric", "acquisition", "evidence", "synthesis"],
                     status=status,
-                    audit_identity_hash=audit_identity_hash,
+                    model_fingerprint=None,
                     provider=provider,
                     model=model,
-                    model_fingerprint=None,
                     elapsed_ms=int((time.monotonic() - started) * 1000),
                     audit_packet_manifest=packet["context_manifest"],
                 )

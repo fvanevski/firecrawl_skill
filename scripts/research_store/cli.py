@@ -1343,7 +1343,7 @@ def main(argv=None):
                         status="partial",
                         audit_identity_hash=identity_hash,
                     )
-            except Exception:
+            except (ImportError, RuntimeError, KeyError, AttributeError, ValueError):
                 # Audit failure is non-fatal — the run is already finished.
                 pass
         return 0

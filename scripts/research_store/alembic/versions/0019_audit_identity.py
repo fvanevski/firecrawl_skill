@@ -40,6 +40,18 @@ hash algorithm difference means legacy backfilled hashes will never
 collide with new SHA-256 hashes, so the partial unique constraint is
 safe.
 
+**Legacy rows become orphaned under the constraint.**  Because the
+backfilled MD5 hash does not match the SHA-256 hash that Python
+would compute for the same six canonical fields, a re-audit of a
+legacy target will produce a new SHA-256 hash.  The partial unique
+constraint will not block this new row (its hash differs from the
+legacy MD5 hash), so the legacy row and the new row coexist as
+separate rows.  ``schedule_assessment()`` will always create a new
+row for a re-audited legacy target — it will never reuse the
+backfilled MD5 row.  This is intentional: the legacy MD5 hash is not
+a valid fingerprint and must not be treated as equivalent to a
+genuine SHA-256 identity.
+
 ## Deterministic identity policy (PRD Section 17.3)
 
 Semantic outputs may be reused only when all of the following match:
