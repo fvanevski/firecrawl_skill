@@ -3,6 +3,13 @@
 from .acquisition_service import AcquisitionService, FirecrawlSearchAdapter
 from .compat_export import CompatibilityExportResult, SearchCompatibilityExporter
 from .config import StoreConfig
+from .domain import (
+    BlobReference,
+    ExtractionAttempt,
+    ExtractionQualityMetrics,
+)
+from .extraction_repository import ExtractionAttemptRepository
+from .extraction_service import ExtractionError, ExtractionService
 from .execution_policy import ExecutionModePolicy
 from .legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from .orchestrator import (
@@ -22,11 +29,17 @@ from .stages import (
 
 __all__ = [
     "AcquisitionService",
+    "BlobReference",
     "CompatibilityExportResult",
     "ContextKeys",
     "CorpusService",
     "AdapterMode",
     "ExecutionModePolicy",
+    "ExtractionAttempt",
+    "ExtractionAttemptRepository",
+    "ExtractionError",
+    "ExtractionQualityMetrics",
+    "ExtractionService",
     "FirecrawlSearchAdapter",
     "LegacyEntryPointAdapter",
     "OrchestratorConfig",

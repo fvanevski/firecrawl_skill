@@ -9,11 +9,11 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from typing import Any
 from uuid import UUID, uuid4
 
 from .blob import ContentAddressedBlobStore
 from .catalog_export import EXPORT_SCHEMA_VERSION
-from .compat import export_json, import_scratch
 from .config import StoreConfig
 from .container import (
     build_audit_service,
@@ -28,6 +28,106 @@ from .qdrant import QdrantIndex
 from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
 from .service import dumps
+
+
+_KNOWN_PREFIXES = ("result_", "url_")
+
+
+def _export_json(path: Path, payload: Any) -> None:
+    """Write JSON atomically via temp-file rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _iter_scratch_assets(root: Path):
+    for meta_path in sorted(root.rglob("_meta.json")):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for item in meta.get("results", []):
+            if item.get("status") != "ok" or not item.get("url"):
+                continue
+            raw = item.get("scratch_file", "")
+            path = (
+                Path(raw)
+                if raw
+                else meta_path.parent / f"result_{item.get('index', 0):03d}.md"
+            )
+            if not path.is_absolute():
+                path = meta_path.parent / path
+            try:
+                path.resolve().relative_to(root.resolve())
+            except ValueError:
+                path = meta_path.parent / Path(raw).name
+            if path.name.startswith(_KNOWN_PREFIXES) and path.is_file():
+                yield (
+                    path,
+                    {
+                        **item,
+                        "invocation_id": meta.get("invocation_id"),
+                        "operation": meta.get("operation"),
+                    },
+                )
+
+
+def _import_scratch(root: Path, service, dry_run: bool = False) -> dict:
+    report = {
+        "version": 1,
+        "root": str(root),
+        "dry_run": dry_run,
+        "scanned": 0,
+        "imported": 0,
+        "reused": 0,
+        "failed": 0,
+        "items": [],
+    }
+    for path, item in _iter_scratch_assets(root):
+        report["scanned"] += 1
+        entry = {
+            "original_path": str(path),
+            "url": item["url"],
+            "status": "would_import" if dry_run else "pending",
+        }
+        try:
+            content = path.read_bytes()
+            entry["byte_length"] = len(content)
+            if not dry_run:
+                result = service.ingest(
+                    IngestRequest(
+                        requested_url=item["url"],
+                        content=content,
+                        mime_type="application/json"
+                        if path.suffix == ".json"
+                        else "text/markdown",
+                        title=item.get("title"),
+                        metadata={
+                            "migration": {
+                                "original_path": str(path),
+                                "invocation_id": item.get("invocation_id"),
+                                "operation": item.get("operation"),
+                            }
+                        },
+                    )
+                )
+                entry.update(
+                    {
+                        "status": "reused" if result.reused_snapshot else "imported",
+                        "source_id": str(result.source_id),
+                        "snapshot_id": str(result.snapshot_id),
+                        "document_id": str(result.document_id),
+                        "content_sha256": result.content_sha256,
+                    }
+                )
+                report[entry["status"]] += 1
+        except Exception as exc:
+            entry.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
+            report["failed"] += 1
+        report["items"].append(entry)
+    report["completed_at"] = datetime.now(timezone.utc).isoformat()
+    return report
 
 
 def parser():
@@ -1126,11 +1226,11 @@ def main(argv=None):
         return 0
     if args.command == "import-scratch":
         root = Path(args.path) if args.path else config.scratch_root
-        report = import_scratch(
+        report = _import_scratch(
             root, None if args.dry_run else build_service(config), args.dry_run
         )
         if args.report:
-            export_json(Path(args.report), report)
+            _export_json(Path(args.report), report)
         print(dumps(report))
         return 1 if report["failed"] else 0
     if args.command == "ingest-result":
@@ -1299,7 +1399,7 @@ def main(argv=None):
     if args.command == "export-invocation":
         with _uow_factory(config)() as uow:
             result = uow.export_invocation(args.invocation_id)
-        export_json(Path(args.output), result)
+        _export_json(Path(args.output), result)
         print(dumps(result))
         return 0
     if args.command == "export-run":
@@ -1324,7 +1424,7 @@ def main(argv=None):
                 (internal_id,),
             )
             events = [row[0] for row in cur.fetchall()]
-        export_json(Path(args.output), {"run": run[0], "retrieval_events": events})
+        _export_json(Path(args.output), {"run": run[0], "retrieval_events": events})
         return 0
 
     # ------------------------------------------------------------------

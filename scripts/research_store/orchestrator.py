@@ -535,11 +535,13 @@ class ExtractionStage:
         coverage_service: CoverageService,
         config: StoreConfig,
         corpus_service: Any | None = None,
+        extraction_service: Any | None = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
         self.config = config
         self.corpus_service = corpus_service
+        self.extraction_service = extraction_service
 
     def execute(
         self,
@@ -564,6 +566,33 @@ class ExtractionStage:
         # Process deep ingestion if raw ingest requests are provided in context
         raw_requests = context.get("raw_ingest_requests")
         if self.corpus_service and raw_requests:
+            attempt_map = {}
+            if self.extraction_service:
+                from dataclasses import replace
+                for idx, req in enumerate(raw_requests):
+                    if isinstance(req, dict):
+                        meta = req.get("metadata", {})
+                        url = req.get("requested_url")
+                    else:
+                        meta = getattr(req, "metadata", {})
+                        url = getattr(req, "requested_url", None)
+                    
+                    candidate_id = meta.get("candidate_id")
+                    if candidate_id:
+                        try:
+                            from uuid import UUID
+                            cid = UUID(str(candidate_id))
+                            aid = self.extraction_service.create_attempt(
+                                candidate_id=cid, run_id=run_id
+                            )
+                            if isinstance(req, dict):
+                                req["extraction_attempt_id"] = aid
+                            else:
+                                raw_requests[idx] = replace(req, extraction_attempt_id=aid)
+                            attempt_map[url] = aid
+                        except Exception as exc:
+                            logger.warning("Failed to create extraction attempt for %s: %s", url, exc)
+
             try:
                 invocation_id = f"extract:{run_id}:{uuid4()}"
                 manifest = self.corpus_service.ingest_batch(
@@ -572,6 +601,20 @@ class ExtractionStage:
                     requests=raw_requests,
                     research_run_external_id=str(run_id),
                 )
+                
+                if self.extraction_service:
+                    for asset in manifest.get("assets", []):
+                        url = asset.get("requested_url")
+                        aid = attempt_map.get(url)
+                        if aid:
+                            status = "succeeded" if asset.get("status") == "complete" else "failed"
+                            try:
+                                self.extraction_service.complete_attempt(attempt_id=aid, exit_status=status)
+                                if status == "succeeded":
+                                    self.extraction_service.select_final_attempt(attempt_id=aid)
+                            except Exception as exc:
+                                logger.warning("Failed to complete extraction attempt %s: %s", aid, exc)
+                                
                 completed_assets = [
                     asset
                     for asset in manifest.get("assets", [])
@@ -1379,6 +1422,7 @@ class ResearchOrchestrator:
         terminal_config: TerminalDecisionConfig | None = None,
         terminal_service: TerminalDecisionService | None = None,
         orchestrator_config: OrchestratorConfig | None = None,
+        extraction_service: Any | None = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
@@ -1399,7 +1443,7 @@ class ResearchOrchestrator:
             run_service, acquisition_service, coverage_service, strategy_service, config
         )
         self._extraction = ExtractionStage(
-            run_service, coverage_service, config, corpus_service=corpus_service
+            run_service, coverage_service, config, corpus_service=corpus_service, extraction_service=extraction_service
         )
         self._indexing = IndexingStage(
             run_service, config, corpus_service=corpus_service
@@ -1466,6 +1510,13 @@ class ResearchOrchestrator:
             except Exception as exc:
                 logger.debug("corpus_service auto-build deferred: %s", exc)
 
+        extraction_service = None
+        try:
+            from .container import build_extraction_service
+            extraction_service = build_extraction_service(config)
+        except Exception as exc:
+            logger.debug("extraction_service auto-build deferred: %s", exc)
+
         legacy_adapter = None
         if orchestrator_config.legacy_adapter_mode != "compatibility":
             from .container import build_legacy_adapter
@@ -1495,6 +1546,7 @@ class ResearchOrchestrator:
             terminal_config=terminal_config,
             terminal_service=terminal_service,
             orchestrator_config=orchestrator_config,
+            extraction_service=extraction_service,
         )
 
     # ------------------------------------------------------------------

@@ -9,8 +9,15 @@ from typing import Any, Callable
 from uuid import UUID
 
 from .blob import ContentAddressedBlobStore
-from .compat import export_json
 from .domain import utcnow
+
+
+def _export_json(path: Path, payload: Any) -> None:
+    """Write JSON atomically via temp-file rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    temporary.replace(path)
 
 
 @dataclass(frozen=True)
@@ -149,7 +156,7 @@ class SearchCompatibilityExporter:
             files_created.append(search_json_path)
 
             candidates_json_path = target_dir / "_candidates.json"
-            export_json(
+            _export_json(
                 candidates_json_path,
                 {
                     "search_response_id": str(resp_data["id"]),
@@ -161,7 +168,7 @@ class SearchCompatibilityExporter:
             files_created.append(candidates_json_path)
 
             meta_json_path = target_dir / "_meta.json"
-            export_json(meta_json_path, meta_payload)
+            _export_json(meta_json_path, meta_payload)
             files_created.append(meta_json_path)
 
         except Exception as exc:
