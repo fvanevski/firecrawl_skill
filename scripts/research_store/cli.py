@@ -132,12 +132,6 @@ def parser():
     run_finish.add_argument("--expected-revision", type=int)
     run_finish.add_argument("--idempotency-key")
     run_finish.add_argument("--actor", default="cli")
-    run_finish.add_argument(
-        "--auto-audit",
-        action="store_true",
-        default=False,
-        help="Trigger automatic semantic audit after finishing the run.",
-    )
     run_reopen = sub.add_parser("run-reopen")
     run_reopen.add_argument("external_id")
     run_reopen.add_argument("--reason", default="legacy compatibility reopen")
@@ -336,15 +330,9 @@ def parser():
     audit.add_argument("--provider", default="local")
     audit.add_argument("--model")
     audit.add_argument("--prompt-hash")
-    audit.add_argument("--model-fingerprint")
+    audit.add_argument("--model-fingerprint", required=True)
     audit.add_argument("--elapsed-ms", type=int, default=0)
     audit.add_argument("--packet-manifest-file")
-    audit.add_argument(
-        "--dry-run",
-        action="store_true",
-        default=False,
-        help="Only check for an equivalent existing assessment; do not create.",
-    )
 
     audit_status = sub.add_parser("audit-status")
     audit_status.add_argument("external_id")
@@ -1314,38 +1302,6 @@ def main(argv=None):
             },
         )
         print(dumps(result.to_dict()))
-        # Auto-audit trigger (issue #34)
-        if args.auto_audit:
-            try:
-                from research_store.container import build_audit_service
-                from research_store.config import StoreConfig
-                from research_store.service import compute_audit_identity_hash
-
-                config = StoreConfig.from_env()
-                if config.database_url:
-                    audit_svc = build_audit_service(config)
-                    identity_hash = compute_audit_identity_hash(
-                        target_hash=args.source_manifest_sha256 or "",
-                        evaluator_version="catalog-v5.0",
-                        prompt_template_version="staged-research-audit-v1",
-                        policy_version="audit-policy-v1",
-                        stage_set=["rubric", "acquisition", "evidence", "synthesis"],
-                    )
-                    audit_svc.create_assessment(
-                        run_id=status.id,
-                        target_type="run",
-                        target_id=status.id,
-                        target_hash=args.source_manifest_sha256 or "",
-                        evaluator_version="catalog-v5.0",
-                        prompt_template_version="staged-research-audit-v1",
-                        policy_version="audit-policy-v1",
-                        stage_set=["rubric", "acquisition", "evidence", "synthesis"],
-                        status="partial",
-                        audit_identity_hash=identity_hash,
-                    )
-            except (ImportError, RuntimeError, KeyError, AttributeError, ValueError):
-                # Audit failure is non-fatal — the run is already finished.
-                pass
         return 0
     if args.command == "run-reopen":
         result = run_service.reopen(
@@ -1828,12 +1784,9 @@ def main(argv=None):
             with open(args.packet_manifest_file, "r") as f:
                 manifest = json.load(f)
 
-        # Use idempotent scheduling (issue #34)
-        assessment = audit_svc.schedule_assessment(
+        assessment = audit_svc.assess_run(
             run_id=run_id,
             external_run_id=args.external_id,
-            target_type="run",
-            target_id=run_id,
             target_hash=args.target_hash,
             evaluator_version=args.evaluator_version,
             prompt_template_version=args.prompt_template_version,
@@ -1846,7 +1799,6 @@ def main(argv=None):
             model_fingerprint=args.model_fingerprint,
             elapsed_ms=args.elapsed_ms,
             audit_packet_manifest=manifest,
-            dry_run=args.dry_run,
         )
         print(dumps(assessment))
 
