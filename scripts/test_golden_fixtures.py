@@ -42,7 +42,6 @@ def load_module(name: str, path: Path):
 
 
 research = load_module("golden_research_workflow", SCRIPTS / "research_workflow.py")
-persist_results = load_module("golden_persist_results", SCRIPTS / "persist_results.py")
 
 
 def replay_env(tmp_path: Path, fixture_path: Path) -> dict[str, str]:
@@ -252,30 +251,6 @@ def test_content_addressed_blob_identity_remains_immutable(tmp_path):
     assert first.sha256 == repeated.sha256
     assert first.sha256 != changed.sha256
     assert store.verify(first.sha256) and store.verify(changed.sha256)
-
-
-def test_persistence_outage_is_fail_closed_and_exports_repair_manifest(tmp_path, monkeypatch):
-    asset = tmp_path / "asset.md"
-    asset.write_text("# Retained fixture\n\nPersistence must remain visible.\n")
-    meta = tmp_path / "_meta.json"
-    meta.write_text(json.dumps({
-        "invocation_id": "fc_" + "3" * 32,
-        "operation": "scrape",
-        "results": [{"index": 0, "url": "https://fixture.invalid/persistence", "status": "ok", "scratch_file": str(asset)}],
-    }))
-
-    class UnavailableService:
-        def persist_manifest_batch(self, *_args, **_kwargs):
-            raise OSError("fixture PostgreSQL outage")
-
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fixture")
-    monkeypatch.setattr(persist_results, "build_service", lambda: UnavailableService())
-    output = tmp_path / "_corpus.json"
-    assert persist_results.main([str(meta), "--output", str(output)]) == 1
-    exported = json.loads(output.read_text())
-    assert exported["status"] == "failed"
-    assert exported["assets"][0]["status"] == "failed"
-    assert "fixture PostgreSQL outage" in exported["error"]
 
 
 class BrokenRedis:

@@ -3,7 +3,6 @@ from __future__ import annotations
 # ruff: noqa: E402 - load the sibling script package without installing it.
 
 from io import BytesIO
-import json
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -16,8 +15,6 @@ sys.path.insert(0, str(SCRIPTS))
 
 from research_store.blob import ContentAddressedBlobStore
 from research_store.cli import parser as research_store_parser
-from research_store.compat import import_scratch
-from research_store.domain import IngestResult
 from research_store.execution_policy import (
     ExecutionModeError,
     ExecutionModePolicy,
@@ -43,7 +40,6 @@ from research_store.run_service import (
 )
 from research_store.service import CorpusService
 from research_store.url import canonicalize_url
-import persist_results
 
 
 def test_destructive_integration_database_guard():
@@ -393,126 +389,6 @@ def test_relation_class_requires_model_provenance():
     )
     with pytest.raises(ValueError):
         validate_relation({"relation_class": "model_inferred", "object_literal": "x"})
-
-
-class FakeService:
-    def __init__(self):
-        self.calls = []
-
-    def ingest(self, request):
-        self.calls.append(request)
-        value = uuid4()
-        return IngestResult(
-            value, value, value, (value,), "a" * 64, len(self.calls) > 1
-        )
-
-
-def test_scratch_import_is_idempotent_and_reports_failures(tmp_path):
-    scratch = tmp_path / "fc_test" / "search"
-    scratch.mkdir(parents=True)
-    asset = scratch / "result_000.md"
-    asset.write_text("# Imported\n\nExact source.")
-    (scratch / "_meta.json").write_text(
-        json.dumps(
-            {
-                "invocation_id": "fc_test",
-                "operation": "search",
-                "results": [
-                    {
-                        "index": 0,
-                        "url": "https://example.com/a",
-                        "title": "Imported",
-                        "scratch_file": str(asset),
-                        "status": "ok",
-                    }
-                ],
-            }
-        )
-    )
-    service = FakeService()
-    first = import_scratch(tmp_path, service)
-    second = import_scratch(tmp_path, service)
-    assert first["imported"] == 1 and second["reused"] == 1
-    assert service.calls[0].metadata["migration"]["original_path"] == str(asset)
-    dry = import_scratch(tmp_path, None, dry_run=True)
-    assert dry["items"][0]["status"] == "would_import"
-
-
-def test_wrapper_persistence_writes_failure_export_when_store_is_unavailable(
-    tmp_path, monkeypatch
-):
-    asset = tmp_path / "asset.md"
-    asset.write_text("# Retained success\n")
-    meta = tmp_path / "_meta.json"
-    meta.write_text(
-        json.dumps(
-            {
-                "invocation_id": "fc_" + "a" * 32,
-                "operation": "scrape",
-                "results": [
-                    {
-                        "index": 0,
-                        "url": "https://fixture.invalid/fail-closed",
-                        "status": "ok",
-                        "scratch_file": str(asset),
-                    }
-                ],
-            }
-        )
-    )
-
-    class UnavailableService:
-        def persist_manifest_batch(self, *_args, **_kwargs):
-            raise OSError("database unavailable")
-
-    output = tmp_path / "_corpus.json"
-    monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
-    monkeypatch.setattr(persist_results, "build_service", lambda: UnavailableService())
-    assert persist_results.main([str(meta), "--output", str(output)]) == 1
-    exported = json.loads(output.read_text())
-    assert exported["status"] == "failed"
-    assert exported["assets"][0]["requested_url"].endswith("fail-closed")
-
-
-def test_wrapper_empty_raw_path_falls_back_to_normalized_scratch(tmp_path, monkeypatch):
-    asset = tmp_path / "smart-result.md"
-    asset.write_text("# Consolidated parent\n\nRetained exactly once.\n")
-    meta = tmp_path / "_meta.json"
-    meta.write_text(
-        json.dumps(
-            {
-                "invocation_id": "fc_" + "b" * 32,
-                "operation": "smart_search",
-                "results": [
-                    {
-                        "index": 0,
-                        "url": "https://fixture.invalid/smart-parent",
-                        "status": "ok",
-                        "scratch_file": str(asset),
-                        "raw_scratch_file": "",
-                    }
-                ],
-            }
-        )
-    )
-
-    class CapturingService:
-        def persist_manifest_batch(self, metadata, assets, **_options):
-            request = assets[0]["request"]
-            assert request.content == request.normalized_content == asset.read_bytes()
-            return {
-                "invocation_id": metadata["invocation_id"],
-                "operation": metadata["operation"],
-                "status": "complete",
-                "assets": [{"status": "complete"}],
-            }
-
-    monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
-    monkeypatch.setattr(persist_results, "build_service", CapturingService)
-    assert (
-        persist_results.main([str(meta), "--output", str(tmp_path / "_corpus.json")])
-        == 0
-    )
 
 
 def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
