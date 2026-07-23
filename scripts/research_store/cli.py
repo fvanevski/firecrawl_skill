@@ -140,6 +140,11 @@ def parser():
     sub.add_parser("doctor")
     sub.add_parser("ingest-ready")
 
+    # ------------------------------------------------------------------
+    # Parser info (issue #44)
+    # ------------------------------------------------------------------
+    sub.add_parser("parser-info")
+
     imp = sub.add_parser("import-scratch")
     imp.add_argument("path", nargs="?")
     imp.add_argument("--dry-run", action="store_true")
@@ -1224,6 +1229,22 @@ def main(argv=None):
                     path.unlink(missing_ok=True)
         print(dumps({"ready": True, "schema": schema, "blob_root": config.blob_root}))
         return 0
+    # ------------------------------------------------------------------
+    # Parser info (issue #44)
+    # ------------------------------------------------------------------
+    if args.command == "parser-info":
+        from .parsing import get_registry
+
+        registry = get_registry()
+        info = {
+            "parser_registry_version": config.parser_registry_version,
+            "parser_version": config.parser_version,
+            "normalization_version": config.normalization_version,
+            "chunker_version": config.chunker_version,
+            "registered_parsers": registry.list_registered(),
+        }
+        print(dumps(info))
+        return 0
     if args.command == "import-scratch":
         root = Path(args.path) if args.path else config.scratch_root
         report = _import_scratch(
@@ -1752,12 +1773,15 @@ def main(argv=None):
     if args.command == "run-audit":
         run_service = build_run_service(config)
         status = run_service.status(external_id=args.external_id)
-        
+
         target_hash = args.target_hash
         if not target_hash:
             from research_store.audit_packet import compute_audit_packet_hash_from_db
-            target_hash = compute_audit_packet_hash_from_db(status.id, run_service.uow_factory)
-            
+
+            target_hash = compute_audit_packet_hash_from_db(
+                status.id, run_service.uow_factory
+            )
+
         result = run_service.trigger_audit(
             status.id,
             target_hash=target_hash,
@@ -2358,9 +2382,7 @@ def main(argv=None):
         if args.report:
             report_path = Path(args.report)
             report_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(report_path.parent), suffix=".tmp"
-            )
+            fd, tmp_path = tempfile.mkstemp(dir=str(report_path.parent), suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
                     json.dump(report_dict, f, indent=2, default=str)
@@ -2399,9 +2421,7 @@ def main(argv=None):
         if args.report:
             report_path = Path(args.report)
             report_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(report_path.parent), suffix=".tmp"
-            )
+            fd, tmp_path = tempfile.mkstemp(dir=str(report_path.parent), suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
                     json.dump(report_dict, f, indent=2, default=str)

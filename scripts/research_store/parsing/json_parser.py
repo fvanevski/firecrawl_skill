@@ -18,6 +18,8 @@ and primitive values.
 * Deep nesting beyond 10 levels is truncated.
 * Binary values (base64 blobs) are represented as ``[binary data]``.
 * Arrays of objects produce a heading per object followed by paragraphs.
+* String values longer than 200 characters are truncated to ``<200 chars>...``.
+  This prevents oversized paragraphs while preserving key metadata.
 
 .. versionchanged:: P5-04
    Introduced as part of Phase 5 canonical parser interfaces.

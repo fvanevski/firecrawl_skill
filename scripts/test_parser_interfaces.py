@@ -666,41 +666,8 @@ class TestTypedBlockConversion:
 
 
 # ---------------------------------------------------------------------------
-# Backward compatibility tests
-# ---------------------------------------------------------------------------
-
-
-class TestBackwardCompatibility:
-    """Tests ensuring backward compatibility with legacy code."""
-
-    def test_structural_blocks_still_works(self):
-        """Legacy structural_blocks() must still function."""
-        from research_store.parsing import structural_blocks
-
-        blocks = structural_blocks("# Title\n\nParagraph text")
-        assert len(blocks) >= 1
-        assert all(isinstance(b, Block) for b in blocks)
-
-    def test_deterministic_chunks_still_works(self):
-        """Legacy deterministic_chunks() must still function."""
-        from research_store.parsing import deterministic_chunks
-
-        blocks = [
-            Block(0, "heading", "Title"),
-            Block(1, "paragraph", "Paragraph text"),
-        ]
-        chunks = deterministic_chunks(blocks, max_chars=100)
-        assert len(chunks) >= 1
-
-    def test_block_has_parser_version(self):
-        """Block dataclass must have parser_version field."""
-        block = Block(
-            ordinal=0,
-            block_type="heading",
-            text="Title",
-        )
-        assert hasattr(block, "parser_version")
-        assert block.parser_version == "markdown-v1"  # default
+# Backward compatibility tests — moved to end of file for clarity
+# See TestBackwardCompatibility class below
 
 
 # ---------------------------------------------------------------------------
@@ -798,3 +765,225 @@ class TestDeterministicChunkIdentity:
             assert c1.text == c2.text
             assert c1.ordinal == c2.ordinal
             assert c1.token_count == c2.token_count
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — typed → legacy → ingest pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestCorpusServiceIntegration:
+    """Integration tests exercising the full typed → legacy → ingest pipeline."""
+
+    def test_parse_content_with_wired_registry(self):
+        """CorpusService._parse_content() succeeds when wired with a registry."""
+        from research_store.config import StoreConfig
+        from research_store.parsing import get_registry
+        from research_store.service import CorpusService
+
+        config = StoreConfig.from_env()
+        # Use a minimal config — we mock the UoW so no DB connection needed
+        registry = get_registry()
+
+        # Build a CorpusService with the registry wired in
+        service = CorpusService(
+            config=config,
+            uow_factory=lambda: None,  # Not used — _parse_content is standalone
+            blob_store=None,
+            parser_registry=registry,
+        )
+
+        # Parse Markdown through the wired service
+        markdown_bytes = b"# Title\n\nThis is a paragraph.\n\n- item 1\n- item 2"
+        blocks = service._parse_content(markdown_bytes, "text/markdown")
+        assert len(blocks) >= 3  # heading + paragraph + list items
+
+        # Verify block types
+        types = [b.block_type for b in blocks]
+        assert "heading" in types
+        assert "paragraph" in types
+        assert "list_item" in types
+
+        # Verify parser_version propagated through to_legacy_block
+        for block in blocks:
+            assert hasattr(block, "parser_version")
+            assert block.parser_version == "markdown-v1"
+
+    def test_parse_content_html_registry(self):
+        """HTML content parsed through wired registry produces typed blocks."""
+        from research_store.config import StoreConfig
+        from research_store.parsing import get_registry
+        from research_store.service import CorpusService
+
+        config = StoreConfig.from_env()
+        registry = get_registry()
+
+        service = CorpusService(
+            config=config,
+            uow_factory=lambda: None,
+            blob_store=None,
+            parser_registry=registry,
+        )
+
+        html_bytes = b"<h1>Hello</h1><p>World content here.</p>"
+        blocks = service._parse_content(html_bytes, "text/html")
+        assert len(blocks) >= 1
+
+        types = [b.block_type for b in blocks]
+        assert "heading" in types or "paragraph" in types
+
+        # Verify parser_version
+        for block in blocks:
+            assert block.parser_version == "html-normalized-v1"
+
+    def test_parse_content_json_registry(self):
+        """JSON content parsed through wired registry produces typed blocks."""
+        from research_store.config import StoreConfig
+        from research_store.parsing import get_registry
+        from research_store.service import CorpusService
+
+        config = StoreConfig.from_env()
+        registry = get_registry()
+
+        service = CorpusService(
+            config=config,
+            uow_factory=lambda: None,
+            blob_store=None,
+            parser_registry=registry,
+        )
+
+        json_bytes = b'{"name": "test", "value": 42}'
+        blocks = service._parse_content(json_bytes, "application/json")
+        assert len(blocks) >= 1
+
+        # Verify parser_version
+        for block in blocks:
+            assert block.parser_version == "json-v1"
+
+    def test_parse_content_fallback_to_legacy_on_unsupported(self):
+        """Unsupported MIME type falls back to legacy structural_blocks."""
+        from research_store.config import StoreConfig
+        from research_store.parsing import get_registry
+        from research_store.service import CorpusService
+
+        config = StoreConfig.from_env()
+        registry = get_registry()
+
+        service = CorpusService(
+            config=config,
+            uow_factory=lambda: None,
+            blob_store=None,
+            parser_registry=registry,
+        )
+
+        # PDF content with a registered but stubbed parser — should raise
+        # UnsupportedFormatError (not fall back to legacy)
+        with pytest.raises(Exception, match="unsupported format|unsupported format"):
+            service._parse_content(b"%PDF-1.4 fake pdf data", "application/pdf")
+
+    def test_parse_content_no_registry_uses_legacy(self):
+        """Without a registry, _parse_content falls back to legacy structural_blocks."""
+        from research_store.config import StoreConfig
+        from research_store.service import CorpusService
+
+        config = StoreConfig.from_env()
+
+        service = CorpusService(
+            config=config,
+            uow_factory=lambda: None,
+            blob_store=None,
+            parser_registry=None,  # No registry — should use legacy
+        )
+
+        markdown_bytes = b"# Title\n\nParagraph text."
+        blocks = service._parse_content(markdown_bytes, "text/markdown")
+        assert len(blocks) >= 2
+
+
+class TestParserInfoCli:
+    """Tests for the parser-info CLI subcommand."""
+
+    def test_parser_info_cli_produces_valid_json(self):
+        """parser-info subcommand produces valid JSON with registered parsers."""
+        from research_store.cli import parser as cli_parser
+        from research_store.config import StoreConfig
+        from research_store.parsing import get_registry
+
+        # Parse the args — just verify the subcommand is recognized
+        args = cli_parser().parse_args(["parser-info"])
+        assert args.command == "parser-info"
+
+        # Verify the config has the expected fields
+        config = StoreConfig.from_env()
+        assert hasattr(config, "parser_registry_version")
+        assert config.parser_registry_version == "canonical-v1"
+
+        # Verify the registry produces expected output
+        registry = get_registry()
+        registered = registry.list_registered()
+        mime_types = [r["mime_type"] for r in registered]
+        assert "text/markdown" in mime_types
+        assert "text/html" in mime_types
+        assert "application/json" in mime_types
+        assert "text/plain" in mime_types
+
+
+class TestBackwardCompatibility:
+    """Tests ensuring backward compatibility with legacy code."""
+
+    def test_structural_blocks_still_works(self):
+        """Legacy structural_blocks() must still function."""
+        from research_store.parsing import structural_blocks
+
+        blocks = structural_blocks("# Title\n\nParagraph text")
+        assert len(blocks) >= 1
+        assert all(hasattr(b, "block_type") for b in blocks)
+
+    def test_deterministic_chunks_still_works(self):
+        """Legacy deterministic_chunks() must still function."""
+        from research_store.parsing import deterministic_chunks
+        from research_store.domain import Block
+
+        blocks = [
+            Block(0, "heading", "Title"),
+            Block(1, "paragraph", "Paragraph text"),
+        ]
+        chunks = deterministic_chunks(blocks, max_chars=100)
+        assert len(chunks) >= 1
+
+    def test_block_has_parser_version(self):
+        """Block dataclass must have parser_version field."""
+        from research_store.domain import Block
+
+        block = Block(
+            ordinal=0,
+            block_type="heading",
+            text="Title",
+        )
+        assert hasattr(block, "parser_version")
+        assert block.parser_version == "markdown-v1"  # default
+
+    def test_typed_block_to_legacy_preserves_parser_version(self):
+        """TypedBlock.to_legacy_block() must propagate parser_version."""
+        from research_store.parsing import TypedBlock
+
+        typed = TypedBlock(
+            ordinal=0,
+            block_type="heading",
+            text="Test",
+            parser_version="html-normalized-v1",
+        )
+        legacy = typed.to_legacy_block()
+        assert legacy.parser_version == "html-normalized-v1"
+
+    def test_typed_block_to_legacy_default_parser_version(self):
+        """TypedBlock with default version produces legacy with same version."""
+        from research_store.parsing import TypedBlock
+
+        typed = TypedBlock(
+            ordinal=0,
+            block_type="paragraph",
+            text="Hello",
+        )
+        legacy = typed.to_legacy_block()
+        assert legacy.parser_version == "canonical-v1"

@@ -9,7 +9,9 @@ from uuid import UUID
 from .config import StoreConfig
 from .domain import IngestRequest, IngestResult
 from .invocation_events import _sanitize
-from .parsing import deterministic_chunks, structural_blocks
+from .parsing import deterministic_chunks
+from .parsing.interfaces import ParserSelectionError, UnsupportedFormatError
+from .parsing_legacy import structural_blocks
 from .retrieval import reciprocal_rank_fusion
 from .url import canonicalize_url
 
@@ -25,6 +27,7 @@ class CorpusService:
         embedder=None,
         reranker=None,
         queue=None,
+        parser_registry=None,
     ):
         self.config = config
         self.uow_factory = uow_factory
@@ -33,6 +36,7 @@ class CorpusService:
         self.embedder = embedder
         self.reranker = reranker
         self.queue = queue
+        self.parser_registry = parser_registry
 
     def ingest(self, request: IngestRequest) -> IngestResult:
         prepared = self._prepare_ingest(request)
@@ -55,8 +59,11 @@ class CorpusService:
             if request.normalized_content is not None
             else request.content
         )
-        text = normalized.decode("utf-8", errors="replace").replace("\r\n", "\n")
-        blocks = structural_blocks(text)
+        raw = normalized
+        text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
+
+        # Use typed parser registry when available, fall back to legacy
+        blocks = self._parse_content(raw, request.mime_type)
         if not blocks:
             raise ValueError("retrieved content produced no structural blocks")
         chunks = deterministic_chunks(blocks)
@@ -71,6 +78,47 @@ class CorpusService:
             self.config.chunker_version,
             self.config.normalization_version,
         )
+
+    def _parse_content(self, raw: bytes, mime_type: str | None) -> list:
+        """Parse content using the typed parser registry or legacy fallback.
+
+        Args:
+            raw: Raw byte payload.
+            mime_type: MIME type hint from the scraper.
+
+        Returns:
+            List of Block instances (typed or legacy).
+
+        Raises:
+            UnsupportedFormatError: When the MIME type is explicitly unsupported.
+            ParserSelectionError: When no parser can be selected.
+        """
+        if self.parser_registry is not None:
+            try:
+                record = self.parser_registry.select(mime_type, raw=raw)
+                # Instantiate the parser from its fully-qualified type name
+                from importlib import import_module
+
+                module_name, class_name = record.selected_parser_type.rsplit(".", 1)
+                mod = import_module(module_name)
+                parser = getattr(mod, class_name)()
+                parse_result = parser.parse(raw, mime_type=mime_type)
+                if not parse_result.success:
+                    # Parse produced an error — treat as unsupported
+                    raise UnsupportedFormatError(
+                        mime_type=mime_type,
+                        suggestion=parse_result.error or "Parser reported an error",
+                    )
+                return [b.to_legacy_block() for b in parse_result.blocks]
+            except (UnsupportedFormatError, ParserSelectionError):
+                raise
+            except Exception:
+                # On unexpected parser failure, fall through to legacy
+                pass
+
+        # Legacy fallback: Markdown-only structural parser
+        text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        return structural_blocks(text)
 
     def ingest_batch(
         self,
@@ -572,7 +620,11 @@ class ClaimManifestService:
                     inserted_links += 1
                 except Exception as exc:
                     exc_str = str(exc).lower()
-                    if "unique constraint" in exc_str or "uk_claim_evidence_links" in exc_str or "duplicate key" in exc_str:
+                    if (
+                        "unique constraint" in exc_str
+                        or "uk_claim_evidence_links" in exc_str
+                        or "duplicate key" in exc_str
+                    ):
                         inserted_links += 1
                     else:
                         failed_links.append(
@@ -678,7 +730,9 @@ def compute_audit_identity_hash(
     if empty:
         raise ValueError("audit identity fields must be non-empty: " + ", ".join(empty))
     normalized_stages = sorted(set(stage_set))
-    if not normalized_stages or any(not stage or not stage.strip() for stage in normalized_stages):
+    if not normalized_stages or any(
+        not stage or not stage.strip() for stage in normalized_stages
+    ):
         raise ValueError("stage_set must contain non-empty stages")
     identity = {
         "identity_version": AUDIT_IDENTITY_VERSION,
@@ -699,7 +753,16 @@ def _extract_evidence_references(obj: Any) -> list[str]:
     if isinstance(obj, dict):
         for k, v in obj.items():
             k_lower = str(k).lower()
-            if k_lower in ("evidence_refs", "evidence_references", "claim_id", "claim_ids", "passage_id", "passage_ids", "snapshot_id", "snapshot_ids"):
+            if k_lower in (
+                "evidence_refs",
+                "evidence_references",
+                "claim_id",
+                "claim_ids",
+                "passage_id",
+                "passage_ids",
+                "snapshot_id",
+                "snapshot_ids",
+            ):
                 if isinstance(v, (list, tuple, set)):
                     refs.extend([str(item) for item in v if item])
                 elif v:
@@ -850,9 +913,7 @@ class AuditService:
 
         with self.uow_factory() as uow:
             if not uow.validate_assessment_exists(assessment_id):
-                raise ValueError(
-                    f"assessment not found: {assessment_id}"
-                )
+                raise ValueError(f"assessment not found: {assessment_id}")
 
             if sanitized_output:
                 extracted_refs = _extract_evidence_references(sanitized_output)
@@ -1151,4 +1212,3 @@ class AuditService:
         assessment["invocation_id"] = str(invocation_id)
         assessment["action"] = result["action"]
         return assessment
-

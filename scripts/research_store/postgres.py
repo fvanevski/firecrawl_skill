@@ -15,7 +15,7 @@ from .domain import (
     IngestResult,
     utcnow,
 )
-from .parsing import parse_raw_search_response
+from .parsing_legacy import parse_raw_search_response
 from .url import canonicalize_candidate_url
 
 

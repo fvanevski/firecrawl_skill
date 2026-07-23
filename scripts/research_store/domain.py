@@ -27,6 +27,7 @@ class Block:
     char_start: int | None = None
     char_end: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    parser_version: str = "markdown-v1"
 
 
 @dataclass(frozen=True)

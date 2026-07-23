@@ -21,6 +21,8 @@ from .strategy_service import StrategyRevisionService
 def build_service(config: StoreConfig | None = None) -> CorpusService:
     config = config or StoreConfig.from_env()
     config.require_database()
+    from .parsing import get_registry
+
     embedder = (
         OpenAICompatibleEmbedder(
             config.embedding_url,
@@ -63,6 +65,7 @@ def build_service(config: StoreConfig | None = None) -> CorpusService:
         embedder=embedder,
         reranker=reranker,
         queue=ValkeyQueue(config.valkey_url),
+        parser_registry=get_registry(),
     )
 
 

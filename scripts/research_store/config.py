@@ -36,6 +36,7 @@ class StoreConfig:
     chunker_version: str
     parser_version: str
     normalization_version: str
+    parser_registry_version: str
     max_index_attempts: int
     job_lease_seconds: int
     worker_poll_seconds: int
@@ -69,8 +70,9 @@ class StoreConfig:
             reranker_candidate_limit=_integer("RERANKER_CANDIDATE_LIMIT", 40),
             chunker_version=os.environ.get("CHUNKER_VERSION", "structural-v1"),
             parser_version=os.environ.get("PARSER_VERSION", "markdown-v1"),
-            normalization_version=os.environ.get(
-                "NORMALIZATION_VERSION", "cleanup-v1"
+            normalization_version=os.environ.get("NORMALIZATION_VERSION", "cleanup-v1"),
+            parser_registry_version=os.environ.get(
+                "PARSER_REGISTRY_VERSION", "canonical-v1"
             ),
             max_index_attempts=_integer("MAX_INDEX_ATTEMPTS", 5),
             job_lease_seconds=_integer("INDEX_JOB_LEASE_SECONDS", 300),

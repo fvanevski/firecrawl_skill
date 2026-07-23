@@ -201,6 +201,11 @@ class ParserRegistry:
                 except Exception:
                     continue
 
+        # 3b. Neither MIME type nor raw bytes — cannot select
+        if mime_type is None and raw is None:
+            available = sorted(self._parsers.keys())
+            raise ParserSelectionError(mime_type, available)
+
         # 4. Fallback
         fallback = self._parsers.get("application/octet-stream")
         if fallback is not None:
@@ -220,6 +225,15 @@ class ParserRegistry:
 # ---------------------------------------------------------------------------
 # Default registry (built-in parsers)
 # ---------------------------------------------------------------------------
+
+
+def _json_sniffer(raw: bytes) -> bool:
+    """Detect JSON by leading bracket or brace (first 512 bytes)."""
+    stripped = raw.lstrip()
+    if not stripped:
+        return False
+    first = stripped[0:1]
+    return first in (b"{", b"[")
 
 
 def build_default_registry() -> ParserRegistry:
@@ -252,10 +266,11 @@ def build_default_registry() -> ParserRegistry:
         mime_types=["text/html", "application/xhtml+xml"],
     )
 
-    # JSON
+    # JSON — with content sniffer for MIME-type-less selection
     registry.register(
         JsonParser,
         mime_types=["application/json", "application/json; charset=utf-8"],
+        sniffer=_json_sniffer,
     )
 
     # Plain text

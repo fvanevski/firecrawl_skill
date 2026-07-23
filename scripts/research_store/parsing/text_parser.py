@@ -15,9 +15,12 @@ MIME type detection fails.
 
 ## Limitations
 
-* No heading detection.
+* No heading detection (even for ``=== Title ===`` or ``---`` patterns).
 * No list or code block recognition.
 * No structural metadata beyond line-group offsets.
+* This is intentional — plain text is the simplest parser and serves as a
+  fallback. Use the Markdown or HTML parsers when structural interpretation
+  is needed.
 
 .. versionchanged:: P5-04
    Introduced as part of Phase 5 canonical parser interfaces.

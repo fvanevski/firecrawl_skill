@@ -95,6 +95,7 @@ class TypedBlock:
             heading_path=self.heading_path,
             char_start=self.char_start,
             char_end=self.char_end,
+            parser_version=self.parser_version,
             metadata=self.metadata,
         )
 

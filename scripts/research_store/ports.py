@@ -11,6 +11,7 @@ from .domain import (
     IngestResult,
     SearchAdapterResult,
 )
+from .parsing import ParseResult, SelectionRecord
 
 
 class SourceRepository(Protocol):
@@ -390,6 +391,17 @@ class BlobStore(Protocol):
     def open(self, digest: str) -> BinaryIO: ...
     def exists(self, digest: str) -> bool: ...
     def verify(self, digest: str) -> bool: ...
+
+
+class ParserRepository(Protocol):
+    """Protocol for parser selection and execution."""
+
+    def select(
+        self,
+        raw: bytes,
+        *,
+        mime_type: str | None = None,
+    ) -> tuple[SelectionRecord, ParseResult]: ...
 
 
 class RetrievalIndex(Protocol):
