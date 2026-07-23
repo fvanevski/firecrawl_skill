@@ -817,3 +817,188 @@ class ExtractionAttempt:
                 else str(self.created_at)
             ),
         }
+
+
+# ---------------------------------------------------------------------------
+# Normalization domain models (issue #45)
+# ---------------------------------------------------------------------------
+
+VALID_NORMALIZATION_DISPOSITIONS = frozenset({"keep", "alter", "suppress", "remove"})
+VALID_NORMALIZATION_RULE_IDS = frozenset(
+    {
+        "strip-html-comments",
+        "collapse-blank-lines",
+        "strip-cookie-notice",
+        "strip-navigation",
+        "strip-social-links",
+        "strip-boilerplate-heading",
+        "strip-copyright-footer",
+        "strip-tracking-params",
+        "strip-image-markdown-wrapper",
+        "preserve-citation",
+        "preserve-code-block",
+        "preserve-meaningful-link",
+        "preserve-image-source",
+        "preserve-short-heading",
+        "preserve-footnote",
+        "preserve-source-url",
+        "doc-type-footer-digest",
+    }
+)
+
+
+@dataclass(frozen=True)
+class NormalizedBlock:
+    """A block after normalization, with a disposition and rule version.
+
+    Attributes:
+        id: Stable UUID for the normalized block.
+        source_block_id: FK to the source ``document_blocks.id``.
+        document_id: FK to ``documents(id)``.
+        ordinal: Positional index within the document.
+        block_type: Semantic type tag (inherited from source).
+        text: Normalized text content.
+        heading_path: Ancestor heading path.
+        disposition: One of keep, alter, suppress, remove.
+        rule_version: Version of the normalization rule applied.
+        transformation_reason: Why this disposition was chosen.
+        parser_version: Parser version that produced the source block.
+    """
+
+    id: UUID
+    source_block_id: UUID
+    document_id: UUID
+    ordinal: int
+    block_type: str
+    text: str
+    heading_path: tuple[str, ...] = ()
+    disposition: str = "keep"
+    rule_version: str = "normalization-v1"
+    transformation_reason: str | None = None
+    parser_version: str = "canonical-v1"
+
+    def __post_init__(self) -> None:
+        if self.disposition not in VALID_NORMALIZATION_DISPOSITIONS:
+            raise ValueError(
+                f"invalid disposition: {self.disposition}; "
+                f"expected one of {sorted(VALID_NORMALIZATION_DISPOSITIONS)}"
+            )
+
+    @classmethod
+    def from_source_block(
+        cls,
+        source_block_id: UUID,
+        document_id: UUID,
+        ordinal: int,
+        block_type: str,
+        text: str,
+        heading_path: tuple[str, ...] = (),
+        disposition: str = "keep",
+        rule_version: str = "normalization-v1",
+        transformation_reason: str | None = None,
+        parser_version: str = "canonical-v1",
+    ) -> "NormalizedBlock":
+        """Create a normalized block from a source block snapshot.
+
+        Args:
+            source_block_id: UUID of the source block.
+            document_id: UUID of the parent document.
+            ordinal: Block ordinal.
+            block_type: Block type.
+            text: Block text (may be normalized).
+            heading_path: Heading path tuple.
+            disposition: Normalization disposition.
+            rule_version: Normalization rule version.
+            transformation_reason: Why this disposition was chosen.
+            parser_version: Parser version from the source block.
+
+        Returns:
+            A new ``NormalizedBlock`` instance.
+        """
+        return cls(
+            id=uuid4(),
+            source_block_id=source_block_id,
+            document_id=document_id,
+            ordinal=ordinal,
+            block_type=block_type,
+            text=text,
+            heading_path=heading_path,
+            disposition=disposition,
+            rule_version=rule_version,
+            transformation_reason=transformation_reason,
+            parser_version=parser_version,
+        )
+
+
+@dataclass(frozen=True)
+class TransformationRecord:
+    """Records a single transformation applied during normalization.
+
+    Every time a normalization rule modifies or acts on a block, a
+    ``TransformationRecord`` is created so that the change is auditable
+    and reversible.
+
+    Attributes:
+        id: Stable UUID for the transformation record.
+        normalized_block_id: FK to ``normalized_blocks(id)``.
+        rule_id: Identifier of the rule that was applied.
+        rule_version: Version of the normalization rule.
+        reason: Human-readable reason for the transformation.
+        before_text: Text before the transformation (may be empty).
+        after_text: Text after the transformation (may be empty).
+        confidence: Confidence score in [0, 1] for the rule decision.
+    """
+
+    id: UUID = field(default_factory=uuid4)
+    normalized_block_id: UUID | None = None
+    rule_id: str = ""
+    rule_version: str = "normalization-v1"
+    reason: str = ""
+    before_text: str = ""
+    after_text: str = ""
+    confidence: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.rule_id not in VALID_NORMALIZATION_RULE_IDS:
+            raise ValueError(
+                f"invalid rule_id: {self.rule_id}; "
+                f"expected one of {sorted(VALID_NORMALIZATION_RULE_IDS)}"
+            )
+        if not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(f"confidence must be in [0, 1], got {self.confidence}")
+
+    @classmethod
+    def create(
+        cls,
+        normalized_block_id: UUID,
+        rule_id: str,
+        reason: str,
+        before_text: str = "",
+        after_text: str = "",
+        confidence: float = 1.0,
+        rule_version: str = "normalization-v1",
+    ) -> "TransformationRecord":
+        """Create a transformation record.
+
+        Args:
+            normalized_block_id: UUID of the normalized block.
+            rule_id: Rule identifier.
+            reason: Human-readable reason.
+            before_text: Text before transformation.
+            after_text: Text after transformation.
+            confidence: Confidence score in [0, 1].
+            rule_version: Rule version.
+
+        Returns:
+            A new ``TransformationRecord`` instance.
+        """
+        return cls(
+            id=uuid4(),
+            normalized_block_id=normalized_block_id,
+            rule_id=rule_id,
+            rule_version=rule_version,
+            reason=reason,
+            before_text=before_text,
+            after_text=after_text,
+            confidence=confidence,
+        )
