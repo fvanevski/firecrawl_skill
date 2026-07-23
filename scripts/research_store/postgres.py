@@ -1296,7 +1296,7 @@ class PostgresUnitOfWork:
             )
             return [dict(zip(keys, row)) for row in cur.fetchall()]
 
-    def _bump_lifecycle_revision(self, run_id, new_revision):
+    def _bump_lifecycle_revision(self, run_id, new_revision, expected_revision=None):
         """Bump the lifecycle_revision counter for a research run.
 
         This is a lightweight helper used by compatibility commands
@@ -1306,15 +1306,25 @@ class PostgresUnitOfWork:
         Args:
             run_id: Research run UUID.
             new_revision: The new lifecycle_revision value.
+            expected_revision: The expected current revision (for CAS).
 
         Returns:
             The number of rows affected.
         """
         with self.connection.cursor() as cur:
-            cur.execute(
-                "UPDATE research_runs SET lifecycle_revision=%s WHERE id=%s",
-                (new_revision, run_id),
-            )
+            if expected_revision is not None:
+                cur.execute(
+                    "UPDATE research_runs SET lifecycle_revision=%s WHERE id=%s AND lifecycle_revision=%s",
+                    (new_revision, run_id, expected_revision),
+                )
+            else:
+                cur.execute(
+                    "UPDATE research_runs SET lifecycle_revision=%s WHERE id=%s",
+                    (new_revision, run_id),
+                )
+            if expected_revision is not None and cur.rowcount == 0:
+                from .run_service import RunStateError
+                raise RunStateError(f"Concurrency error: expected revision {expected_revision} for run {run_id}")
             return cur.rowcount
 
     def append_event(

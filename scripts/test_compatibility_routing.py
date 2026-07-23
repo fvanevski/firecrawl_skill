@@ -7,16 +7,27 @@ Tests cover:
 - Export failure after successful state transition
 - Deprecation warnings for filesystem fallback
 - CLI parity
+- Concurrency protections for lifecycle_revision
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
+try:
+    import psycopg
+except ImportError:
+    psycopg = None
+
 SCRIPTS = Path(__file__).resolve().parent
+
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
 
 def run_frun(*args, env=None):
@@ -71,6 +82,7 @@ class TestFrunCommandRouting:
         """verify command should fall back to filesystem catalog with deprecation warning when DB is off."""
         monkeypatch.setenv("FIRECRAWL_RESEARCH_PERSIST", "off")
         monkeypatch.setenv("FIRECRAWL_RESEARCH_AUTO_ENV", "0")
+        monkeypatch.setenv("FIRECRAWL_WARN_MARKER", str(tmp_path / "warn_marker"))
         result = run_frun("verify", "fr_test")
         assert "WARNING" in result.stderr or result.returncode != 0
 
@@ -207,6 +219,7 @@ class TestDeprecationWarnings:
         monkeypatch.setenv("FIRECRAWL_RESEARCH_PERSIST", "off")
         monkeypatch.setenv("FIRECRAWL_RESEARCH_AUTO_ENV", "0")
         monkeypatch.setenv("FIRECRAWL_CATALOG_DIR", str(tmp_path / "catalog"))
+        monkeypatch.setenv("FIRECRAWL_WARN_MARKER", str(tmp_path / "warn_marker"))
 
         result = run_frun("status", "fr_test")
         assert "WARNING" in result.stderr
@@ -219,6 +232,7 @@ class TestDeprecationWarnings:
         monkeypatch.setenv("FIRECRAWL_RESEARCH_PERSIST", "off")
         monkeypatch.setenv("FIRECRAWL_RESEARCH_AUTO_ENV", "0")
         monkeypatch.setenv("FIRECRAWL_CATALOG_DIR", str(tmp_path / "catalog"))
+        monkeypatch.setenv("FIRECRAWL_WARN_MARKER", str(tmp_path / "warn_marker"))
 
         # Each invocation shows the warning once (not cumulative across invocations)
         result1 = run_frun("status", "fr_test")
@@ -344,3 +358,60 @@ class TestCatalogExportIntegration:
         assert hasattr(CatalogExportService, "export_run")
         assert hasattr(CatalogExportService, "export_invocation")
         assert hasattr(CatalogExportService, "export_events")
+
+
+class TestConcurrency:
+    """Test concurrency protections for compatibility commands."""
+
+    @pytest.mark.skipif(not TEST_DSN or not psycopg, reason="Requires PostgreSQL and psycopg")
+    def test_concurrent_annotate(self, monkeypatch):
+        """Concurrent annotations must not lose lifecycle_revision updates."""
+        from research_store.config import StoreConfig
+        from research_store.container import build_run_service
+        from research_store.run_service import RunStateError
+
+        monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+        config = StoreConfig.from_env()
+        run_service = build_run_service(config)
+
+        # Start a run
+        run_id = uuid4()
+        run_service.create(
+            external_id=str(run_id),
+            objective="Concurrency test objective",
+            profile="autonomous_local",
+            run_id=run_id,
+            idempotency_key=f"idem:start:{run_id}"
+        )
+
+        # Blast annotations
+        num_workers = 10
+        successes = 0
+        failures = 0
+
+        def annotate_worker(i):
+            try:
+                run_service.annotate(
+                    run_id,
+                    event_type="pivot",
+                    reason=f"Concurrent annotation {i}",
+                    actor_type="test",
+                    idempotency_key=f"idem:test:{i}"
+                )
+                return True
+            except RunStateError:
+                return False
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(annotate_worker, i) for i in range(num_workers)]
+            for future in as_completed(futures):
+                if future.result():
+                    successes += 1
+                else:
+                    failures += 1
+
+        status = run_service.status(run_id=run_id)
+        # The revision should have incremented exactly by the number of successful annotations.
+        # Initial is 1. Plus successes.
+        assert status.lifecycle_revision == 1 + successes
+        assert successes > 0, "At least one annotation should have succeeded"

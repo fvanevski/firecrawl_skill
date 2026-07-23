@@ -35,17 +35,19 @@ preflight_database() {
 # Emit a one-shot deprecation warning when falling back to the legacy
 # filesystem catalog.  We track it in a temp file so the message only
 # appears once per invocation.
-_deprecation_warning_shown=0
 _deprecation_warn() {
-  if [[ "$_deprecation_warning_shown" == "0" ]]; then
+  local marker="${FIRECRAWL_WARN_MARKER:-/tmp/.firecrawl_legacy_warned_${USER:-$UID}}"
+  if [[ ! -f "$marker" ]]; then
     printf '%s\n' "WARNING: falling back to legacy filesystem catalog; PostgreSQL commands are deprecated and will be removed in a future release" >&2
-    _deprecation_warning_shown=1
+    touch "$marker" 2>/dev/null || true
   fi
 }
 _compat_export_events() {
   local run_id="$1"
   if [[ "${FIRECRAWL_CATALOG_DISABLED:-}" != "1" ]]; then
-    "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" export-events-to-fs --run-id "$run_id" >/dev/null 2>&1 || true
+    if ! "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" export-events-to-fs --run-id "$run_id" >/dev/null 2>&1; then
+      echo "WARNING: filesystem export failed for run $run_id" >&2
+    fi
   fi
 }
 case "${1:-}" in
@@ -120,7 +122,7 @@ case "${1:-}" in
     printf '%s\n' "${run_id:-}"
     if [[ "$auto_audit" == "1" ]]; then
       if [[ "$DB_ACTIVE" == "1" ]]; then
-        "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit "$run_id"
+        "$SCRIPT_DIR/research-db" run-audit "$run_id"
       else
         _deprecation_warn
         "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit "$run_id"
@@ -176,14 +178,7 @@ case "${1:-}" in
   audit)
     shift
     if [[ "$DB_ACTIVE" == "1" ]]; then
-      # Forward to PostgreSQL when --target-hash is present; the CLI
-      # handles validation and rejects missing required arguments.
-      if printf '%s\n' "$@" | grep -q -- '--target-hash'; then
-        "$SCRIPT_DIR/research-db" run-audit "$@"
-      else
-        echo "WARNING: PostgreSQL audit requires --target-hash; use catalog_v5.py audit for auto-packet building" >&2
-        "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit "$@"
-      fi
+      "$SCRIPT_DIR/research-db" run-audit "$@"
     else
       _deprecation_warn
       "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit "$@"

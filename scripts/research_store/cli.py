@@ -209,7 +209,7 @@ def parser():
     run_verify.add_argument("--output", default="-")
     run_audit = sub.add_parser("run-audit")
     run_audit.add_argument("external_id")
-    run_audit.add_argument("--target-hash", required=True)
+    run_audit.add_argument("--target-hash")
     run_audit.add_argument(
         "--llm", choices=("local", "openai", "gemini"), default="local"
     )
@@ -1622,9 +1622,15 @@ def main(argv=None):
     if args.command == "run-audit":
         run_service = build_run_service(config)
         status = run_service.status(external_id=args.external_id)
+        
+        target_hash = args.target_hash
+        if not target_hash:
+            from research_store.audit_packet import compute_audit_packet_hash_from_db
+            target_hash = compute_audit_packet_hash_from_db(status.id, run_service.uow_factory)
+            
         result = run_service.trigger_audit(
             status.id,
-            target_hash=args.target_hash,
+            target_hash=target_hash,
             provider=args.llm,
             model=args.model,
             force=args.force,

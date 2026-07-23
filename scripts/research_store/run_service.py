@@ -871,13 +871,6 @@ class ResearchRunService:
         if to_invocation:
             payload["to_invocation"] = to_invocation
         with self.uow_factory() as uow:
-            # Read current state for compare-and-swap
-            status_data = uow.runs.get_run_status(run_id=run_id)
-            if status_data["lifecycle_revision"] != expected_revision:
-                raise RunStateError(
-                    f"stale research run revision: expected {expected_revision}, "
-                    f"got {status_data['lifecycle_revision']}"
-                )
             event_id = uow.runs.append_event(
                 run_id,
                 "annotation",
@@ -885,9 +878,9 @@ class ResearchRunService:
                 key,
                 payload=payload,
             )
-            # Bump lifecycle revision within the same transaction
+            # Bump lifecycle revision atomically within the same transaction
             new_revision = expected_revision + 1
-            uow.runs._bump_lifecycle_revision(run_id, new_revision)
+            uow.runs._bump_lifecycle_revision(run_id, new_revision, expected_revision=expected_revision)
         return {
             "event_id": str(event_id),
             "run_id": str(run_id),
