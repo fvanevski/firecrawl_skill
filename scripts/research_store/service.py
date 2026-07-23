@@ -9,10 +9,10 @@ from uuid import UUID
 
 from .config import StoreConfig
 from .domain import IngestRequest, IngestResult
+from .hierarchical_chunker import hierarchical_chunks
 from .invocation_events import _sanitize
-from .parsing import deterministic_chunks
+from .parsing import structural_blocks
 from .parsing.interfaces import ParserSelectionError, UnsupportedFormatError
-from .parsing_legacy import structural_blocks
 from .retrieval import reciprocal_rank_fusion
 from .url import canonicalize_url
 
@@ -67,17 +67,40 @@ class CorpusService:
         blocks = self._parse_content(raw, request.mime_type)
         if not blocks:
             raise ValueError("retrieved content produced no structural blocks")
-        chunks = deterministic_chunks(blocks)
+        chunks = hierarchical_chunks(
+            blocks,
+            max_tokens=self.config.chunker_max_tokens,
+            tokenizer_name="cl100k_base",
+            chunker_version=self.config.chunker_version,
+            chunker_name="hierarchical",
+        )
+        # Convert HierarchicalChunk to legacy Chunk for DB persistence
+        from .domain import Chunk
+
+        legacy_chunks: list[Chunk] = []
+        for hc in chunks:
+            legacy_chunks.append(
+                Chunk(
+                    ordinal=hc.ordinal,
+                    text=hc.text,
+                    content_sha256=hc.content_sha256,
+                    first_block_ordinal=hc.first_block_ordinal,
+                    last_block_ordinal=hc.last_block_ordinal,
+                    token_count=hc.token_count,
+                    heading_path=hc.heading_path,
+                )
+            )
         return (
             request,
             canonical,
             blob,
             text,
             blocks,
-            chunks,
+            legacy_chunks,
             self.config.parser_version,
             self.config.chunker_version,
             self.config.normalization_version,
+            "hierarchical",
         )
 
     def _parse_content(self, raw: bytes, mime_type: str | None) -> list:
@@ -160,7 +183,9 @@ class CorpusService:
                 )
 
         if self._is_html_content(mime_type, raw):
-            raise ValueError("HTML parsing failed for both primary and fallback parsers")
+            raise ValueError(
+                "HTML parsing failed for both primary and fallback parsers"
+            )
 
         # Legacy fallback: Markdown-only structural parser
         text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")

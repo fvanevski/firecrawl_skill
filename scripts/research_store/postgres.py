@@ -160,6 +160,7 @@ class PostgresUnitOfWork:
         parser_version: str,
         chunker_version: str,
         normalization_version: str,
+        chunker_name: str = "structural",
     ) -> IngestResult:
         domain = urlsplit(canonical_url).hostname
         document_hash = hashlib.sha256(normalized_text.encode()).hexdigest()
@@ -273,26 +274,42 @@ class PostgresUnitOfWork:
 
             cur.execute(
                 """SELECT id FROM chunks WHERE document_id=%s
-                AND chunker_name='structural' AND chunker_version=%s ORDER BY ordinal""",
-                (document_id, chunker_version),
+                AND chunker_name=%s AND chunker_version=%s ORDER BY ordinal""",
+                (document_id, chunker_name, chunker_version),
             )
             chunk_ids = [row[0] for row in cur.fetchall()]
             reused_chunks = bool(chunk_ids)
             if not chunk_ids:
                 for chunk in chunks:
+                    metadata_dict: dict[str, object] = {
+                        "heading_path": list(chunk.heading_path),
+                    }
+                    # Add hierarchical metadata if present
+                    if hasattr(chunk, "tokenizer_name"):
+                        metadata_dict["tokenizer_name"] = chunk.tokenizer_name
+                    if hasattr(chunk, "parent_block_ordinal"):
+                        metadata_dict["parent_block_ordinal"] = (
+                            chunk.parent_block_ordinal
+                        )
+
                     cur.execute(
                         """INSERT INTO chunks(document_id,first_block_id,last_block_id,ordinal,text,token_count,content_sha256,
-                        chunker_name,chunker_version,metadata) VALUES(%s,%s,%s,%s,%s,%s,%s,'structural',%s,%s) RETURNING id""",
+                        chunker_name,chunker_version,tokenizer_name,parent_block_id,metadata) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                         (
                             document_id,
-                            block_ids[chunk.first_block_ordinal],
-                            block_ids[chunk.last_block_ordinal],
+                            block_ids.get(chunk.first_block_ordinal),
+                            block_ids.get(chunk.last_block_ordinal),
                             chunk.ordinal,
                             chunk.text,
                             chunk.token_count,
                             chunk.content_sha256,
+                            chunker_name,
                             chunker_version,
-                            json.dumps({"heading_path": list(chunk.heading_path)}),
+                            getattr(chunk, "tokenizer_name", None),
+                            block_ids.get(getattr(chunk, "parent_block_ordinal"))
+                            if getattr(chunk, "parent_block_ordinal", None) is not None
+                            else None,
+                            json.dumps(metadata_dict),
                         ),
                     )
                     chunk_ids.append(cur.fetchone()[0])

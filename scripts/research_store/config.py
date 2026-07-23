@@ -34,6 +34,7 @@ class StoreConfig:
     reranker_api_key: str
     reranker_candidate_limit: int
     chunker_version: str
+    chunker_max_tokens: int
     parser_version: str
     normalization_version: str
     parser_registry_version: str
@@ -69,6 +70,7 @@ class StoreConfig:
             reranker_api_key=os.environ.get("RERANKER_API_KEY", ""),
             reranker_candidate_limit=_integer("RERANKER_CANDIDATE_LIMIT", 40),
             chunker_version=os.environ.get("CHUNKER_VERSION", "structural-v1"),
+            chunker_max_tokens=_integer("CHUNKER_MAX_TOKENS", 1000),
             parser_version=os.environ.get("PARSER_VERSION", "markdown-v1"),
             normalization_version=os.environ.get("NORMALIZATION_VERSION", "cleanup-v1"),
             parser_registry_version=os.environ.get(
