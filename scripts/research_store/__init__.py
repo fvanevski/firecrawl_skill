@@ -7,6 +7,10 @@ from .domain import (
     BlobReference,
     ExtractionAttempt,
     ExtractionQualityMetrics,
+    NormalizedBlock,
+    TransformationRecord,
+    VALID_NORMALIZATION_DISPOSITIONS,
+    VALID_NORMALIZATION_RULE_IDS,
 )
 from .extraction_repository import ExtractionAttemptRepository
 from .extraction_service import ExtractionError, ExtractionService
@@ -45,12 +49,16 @@ __all__ = [
     "ExtractionService",
     "FirecrawlSearchAdapter",
     "LegacyEntryPointAdapter",
+    "NormalizedBlock",
     "OrchestratorConfig",
     "OrchestratorResult",
     "QualityConfig",
     "QualityEvaluationError",
     "QualityService",
     "ResearchOrchestrator",
+    "TransformationRecord",
+    "VALID_NORMALIZATION_DISPOSITIONS",
+    "VALID_NORMALIZATION_RULE_IDS",
     "evaluate_quality",
     "ResearchRunService",
     "SearchCompatibilityExporter",

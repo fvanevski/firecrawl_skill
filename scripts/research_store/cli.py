@@ -23,6 +23,7 @@ from .container import (
 )
 from .domain import IngestRequest
 from .indexing import IndexWorker, OpenAICompatibleEmbedder
+from .normalization import NORMALIZATION_VERSION
 from .postgres import PostgresUnitOfWork, connect
 from .qdrant import QdrantIndex
 from .queue import ValkeyQueue
@@ -191,6 +192,22 @@ def parser():
     target = rederive.add_mutually_exclusive_group(required=True)
     target.add_argument("--all", action="store_true")
     target.add_argument("--snapshot")
+
+    # ------------------------------------------------------------------
+    # Normalization diagnostics (issue #45)
+    # ------------------------------------------------------------------
+    norm = sub.add_parser("normalize", help="Run normalization and show diagnostics")
+    norm.add_argument("--document", help="Document UUID to normalize")
+    norm.add_argument("--all", action="store_true", help="Normalize all documents")
+    norm.add_argument(
+        "--aggressive", action="store_true", help="Enable aggressive cleanup"
+    )
+    norm.add_argument(
+        "--document-type",
+        default="web",
+        choices=["web", "academic", "legal", "documentation"],
+    )
+
     export = sub.add_parser("export-invocation")
     export.add_argument("invocation_id")
     export.add_argument("--output", required=True)
@@ -587,6 +604,210 @@ def _uow_factory(config):
         config.normalization_version,
         config.chunker_version,
     )
+
+
+def _cmd_normalize(config, args) -> int:
+    """Run normalization diagnostics on document blocks (issue #45).
+
+    Runs normalization on document blocks and persists the results to
+    ``normalized_blocks`` and ``transformation_records`` tables.  The
+    operation is idempotent — re-running normalizes the same blocks and
+    upserts the results.
+
+    Args:
+        config: Store configuration.
+        args: Parsed CLI arguments.
+
+    Returns:
+        Exit code (0 = success).
+    """
+    from uuid import UUID as _UUID
+
+    from .normalization import NormalizationService
+
+    config.require_database()
+    with _db(config) as conn, conn.cursor() as cur:
+        if args.all:
+            cur.execute(
+                """SELECT d.id, d.title, d.requested_url, d.content_sha256,
+                   db.id AS block_id, db.ordinal, db.block_type,
+                   db.char_start, db.char_end, db.text,
+                   db.parser_version
+                   FROM documents d
+                   JOIN document_blocks db ON db.document_id = d.id
+                   ORDER BY d.id, db.ordinal"""
+            )
+            rows = cur.fetchall()
+        elif args.document:
+            doc_uuid = _UUID(args.document)
+            cur.execute(
+                """SELECT d.id, d.title, d.requested_url, d.content_sha256,
+                   db.id AS block_id, db.ordinal, db.block_type,
+                   db.char_start, db.char_end, db.text,
+                   db.parser_version
+                   FROM documents d
+                   JOIN document_blocks db ON db.document_id = d.id
+                   WHERE d.id = %s
+                   ORDER BY db.ordinal""",
+                (doc_uuid,),
+            )
+            rows = cur.fetchall()
+        else:
+            print(dumps({"error": "specify --document <uuid> or --all"}))
+            return 1
+
+    if not rows:
+        print(dumps({"message": "no blocks found", "normalized": 0}))
+        return 0
+
+    # Group rows by document
+    docs: dict[tuple, list] = {}
+    for row in rows:
+        doc_key = (str(row[0]), row[1], row[2], row[3])
+        docs.setdefault(doc_key, []).append(row)
+
+    service = NormalizationService(
+        aggressive=args.aggressive,
+        document_type=args.document_type,
+    )
+
+    results = []
+    upserted_blocks = 0
+    upserted_transforms = 0
+
+    for doc_key, doc_rows in docs.items():
+        doc_id = _UUID(doc_key[0])
+        title = doc_key[1]
+        url = doc_key[2]
+        sha = doc_key[3]
+
+        block_ids = []
+        for row in doc_rows:
+            block_ids.append(_UUID(row[4]))
+
+        # Build TypedBlock for normalization
+        from research_store.parsing.interfaces import TypedBlock
+
+        typed_blocks = []
+        for row in doc_rows:
+            typed_blocks.append(
+                TypedBlock(
+                    ordinal=int(row[5]),
+                    block_type=row[6],
+                    text=row[9] or "",
+                    heading_path=(),
+                    char_start=int(row[7]) if row[7] is not None else None,
+                    char_end=int(row[8]) if row[8] is not None else None,
+                    parser_version=row[10] or "canonical-v1",
+                )
+            )
+
+        norm_result = service.normalize(
+            blocks=typed_blocks,
+            source_block_ids=block_ids,
+            document_id=doc_id,
+            document_type=args.document_type,
+        )
+
+        # Persist normalized blocks and transformation records
+        with conn.cursor() as block_cur:
+            for nb in (
+                norm_result.blocks
+                + norm_result.suppressed_blocks
+                + norm_result.removed_blocks
+            ):
+                block_cur.execute(
+                    """INSERT INTO normalized_blocks
+                       (id, source_block_id, document_id, ordinal, block_type,
+                        text, heading_path, char_start, char_end, disposition,
+                        rule_version, transformation_reason, parser_version)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (source_block_id, rule_version) DO UPDATE SET
+                         disposition = EXCLUDED.disposition,
+                         transformation_reason = EXCLUDED.transformation_reason,
+                         text = EXCLUDED.text,
+                         char_start = EXCLUDED.char_start,
+                         char_end = EXCLUDED.char_end,
+                         parser_version = EXCLUDED.parser_version""",
+                    (
+                        str(nb.id),
+                        str(nb.source_block_id),
+                        str(nb.document_id) if nb.document_id else None,
+                        nb.ordinal,
+                        nb.block_type,
+                        nb.text if nb.disposition != "remove" else "",
+                        list(nb.heading_path) if nb.heading_path else None,
+                        nb.char_start,
+                        nb.char_end,
+                        nb.disposition,
+                        nb.rule_version,
+                        nb.transformation_reason,
+                        nb.parser_version,
+                    ),
+                )
+
+        with conn.cursor() as transform_cur:
+            for tr in norm_result.transformations:
+                transform_cur.execute(
+                    """INSERT INTO transformation_records
+                       (id, normalized_block_id, rule_id, rule_version,
+                        reason, before_text, after_text, confidence)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (normalized_block_id, rule_id) DO UPDATE SET
+                         rule_id = EXCLUDED.rule_id,
+                         reason = EXCLUDED.reason,
+                         before_text = EXCLUDED.before_text,
+                         after_text = EXCLUDED.after_text,
+                         confidence = EXCLUDED.confidence""",
+                    (
+                        str(tr.id),
+                        str(tr.normalized_block_id) if tr.normalized_block_id else None,
+                        tr.rule_id,
+                        tr.rule_version,
+                        tr.reason,
+                        tr.before_text,
+                        tr.after_text,
+                        tr.confidence,
+                    ),
+                )
+            conn.commit()
+
+        upserted_blocks += len(
+            norm_result.blocks
+            + norm_result.suppressed_blocks
+            + norm_result.removed_blocks
+        )
+        upserted_transforms += len(norm_result.transformations)
+
+        results.append(
+            {
+                "document_id": str(doc_id),
+                "title": title,
+                "url": url,
+                "content_sha256": sha,
+                "source_block_count": len(typed_blocks),
+                "kept": len([b for b in norm_result.blocks if b.disposition == "keep"]),
+                "altered": len(
+                    [b for b in norm_result.blocks if b.disposition == "alter"]
+                ),
+                "suppressed": len(norm_result.suppressed_blocks),
+                "removed": len(norm_result.removed_blocks),
+                "transformations": len(norm_result.transformations),
+                "diagnostics": norm_result.diagnostics(),
+            }
+        )
+
+    output = {
+        "rule_version": NORMALIZATION_VERSION,
+        "aggressive": args.aggressive,
+        "document_type": args.document_type,
+        "documents_processed": len(results),
+        "normalized_blocks_upserted": upserted_blocks,
+        "transformation_records_upserted": upserted_transforms,
+        "documents": results,
+    }
+    print(dumps(output))
+    return 0
 
 
 def _qdrant(config, collection=None, dimension=None, distance="Cosine"):
@@ -1417,6 +1638,8 @@ def main(argv=None):
             results.append(result.__dict__)
         print(dumps({"rederived": len(results), "assets": results}))
         return 0
+    if args.command == "normalize":
+        return _cmd_normalize(config, args)
     if args.command == "export-invocation":
         with _uow_factory(config)() as uow:
             result = uow.export_invocation(args.invocation_id)
