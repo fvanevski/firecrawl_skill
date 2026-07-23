@@ -286,20 +286,6 @@ class ResearchRunService:
         except KeyError:
             return False
 
-    def get_run_by_external_id(self, external_id: str) -> dict[str, Any] | None:
-        """Return the run dict for an external ID, or None if not found.
-
-        Delegates to ``uow.runs.get_run_status(external_id=...)`` and returns
-        the row dict.  This is used by external callers (e.g. ``catalog_v5.py``)
-        to resolve a run UUID from its external identifier.
-        """
-        with self.uow_factory() as uow:
-            try:
-                status = uow.runs.get_run_status(external_id=external_id)
-                return dict(status)
-            except KeyError:
-                return None
-
     def transition(
         self,
         run_id: UUID,
