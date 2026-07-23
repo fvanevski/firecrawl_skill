@@ -173,9 +173,13 @@ class MappingResult:
     details: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
+@dataclass
 class ImportReport:
     """Complete import reconciliation report.
+
+    Note: not frozen — the apply() method mutates errors and completed_at
+    to record post-dry-run outcomes.  All other fields remain immutable
+    by convention (read-only after construction).
 
     Attributes:
         import_run_id: The import session UUID.

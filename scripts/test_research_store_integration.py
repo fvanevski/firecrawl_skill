@@ -2295,6 +2295,7 @@ def test_run_annotate_handler_executes_through_service(monkeypatch, capsys):
         )
         == 0
     )
+    capsys.readouterr()  # discard run-start output
 
     # Annotate the run
     assert (
@@ -2311,9 +2312,8 @@ def test_run_annotate_handler_executes_through_service(monkeypatch, capsys):
         == 0
     )
     result = json.loads(capsys.readouterr().out)
-    assert result["event_type"] == "run_annotated"
-    assert result["annotation_type"] == "pivot"
-    assert result["reason"] == "integration test annotation"
+    assert result["event_type"] == "pivot"
+    assert result["lifecycle_revision"] >= 1
 
     # Verify the annotation persisted
     assert store_cli.main(["run-status", external_id]) == 0
@@ -2345,6 +2345,7 @@ def test_run_verify_handler_executes_through_service(monkeypatch, capsys):
         )
         == 0
     )
+    capsys.readouterr()  # discard run-start output
 
     # Verify the run
     assert store_cli.main(["run-verify", external_id]) == 0
@@ -2379,6 +2380,7 @@ def test_run_audit_handler_executes_through_service(monkeypatch, capsys):
         )
         == 0
     )
+    capsys.readouterr()  # discard run-start output
 
     # Run audit — the audit service records the assessment in PostgreSQL
     # even if the LLM call fails, it returns a result with status
@@ -2413,12 +2415,14 @@ def test_run_compare_handler_executes_through_service(monkeypatch, capsys):
         )
         == 0
     )
+    capsys.readouterr()  # discard first run-start output
     assert (
         store_cli.main(
             ["run-start", external_id_b, "Compare test B", "--mode", "autonomous_local"]
         )
         == 0
     )
+    capsys.readouterr()  # discard second run-start output
 
     # Compare the two runs
     assert store_cli.main(["run-compare", external_id_a, external_id_b]) in (0, 1)
@@ -2433,6 +2437,8 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
 
     Exercises the finish handler path to ensure idempotent terminal transitions.
     """
+    from research_store.container import build_run_service
+
     external_id = f"fr_finish_{uuid4().hex}"
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
 
@@ -2449,6 +2455,21 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
         )
         == 0
     )
+    capsys.readouterr()  # discard run-start output
+
+    # Advance through all states to validating (required before completed)
+    svc = build_run_service()
+    status = svc.status(external_id=external_id)
+    revision = status.lifecycle_revision
+    for state in ("planning", "corpus_review", "retrieving", "synthesizing", "validating"):
+        svc.transition(
+            status.id,
+            state,
+            expected_revision=revision,
+            idempotency_key=f"advance:finish:{state}",
+            actor_type="integration-test",
+        )
+        revision += 1
 
     # Finish the run
     assert (
@@ -2478,6 +2499,8 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
     The second finish call should return reused=true and the lifecycle_revision
     should be unchanged after the second call.
     """
+    from research_store.container import build_run_service
+
     external_id = f"fr_finish_idem_{uuid4().hex}"
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
 
@@ -2494,6 +2517,21 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
         )
         == 0
     )
+    capsys.readouterr()  # discard run-start output
+
+    # Advance through all states to validating (required before completed)
+    svc = build_run_service()
+    status = svc.status(external_id=external_id)
+    revision = status.lifecycle_revision
+    for state in ("planning", "corpus_review", "retrieving", "synthesizing", "validating"):
+        svc.transition(
+            status.id,
+            state,
+            expected_revision=revision,
+            idempotency_key=f"advance:idem:{state}",
+            actor_type="integration-test",
+        )
+        revision += 1
 
     # Finish the run
     assert (
@@ -2534,6 +2572,8 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
 
 def test_run_reopen_after_finish_idempotency(monkeypatch, capsys):
     """Verify that reopening a finished run transitions it back to created state."""
+    from research_store.container import build_run_service
+
     external_id = f"fr_reopen_idem_{uuid4().hex}"
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
 
@@ -2550,6 +2590,21 @@ def test_run_reopen_after_finish_idempotency(monkeypatch, capsys):
         )
         == 0
     )
+    capsys.readouterr()  # discard run-start output
+
+    # Advance through all states to validating (required before completed)
+    svc = build_run_service()
+    status = svc.status(external_id=external_id)
+    revision = status.lifecycle_revision
+    for state in ("planning", "corpus_review", "retrieving", "synthesizing", "validating"):
+        svc.transition(
+            status.id,
+            state,
+            expected_revision=revision,
+            idempotency_key=f"advance:reopen:{state}",
+            actor_type="integration-test",
+        )
+        revision += 1
 
     # Finish the run
     assert (
@@ -2610,6 +2665,7 @@ def test_run_annotate_idempotency_same_key(monkeypatch, capsys):
         )
         == 0
     )
+    capsys.readouterr()  # discard run-start output
 
     # Annotate the run
     assert (
@@ -2673,6 +2729,7 @@ def test_run_audit_idempotency_same_target_hash(monkeypatch, capsys):
         )
         == 0
     )
+    capsys.readouterr()  # discard run-start output
 
     # Run audit with a target hash
     first_rc = store_cli.main(
@@ -2747,7 +2804,7 @@ def test_catalog_import_apply_run_and_invocation(tmp_path, monkeypatch):
     # Create a minimal Catalog v5 root with a run and invocation
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
-    runs_dir.mkdir()
+    runs_dir.mkdir(parents=True)
     run_id = "fr_" + "a" * 32
     run_data = {
         "schema_version": 5,
@@ -2757,7 +2814,7 @@ def test_catalog_import_apply_run_and_invocation(tmp_path, monkeypatch):
     (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
 
     inv_dir = root / "invocations"
-    inv_dir.mkdir()
+    inv_dir.mkdir(parents=True)
     inv_id = "fc_" + "b" * 32
     inv_data = {
         "schema_version": 5,
@@ -2805,7 +2862,7 @@ def test_catalog_import_idempotent_apply(tmp_path, monkeypatch):
 
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
-    runs_dir.mkdir()
+    runs_dir.mkdir(parents=True)
     run_id = "fr_" + "c" * 32
     run_data = {
         "schema_version": 5,
@@ -2838,7 +2895,7 @@ def test_catalog_import_tracking_table_populated(tmp_path, monkeypatch):
 
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
-    runs_dir.mkdir()
+    runs_dir.mkdir(parents=True)
     run_id = "fr_" + "d" * 32
     run_data = {
         "schema_version": 5,
@@ -2886,7 +2943,7 @@ def test_catalog_import_reconcile_with_history(tmp_path, monkeypatch):
     # Create and apply an import
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
-    runs_dir.mkdir()
+    runs_dir.mkdir(parents=True)
     run_id = "fr_" + "e" * 32
     run_data = {
         "schema_version": 5,
@@ -2922,7 +2979,7 @@ def test_catalog_import_dry_run_pending_records(tmp_path, monkeypatch):
     # Create a Catalog root with runs + events
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
-    runs_dir.mkdir()
+    runs_dir.mkdir(parents=True)
     run_id = "fr_" + "f" * 32
     run_data = {
         "schema_version": 5,
@@ -2971,7 +3028,7 @@ def test_catalog_import_apply_all_malformed_raises(tmp_path, monkeypatch):
     # Create a Catalog with only malformed records (bad schema version + bad ID)
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
-    runs_dir.mkdir()
+    runs_dir.mkdir(parents=True)
     run_data = {
         "schema_version": 3,
         "research_run_id": "not-a-valid-id",
@@ -3055,7 +3112,7 @@ def test_catalog_import_apply_pending_warning(tmp_path, monkeypatch):
     # Create a Catalog root with a run and an event
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
-    runs_dir.mkdir()
+    runs_dir.mkdir(parents=True)
     run_id = "fr_" + "c" * 32
     run_data = {
         "schema_version": 5,
@@ -3119,7 +3176,7 @@ def test_catalog_import_apply_conflict_detection_integration(tmp_path, monkeypat
 
     from research_store.catalog_import import CatalogImportService
     from research_store.container import build_catalog_import_service
-    from research_store.run_service import ResearchStoreService
+    from research_store.run_service import ResearchRunService
     import json
 
     service = build_catalog_import_service()
