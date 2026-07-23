@@ -988,7 +988,7 @@ class CatalogImportService:
                             """INSERT INTO catalog_import_record_map (
                                 import_run_id, catalog_type, catalog_id,
                                 postgresql_id, mapping_status, conflict_detail
-                            ) VALUES (%s, %s, %s, %s, 'omitted', %s)""",
+                            ) VALUES (%s, %s, %s, %s, 'pending', %s)""",
                             (
                                 str(tracking_id),
                                 mapping.catalog_type,
