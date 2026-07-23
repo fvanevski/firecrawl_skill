@@ -1,120 +1,62 @@
-"""Catalog v5 compatibility exporter.
+"""Deterministic Catalog v5 compatibility exports from PostgreSQL authority.
 
-Derives Catalog v5-compatible runs, invocations, events, snapshots,
-claims, assessments, and manifests from PostgreSQL and blob storage.
-
-PRD mapping: FR-018
-
-Authority model:
-
-* PostgreSQL ``research_runs``, ``research_invocations``,
-  ``research_events``, ``research_claims``, ``audit_assessments``,
-  ``asset_snapshots``, ``chunks``, ``documents``, and blob storage
-  are authoritative.
-* Filesystem Catalog v5 records are derived compatibility exports,
-  written *after* database commit.
-* Filesystem records are never read to determine current invocation
-  or run state.
-* Export failure does not roll back an already committed database
-  transition.
-
-Export schema version: ``catalog-export-v1``
-
-Never mutates PostgreSQL or blob storage.
+The exporter captures one repeatable-read projection, verifies every referenced
+blob before publication, records the attempt in ``compatibility_exports``, and
+publishes a complete Catalog tree only after every staged file is durable.
+Catalog files are derived output and are never read as workflow authority.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
+import ctypes
+import fcntl
+import gzip
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
-from typing import Any, Callable
-from uuid import UUID
+import re
+import shutil
+import tempfile
+from typing import Any, Callable, Iterable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from uuid import UUID, uuid4
 
 from .blob import ContentAddressedBlobStore
-from .domain import utcnow
+from .invocation_events import _sanitize
 
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 EXPORT_SCHEMA_VERSION = "catalog-export-v1"
+EXPORT_SCHEMA_REVISION = 1
 SCHEMA_VERSION = 5
 EVALUATOR_VERSION = "catalog-v5.0"
 PROMPT_TEMPLATE_VERSION = "staged-research-audit-v1"
+POLICY_VERSION = "audit-policy-v1"
 RUN_PREFIX = "fr_"
-
-
-# ---------------------------------------------------------------------------
-# Version-drift guard (N5)
-# ---------------------------------------------------------------------------
-
-# Attempt to verify that our version constants match the legacy
-# catalog_v5.py module.  This import may fail when model_gateway is
-# unavailable, so the guard is silently skipped in that case.
-try:
-    # Use a relative import so the check works regardless of how
-    # research_store is installed (package vs. flat scripts/).
-    from ..catalog_v5 import (
-        EVALUATOR_VERSION as _legacy_eval,
-        PROMPT_TEMPLATE_VERSION as _legacy_prompt,
-    )
-
-    assert EVALUATOR_VERSION == _legacy_eval, (
-        f"EVALUATOR_VERSION mismatch: exporter={EVALUATOR_VERSION!r} "
-        f"catalog_v5={_legacy_eval!r}"
-    )
-    assert PROMPT_TEMPLATE_VERSION == _legacy_prompt, (
-        f"PROMPT_TEMPLATE_VERSION mismatch: exporter={PROMPT_TEMPLATE_VERSION!r} "
-        f"catalog_v5={_legacy_prompt!r}"
-    )
-except (ImportError, AssertionError, AttributeError):
-    # catalog_v5.py may not be importable (missing model_gateway) or the
-    # constants may not be exposed yet.  Drift will be caught by the
-    # explicit integration tests that compare exported fields.
-    pass
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
+INVOCATION_PREFIX = "fc_"
+ASSESSMENT_PREFIX = "fa_"
+SENSITIVE_PARAMS = {
+    "access_token", "api_key", "apikey", "auth", "authorization", "key",
+    "password", "secret", "sig", "signature", "token",
+}
 
 
 class CatalogExportError(Exception):
-    """Base exception for catalog export failures."""
+    """Base exception for compatibility-export failures."""
 
 
 class ExportTargetNotFound(CatalogExportError):
-    """Raised when the requested run or invocation does not exist."""
+    """Raised when the requested authoritative target does not exist."""
 
 
 class ExportWriteFailure(CatalogExportError):
-    """Raised when an atomic write fails."""
-
-
-# ---------------------------------------------------------------------------
-# Result types
-# ---------------------------------------------------------------------------
+    """Raised when staging, blob verification, or publication fails."""
 
 
 @dataclass(frozen=True)
 class CatalogExportResult:
-    """Result of a single export operation.
-
-    Attributes:
-        export_id: Deterministic export ID derived from source state.
-        source_state_sha256: SHA-256 of the canonical source-state string.
-        export_schema_version: Schema version of the export.
-        target_type: ``"run"`` or ``"invocation"``.
-        target_id: UUID of the exported entity.
-        target_dir: Directory where files were written.
-        status: ``"complete"`` or ``"failed"``.
-        files_created: List of paths to exported files.
-        error: Error message if status is ``"failed"``.
-    """
-
     export_id: str
     source_state_sha256: str
     export_schema_version: str
@@ -128,22 +70,6 @@ class CatalogExportResult:
 
 @dataclass(frozen=True)
 class ExportRunResult:
-    """Result of exporting a complete run with all derived artifacts.
-
-    Attributes:
-        run: The exported run record in Catalog v5 format.
-        invocations: List of exported invocation records.
-        events: List of exported event records.
-        snapshots: List of exported snapshot records.
-        claims: List of exported claim records.
-        assessments: List of exported assessment records.
-        source_state_sha256: SHA-256 of the canonical source-state string.
-        export_schema_version: Schema version of the export.
-        target_dir: Directory where files were written.
-        status: ``"complete"`` or ``"failed"``.
-        error: Error message if status is ``"failed"``.
-    """
-
     run: dict[str, Any]
     invocations: list[dict[str, Any]]
     events: list[dict[str, Any]]
@@ -158,1200 +84,716 @@ class ExportRunResult:
     error: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Atomic write helper
-# ---------------------------------------------------------------------------
+@dataclass
+class _Projection:
+    run_row: dict[str, Any]
+    invocation_rows: list[dict[str, Any]]
+    event_rows: list[dict[str, Any]]
+    claim_rows: list[dict[str, Any]]
+    evidence_rows: list[dict[str, Any]]
+    snapshot_rows: list[dict[str, Any]]
+    assessment_rows: list[dict[str, Any]]
+    stage_rows: list[dict[str, Any]]
+    semantic_call_rows: list[dict[str, Any]]
+    semantic_artifact_rows: list[dict[str, Any]]
+    coverage_row: dict[str, Any] | None
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    """Write JSON atomically via temp-file rename.
+def _iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat() if isinstance(value, datetime) else str(value)
 
-    Raises:
-        ExportWriteFailure: If the write fails.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
+
+def _canonical_bytes(value: Any) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"), default=str) + "\n").encode()
+
+
+def _catalog_id(prefix: str, value: Any, external: Any = None) -> str:
+    candidate = str(external or "")
+    if re.fullmatch(rf"{re.escape(prefix)}[0-9a-f]{{32}}", candidate):
+        return candidate
+    return prefix + UUID(str(value)).hex
+
+
+def _canonical_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise CatalogExportError("authoritative source URL is empty")
     try:
-        temporary.write_text(
-            json.dumps(payload, indent=2, sort_keys=True, default=str),
-            encoding="utf-8",
-        )
-        temporary.replace(path)
-    except OSError as exc:
-        raise ExportWriteFailure(f"atomic write failed for {path}: {exc}") from exc
+        parts = urlsplit(raw)
+    except ValueError as exc:
+        raise CatalogExportError(f"invalid authoritative source URL: {raw!r}") from exc
+    if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
+        raise CatalogExportError(f"invalid authoritative source URL: {raw!r}")
+    query = [
+        (key, "[REDACTED]" if key.lower() in SENSITIVE_PARAMS else val)
+        for key, val in parse_qsl(parts.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_")
+    ]
+    return urlunsplit(
+        (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/") or "/", urlencode(query), "")
+    )
+
+
+def _fetchall(cur: Any) -> list[dict[str, Any]]:
+    keys = [item[0] for item in cur.description]
+    return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+
+def _fetchone(cur: Any) -> dict[str, Any] | None:
+    keys = [item[0] for item in cur.description]
+    row = cur.fetchone()
+    return dict(zip(keys, row)) if row is not None else None
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
-    """Write bytes atomically via temp-file rename.
-
-    Raises:
-        ExportWriteFailure: If the write fails.
-    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
     try:
-        temporary.write_bytes(payload)
-        temporary.replace(path)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
     except OSError as exc:
         raise ExportWriteFailure(f"atomic write failed for {path}: {exc}") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
-# ---------------------------------------------------------------------------
-# Source-state hash computation
-# ---------------------------------------------------------------------------
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    _atomic_write_bytes(path, json.dumps(payload, indent=2, sort_keys=True, default=str).encode() + b"\n")
 
 
-def _compute_source_state_hash(*parts: str) -> str:
-    """Compute SHA-256 of concatenated source-state parts."""
-    combined = "\x00".join(parts)
-    return sha256(combined.encode("utf-8")).hexdigest()
+def _rename_exchange(left: Path, right: Path) -> bool:
+    """Atomically exchange two directories on Linux; return False if unsupported."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        return False
+    result = renameat2(-100, os.fsencode(left), -100, os.fsencode(right), 2)
+    if result == 0:
+        return True
+    error = ctypes.get_errno()
+    if error in {22, 38, 95}:
+        return False
+    raise OSError(error, os.strerror(error))
 
 
-# ---------------------------------------------------------------------------
-# Field mappers
-# ---------------------------------------------------------------------------
-
-
-def _map_run(row: dict[str, Any]) -> dict[str, Any]:
-    """Map a ``research_runs`` row to Catalog v5 run format.
-
-    Args:
-        row: Dictionary from ``research_runs`` query.
-
-    Returns:
-        Catalog v5 run record.
-    """
-    lifecycle_state = row.get("state", "created")
-
-    # Map internal PG state to Catalog v5 lifecycle state
-    if lifecycle_state in ("completed", "partial", "failed", "cancelled"):
-        catalog_state = "finished"
-    else:
-        catalog_state = "running"
-
-    # Derive operational_status from lifecycle and declared outcome
-    if catalog_state == "running":
-        operational_status = "running"
-    elif catalog_state == "finished" and row.get("declared_outcome") == "satisfied":
-        operational_status = "succeeded"
-    else:
-        operational_status = "failed"
-
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "research_run_id": str(row["id"]),
-        "external_id": row.get("external_id"),
-        "objective": row.get("objective", ""),
-        "profile": {
-            "requested": row.get("execution_mode", "auto"),
-            "selected": row.get("execution_mode", "auto"),
-            "reason": "deterministic mode",
-        },
-        "started_at": (
-            row["started_at"].isoformat()
-            if row.get("started_at")
-            else None
-        ),
-        "updated_at": (
-            row["updated_at"].isoformat()
-            if row.get("updated_at")
-            else None
-        ),
-        "finished_at": (
-            row["finished_at"].isoformat()
-            if row.get("finished_at")
-            else None
-        ),
-        "lifecycle": {
-            "state": catalog_state,
-            "revision": row.get("lifecycle_revision", 1),
-        },
-        "declared_outcome": row.get("declared_outcome"),
-        "operational_status": operational_status,
-        "data_completeness": "partial",
-        "audit_status": "not_run",
-        "assessment_summary": None,
-        "invocation_ids": [],  # Populated by caller
-        "claims": [],  # Populated by caller
-        "used_sources": [],  # Populated by caller
-        "annotations": [],  # Populated by caller
-        "final_answer": None,  # Populated by caller
-        "assessment_refs": [],  # Populated by caller
-        "operational_summary": {},  # Populated by caller
-        "evidence_revision": row.get("lifecycle_revision", 1),
-        "record_revision": row.get("lifecycle_revision", 1),
-    }
-
-
-def _map_invocation(row: dict[str, Any]) -> dict[str, Any]:
-    """Map a ``research_invocations`` row to Catalog v5 invocation format.
-
-    Args:
-        row: Dictionary from ``research_invocations`` query.
-
-    Returns:
-        Catalog v5 invocation record.
-    """
-    status = row.get("status", "running")
-    exec_status = "running" if status == "running" else (
-        "succeeded" if status in ("complete", "succeeded") else "failed"
-    )
-
-    record = {
-        "schema_version": SCHEMA_VERSION,
-        "invocation_id": str(row["id"]),
-        "external_invocation_id": row.get("external_invocation_id"),
-        "research_run_id": str(row["run_id"]),
-        "operation": row.get("operation", "unknown"),
-        "input": row.get("input", {}),
-        "started_at": (
-            row["started_at"].isoformat()
-            if row.get("started_at")
-            else None
-        ),
-        "finished_at": (
-            row["completed_at"].isoformat()
-            if row.get("completed_at")
-            else None
-        ),
-        "execution": {
-            "status": exec_status,
-            "exit_code": None,
-            "error": row.get("error"),
-        },
-        "operational_status": status,
-        "data_completeness": "complete" if row.get("completed_at") else "partial",
-        "audit_status": "not_run",
-        "events": [],  # Populated by caller
-        "results": [],  # Populated by caller
-        "artifacts": [],  # Populated by caller
-        "assessment_refs": [],  # Populated by caller
-        "evidence_revision": 1,
-        "record_revision": 0,
-    }
-    if row.get("output"):
-        output = row["output"]
-        if isinstance(output, str):
-            try:
-                output = json.loads(output)
-            except json.JSONDecodeError:
-                output = {}
-        record["results"] = output.get("results", [])
-        record["operational_metrics"] = output.get("operational_metrics", {})
-    return record
-
-
-def _map_event(row: dict[str, Any]) -> dict[str, Any]:
-    """Map a ``research_events`` row to Catalog v5 event format.
-
-    Args:
-        row: Dictionary from ``research_events`` query.
-
-    Returns:
-        Catalog v5 event record.
-    """
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "event_id": "fe_" + row["id"].hex[:32],
-        "at": (
-            row["created_at"].isoformat()
-            if row.get("created_at")
-            else None
-        ),
-        "event": row.get("event_type", "unknown"),
-        "invocation_id": str(row["invocation_id"]) if row.get("invocation_id") else None,
-        "data": row.get("payload", {}),
-    }
-
-
-def _map_assessment(row: dict[str, Any], stages: list[dict[str, Any]]) -> dict[str, Any]:
-    """Map an ``audit_assessments`` row to Catalog v5 assessment format.
-
-    Args:
-        row: Dictionary from ``audit_assessments`` query.
-        stages: List of ``audit_stage_outputs`` rows for this assessment.
-
-    Returns:
-        Catalog v5 assessment record.
-    """
-    stage_outputs = []
-    for stage_row in stages:
-        stage_outputs.append({
-            "stage": stage_row.get("stage"),
-            "sequence_number": stage_row.get("sequence_number", 1),
-            "status": stage_row.get("status", "completed"),
-            "output": stage_row.get("output"),
-            "error": stage_row.get("error"),
-            "call_count": stage_row.get("call_count", 0),
-            "used_fallback": stage_row.get("used_fallback", False),
-        })
-
-    assessment = {
-        "schema_version": SCHEMA_VERSION,
-        "assessment_id": str(row["id"]),
-        "target_id": str(row["target_id"]),
-        "target_hash": row.get("target_hash", ""),
-        "evaluator_version": row.get("evaluator_version", EVALUATOR_VERSION),
-        "prompt_template_version": row.get("prompt_template_version", PROMPT_TEMPLATE_VERSION),
-        "policy_version": row.get("policy_version", "audit-policy-v1"),
-        "stage_set": list(row.get("stage_set", [])),
-        "status": row.get("status", "partial"),
-        "provider": row.get("provider"),
-        "model": row.get("model"),
-        "prompt_hash": row.get("prompt_hash"),
-        "model_fingerprint": row.get("model_fingerprint"),
-        "audit_identity_hash": row.get("audit_identity_hash"),
-        "elapsed_ms": row.get("elapsed_ms", 0),
-        "stage_outputs": stage_outputs,
-        "created_at": (
-            row["created_at"].isoformat()
-            if row.get("created_at")
-            else None
-        ),
-    }
-    if row.get("audit_packet_manifest"):
-        assessment["audit_packet_manifest"] = row["audit_packet_manifest"]
-    return assessment
+def _publish_directory(staging: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = target.parent / f".{target.name}.catalog-export.lock"
+    with lock_path.open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            if target.exists() and not target.is_dir():
+                raise ExportWriteFailure(f"target path exists as a file, not a directory: {target}")
+            if not target.exists():
+                os.replace(staging, target)
+            elif _rename_exchange(staging, target):
+                shutil.rmtree(staging)
+            else:
+                backup = Path(tempfile.mkdtemp(prefix=f".{target.name}.old-", dir=target.parent))
+                backup.rmdir()
+                os.replace(target, backup)
+                try:
+                    os.replace(staging, target)
+                except Exception:
+                    os.replace(backup, target)
+                    raise
+                shutil.rmtree(backup)
+            _fsync_directory(target.parent)
+        except ExportWriteFailure:
+            raise
+        except OSError as exc:
+            raise ExportWriteFailure(f"atomic publication failed for {target}: {exc}") from exc
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def _map_claim(row: dict[str, Any]) -> dict[str, Any]:
-    """Map a ``research_claims`` row to Catalog v5 claim format.
-
-    Args:
-        row: Dictionary from ``research_claims`` query.
-
-    Returns:
-        Catalog v5 claim record.
-    """
     return {
         "id": str(row["claim_id"]),
         "statement": row.get("statement", ""),
         "semantic_status": row.get("semantic_status", "unassessed"),
         "uncertainty": row.get("uncertainty"),
         "evidence_packet_revision": row.get("evidence_packet_revision", 1),
-        "created_at": (
-            row["created_at"].isoformat()
-            if row.get("created_at")
-            else None
-        ),
+        "created_at": _iso(row.get("created_at")),
     }
 
 
-# ---------------------------------------------------------------------------
-# Snapshot export
-# ---------------------------------------------------------------------------
+def _map_event(row: dict[str, Any], run_catalog_id: str, invocation_ids: dict[str, str]) -> dict[str, Any]:
+    invocation_id = row.get("invocation_id")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "event_id": "fe_" + UUID(str(row["id"])).hex,
+        "at": _iso(row.get("created_at")),
+        "event": row.get("event_type", "unknown"),
+        "research_run_id": run_catalog_id,
+        "invocation_id": invocation_ids.get(str(invocation_id)) if invocation_id else None,
+        "record_revision": row.get("run_revision"),
+        "sequence_number": row.get("sequence_number"),
+        "data": _sanitize(row.get("payload") or {}),
+    }
 
 
-def _export_snapshots(
-    uow_factory: Callable,
-) -> list[dict[str, Any]]:
-    """Export all snapshots from ``asset_snapshots`` and ``documents``.
-
-    Each snapshot is mapped to a Catalog v5-compatible snapshot record.
-
-    Note: There is no direct ``run_id`` column on ``documents`` or
-    ``asset_snapshots``.  This function returns ALL snapshots in the
-    database.  Callers that need run-scoped snapshots must filter
-    the returned list.
-
-    Args:
-        uow_factory: Unit-of-work factory.
-
-    Returns:
-        List of snapshot records.
-    """
-    snapshots = []
-    with uow_factory() as uow:
-        cur = uow.connection.cursor()
-        cur.execute(
-            """SELECT s.id, s.source_id, s.requested_url, s.final_url,
-                      s.retrieved_at, s.mime_type, s.content_sha256,
-                      d.title, d.metadata
-               FROM asset_snapshots s
-               LEFT JOIN documents d ON d.snapshot_id = s.id
-               ORDER BY s.retrieved_at""",
-        )
-        for row in cur.fetchall():
-            metadata = row[8] or {}
-            snapshots.append({
-                "schema_version": SCHEMA_VERSION,
-                "snapshot_id": str(row[0]),
-                "source_id": str(row[1]),
-                "url": row[2] or row[3] or "",
-                "title": row[7],
-                "retrieved_at": (
-                    row[4].isoformat() if row[4] else None
-                ),
-                "mime_type": row[5],
-                "content_sha256": row[6],
-                "availability": "available",
-                "metadata": metadata,
-            })
-    return snapshots
-
-
-# ---------------------------------------------------------------------------
-# Main export service
-# ---------------------------------------------------------------------------
+def _map_semantic_call(row: dict[str, Any], artifacts: list[dict[str, Any]], invocation_ids: dict[str, str]) -> dict[str, Any]:
+    invocation_id = row.get("invocation_id")
+    return _sanitize({
+        "call_id": str(row["id"]),
+        "invocation_id": invocation_ids.get(str(invocation_id)) if invocation_id else None,
+        "stage": row.get("stage"),
+        "provider": row.get("provider"),
+        "model": row.get("model"),
+        "model_revision": row.get("model_revision", ""),
+        "prompt_version": row.get("prompt_version"),
+        "input_sha256": row.get("input_sha256"),
+        "request": row.get("request") or {},
+        "response_metadata": row.get("response_metadata") or {},
+        "status": row.get("status"),
+        "error": row.get("error"),
+        "started_at": _iso(row.get("started_at")),
+        "completed_at": _iso(row.get("completed_at")),
+        "artifacts": artifacts,
+    })
 
 
 class CatalogExportService:
-    """Derives Catalog v5-compatible exports from PostgreSQL authority.
+    """Project committed PostgreSQL/blob state into a Catalog v5 tree."""
 
-    This service is a **pure projection**: it reads from PostgreSQL
-    and blob storage, and writes derived filesystem exports.
-    It never mutates source state.
-
-    Args:
-        uow_factory: Callable that returns a ``PostgresUnitOfWork``.
-        blob_store: Optional blob store for large payloads.
-    """
-
-    def __init__(
-        self,
-        uow_factory: Callable,
-        blob_store: ContentAddressedBlobStore | None = None,
-    ) -> None:
+    def __init__(self, uow_factory: Callable, blob_store: ContentAddressedBlobStore | None = None) -> None:
         self.uow_factory = uow_factory
         self.blob_store = blob_store
 
-    # ------------------------------------------------------------------
-    # Run export
-    # ------------------------------------------------------------------
-
-    def export_run(
-        self,
-        run_id: UUID,
-        target_dir: Path | str,
-    ) -> ExportRunResult:
-        """Export a complete research run to Catalog v5 format.
-
-        Reads from PostgreSQL and blob storage, writes derived
-        filesystem exports atomically.
-
-        .. note::
-           The snapshot export includes **all** snapshots in the database,
-           not just those scoped to this run, because ``asset_snapshots``
-           and ``documents`` have no ``run_id`` column.  Callers that need
-           run-scoped snapshots must filter the returned list.
-
-        .. note::
-           The manifest's ``sources[].url`` field is populated from the
-           invocation's input query text, not from resolved URLs.  This
-           differs from the legacy ``load_source_manifest`` in
-           ``catalog_v5.py`` which expects actual URLs.  For pure search
-           invocations the URL may be empty — that is intentional and
-           documented.
-
-        Args:
-            run_id: Research run UUID.
-            target_dir: Directory to write exports to.
-
-        Returns:
-            ``ExportRunResult`` with all exported artifacts.
-
-        Raises:
-            ExportTargetNotFound: If the run does not exist.
-            ExportWriteFailure: If an atomic write fails.
-        """
-        run_id = UUID(str(run_id))
-        target_dir = Path(target_dir)
-        if target_dir.exists() and not target_dir.is_dir():
-            raise ExportWriteFailure(
-                f"target path exists as a file, not a directory: {target_dir}"
-            )
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        # --- Read authoritative state ---
+    def _load_projection(self, run_id: UUID) -> _Projection:
         with self.uow_factory() as uow:
             cur = uow.connection.cursor()
-
-            # Run
-            cur.execute(
-                "SELECT * FROM research_runs WHERE id = %s",
-                (str(run_id),),
-            )
-            run_row = cur.fetchone()
-            if run_row is None:
+            cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            cur.execute("SELECT * FROM research_runs WHERE id=%s", (str(run_id),))
+            run = _fetchone(cur)
+            if run is None:
                 raise ExportTargetNotFound(f"run {run_id} not found")
-            run_row = dict(
-                zip([desc[0] for desc in cur.description], run_row)
-            )
 
-            # Invocations
+            cur.execute("SELECT * FROM research_invocations WHERE run_id=%s ORDER BY created_at,id", (str(run_id),))
+            invocations = _fetchall(cur)
+            cur.execute("SELECT * FROM research_events WHERE run_id=%s ORDER BY sequence_number,id", (str(run_id),))
+            events = _fetchall(cur)
+            cur.execute("SELECT * FROM research_claims WHERE run_id=%s ORDER BY created_at,id", (str(run_id),))
+            claims = _fetchall(cur)
             cur.execute(
-                "SELECT * FROM research_invocations WHERE run_id = %s ORDER BY created_at",
+                """SELECT cel.*, c.text AS passage_text,
+                          c.content_sha256 AS passage_sha256,
+                          s.canonical_url, sc.id AS candidate_id
+                   FROM claim_evidence_links cel
+                   JOIN chunks c ON c.id=cel.passage_id
+                   JOIN documents d ON d.id=c.document_id
+                   JOIN asset_snapshots snap ON snap.id=cel.snapshot_id
+                   JOIN sources s ON s.id=snap.source_id
+                   LEFT JOIN search_candidates sc
+                     ON sc.run_id=cel.run_id AND sc.canonical_url=s.canonical_url
+                   WHERE cel.run_id=%s
+                   ORDER BY cel.claim_id,cel.created_at,cel.id""",
                 (str(run_id),),
             )
-            inv_keys = [desc[0] for desc in cur.description]
-            inv_rows = [
-                dict(zip(inv_keys, row))
-                for row in cur.fetchall()
-            ]
-
-            # Events (all events for the run)
+            evidence = _fetchall(cur)
             cur.execute(
-                """SELECT * FROM research_events
-                   WHERE run_id = %s
-                   ORDER BY created_at""",
-                (str(run_id),),
+                """WITH run_snapshot_ids AS (
+                       SELECT snapshot_id FROM research_run_assets WHERE run_id=%s
+                       UNION
+                       SELECT snapshot_id FROM claim_evidence_links WHERE run_id=%s
+                   )
+                   SELECT snap.id,snap.source_id,snap.requested_url,snap.final_url,
+                          snap.retrieved_at,snap.mime_type,snap.content_sha256,
+                          snap.raw_blob_uri,snap.raw_byte_length,snap.firecrawl_version,
+                          snap.crawl_options,src.canonical_url,d.title,d.author,
+                          d.published_at,d.language,d.parser_name,d.parser_version,
+                          d.normalization_version,d.document_sha256,d.metadata
+                   FROM run_snapshot_ids rs
+                   JOIN asset_snapshots snap ON snap.id=rs.snapshot_id
+                   JOIN sources src ON src.id=snap.source_id
+                   LEFT JOIN documents d ON d.snapshot_id=snap.id
+                   ORDER BY snap.retrieved_at,snap.id""",
+                (str(run_id), str(run_id)),
             )
-            evt_keys = [desc[0] for desc in cur.description]
-            evt_rows = [
-                dict(zip(evt_keys, row))
-                for row in cur.fetchall()
-            ]
-
-            # Claims
-            cur.execute(
-                "SELECT * FROM research_claims WHERE run_id = %s ORDER BY created_at",
-                (str(run_id),),
-            )
-            claim_keys = [desc[0] for desc in cur.description]
-            claim_rows = [
-                dict(zip(claim_keys, row))
-                for row in cur.fetchall()
-            ]
-
-            # Assessments
-            cur.execute(
-                """SELECT * FROM audit_assessments
-                   WHERE run_id = %s
-                   ORDER BY created_at""",
-                (str(run_id),),
-            )
-            asmt_keys = [desc[0] for desc in cur.description]
-            assessment_rows = [
-                dict(zip(asmt_keys, row))
-                for row in cur.fetchall()
-            ]
-
-            # Assessment stage outputs
-            stage_map: dict[str, list[dict[str, Any]]] = {}
-            if assessment_rows:
-                assessment_ids = [row["id"] for row in assessment_rows]
-                cur.execute(
-                    """SELECT * FROM audit_stage_outputs
-                       WHERE assessment_id = ANY(%s)
-                       ORDER BY assessment_id, sequence_number""",
-                    (assessment_ids,),
-                )
-                stage_keys = [desc[0] for desc in cur.description]
-                for srow in cur.fetchall():
-                    sdict = dict(zip(stage_keys, srow))
-                    aid = str(sdict["assessment_id"])
-                    stage_map.setdefault(aid, []).append(sdict)
-
-        # --- Map to Catalog v5 format ---
-        run_record = _map_run(run_row)
-
-        # Gather invocation IDs for the run record
-        invocations = []
-        for inv_row in inv_rows:
-            inv_record = _map_invocation(inv_row)
-            invocations.append(inv_record)
-            run_record["invocation_ids"].append(str(inv_row["id"]))
-
-        # Map events
-        events = [_map_event(evt) for evt in evt_rows]
-
-        # Map claims
-        claims = [_map_claim(claim) for claim in claim_rows]
-        run_record["claims"] = claims
-
-        # Map assessments
-        assessments = []
-        for asmt_row in assessment_rows:
-            stage_outputs = stage_map.get(str(asmt_row["id"]), [])
-            asmt_record = _map_assessment(asmt_row, stage_outputs)
-            assessments.append(asmt_record)
-            run_record["assessment_refs"].append({
-                "assessment_id": str(asmt_row["id"]),
-                "status": asmt_row.get("status", "partial"),
-                "provider": asmt_row.get("provider"),
-                "target_hash": asmt_row.get("target_hash", ""),
-                "evaluator_version": asmt_row.get(
-                    "evaluator_version", EVALUATOR_VERSION
-                ),
-            })
-
-        # Compute source-state hash
-        source_parts = [
-            json.dumps(run_record, sort_keys=True, default=str),
-            json.dumps(invocations, sort_keys=True, default=str),
-            json.dumps(events, sort_keys=True, default=str),
-            json.dumps(claims, sort_keys=True, default=str),
-            json.dumps(assessments, sort_keys=True, default=str),
-        ]
-        source_state_hash = _compute_source_state_hash(*source_parts)
-
-        # --- Write files ---
-        files_created = []
-        export_status = "complete"
-        export_error = None
-        snapshots: list[dict[str, Any]] = []
-
-        try:
-            # Run record
-            run_path = target_dir / f"{run_record['research_run_id']}.json"
-            _atomic_write_json(run_path, run_record)
-            files_created.append(run_path)
-
-            # Invocations
-            for inv in invocations:
-                inv_path = target_dir / "invocations" / f"{inv['invocation_id']}.json"
-                _atomic_write_json(inv_path, inv)
-                files_created.append(inv_path)
-
-            # Events (JSONL)
-            events_path = target_dir / "events.jsonl"
-            events_tmp = events_path.with_name(".events.jsonl.tmp")
-            events_path.parent.mkdir(parents=True, exist_ok=True)
-            with events_tmp.open("w", encoding="utf-8") as f:
-                for evt in events:
-                    f.write(json.dumps(evt, sort_keys=True) + "\n")
-                f.flush()
-            events_tmp.replace(events_path)
-            files_created.append(events_path)
-
-            # Snapshots
-            snapshots = _export_snapshots(self.uow_factory)
-            if snapshots:
-                snapshots_path = target_dir / "snapshots.json"
-                _atomic_write_json(snapshots_path, snapshots)
-                files_created.append(snapshots_path)
-
-            # Claims
-            if claims:
-                claims_path = target_dir / "claims.json"
-                _atomic_write_json(claims_path, claims)
-                files_created.append(claims_path)
-
-            # Assessments
+            snapshots = _fetchall(cur)
+            cur.execute("SELECT * FROM audit_assessments WHERE run_id=%s ORDER BY created_at,id", (str(run_id),))
+            assessments = _fetchall(cur)
             if assessments:
-                assessments_path = target_dir / "assessments.json"
-                _atomic_write_json(assessments_path, assessments)
-                files_created.append(assessments_path)
+                cur.execute(
+                    "SELECT * FROM audit_stage_outputs WHERE assessment_id=ANY(%s) ORDER BY assessment_id,stage,sequence_number,id",
+                    ([row["id"] for row in assessments],),
+                )
+                stages = _fetchall(cur)
+            else:
+                stages = []
+            cur.execute("SELECT * FROM semantic_calls WHERE run_id=%s ORDER BY created_at,id", (str(run_id),))
+            calls = _fetchall(cur)
+            if calls:
+                cur.execute(
+                    "SELECT * FROM semantic_artifacts WHERE semantic_call_id=ANY(%s) ORDER BY semantic_call_id,created_at,id",
+                    ([row["id"] for row in calls],),
+                )
+                artifacts = _fetchall(cur)
+            else:
+                artifacts = []
+            cur.execute(
+                "SELECT * FROM coverage_snapshots WHERE run_id=%s ORDER BY coverage_revision DESC LIMIT 1",
+                (str(run_id),),
+            )
+            coverage = _fetchone(cur)
+        return _Projection(run, invocations, events, claims, evidence, snapshots, assessments, stages, calls, artifacts, coverage)
 
-            # Manifest (sources + claims summary)
-            #
-            # Note: The ``sources[].url`` field is populated from the
-            # invocation's input query text, not from resolved URLs.
-            # This differs from the legacy ``load_source_manifest`` in
-            # ``catalog_v5.py`` which expects actual URLs.  For pure
-            # search invocations the URL may be empty — that is
-            # intentional and documented.
-            manifest = {
+    def _snapshot_records(self, projection: _Projection) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for row in projection.snapshot_rows:
+            digest = str(row.get("content_sha256") or "")
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ExportWriteFailure(f"snapshot {row['id']} has invalid content SHA-256")
+            canonical = _canonical_url(row.get("canonical_url") or row.get("final_url") or row.get("requested_url"))
+            records.append({
                 "schema_version": SCHEMA_VERSION,
-                "export_schema_version": EXPORT_SCHEMA_VERSION,
-                "run_id": str(run_id),
-                "source_state_sha256": source_state_hash,
-                "generated_at": utcnow().isoformat(),
-                "claims": claims,
-                "sources": [
-                    {
-                        "url": inv.get("input", {}).get("query", ""),
-                        "claim_ids": [c["id"] for c in claims],
-                        "roles": ["unspecified"],
-                        "fidelity": "url_only",
-                    }
-                    for inv in invocations
-                ],
-            }
-            manifest_path = target_dir / "manifest.json"
-            _atomic_write_json(manifest_path, manifest)
-            files_created.append(manifest_path)
+                "snapshot_id": str(row["id"]),
+                "source_id": str(row["source_id"]),
+                "url": canonical,
+                "requested_url": _canonical_url(row.get("requested_url") or canonical),
+                "title": row.get("title"),
+                "author": row.get("author"),
+                "published_at": _iso(row.get("published_at")),
+                "retrieved_at": _iso(row.get("retrieved_at")),
+                "mime_type": row.get("mime_type"),
+                "content_sha256": digest,
+                "raw_blob_uri": row.get("raw_blob_uri"),
+                "raw_byte_length": row.get("raw_byte_length"),
+                "firecrawl_version": row.get("firecrawl_version"),
+                "parser": {
+                    "name": row.get("parser_name"),
+                    "version": row.get("parser_version"),
+                    "normalization_version": row.get("normalization_version"),
+                },
+                "document_sha256": row.get("document_sha256"),
+                "blob_path": f"blobs/sha256/{digest[:2]}/{digest}",
+                "availability": "available",
+                "metadata": _sanitize(row.get("metadata") or {}),
+            })
+        return records
 
-        except ExportWriteFailure as exc:
-            export_status = "failed"
-            export_error = str(exc)
-        except Exception as exc:
-            export_status = "failed"
-            export_error = f"{type(exc).__name__}: {exc}"
+    @staticmethod
+    def _manifest(projection: _Projection, claims: list[dict[str, Any]]) -> dict[str, Any]:
+        known_claims = {claim["id"] for claim in claims}
+        sources: dict[tuple[str, str], dict[str, Any]] = {}
+        for link in projection.evidence_rows:
+            claim_id = str(link["claim_id"])
+            if claim_id not in known_claims:
+                raise CatalogExportError(f"evidence link references unknown claim {claim_id}")
+            url = _canonical_url(link.get("canonical_url") or link.get("source_url"))
+            candidate_id = str(link["candidate_id"]) if link.get("candidate_id") else ""
+            key = (url, candidate_id)
+            source = sources.setdefault(key, {
+                "url": url,
+                "canonical_url": url,
+                "candidate_id": candidate_id or None,
+                "snapshot_id": str(link["snapshot_id"]),
+                "claim_ids": [],
+                "passage_ids": [],
+                "roles": [],
+                "relationships": [],
+                "fidelity": "authoritative_passage",
+                "resolution": "matched",
+            })
+            source["claim_ids"].append(claim_id)
+            source["passage_ids"].append(str(link["passage_id"]))
+            relationship = str(link.get("relationship") or "supports")
+            source["roles"].append(relationship)
+            source["relationships"].append({
+                "claim_id": claim_id,
+                "passage_id": str(link["passage_id"]),
+                "snapshot_id": str(link["snapshot_id"]),
+                "relationship": relationship,
+                "confidence": link.get("confidence"),
+                "passage_sha256": link.get("passage_sha256"),
+            })
+        output = []
+        for source in sources.values():
+            for key in ("claim_ids", "passage_ids", "roles"):
+                source[key] = sorted(set(source[key]))
+            source["relationships"].sort(key=lambda item: (item["claim_id"], item["passage_id"]))
+            output.append(source)
+        output.sort(key=lambda item: (item["canonical_url"], item.get("candidate_id") or ""))
+        return {"schema_version": SCHEMA_VERSION, "claims": claims, "sources": output}
 
-        return ExportRunResult(
-            run=run_record,
-            invocations=invocations,
-            events=events,
-            snapshots=snapshots,
-            claims=claims,
-            assessments=assessments,
-            source_state_sha256=source_state_hash,
-            export_schema_version=EXPORT_SCHEMA_VERSION,
-            target_dir=target_dir,
-            status=export_status,
-            files_created=files_created,
-            error=export_error,
-        )
+    def _map_records(self, projection: _Projection) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+        run_row = projection.run_row
+        run_catalog_id = _catalog_id(RUN_PREFIX, run_row["id"], run_row.get("external_run_id") or run_row.get("external_id"))
+        invocation_ids = {
+            str(row["id"]): _catalog_id(INVOCATION_PREFIX, row["id"], row.get("external_invocation_id"))
+            for row in projection.invocation_rows
+        }
+        claims = [_map_claim(row) for row in projection.claim_rows]
+        snapshots = self._snapshot_records(projection)
+        manifest = self._manifest(projection, claims)
 
-    # ------------------------------------------------------------------
-    # Single invocation export
-    # ------------------------------------------------------------------
-
-    def export_invocation(
-        self,
-        invocation_id: UUID,
-        run_id: UUID,
-        target_dir: Path | str,
-    ) -> CatalogExportResult:
-        """Export a single invocation to Catalog v5 format.
-
-        Args:
-            invocation_id: Invocation UUID.
-            run_id: Research run UUID.
-            target_dir: Directory to write exports to.
-
-        Returns:
-            ``CatalogExportResult``.
-
-        Raises:
-            ExportTargetNotFound: If the invocation does not exist.
-        """
-        invocation_id = UUID(str(invocation_id))
-        run_id = UUID(str(run_id))
-        target_dir = Path(target_dir)
-
-        with self.uow_factory() as uow:
-            cur = uow.connection.cursor()
-
-            # Invocation
-            cur.execute(
-                "SELECT * FROM research_invocations WHERE id = %s",
-                (str(invocation_id),),
+        artifacts_by_call: dict[str, list[dict[str, Any]]] = {}
+        for artifact in projection.semantic_artifact_rows:
+            artifacts_by_call.setdefault(str(artifact["semantic_call_id"]), []).append(_sanitize({
+                "artifact_id": str(artifact["id"]),
+                "artifact_type": artifact.get("artifact_type"),
+                "schema_name": artifact.get("schema_name"),
+                "schema_version": artifact.get("schema_version"),
+                "content_sha256": artifact.get("content_sha256"),
+                "validation_status": artifact.get("validation_status"),
+                "validation_errors": artifact.get("validation_errors") or [],
+            }))
+        mapped_calls = {
+            str(row["id"]): _map_semantic_call(
+                row, artifacts_by_call.get(str(row["id"]), []), invocation_ids
             )
-            inv_row = cur.fetchone()
-            if inv_row is None:
-                raise ExportTargetNotFound(
-                    f"invocation {invocation_id} not found"
-                )
-            inv_row = dict(
-                zip([desc[0] for desc in cur.description], inv_row)
-            )
-
-            # Events for this invocation
-            cur.execute(
-                """SELECT * FROM research_events
-                   WHERE invocation_id = %s
-                   ORDER BY created_at""",
-                (str(invocation_id),),
-            )
-            evt_keys = [desc[0] for desc in cur.description]
-            evt_rows = [
-                dict(zip(evt_keys, row))
-                for row in cur.fetchall()
-            ]
-
-        inv_record = _map_invocation(inv_row)
-        events = [_map_event(evt) for evt in evt_rows]
-        inv_record["events"] = events
-
-        # Source-state hash
-        source_parts = [
-            json.dumps(inv_record, sort_keys=True, default=str),
-            json.dumps(events, sort_keys=True, default=str),
-        ]
-        source_state_hash = _compute_source_state_hash(*source_parts)
-        export_id = "ce_" + sha256(
-            f"{source_state_hash}:{EXPORT_SCHEMA_VERSION}".encode()
-        ).hexdigest()[:40]
-
-        # Write files
-        files_created = []
-        export_status = "complete"
-        export_error = None
-
-        try:
-            inv_path = target_dir / "invocations" / f"{inv_record['invocation_id']}.json"
-            _atomic_write_json(inv_path, inv_record)
-            files_created.append(inv_path)
-
-            events_path = target_dir / "events.jsonl"
-            events_tmp = events_path.with_name(".events.jsonl.tmp")
-            events_path.parent.mkdir(parents=True, exist_ok=True)
-            with events_tmp.open("w", encoding="utf-8") as f:
-                for evt in events:
-                    f.write(json.dumps(evt, sort_keys=True) + "\n")
-                f.flush()
-            events_tmp.replace(events_path)
-            files_created.append(events_path)
-
-        except ExportWriteFailure as exc:
-            export_status = "failed"
-            export_error = str(exc)
-        except Exception as exc:
-            export_status = "failed"
-            export_error = f"{type(exc).__name__}: {exc}"
-
-        return CatalogExportResult(
-            export_id=export_id,
-            source_state_sha256=source_state_hash,
-            export_schema_version=EXPORT_SCHEMA_VERSION,
-            target_type="invocation",
-            target_id=str(invocation_id),
-            target_dir=target_dir,
-            status=export_status,
-            files_created=files_created,
-            error=export_error,
-        )
-
-    # ------------------------------------------------------------------
-    # Events-only export
-    # ------------------------------------------------------------------
-
-    def export_events(
-        self,
-        run_id: UUID,
-        target_dir: Path | str,
-    ) -> CatalogExportResult:
-        """Export run events as JSONL.
-
-        Args:
-            run_id: Research run UUID.
-            target_dir: Directory to write exports to.
-
-        Returns:
-            ``CatalogExportResult``.
-        """
-        run_id = UUID(str(run_id))
-        target_dir = Path(target_dir)
-
-        with self.uow_factory() as uow:
-            cur = uow.connection.cursor()
-            cur.execute(
-                """SELECT * FROM research_events
-                   WHERE run_id = %s
-                   ORDER BY created_at""",
-                (str(run_id),),
-            )
-            keys = [desc[0] for desc in cur.description]
-            evt_rows = [
-                dict(zip(keys, row))
-                for row in cur.fetchall()
-            ]
-
-            # Verify the run exists (events may be empty for a valid run)
-            if not evt_rows:
-                cur.execute(
-                    "SELECT 1 FROM research_runs WHERE id = %s",
-                    (str(run_id),),
-                )
-                if cur.fetchone() is None:
-                    raise ExportTargetNotFound(f"run {run_id} not found")
-
-        events = [_map_event(evt) for evt in evt_rows]
-
-        source_parts = [
-            json.dumps(events, sort_keys=True, default=str),
-        ]
-        source_state_hash = _compute_source_state_hash(*source_parts)
-        export_id = "ce_" + sha256(
-            f"{source_state_hash}:{EXPORT_SCHEMA_VERSION}:events".encode()
-        ).hexdigest()[:40]
-
-        files_created = []
-        export_status = "complete"
-        export_error = None
-
-        try:
-            events_path = target_dir / "events.jsonl"
-            events_tmp = events_path.with_name(".events.jsonl.tmp")
-            events_path.parent.mkdir(parents=True, exist_ok=True)
-            with events_tmp.open("w", encoding="utf-8") as f:
-                for evt in events:
-                    f.write(json.dumps(evt, sort_keys=True) + "\n")
-                f.flush()
-            events_tmp.replace(events_path)
-            files_created.append(events_path)
-        except ExportWriteFailure as exc:
-            export_status = "failed"
-            export_error = str(exc)
-        except Exception as exc:
-            export_status = "failed"
-            export_error = f"{type(exc).__name__}: {exc}"
-
-        return CatalogExportResult(
-            export_id=export_id,
-            source_state_sha256=source_state_hash,
-            export_schema_version=EXPORT_SCHEMA_VERSION,
-            target_type="run",
-            target_id=str(run_id),
-            target_dir=target_dir,
-            status=export_status,
-            files_created=files_created,
-            error=export_error,
-        )
-
-    # ------------------------------------------------------------------
-    # Snapshots-only export
-    # ------------------------------------------------------------------
-
-    def export_snapshots(
-        self,
-        run_id: UUID,
-        target_dir: Path | str,
-    ) -> CatalogExportResult:
-        """Export run snapshots.
-
-        Args:
-            run_id: Research run UUID.
-            target_dir: Directory to write exports to.
-
-        Returns:
-            ``CatalogExportResult``.
-        """
-        run_id = UUID(str(run_id))
-        target_dir = Path(target_dir)
-
-        snapshots = _export_snapshots(self.uow_factory)
-
-        source_parts = [
-            json.dumps(snapshots, sort_keys=True, default=str),
-        ]
-        source_state_hash = _compute_source_state_hash(*source_parts)
-        export_id = "ce_" + sha256(
-            f"{source_state_hash}:{EXPORT_SCHEMA_VERSION}:snapshots".encode()
-        ).hexdigest()[:40]
-
-        files_created = []
-        export_status = "complete"
-        export_error = None
-
-        try:
-            if snapshots:
-                snapshots_path = target_dir / "snapshots.json"
-                _atomic_write_json(snapshots_path, snapshots)
-                files_created.append(snapshots_path)
-        except ExportWriteFailure as exc:
-            export_status = "failed"
-            export_error = str(exc)
-        except Exception as exc:
-            export_status = "failed"
-            export_error = f"{type(exc).__name__}: {exc}"
-
-        return CatalogExportResult(
-            export_id=export_id,
-            source_state_sha256=source_state_hash,
-            export_schema_version=EXPORT_SCHEMA_VERSION,
-            target_type="run",
-            target_id=str(run_id),
-            target_dir=target_dir,
-            status=export_status,
-            files_created=files_created,
-            error=export_error,
-        )
-
-    # ------------------------------------------------------------------
-    # Claims-only export
-    # ------------------------------------------------------------------
-
-    def export_claims(
-        self,
-        run_id: UUID,
-        target_dir: Path | str,
-    ) -> CatalogExportResult:
-        """Export run claims.
-
-        Args:
-            run_id: Research run UUID.
-            target_dir: Directory to write exports to.
-
-        Returns:
-            ``CatalogExportResult``.
-        """
-        run_id = UUID(str(run_id))
-        target_dir = Path(target_dir)
-
-        with self.uow_factory() as uow:
-            cur = uow.connection.cursor()
-            cur.execute(
-                "SELECT * FROM research_claims WHERE run_id = %s ORDER BY created_at",
-                (str(run_id),),
-            )
-            keys = [desc[0] for desc in cur.description]
-            claim_rows = [
-                dict(zip(keys, row))
-                for row in cur.fetchall()
-            ]
-
-            # Verify the run exists (claims may be empty for a valid run)
-            if not claim_rows:
-                cur.execute(
-                    "SELECT 1 FROM research_runs WHERE id = %s",
-                    (str(run_id),),
-                )
-                if cur.fetchone() is None:
-                    raise ExportTargetNotFound(f"run {run_id} not found")
-
-        claims = [_map_claim(claim) for claim in claim_rows]
-
-        source_parts = [
-            json.dumps(claims, sort_keys=True, default=str),
-        ]
-        source_state_hash = _compute_source_state_hash(*source_parts)
-        export_id = "ce_" + sha256(
-            f"{source_state_hash}:{EXPORT_SCHEMA_VERSION}:claims".encode()
-        ).hexdigest()[:40]
-
-        files_created = []
-        export_status = "complete"
-        export_error = None
-
-        try:
-            if claims:
-                claims_path = target_dir / "claims.json"
-                _atomic_write_json(claims_path, claims)
-                files_created.append(claims_path)
-        except ExportWriteFailure as exc:
-            export_status = "failed"
-            export_error = str(exc)
-        except Exception as exc:
-            export_status = "failed"
-            export_error = f"{type(exc).__name__}: {exc}"
-
-        return CatalogExportResult(
-            export_id=export_id,
-            source_state_sha256=source_state_hash,
-            export_schema_version=EXPORT_SCHEMA_VERSION,
-            target_type="run",
-            target_id=str(run_id),
-            target_dir=target_dir,
-            status=export_status,
-            files_created=files_created,
-            error=export_error,
-        )
-
-    # ------------------------------------------------------------------
-    # Assessments-only export
-    # ------------------------------------------------------------------
-
-    def export_assessments(
-        self,
-        run_id: UUID,
-        target_dir: Path | str,
-    ) -> CatalogExportResult:
-        """Export run assessments.
-
-        Args:
-            run_id: Research run UUID.
-            target_dir: Directory to write exports to.
-
-        Returns:
-            ``CatalogExportResult``.
-        """
-        run_id = UUID(str(run_id))
-        target_dir = Path(target_dir)
-
-        with self.uow_factory() as uow:
-            cur = uow.connection.cursor()
-            cur.execute(
-                """SELECT * FROM audit_assessments
-                   WHERE run_id = %s
-                   ORDER BY created_at""",
-                (str(run_id),),
-            )
-            keys = [desc[0] for desc in cur.description]
-            asmt_rows = [
-                dict(zip(keys, row))
-                for row in cur.fetchall()
-            ]
-
-            stage_map: dict[str, list[dict[str, Any]]] = {}
-            if asmt_rows:
-                asmt_ids = [row["id"] for row in asmt_rows]
-                cur.execute(
-                    """SELECT * FROM audit_stage_outputs
-                       WHERE assessment_id = ANY(%s)
-                       ORDER BY assessment_id, sequence_number""",
-                    (asmt_ids,),
-                )
-                stage_keys = [desc[0] for desc in cur.description]
-                for srow in cur.fetchall():
-                    sdict = dict(zip(stage_keys, srow))
-                    aid = str(sdict["assessment_id"])
-                    stage_map.setdefault(aid, []).append(sdict)
-
-            # Verify the run exists (assessments may be empty for a valid run)
-            if not asmt_rows:
-                cur.execute(
-                    "SELECT 1 FROM research_runs WHERE id = %s",
-                    (str(run_id),),
-                )
-                if cur.fetchone() is None:
-                    raise ExportTargetNotFound(f"run {run_id} not found")
-
-        assessments = []
-        for asmt_row in asmt_rows:
-            stage_outputs = stage_map.get(str(asmt_row["id"]), [])
-            asmt_record = _map_assessment(asmt_row, stage_outputs)
-            assessments.append(asmt_record)
-
-        source_parts = [
-            json.dumps(assessments, sort_keys=True, default=str),
-        ]
-        source_state_hash = _compute_source_state_hash(*source_parts)
-        export_id = "ce_" + sha256(
-            f"{source_state_hash}:{EXPORT_SCHEMA_VERSION}:assessments".encode()
-        ).hexdigest()[:40]
-
-        files_created = []
-        export_status = "complete"
-        export_error = None
-
-        try:
-            if assessments:
-                assessments_path = target_dir / "assessments.json"
-                _atomic_write_json(assessments_path, assessments)
-                files_created.append(assessments_path)
-        except ExportWriteFailure as exc:
-            export_status = "failed"
-            export_error = str(exc)
-        except Exception as exc:
-            export_status = "failed"
-            export_error = f"{type(exc).__name__}: {exc}"
-
-        return CatalogExportResult(
-            export_id=export_id,
-            source_state_sha256=source_state_hash,
-            export_schema_version=EXPORT_SCHEMA_VERSION,
-            target_type="run",
-            target_id=str(run_id),
-            target_dir=target_dir,
-            status=export_status,
-            files_created=files_created,
-            error=export_error,
-        )
-
-    # ------------------------------------------------------------------
-    # Manifest export
-    # ------------------------------------------------------------------
-
-    def export_manifest(
-        self,
-        run_id: UUID,
-        target_dir: Path | str,
-    ) -> CatalogExportResult:
-        """Export a source manifest (sources + claims).
-
-        Args:
-            run_id: Research run UUID.
-            target_dir: Directory to write exports to.
-
-        Returns:
-            ``CatalogExportResult``.
-        """
-        run_id = UUID(str(run_id))
-        target_dir = Path(target_dir)
-
-        with self.uow_factory() as uow:
-            cur = uow.connection.cursor()
-
-            # Invocations (for source URLs)
-            cur.execute(
-                "SELECT * FROM research_invocations WHERE run_id = %s ORDER BY created_at",
-                (str(run_id),),
-            )
-            inv_keys = [desc[0] for desc in cur.description]
-            inv_rows = [
-                dict(zip(inv_keys, row))
-                for row in cur.fetchall()
-            ]
-
-            # Claims
-            cur.execute(
-                "SELECT * FROM research_claims WHERE run_id = %s ORDER BY created_at",
-                (str(run_id),),
-            )
-            claim_keys = [desc[0] for desc in cur.description]
-            claim_rows = [
-                dict(zip(claim_keys, row))
-                for row in cur.fetchall()
-            ]
-
-            # Verify the run exists (invocations and claims may be empty)
-            if not inv_rows and not claim_rows:
-                cur.execute(
-                    "SELECT 1 FROM research_runs WHERE id = %s",
-                    (str(run_id),),
-                )
-                if cur.fetchone() is None:
-                    raise ExportTargetNotFound(f"run {run_id} not found")
-
-        claims = [_map_claim(claim) for claim in claim_rows]
-        manifest_sources = [
-            {
-                "url": inv.get("input", {}).get("query", ""),
-                "claim_ids": [c["id"] for c in claims],
-                "roles": ["unspecified"],
-                "fidelity": "url_only",
-            }
-            for inv in inv_rows
-        ]
-
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "export_schema_version": EXPORT_SCHEMA_VERSION,
-            "run_id": str(run_id),
-            "claims": claims,
-            "sources": manifest_sources,
+            for row in projection.semantic_call_rows
         }
 
-        source_parts = [
-            json.dumps(manifest, sort_keys=True, default=str),
-        ]
-        source_state_hash = _compute_source_state_hash(*source_parts)
-        export_id = "ce_" + sha256(
-            f"{source_state_hash}:{EXPORT_SCHEMA_VERSION}:manifest".encode()
-        ).hexdigest()[:40]
+        stages_by_assessment: dict[str, list[dict[str, Any]]] = {}
+        for row in projection.stage_rows:
+            stages_by_assessment.setdefault(str(row["assessment_id"]), []).append(row)
+        assessments: list[dict[str, Any]] = []
+        assessment_id_map: dict[str, str] = {}
+        for row in projection.assessment_rows:
+            aid = ASSESSMENT_PREFIX + UUID(str(row["id"])).hex
+            assessment_id_map[str(row["id"])] = aid
+            target = run_catalog_id if row.get("target_type") == "run" else invocation_ids.get(str(row.get("target_id")))
+            if target is None:
+                raise CatalogExportError(f"assessment {row['id']} references unknown target {row.get('target_id')}")
+            stage_values: dict[str, Any] = {}
+            stage_errors: list[dict[str, Any]] = []
+            call_ids = set((row.get("audit_packet_manifest") or {}).get("semantic_call_ids", []))
+            for stage in stages_by_assessment.get(str(row["id"]), []):
+                name = str(stage["stage"])
+                stage_output = stage.get("output") or {}
+                if isinstance(stage_output, dict):
+                    if stage_output.get("semantic_call_id"):
+                        call_ids.add(stage_output["semantic_call_id"])
+                    call_ids.update(stage_output.get("semantic_call_ids") or [])
+                if stage.get("status") == "failed":
+                    stage_errors.append({
+                        "stage": name,
+                        "sequence_number": stage.get("sequence_number"),
+                        "error": stage.get("error"),
+                        "error_details": stage.get("error_details") or {},
+                    })
+                    continue
+                value = stage.get("output")
+                if name in stage_values:
+                    if not isinstance(stage_values[name], list):
+                        stage_values[name] = [stage_values[name]]
+                    stage_values[name].append(value)
+                else:
+                    stage_values[name] = value
+            unknown_calls = sorted(str(item) for item in call_ids if str(item) not in mapped_calls)
+            if unknown_calls:
+                raise CatalogExportError(
+                    f"assessment {row['id']} references unknown semantic calls: {unknown_calls}"
+                )
+            assessments.append(_sanitize({
+                "schema_version": SCHEMA_VERSION,
+                "assessment_id": aid,
+                "target_id": target,
+                "target_type": row.get("target_type"),
+                "target_hash": row.get("target_hash"),
+                "evaluator_version": row.get("evaluator_version"),
+                "prompt_template_version": row.get("prompt_template_version"),
+                "policy_version": row.get("policy_version"),
+                "implementation_version": EXPORT_SCHEMA_VERSION,
+                "stage_set": list(row.get("stage_set") or []),
+                "status": row.get("status"),
+                "provider": row.get("provider"),
+                "model": row.get("model"),
+                "model_fingerprint": row.get("model_fingerprint"),
+                "prompt_hash": row.get("prompt_hash"),
+                "audit_identity_hash": row.get("audit_identity_hash"),
+                "audit_packet_manifest": row.get("audit_packet_manifest") or {},
+                "stages": stage_values,
+                "stage_errors": stage_errors,
+                "calls": [mapped_calls[str(call_id)] for call_id in sorted(call_ids, key=str)],
+                "elapsed_ms": row.get("elapsed_ms", 0),
+                "created_at": _iso(row.get("created_at")),
+            }))
 
-        files_created = []
-        export_status = "complete"
-        export_error = None
+        invocations: list[dict[str, Any]] = []
+        for row in projection.invocation_rows:
+            status = row.get("status", "pending")
+            execution = "running" if status in {"pending", "running"} else "succeeded" if status == "complete" else "failed"
+            output = row.get("output") or {}
+            if isinstance(output, str):
+                output = json.loads(output)
+            invocation_assessments = [
+                item for item in assessments if item["target_type"] == "invocation" and item["target_id"] == invocation_ids[str(row["id"])]
+            ]
+            invocations.append(_sanitize({
+                "schema_version": SCHEMA_VERSION,
+                "invocation_id": invocation_ids[str(row["id"])],
+                "research_run_id": run_catalog_id,
+                "operation": row.get("operation", "unknown"),
+                "input": row.get("input") or {},
+                "started_at": _iso(row.get("started_at") or row.get("created_at")),
+                "finished_at": _iso(row.get("completed_at")),
+                "execution": {"status": execution, "exit_code": None, "error": row.get("error")},
+                "operational_status": execution,
+                "data_completeness": "complete" if status == "complete" else "partial",
+                "audit_status": invocation_assessments[-1]["status"] if invocation_assessments else "not_run",
+                "events": [],
+                "results": output.get("results", []),
+                "operational_metrics": output.get("operational_metrics", {}),
+                "artifacts": [],
+                "assessment_refs": [{
+                    "assessment_id": item["assessment_id"], "status": item["status"],
+                    "provider": item.get("provider"), "target_hash": item["target_hash"],
+                    "evaluator_version": item["evaluator_version"],
+                } for item in invocation_assessments],
+                "evidence_revision": row.get("lifecycle_revision", 1),
+                "record_revision": row.get("lifecycle_revision", 1),
+            }))
 
+        events = [_map_event(row, run_catalog_id, invocation_ids) for row in projection.event_rows]
+        events_by_invocation: dict[str, list[dict[str, Any]]] = {}
+        for event in events:
+            if event.get("invocation_id"):
+                events_by_invocation.setdefault(event["invocation_id"], []).append({
+                    "type": event["event"], "at": event["at"], **event["data"]
+                })
+        for invocation in invocations:
+            invocation["events"] = events_by_invocation.get(invocation["invocation_id"], [])
+            if snapshots:
+                _, compressed = self._invocation_snapshot_archive(invocation, snapshots)
+                relative = Path("snapshots") / f"{invocation['invocation_id']}.json.gz"
+                invocation["snapshot"] = {
+                    "path": str(relative),
+                    "type": "catalog_snapshot",
+                    "size_bytes": len(compressed),
+                    "sha256": sha256(compressed).hexdigest(),
+                    "availability": "available",
+                    "truncated": False,
+                    "original_result_count": len(invocation.get("results", [])),
+                    "retained_result_count": len(invocation.get("results", [])),
+                }
+
+        run_assessments = [item for item in assessments if item["target_type"] == "run"]
+        state = run_row.get("state", "created")
+        terminal = state in {"completed", "partial", "failed", "cancelled"}
+        outcome = run_row.get("declared_outcome")
+        operational_status = "running" if not terminal else "succeeded" if state == "completed" else "failed" if state in {"failed", "cancelled"} else "partial"
+        coverage = projection.coverage_row or {}
+        run = _sanitize({
+            "schema_version": SCHEMA_VERSION,
+            "research_run_id": run_catalog_id,
+            "objective": run_row.get("objective", ""),
+            "profile": {"requested": run_row.get("execution_mode"), "selected": run_row.get("execution_mode"), "reason": "authoritative execution mode"},
+            "started_at": _iso(run_row.get("started_at")),
+            "updated_at": _iso(run_row.get("updated_at") or run_row.get("started_at")),
+            "finished_at": _iso(run_row.get("finished_at") or run_row.get("completed_at")),
+            "lifecycle": {"state": "finished" if terminal else "running", "revision": run_row.get("lifecycle_revision", 1)},
+            "declared_outcome": outcome,
+            "operational_status": operational_status,
+            "data_completeness": "complete" if state == "completed" and claims and manifest["sources"] else "partial",
+            "audit_status": run_assessments[-1]["status"] if run_assessments else "not_run",
+            "assessment_summary": run_assessments[-1]["stages"].get("synthesis") if run_assessments else None,
+            "invocation_ids": [item["invocation_id"] for item in invocations],
+            "claims": claims,
+            "used_sources": manifest["sources"],
+            "annotations": [event for event in events if event["event"] == "annotation"],
+            "final_answer": None,
+            "assessment_refs": [{
+                "assessment_id": item["assessment_id"], "status": item["status"],
+                "provider": item.get("provider"), "target_hash": item["target_hash"],
+                "evaluator_version": item["evaluator_version"],
+            } for item in run_assessments],
+            "operational_summary": {
+                "operations": len(invocations),
+                "succeeded": sum(item["execution"]["status"] == "succeeded" for item in invocations),
+                "failed": sum(item["execution"]["status"] == "failed" for item in invocations),
+                "snapshots": len(snapshots),
+                "claims": len(claims),
+                "coverage_revision": coverage.get("coverage_revision", run_row.get("current_coverage_revision", 0)),
+                "coverage": coverage.get("ledger", {}),
+            },
+            "evidence_revision": run_row.get("current_coverage_revision", run_row.get("lifecycle_revision", 1)),
+            "record_revision": run_row.get("lifecycle_revision", 1),
+        })
+        return run, invocations, events, snapshots, claims, assessments, manifest
+
+    @staticmethod
+    def _source_hash(records: Iterable[Any]) -> str:
+        return sha256(b"\x00".join(_canonical_bytes(item) for item in records)).hexdigest()
+
+    def _record_export(self, run_id: UUID, projection: _Projection, target_dir: Path, export_type: str, source_hash: str, status: str, attempt_key: str, error: str | None = None) -> None:
+        event_cursor = projection.event_rows[-1]["id"] if projection.event_rows else None
+        with self.uow_factory() as uow:
+            uow.runs.record_compatibility_export(
+                run_id, export_type, EXPORT_SCHEMA_REVISION, source_hash, status, attempt_key,
+                database_revision=projection.run_row.get("lifecycle_revision", 0),
+                event_cursor=event_cursor,
+                filesystem_path=str(target_dir.resolve()),
+                error=error,
+                metadata={"export_schema": EXPORT_SCHEMA_VERSION},
+            )
+
+    def _stage_tree(self, target_dir: Path, writer: Callable[[Path], None]) -> list[Path]:
+        target_dir = target_dir.resolve()
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{target_dir.name}.stage-", dir=target_dir.parent))
         try:
-            manifest_path = target_dir / "manifest.json"
-            _atomic_write_json(manifest_path, manifest)
-            files_created.append(manifest_path)
-        except ExportWriteFailure as exc:
-            export_status = "failed"
-            export_error = str(exc)
+            writer(staging)
+            for directory in sorted((item for item in staging.rglob("*") if item.is_dir()), reverse=True):
+                _fsync_directory(directory)
+            _fsync_directory(staging)
+            relative_files = [item.relative_to(staging) for item in sorted(staging.rglob("*")) if item.is_file()]
+            _publish_directory(staging, target_dir)
+            return [target_dir / item for item in relative_files]
+        except Exception:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            raise
+
+    def _write_snapshots(self, root: Path, snapshots: list[dict[str, Any]], invocations: list[dict[str, Any]]) -> None:
+        if not snapshots:
+            return
+        _atomic_write_json(root / "snapshots" / "index.json", snapshots)
+        for snapshot in snapshots:
+            digest = snapshot["content_sha256"]
+            if self.blob_store is None or not self.blob_store.verify(digest):
+                raise ExportWriteFailure(
+                    "authoritative blob missing or corrupt for snapshot "
+                    f"{snapshot['snapshot_id']}: {digest}"
+                )
+            with self.blob_store.open(digest) as handle:
+                _atomic_write_bytes(root / snapshot["blob_path"], handle.read())
+        for invocation in invocations:
+            _, compressed = self._invocation_snapshot_archive(invocation, snapshots)
+            relative = Path("snapshots") / f"{invocation['invocation_id']}.json.gz"
+            _atomic_write_bytes(root / relative, compressed)
+
+    @staticmethod
+    def _invocation_snapshot_archive(invocation: dict[str, Any], snapshots: list[dict[str, Any]]) -> tuple[dict[str, Any], bytes]:
+        by_url = {item["url"]: item for item in snapshots}
+        urls = set()
+        for result in invocation.get("results", []):
+            try:
+                urls.add(_canonical_url(result.get("canonical_url") or result.get("url")))
+            except CatalogExportError:
+                continue
+        linked = [by_url[url] for url in sorted(urls) if url in by_url]
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            "invocation_id": invocation["invocation_id"],
+            "created_at": invocation.get("finished_at") or invocation.get("started_at"),
+            "topic": invocation.get("input", {}).get("topic") or invocation.get("input", {}).get("query") or "",
+            "results": invocation.get("results", []),
+            "authoritative_snapshots": linked,
+            "truncation": {
+                "truncated": False,
+                "original_result_count": len(invocation.get("results", [])),
+                "retained_result_count": len(invocation.get("results", [])),
+            },
+        }
+        return payload, gzip.compress(_canonical_bytes(payload), mtime=0)
+
+    def export_run(self, run_id: UUID, target_dir: Path | str) -> ExportRunResult:
+        run_id = UUID(str(run_id))
+        target = Path(target_dir)
+        projection = self._load_projection(run_id)
+        run, invocations, events, snapshots, claims, assessments, manifest = self._map_records(projection)
+        source_hash = self._source_hash((run, invocations, events, snapshots, claims, assessments, manifest))
+        manifest = {**manifest, "export_schema_version": EXPORT_SCHEMA_VERSION, "run_id": run["research_run_id"], "source_state_sha256": source_hash}
+        attempt_key = f"catalog-v5:run-attempt:{uuid4()}"
+        self._record_export(run_id, projection, target, "catalog_v5_run", source_hash, "pending", attempt_key)
+        files: list[Path] = []
+        error = None
+        try:
+            def write(root: Path) -> None:
+                self._write_snapshots(root, snapshots, invocations)
+                _atomic_write_json(root / "runs" / f"{run['research_run_id']}.json", run)
+                for invocation in invocations:
+                    _atomic_write_json(root / "invocations" / f"{invocation['invocation_id']}.json", invocation)
+                _atomic_write_bytes(root / "events.jsonl", b"".join(_canonical_bytes(event) for event in events))
+                for assessment in assessments:
+                    _atomic_write_json(root / "assessments" / assessment["target_id"] / f"{assessment['assessment_id']}.json", assessment)
+                _atomic_write_json(root / "manifest.json", manifest)
+            files = self._stage_tree(target, write)
+            self._record_export(run_id, projection, target, "catalog_v5_run", source_hash, "complete", attempt_key)
+            status = "complete"
         except Exception as exc:
-            export_status = "failed"
-            export_error = f"{type(exc).__name__}: {exc}"
+            error = f"{type(exc).__name__}: {exc}"
+            try:
+                self._record_export(run_id, projection, target, "catalog_v5_run", source_hash, "failed", attempt_key, error)
+            except Exception as record_exc:
+                error += f"; failure recording failed: {type(record_exc).__name__}: {record_exc}"
+            status = "failed"
+        return ExportRunResult(run, invocations, events, snapshots, claims, assessments, source_hash, EXPORT_SCHEMA_VERSION, target, status, files, error)
 
-        return CatalogExportResult(
-            export_id=export_id,
-            source_state_sha256=source_state_hash,
-            export_schema_version=EXPORT_SCHEMA_VERSION,
-            target_type="run",
-            target_id=str(run_id),
-            target_dir=target_dir,
-            status=export_status,
-            files_created=files_created,
-            error=export_error,
-        )
+    def _export_subset(self, run_id: UUID, target_dir: Path | str, export_type: str, writer_factory: Callable[[_Projection, tuple[Any, ...]], Callable[[Path], None]]) -> CatalogExportResult:
+        run_id = UUID(str(run_id))
+        target = Path(target_dir)
+        projection = self._load_projection(run_id)
+        records = self._map_records(projection)
+        source_hash = self._source_hash(records)
+        export_id = "ce_" + sha256(f"{source_hash}:{EXPORT_SCHEMA_VERSION}:{export_type}".encode()).hexdigest()[:40]
+        attempt_key = f"catalog-v5:{export_type}-attempt:{uuid4()}"
+        self._record_export(run_id, projection, target, export_type, source_hash, "pending", attempt_key)
+        try:
+            files = self._stage_tree(target, writer_factory(projection, records))
+            self._record_export(run_id, projection, target, export_type, source_hash, "complete", attempt_key)
+            return CatalogExportResult(export_id, source_hash, EXPORT_SCHEMA_VERSION, "run", str(run_id), target, "complete", files)
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            try:
+                self._record_export(run_id, projection, target, export_type, source_hash, "failed", attempt_key, error)
+            except Exception as record_exc:
+                error += f"; failure recording failed: {type(record_exc).__name__}: {record_exc}"
+            return CatalogExportResult(export_id, source_hash, EXPORT_SCHEMA_VERSION, "run", str(run_id), target, "failed", [], error)
 
-    # ------------------------------------------------------------------
-    # Regeneration
-    # ------------------------------------------------------------------
+    def export_invocation(self, invocation_id: UUID, run_id: UUID, target_dir: Path | str) -> CatalogExportResult:
+        invocation_id = UUID(str(invocation_id))
+        projection = self._load_projection(UUID(str(run_id)))
+        records = self._map_records(projection)
+        invocation = next((item for row, item in zip(projection.invocation_rows, records[1]) if UUID(str(row["id"])) == invocation_id), None)
+        if invocation is None:
+            raise ExportTargetNotFound(f"invocation {invocation_id} not found for run {run_id}")
+        def factory(_projection: _Projection, _records: tuple[Any, ...]) -> Callable[[Path], None]:
+            return lambda root: _atomic_write_json(root / "invocations" / f"{invocation['invocation_id']}.json", invocation)
+        result = self._export_subset(UUID(str(run_id)), target_dir, "catalog_v5_invocation", factory)
+        return CatalogExportResult(result.export_id, result.source_state_sha256, result.export_schema_version, "invocation", str(invocation_id), result.target_dir, result.status, result.files_created, result.error)
 
-    def regenerate_run_export(
-        self,
-        run_id: UUID,
-        target_dir: Path | str,
-    ) -> ExportRunResult:
-        """Regenerate a run export from authoritative PostgreSQL state.
+    def export_events(self, run_id: UUID, target_dir: Path | str) -> CatalogExportResult:
+        return self._export_subset(UUID(str(run_id)), target_dir, "catalog_v5_events", lambda _p, r: lambda root: _atomic_write_bytes(root / "events.jsonl", b"".join(_canonical_bytes(item) for item in r[2])))
 
-        This method always recomputes the export; it does not skip
-        writing when files already exist with a matching source-state
-        hash.  The source-state hash is deterministic for unchanged
-        source data, so callers can compare hashes to decide whether
-        to overwrite.
+    def export_snapshots(self, run_id: UUID, target_dir: Path | str) -> CatalogExportResult:
+        return self._export_subset(UUID(str(run_id)), target_dir, "catalog_v5_snapshots", lambda _p, r: lambda root: self._write_snapshots(root, r[3], r[1]))
 
-        Args:
-            run_id: Research run UUID.
-            target_dir: Directory to write exports to.
+    def export_claims(self, run_id: UUID, target_dir: Path | str) -> CatalogExportResult:
+        return self._export_subset(UUID(str(run_id)), target_dir, "catalog_v5_claims", lambda _p, r: lambda root: _atomic_write_json(root / "claims.json", r[4]))
 
-        Returns:
-            ``ExportRunResult``.
-        """
+    def export_assessments(self, run_id: UUID, target_dir: Path | str) -> CatalogExportResult:
+        def factory(_projection: _Projection, records: tuple[Any, ...]) -> Callable[[Path], None]:
+            def write(root: Path) -> None:
+                for item in records[5]:
+                    _atomic_write_json(root / "assessments" / item["target_id"] / f"{item['assessment_id']}.json", item)
+            return write
+        return self._export_subset(UUID(str(run_id)), target_dir, "catalog_v5_assessments", factory)
+
+    def export_manifest(self, run_id: UUID, target_dir: Path | str) -> CatalogExportResult:
+        def factory(_projection: _Projection, records: tuple[Any, ...]) -> Callable[[Path], None]:
+            source_hash = self._source_hash(records)
+            payload = {**records[6], "export_schema_version": EXPORT_SCHEMA_VERSION, "run_id": records[0]["research_run_id"], "source_state_sha256": source_hash}
+            return lambda root: _atomic_write_json(root / "manifest.json", payload)
+        return self._export_subset(UUID(str(run_id)), target_dir, "catalog_v5_manifest", factory)
+
+    def regenerate_run_export(self, run_id: UUID, target_dir: Path | str) -> ExportRunResult:
         return self.export_run(run_id, target_dir)

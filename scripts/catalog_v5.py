@@ -575,7 +575,10 @@ def verify_target(identifier, persist=True):
     checks = []
     for record in filter(None, records):
         for artifact in [*record.get("artifacts", []), *([record["snapshot"]] if record.get("snapshot") else [])]:
-            path = Path(artifact["path"]); state = "missing" if not path.is_file() else "available" if hashlib.sha256(path.read_bytes()).hexdigest() == artifact.get("sha256") else "hash_mismatch"
+            path = Path(artifact["path"])
+            if not path.is_absolute():
+                path = catalog_root() / path
+            state = "missing" if not path.is_file() else "available" if hashlib.sha256(path.read_bytes()).hexdigest() == artifact.get("sha256") else "hash_mismatch"
             checks.append({"invocation_id": record["invocation_id"], "path": str(path), "state": state})
     report = {"target": identifier, "verified_at": now(), "total": len(checks), "available": sum(item["state"] == "available" for item in checks), "missing": sum(item["state"] == "missing" for item in checks), "hash_mismatch": sum(item["state"] == "hash_mismatch" for item in checks), "artifacts": checks}
     if persist: append_event({"event": "artifact_verification", "research_run_id": identifier if run else None, "invocation_id": None if run else identifier, "data": {key: report[key] for key in ("total", "available", "missing", "hash_mismatch")}})

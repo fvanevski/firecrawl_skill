@@ -17,10 +17,14 @@ PRD mapping: FR-018
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
 from hashlib import sha256
+from io import BytesIO
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -33,8 +37,8 @@ sys.path.insert(0, str(SCRIPTS))
 from research_store.catalog_export import (
     EXPORT_SCHEMA_VERSION,
     ExportTargetNotFound,
-    ExportWriteFailure,
 )
+from research_store.blob import ContentAddressedBlobStore
 from research_store.config import StoreConfig
 from research_store.container import (
     build_catalog_export_service,
@@ -115,6 +119,39 @@ def _create_run_with_data(run_service, query="export test query"):
     return run_id
 
 
+def _link_snapshot(config, run_id, url, payload, *, persist_blob=True):
+    digest = sha256(payload).hexdigest()
+    blob_uri = f"blob://sha256/{digest}"
+    if persist_blob:
+        ContentAddressedBlobStore(config.blob_root).put(
+            BytesIO(payload), "text/plain"
+        )
+    with connect(config.database_url) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """INSERT INTO sources(canonical_url,registered_domain)
+               VALUES(%s,%s)
+               ON CONFLICT(canonical_url) DO UPDATE
+                 SET last_seen_at=excluded.last_seen_at
+               RETURNING id""",
+            (url, "example.test"),
+        )
+        source_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO asset_snapshots(
+                   source_id,requested_url,final_url,retrieved_at,mime_type,
+                   content_sha256,raw_blob_uri,raw_byte_length)
+               VALUES(%s,%s,%s,now(),'text/plain',%s,%s,%s)
+               RETURNING id""",
+            (source_id, url, url, digest, blob_uri, len(payload)),
+        )
+        snapshot_id = cursor.fetchone()[0]
+        cursor.execute(
+            "INSERT INTO research_run_assets(run_id,snapshot_id,role) VALUES(%s,%s,'acquired')",
+            (str(run_id), snapshot_id),
+        )
+    return str(snapshot_id), digest
+
+
 # -----------------------------------------------------------------------
 # Normal success
 # -----------------------------------------------------------------------
@@ -132,7 +169,7 @@ def test_export_run_success(config, run_service, tmp_path):
     assert result.source_state_sha256 is not None
     assert result.export_schema_version == EXPORT_SCHEMA_VERSION
     assert len(result.files_created) > 0
-    assert (target_dir / f"{result.run['research_run_id']}.json").exists()
+    assert (target_dir / "runs" / f"{result.run['research_run_id']}.json").exists()
     assert (target_dir / "events.jsonl").exists()
 
 
@@ -146,11 +183,7 @@ def test_export_run_no_state_change(config, run_service, tmp_path):
     assert result.status == "complete"
 
     # Delete export files
-    for f in target_dir.rglob("*"):
-        if f.is_file():
-            f.unlink()
-    if target_dir.exists():
-        target_dir.rmdir()
+    shutil.rmtree(target_dir)
 
     # Run state is unchanged in PostgreSQL
     status = run_service.status(run_id=run_id)
@@ -313,8 +346,18 @@ def test_export_failure_isolation(config, run_service, tmp_path):
     blocker = tmp_path / "blocker"
     blocker.write_text("blocker")
 
-    with pytest.raises(ExportWriteFailure, match="exists as a file"):
-        exporter.export_run(run_id, blocker)
+    result = exporter.export_run(run_id, blocker)
+    assert result.status == "failed"
+    assert "exists as a file" in result.error
+
+    with connect(config.database_url) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT status,error FROM compatibility_exports WHERE run_id=%s ORDER BY created_at DESC LIMIT 1",
+            (str(run_id),),
+        )
+        export_status, export_error = cursor.fetchone()
+    assert export_status == "failed"
+    assert "exists as a file" in export_error
 
     # PostgreSQL state is intact
     status = run_service.status(run_id=run_id)
@@ -335,15 +378,25 @@ def test_legacy_run_reader_compatibility(config, run_service, tmp_path):
     result = exporter.export_run(run_id, target_dir)
     assert result.status == "complete"
 
-    # Read the run file and verify it has the expected structure
-    run_file = target_dir / f"{result.run['research_run_id']}.json"
-    run_data = json.loads(run_file.read_text(encoding="utf-8"))
+    import catalog_v5
+
+    previous = os.environ.get("FIRECRAWL_CATALOG_DIR")
+    os.environ["FIRECRAWL_CATALOG_DIR"] = str(target_dir)
+    try:
+        run_data = catalog_v5.read_run(result.run["research_run_id"])
+        packet = catalog_v5.build_audit_packet(result.run["research_run_id"])
+    finally:
+        if previous is None:
+            os.environ.pop("FIRECRAWL_CATALOG_DIR", None)
+        else:
+            os.environ["FIRECRAWL_CATALOG_DIR"] = previous
 
     assert run_data.get("schema_version") == 5
     assert "research_run_id" in run_data
     assert "objective" in run_data
     assert "lifecycle" in run_data
     assert "invocation_ids" in run_data
+    assert packet["target_id"] == result.run["research_run_id"]
 
 
 def test_legacy_invocation_reader_compatibility(config, run_service, tmp_path):
@@ -377,8 +430,18 @@ def test_legacy_invocation_reader_compatibility(config, run_service, tmp_path):
     result = exporter.export_invocation(inv_record.id, run_id, tmp_path / "inv")
     assert result.status == "complete"
 
-    inv_file = tmp_path / "inv" / "invocations" / f"{inv_record.id}.json"
-    inv_data = json.loads(inv_file.read_text(encoding="utf-8"))
+    inv_file = next((tmp_path / "inv" / "invocations").glob("fc_*.json"))
+    import catalog_v5
+
+    previous = os.environ.get("FIRECRAWL_CATALOG_DIR")
+    os.environ["FIRECRAWL_CATALOG_DIR"] = str(tmp_path / "inv")
+    try:
+        inv_data = catalog_v5.read_record(inv_file.stem)
+    finally:
+        if previous is None:
+            os.environ.pop("FIRECRAWL_CATALOG_DIR", None)
+        else:
+            os.environ["FIRECRAWL_CATALOG_DIR"] = previous
 
     assert inv_data.get("schema_version") == 5
     assert "invocation_id" in inv_data
@@ -403,6 +466,19 @@ def test_legacy_events_jsonl_compatibility(config, run_service, tmp_path):
         assert "event_id" in event
         assert "at" in event
         assert "event" in event
+        assert event["research_run_id"] == "fr_" + run_id.hex
+
+    import catalog_v5
+
+    previous = os.environ.get("FIRECRAWL_CATALOG_DIR")
+    os.environ["FIRECRAWL_CATALOG_DIR"] = str(tmp_path / "events")
+    try:
+        assert catalog_v5._events_for_run("fr_" + run_id.hex)
+    finally:
+        if previous is None:
+            os.environ.pop("FIRECRAWL_CATALOG_DIR", None)
+        else:
+            os.environ["FIRECRAWL_CATALOG_DIR"] = previous
 
 
 # -----------------------------------------------------------------------
@@ -452,7 +528,7 @@ def test_golden_export(config, run_service, tmp_path):
     assert result.export_schema_version == EXPORT_SCHEMA_VERSION
 
     # Verify all expected files exist
-    run_file = target_dir / f"{result.run['research_run_id']}.json"
+    run_file = target_dir / "runs" / f"{result.run['research_run_id']}.json"
     assert run_file.exists()
 
     events_file = target_dir / "events.jsonl"
@@ -524,7 +600,7 @@ def test_export_no_secret_leakage(config, run_service, tmp_path):
     assert result.status == "complete"
 
     # Read back the exported invocation
-    inv_file = tmp_path / "sanitization" / "invocations" / f"{inv_record.id}.json"
+    inv_file = next((tmp_path / "sanitization" / "invocations").glob("fc_*.json"))
     inv_data = json.loads(inv_file.read_text(encoding="utf-8"))
 
     # Verify the input was sanitized — raw secrets must not appear
@@ -542,8 +618,7 @@ def test_export_no_secret_leakage(config, run_service, tmp_path):
 
 
 def test_export_run_target_dir_is_file(config, run_service, tmp_path):
-    """Exporting when target_dir is an existing file raises ExportWriteFailure."""
-    from research_store.catalog_export import ExportWriteFailure
+    """An invalid target is returned and durably recorded as failed."""
 
     run_id = _create_run_with_data(run_service)
     exporter = build_catalog_export_service(config)
@@ -551,8 +626,9 @@ def test_export_run_target_dir_is_file(config, run_service, tmp_path):
     blocker = tmp_path / "blocker"
     blocker.write_text("blocker")
 
-    with pytest.raises(ExportWriteFailure, match="exists as a file"):
-        exporter.export_run(run_id, blocker)
+    result = exporter.export_run(run_id, blocker)
+    assert result.status == "failed"
+    assert "exists as a file" in result.error
 
 
 # -----------------------------------------------------------------------
@@ -701,6 +777,27 @@ def test_export_with_failed_assessment_stages(config, run_service, tmp_path):
         output={"score": 0.8},
     )
 
+    with connect(config.database_url) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """INSERT INTO semantic_calls(
+                   run_id,stage,provider,model,model_revision,prompt_version,
+                   input_sha256,status,idempotency_key,request,response_metadata)
+               VALUES(%s,'acquisition','local','test-model','rev-1','prompt-v1',
+                      %s,'complete',%s,%s,%s)
+               RETURNING id""",
+            (
+                str(run_id), sha256(b"semantic input").hexdigest(),
+                f"catalog-export-call:{run_id}",
+                json.dumps({"authorization": "Bearer secret-value"}),
+                json.dumps({"usage": {"total_tokens": 10}}),
+            ),
+        )
+        call_id = cursor.fetchone()[0]
+        cursor.execute(
+            "UPDATE audit_assessments SET audit_packet_manifest=%s WHERE id=%s",
+            (json.dumps({"semantic_call_ids": [str(call_id)]}), str(assessment_id)),
+        )
+
     result = exporter.export_run(run_id, tmp_path / "failed_stage")
 
     assert result.status == "complete"
@@ -708,10 +805,237 @@ def test_export_with_failed_assessment_stages(config, run_service, tmp_path):
 
     asmt = result.assessments[0]
     assert asmt["status"] == "partial"  # partial because one stage failed
-    assert len(asmt["stage_outputs"]) == 2
+    assert asmt["stages"]["acquisition"] == {"score": 0.8}
+    assert asmt["calls"][0]["model_revision"] == "rev-1"
+    assert asmt["calls"][0]["request"]["authorization"] == "[REDACTED]"
 
     # Verify the failed stage is present
-    failed_stages = [s for s in asmt["stage_outputs"] if s["status"] == "failed"]
+    failed_stages = asmt["stage_errors"]
     assert len(failed_stages) == 1
     assert failed_stages[0]["stage"] == "rubric"
     assert failed_stages[0]["error"] == "rubric evaluation failed"
+
+    import catalog_v5
+
+    root = tmp_path / "failed_stage"
+    previous = os.environ.get("FIRECRAWL_CATALOG_DIR")
+    os.environ["FIRECRAWL_CATALOG_DIR"] = str(root)
+    try:
+        stored = catalog_v5.read_path(
+            catalog_v5.assessment_path(asmt["target_id"], asmt["assessment_id"])
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("FIRECRAWL_CATALOG_DIR", None)
+        else:
+            os.environ["FIRECRAWL_CATALOG_DIR"] = previous
+    assert stored["stages"]["acquisition"] == {"score": 0.8}
+    assert stored["stage_errors"][0]["stage"] == "rubric"
+    assert isinstance(stored["calls"], list)
+
+
+def test_regeneration_is_byte_for_byte_stable(config, run_service, tmp_path):
+    run_id = _create_run_with_data(run_service)
+    exporter = build_catalog_export_service(config)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+
+    assert exporter.export_run(run_id, first).status == "complete"
+    assert exporter.export_run(run_id, second).status == "complete"
+
+    def tree(root):
+        return {
+            path.relative_to(root): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    assert tree(first) == tree(second)
+
+
+def test_events_follow_authoritative_sequence(config, run_service, tmp_path):
+    run_id = _create_run_with_data(run_service)
+    result = build_catalog_export_service(config).export_events(
+        run_id, tmp_path / "events-sequence"
+    )
+    assert result.status == "complete"
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "events-sequence" / "events.jsonl").read_text().splitlines()
+    ]
+    assert [item["sequence_number"] for item in events] == sorted(
+        item["sequence_number"] for item in events
+    )
+
+
+def test_concurrent_equivalent_exports_publish_complete_tree(
+    config, run_service, tmp_path
+):
+    run_id = _create_run_with_data(run_service)
+    target = tmp_path / "concurrent"
+
+    def export_once():
+        return build_catalog_export_service(config).export_run(run_id, target)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: export_once(), range(2)))
+    assert all(result.status == "complete" for result in results)
+    assert (target / "runs" / f"fr_{run_id.hex}.json").is_file()
+    assert (target / "manifest.json").is_file()
+
+
+def test_mid_stage_failure_keeps_previous_export_and_records_failure(
+    config, run_service, tmp_path, monkeypatch
+):
+    import research_store.catalog_export as module
+
+    run_id = _create_run_with_data(run_service)
+    exporter = build_catalog_export_service(config)
+    target = tmp_path / "atomic"
+    assert exporter.export_run(run_id, target).status == "complete"
+    before = {
+        path.relative_to(target): path.read_bytes()
+        for path in target.rglob("*")
+        if path.is_file()
+    }
+    original = module._atomic_write_json
+
+    def fail_manifest(path, payload):
+        if path.name == "manifest.json":
+            raise module.ExportWriteFailure("injected manifest failure")
+        return original(path, payload)
+
+    monkeypatch.setattr(module, "_atomic_write_json", fail_manifest)
+    result = exporter.export_run(run_id, target)
+    after = {
+        path.relative_to(target): path.read_bytes()
+        for path in target.rglob("*")
+        if path.is_file()
+    }
+    assert result.status == "failed"
+    assert before == after
+    with connect(config.database_url) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT status FROM compatibility_exports WHERE run_id=%s ORDER BY created_at DESC LIMIT 1",
+            (str(run_id),),
+        )
+        assert cursor.fetchone()[0] == "failed"
+
+
+def test_snapshots_are_run_scoped_and_blob_backed(config, run_service, tmp_path):
+    first_run = _create_run_with_data(run_service)
+    second_run = _create_run_with_data(run_service)
+    first_snapshot, first_digest = _link_snapshot(
+        config, first_run, "https://first.example.test/source", b"first run"
+    )
+    _link_snapshot(
+        config, second_run, "https://second.example.test/source", b"second run"
+    )
+
+    result = build_catalog_export_service(config).export_run(
+        first_run, tmp_path / "scoped"
+    )
+    assert result.status == "complete"
+    index = json.loads(
+        (tmp_path / "scoped" / "snapshots" / "index.json").read_text()
+    )
+    assert [item["snapshot_id"] for item in index] == [first_snapshot]
+    assert (
+        tmp_path / "scoped" / "blobs" / "sha256" /
+        first_digest[:2] / first_digest
+    ).read_bytes() == b"first run"
+
+
+def test_manifest_uses_authoritative_claim_evidence_provenance(
+    config, run_service, tmp_path
+):
+    run_id = _create_run_with_data(run_service)
+    url = "https://evidence.example.test/source"
+    snapshot_id, digest = _link_snapshot(config, run_id, url, b"evidence body")
+    claim_id = uuid4()
+    with connect(config.database_url) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """INSERT INTO documents(
+                   snapshot_id,title,normalized_text,parser_name,parser_version,
+                   normalization_version,document_sha256)
+               VALUES(%s,'Evidence','evidence body','plain','v1','v1',%s)
+               RETURNING id""",
+            (snapshot_id, digest),
+        )
+        document_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO chunks(
+                   document_id,ordinal,text,content_sha256,chunker_name,chunker_version)
+               VALUES(%s,0,'evidence body',%s,'structural','v1')
+               RETURNING id""",
+            (document_id, digest),
+        )
+        passage_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO research_claims(run_id,claim_id,statement)
+               VALUES(%s,%s,'Supported claim')""",
+            (str(run_id), claim_id),
+        )
+        cursor.execute(
+            """INSERT INTO claim_evidence_links(
+                   run_id,claim_id,passage_id,snapshot_id,source_url,
+                   relationship,confidence)
+               VALUES(%s,%s,%s,%s,%s,'supports',0.9)""",
+            (str(run_id), claim_id, passage_id, snapshot_id, url),
+        )
+
+    result = build_catalog_export_service(config).export_run(
+        run_id, tmp_path / "provenance"
+    )
+    assert result.status == "complete"
+    manifest = json.loads((tmp_path / "provenance" / "manifest.json").read_text())
+    assert manifest["sources"] == [{
+        "candidate_id": None,
+        "canonical_url": "https://evidence.example.test/source",
+        "claim_ids": [str(claim_id)],
+        "fidelity": "authoritative_passage",
+        "passage_ids": [str(passage_id)],
+        "relationships": [{
+            "claim_id": str(claim_id),
+            "confidence": 0.9,
+            "passage_id": str(passage_id),
+            "passage_sha256": digest,
+            "relationship": "supports",
+            "snapshot_id": snapshot_id,
+        }],
+        "resolution": "matched",
+        "roles": ["supports"],
+        "snapshot_id": snapshot_id,
+        "url": "https://evidence.example.test/source",
+    }]
+
+
+def test_missing_blob_fails_without_replacing_catalog(config, run_service, tmp_path):
+    run_id = _create_run_with_data(run_service)
+    _link_snapshot(
+        config, run_id, "https://missing.example.test/source", b"missing", persist_blob=False
+    )
+    target = tmp_path / "missing-blob"
+    target.mkdir()
+    (target / "sentinel").write_text("old catalog")
+
+    result = build_catalog_export_service(config).export_run(run_id, target)
+    assert result.status == "failed"
+    assert "missing or corrupt" in result.error
+    assert (target / "sentinel").read_text() == "old catalog"
+
+
+def test_catalog_export_cli_parity(config, run_service, tmp_path, monkeypatch, capsys):
+    from research_store.cli import main
+
+    run_id = _create_run_with_data(run_service)
+    with connect(config.database_url) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT external_run_id FROM research_runs WHERE id=%s", (str(run_id),))
+        external_run_id = cursor.fetchone()[0]
+    monkeypatch.setenv("DATABASE_URL", config.database_url)
+    monkeypatch.setenv("BLOB_ROOT", str(config.blob_root))
+    target = tmp_path / "cli"
+    assert main(["catalog-export", "run", external_run_id, "--target-dir", str(target)]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "complete"
+    assert (target / "runs" / f"fr_{run_id.hex}.json").is_file()

@@ -15,7 +15,12 @@ from .blob import ContentAddressedBlobStore
 from .catalog_export import EXPORT_SCHEMA_VERSION
 from .compat import export_json, import_scratch
 from .config import StoreConfig
-from .container import build_run_service, build_service, build_audit_service
+from .container import (
+    build_audit_service,
+    build_catalog_export_service,
+    build_run_service,
+    build_service,
+)
 from .domain import IngestRequest
 from .indexing import IndexWorker, OpenAICompatibleEmbedder
 from .postgres import PostgresUnitOfWork, connect
@@ -1264,13 +1269,9 @@ def main(argv=None):
     # Catalog v5 compatibility export (issue #35)
     # ------------------------------------------------------------------
     if args.command == "catalog-export":
-        from .catalog_export import (
-            CatalogExportService,
-            ExportTargetNotFound,
-        )
+        from .catalog_export import ExportTargetNotFound
 
-        uow_factory = _uow_factory(config)
-        exporter = CatalogExportService(uow_factory)
+        exporter = build_catalog_export_service(config)
 
         try:
             if args.catalog_command == "run":
