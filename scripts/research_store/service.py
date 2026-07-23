@@ -159,6 +159,9 @@ class CorpusService:
                     "Unexpected parser error, falling back to legacy: %s", exc
                 )
 
+        if self._is_html_content(mime_type, raw):
+            raise ValueError("HTML parsing failed for both primary and fallback parsers")
+
         # Legacy fallback: Markdown-only structural parser
         text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
         return structural_blocks(text)

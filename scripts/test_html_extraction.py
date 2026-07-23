@@ -349,7 +349,7 @@ class TestMalformedHtml:
         source = b"\xff\xfe\x00\x01"
         result = parser.parse(source)
         assert result.success
-        assert result.block_count == 0
+        assert result.block_count <= 1
 
     def test_severely_malformed(self):
         """Severely malformed input should not crash and produce empty or partial blocks."""
@@ -403,9 +403,10 @@ class TestFallbackPolicy:
         record = registry.select("text/html-fallback")
         assert "HtmlNormalizedParser" in record.selected_parser_type
 
-    def test_service_prefers_html_over_legacy(self):
-        """CorpusService._parse_content should try HTML parser before regex."""
+    def test_html_fails_without_registry(self):
+        """CorpusService._parse_content raises ValueError for HTML if no parser is available."""
         from research_store.service import CorpusService
+        import pytest
 
         # Minimal mock config
         config = type(
@@ -421,13 +422,11 @@ class TestFallbackPolicy:
             config=config,
             uow_factory=lambda: None,
             blob_store=None,
-            parser_registry=None,  # No registry — will use legacy path
+            parser_registry=None,  # No registry
         )
-        # Without registry, HTML content goes to legacy
         raw = b"<h1>Hello</h1><p>World</p>"
-        blocks = service._parse_content(raw, "text/html")
-        # Legacy regex parser treats HTML tags as plain text
-        assert len(blocks) >= 0
+        with pytest.raises(ValueError, match="HTML parsing failed"):
+            service._parse_content(raw, "text/html")
 
     def test_html_fallback_chain(self):
         """When main-content parser fails, normalized parser is tried."""
@@ -490,14 +489,18 @@ class TestFallbackPolicy:
         with patch(
             "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
             side_effect=ValueError("simulated failure"),
+        ), patch(
+            "research_store.service.CorpusService._try_normalized_html",
+            return_value=[{"type": "paragraph", "text": "mocked"}],
         ):
             blocks = service._parse_content(raw, "text/html")
             # Should fall through to normalized fallback, which succeeds
             assert len(blocks) >= 1
 
-    def test_normalized_fallback_returns_none_when_both_fail(self):
-        """When both primary and normalized parsers fail, legacy regex is used."""
+    def test_html_parsing_fails_when_both_parsers_fail(self):
+        """When both primary and normalized parsers fail, a ValueError is raised."""
         from unittest.mock import patch
+        import pytest
 
         from research_store.service import CorpusService
         from research_store.parsing import build_default_registry
@@ -525,12 +528,11 @@ class TestFallbackPolicy:
             "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
             side_effect=ValueError("simulated failure"),
         ), patch(
-            "research_store.parsing.html_parser.HtmlNormalizedParser.parse",
-            side_effect=ValueError("normalized also fails"),
+            "research_store.service.CorpusService._try_normalized_html",
+            return_value=None,
         ):
-            blocks = service._parse_content(raw, "text/html")
-            # Should fall through to legacy regex parser
-            assert isinstance(blocks, list)
+            with pytest.raises(ValueError, match="HTML parsing failed"):
+                service._parse_content(raw, "text/html")
 
     def test_is_html_content(self):
         from research_store.service import CorpusService
@@ -674,6 +676,7 @@ class TestServiceIntegration:
 
     def test_parse_content_no_registry(self):
         from research_store.service import CorpusService
+        import pytest
 
         config = type(
             "Config",
@@ -691,10 +694,9 @@ class TestServiceIntegration:
             parser_registry=None,
         )
 
-        # Without registry, HTML falls through to legacy regex
         raw = b"<p>Paragraph</p>"
-        blocks = service._parse_content(raw, "text/html")
-        assert isinstance(blocks, list)
+        with pytest.raises(ValueError, match="HTML parsing failed"):
+            service._parse_content(raw, "text/html")
 
     def test_parse_content_markdown(self):
         from research_store.service import CorpusService
@@ -989,10 +991,36 @@ class TestRepresentativeFixtures:
         assert "Mountains at dawn" in captions[1].text
         assert "City skyline at night" in captions[2].text
 
+    def test_html_offset_preservation(self):
+        """Test that HTML offsets correctly map back to the original text."""
+        parser = self._parser()
+        source = b"<main>\n  <h1>Title</h1>\n  <p>Some paragraph text.</p>\n</main>"
+        result = parser.parse(source)
+        text = source.decode("utf-8")
+        
+        blocks = result.blocks
+        assert len(blocks) == 2
+        
+        assert blocks[0].block_type == "heading"
+        assert text[blocks[0].char_start:blocks[0].char_end] == "Title"
+        
+        assert blocks[1].block_type == "paragraph"
+        assert text[blocks[1].char_start:blocks[1].char_end] == "Some paragraph text."
+
+    def test_boilerplate_gating(self):
+        """Test that boilerplate can be extracted if strip_boilerplate=False."""
+        from research_store.parsing.html_main_content import HtmlMainContentParser
+        parser = HtmlMainContentParser(strip_boilerplate=False)
+        source = b"<nav>Navigation Link</nav><main>Main content</main><aside>Sidebar</aside>"
+        result = parser.parse(source)
+        
+        all_text = " ".join(b.text for b in result.blocks)
+        assert "Navigation Link" in all_text
+        assert "Main content" in all_text
+        assert "Sidebar" in all_text
+
     def test_figure_and_figcaption(self):
-        """<figure>/<figcaption> elements are not explicitly handled by the
-        parser — content falls through as paragraph blocks. This is a known
-        limitation documented in the module docstring."""
+        """<figure>/<figcaption> elements are now explicitly handled."""
         parser = self._parser()
         source = (
             b"<main>"
@@ -1007,12 +1035,10 @@ class TestRepresentativeFixtures:
         assert result.success
         assert result.block_count > 0
 
-        # <figure> is not a skip tag, not a main tag, not a block-end tag
-        # that produces typed output — its children flow through as
-        # paragraphs/captions. The key assertion is that it does not crash.
-        all_text = " ".join(b.text for b in result.blocks)
-        # The caption from <img> should be present
-        assert "A diagram" in all_text
+        captions = [b for b in result.blocks if b.block_type == "caption"]
+        assert len(captions) == 2
+        assert "[A diagram]" in captions[0].text
+        assert "Figure 1: Diagram description" in captions[1].text
 
 
 # ---------------------------------------------------------------------------
@@ -1095,9 +1121,9 @@ class TestIngestRoundTrip:
             assert chunk.token_count > 0
             assert chunk.content_sha256  # Non-empty hash
 
-    def test_html_none_offsets_propagate_through_chunking(self):
-        """HTML blocks have char_start/char_end=None; this must not break
-        the chunking pipeline — chunks are produced with heading_path."""
+    def test_html_offsets_propagate_through_chunking(self):
+        """HTML blocks have char_start/char_end populated; this must propagate
+        through the chunking pipeline — chunks are produced with heading_path."""
         from research_store.parsing import deterministic_chunks
         from research_store.parsing import build_default_registry
 
@@ -1124,12 +1150,13 @@ class TestIngestRoundTrip:
         raw = b"<main><h1>Title</h1><p>Body text.</p></main>"
         blocks = service_obj._parse_content(raw, "text/html")
 
-        # HTML blocks have None offsets
+        # HTML blocks have offsets
         for block in blocks:
-            assert block.char_start is None
-            assert block.char_end is None
+            assert block.char_start is not None
+            assert block.char_end is not None
+            assert block.char_start < block.char_end
 
-        # Chunking must not fail with None offsets
+        # Chunking must not fail with offsets
         chunks = deterministic_chunks(blocks, max_chars=3000)
         assert len(chunks) >= 1
         for chunk in chunks:

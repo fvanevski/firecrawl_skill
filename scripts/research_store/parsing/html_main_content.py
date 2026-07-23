@@ -53,10 +53,8 @@ that cannot be decoded), it returns a ``ParseResult`` with
 ## Structural preservation
 
 * Heading hierarchy is tracked via the ``heading_path`` field.
-* Source offsets (``char_start`` / ``char_end``) are **not computed**
-  for HTML blocks — the HTML source tree does not map cleanly to
-  character offsets after normalization (comments stripped, whitespace
-  collapsed, elements restructured).  Both fields are always ``None``.
+* Source offsets (``char_start`` / ``char_end``) are computed based on
+  the HTML source tree position using ``html.parser.HTMLParser.getpos()``.
 * Tables are preserved as pipe-delimited rows.
 * Links are converted to Markdown link syntax.
 * Images are converted to ``[alt]`` syntax.
@@ -106,6 +104,7 @@ _BLOCK_END_TAGS = frozenset(
         "code",
         "hr",
         "br",
+        "figure",
     )
 )
 
@@ -136,7 +135,7 @@ _IGNORE_TAGS = frozenset(("script", "style", "noscript", "head"))
 class _MainContentCollector(HTMLParser):
     """HTML parser that extracts main content with semantic awareness."""
 
-    def __init__(self) -> None:
+    def __init__(self, strip_boilerplate: bool = True, line_offsets: list[int] | None = None) -> None:
         super().__init__()
         self.blocks: list[TypedBlock] = []
         self._headings: list[str] = []
@@ -156,6 +155,20 @@ class _MainContentCollector(HTMLParser):
         self._in_title = False
         self._title_pending = False
         self._pending_heading_title: str = ""  # Temp storage for current heading text
+        
+        self.strip_boilerplate = strip_boilerplate
+        self.line_offsets = line_offsets or []
+        self._current_char_start: int | None = None
+        self._current_char_end: int | None = None
+        self._in_figcaption = False
+
+    def _current_absolute_offset(self) -> int:
+        """Calculate the absolute character offset of the current position."""
+        line, offset = self.getpos()
+        # line is 1-indexed, offset is 0-indexed
+        if line >= 1 and line - 1 < len(self.line_offsets):
+            return self.line_offsets[line - 1] + offset
+        return 0
 
     # ------------------------------------------------------------------
     # Public accessor for metadata (avoids private attribute access from parse())
@@ -204,7 +217,7 @@ class _MainContentCollector(HTMLParser):
         if tag in _IGNORE_TAGS:
             self._skip_depth += 1
             return
-        if tag in _SKIP_TAGS:
+        if self.strip_boilerplate and tag in _SKIP_TAGS:
             if not self._in_skip:
                 self._flush_text()
                 self._in_skip = True
@@ -292,15 +305,24 @@ class _MainContentCollector(HTMLParser):
         elif tag == "img":
             alt = attr_dict.get("alt", "")
             self._flush_text()
+            
+            char_start = self._current_absolute_offset()
+            text_repr = f"[{alt}]"
+            
             self.blocks.append(
                 TypedBlock(
                     ordinal=len(self.blocks),
                     block_type="caption",
-                    text=f"[{alt}]",
+                    text=text_repr,
                     heading_path=tuple(self._headings),
                     parser_version="html-main-content-v1",
+                    char_start=char_start,
+                    char_end=char_start + len(text_repr)
                 )
             )
+        elif tag == "figcaption":
+            self._flush_text()
+            self._in_figcaption = True
 
     # ------------------------------------------------------------------
     # End-tag handling
@@ -317,10 +339,10 @@ class _MainContentCollector(HTMLParser):
             return
 
         # --- Handle skipped elements ---
-        if tag in _SKIP_TAGS or tag in _IGNORE_TAGS:
+        if tag in _IGNORE_TAGS or (self.strip_boilerplate and tag in _SKIP_TAGS):
             if self._skip_depth > 0:
                 self._skip_depth -= 1
-                if self._skip_depth == 0 and tag in _SKIP_TAGS and self._in_skip:
+                if self.strip_boilerplate and self._skip_depth == 0 and tag in _SKIP_TAGS and self._in_skip:
                     self._in_skip = False
                     self._flush_text()
             return
@@ -343,9 +365,13 @@ class _MainContentCollector(HTMLParser):
                         text=text,
                         heading_path=tuple(self._headings),
                         parser_version="html-main-content-v1",
+                        char_start=self._current_char_start,
+                        char_end=self._current_char_end,
                     )
                 )
             self._current_text = []
+            self._current_char_start = None
+            self._current_char_end = None
         elif tag in _HEADING_TAGS:
             depth = int(tag[1])
             title = self._pending_heading_title
@@ -361,6 +387,8 @@ class _MainContentCollector(HTMLParser):
                         text=title,
                         heading_path=ancestor_path,
                         parser_version="html-main-content-v1",
+                        char_start=self._current_char_start,
+                        char_end=self._current_char_end,
                     )
                 )
             # Do NOT clear _headings[depth - 1] here — ancestors must
@@ -368,6 +396,8 @@ class _MainContentCollector(HTMLParser):
             # truncates deeper levels via the slice assignment.
             self._pending_heading_depth = None
             self._pending_heading_title = ""
+            self._current_char_start = None
+            self._current_char_end = None
         elif tag == "li":
             # Don't call _flush_text — the accumulated text IS the list item
             text = "".join(self._current_text).strip()
@@ -379,9 +409,13 @@ class _MainContentCollector(HTMLParser):
                         text="- " + text,
                         heading_path=tuple(self._headings),
                         parser_version="html-main-content-v1",
+                        char_start=self._current_char_start,
+                        char_end=self._current_char_end,
                     )
                 )
             self._current_text = []
+            self._current_char_start = None
+            self._current_char_end = None
         elif tag in ("ul", "ol"):
             # Flush any remaining list item when the list closes
             if self._in_list and self._current_text:
@@ -394,9 +428,13 @@ class _MainContentCollector(HTMLParser):
                             text=text,
                             heading_path=tuple(self._headings),
                             parser_version="html-main-content-v1",
+                            char_start=self._current_char_start,
+                            char_end=self._current_char_end,
                         )
                     )
                 self._current_text = []
+                self._current_char_start = None
+                self._current_char_end = None
             self._in_list = False
         elif tag == "blockquote":
             self._in_blockquote = False
@@ -406,6 +444,9 @@ class _MainContentCollector(HTMLParser):
         elif tag == "tr":
             self._flush_text(block_type="table_row")
             self._in_tr = False
+        elif tag == "figcaption":
+            self._flush_text(block_type="caption")
+            self._in_figcaption = False
         elif tag in ("td", "th"):
             self._current_text.append(" | ")
         elif tag == "a":
@@ -434,6 +475,11 @@ class _MainContentCollector(HTMLParser):
         # Skip content inside skipped elements (nav, aside, etc.)
         if self._in_skip:
             return
+
+        if self._current_char_start is None and data.strip():
+            self._current_char_start = self._current_absolute_offset()
+        if data.strip():
+            self._current_char_end = self._current_absolute_offset() + len(data)
 
         if self._in_code:
             self._current_text.append(data)
@@ -474,6 +520,8 @@ class _MainContentCollector(HTMLParser):
         text = "".join(self._current_text)
         if not text.strip() or text.strip() == "|":
             self._current_text = []
+            self._current_char_start = None
+            self._current_char_end = None
             return
         # Normalize whitespace
         normalized = " ".join(text.split())
@@ -490,9 +538,13 @@ class _MainContentCollector(HTMLParser):
                     text=normalized.strip(),
                     heading_path=tuple(self._headings),
                     parser_version="html-main-content-v1",
+                    char_start=self._current_char_start,
+                    char_end=self._current_char_end,
                 )
             )
         self._current_text = []
+        self._current_char_start = None
+        self._current_char_end = None
 
 
 class HtmlMainContentParser(Parser):
@@ -507,6 +559,9 @@ class HtmlMainContentParser(Parser):
     """
 
     parser_version = "html-main-content-v1"
+
+    def __init__(self, strip_boilerplate: bool = True):
+        self.strip_boilerplate = strip_boilerplate
 
     def parse(
         self,
@@ -540,9 +595,19 @@ class HtmlMainContentParser(Parser):
         if source_length is None:
             source_length = len(text)
 
-        collector = _MainContentCollector()
+        line_offsets = []
+        offset = 0
+        for line in text.splitlines(keepends=True):
+            line_offsets.append(offset)
+            offset += len(line)
+
+        collector = _MainContentCollector(
+            strip_boilerplate=self.strip_boilerplate,
+            line_offsets=line_offsets
+        )
         try:
             collector.feed(text)
+            collector._flush_text()
         except Exception:
             # If parsing fails, return an error result
             return ParseResult(
