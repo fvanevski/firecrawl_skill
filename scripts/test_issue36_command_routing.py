@@ -11,11 +11,8 @@ Tests cover:
 
 from __future__ import annotations
 
-import json
 import subprocess
-import textwrap
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
@@ -47,10 +44,10 @@ def run_research_db(*args, env=None):
 class TestFrunCommandRouting:
     """Test that frun routes commands through PostgreSQL when available."""
 
-    def test_frun_annotate_routes_to_postgres_when_db_active(
+    def test_frun_annotate_fallback_to_filesystem_with_deprecation_warning(
         self, tmp_path, monkeypatch
     ):
-        """annotate command should route to research-db run-annotate when DB_ACTIVE=1."""
+        """annotate command should fall back to filesystem catalog with deprecation warning when DB is off."""
         monkeypatch.setenv("FIRECRAWL_RESEARCH_PERSIST", "off")
         monkeypatch.setenv("FIRECRAWL_RESEARCH_AUTO_ENV", "0")
         # When DB is off, annotate falls back to filesystem with deprecation warning
@@ -58,25 +55,29 @@ class TestFrunCommandRouting:
         # Should show deprecation warning when falling back
         assert "WARNING" in result.stderr or result.returncode != 0
 
-    def test_frun_status_routes_to_postgres_when_db_active(self, tmp_path, monkeypatch):
-        """status command should route to research-db run-status when DB_ACTIVE=1."""
+    def test_frun_status_fallback_to_filesystem_with_deprecation_warning(
+        self, tmp_path, monkeypatch
+    ):
+        """status command should fall back to filesystem catalog with deprecation warning when DB is off."""
         monkeypatch.setenv("FIRECRAWL_RESEARCH_PERSIST", "off")
         monkeypatch.setenv("FIRECRAWL_RESEARCH_AUTO_ENV", "0")
         result = run_frun("status", "fr_test")
         # Should show deprecation warning when falling back
         assert "WARNING" in result.stderr or result.returncode != 0
 
-    def test_frun_verify_routes_to_postgres_when_db_active(self, tmp_path, monkeypatch):
-        """verify command should route to research-db run-verify when DB_ACTIVE=1."""
+    def test_frun_verify_fallback_to_filesystem_with_deprecation_warning(
+        self, tmp_path, monkeypatch
+    ):
+        """verify command should fall back to filesystem catalog with deprecation warning when DB is off."""
         monkeypatch.setenv("FIRECRAWL_RESEARCH_PERSIST", "off")
         monkeypatch.setenv("FIRECRAWL_RESEARCH_AUTO_ENV", "0")
         result = run_frun("verify", "fr_test")
         assert "WARNING" in result.stderr or result.returncode != 0
 
-    def test_frun_compare_routes_to_postgres_when_db_active(
+    def test_frun_compare_fallback_to_filesystem_with_deprecation_warning(
         self, tmp_path, monkeypatch
     ):
-        """compare command should route to research-db run-compare when DB_ACTIVE=1."""
+        """compare command should fall back to filesystem catalog with deprecation warning when DB is off."""
         monkeypatch.setenv("FIRECRAWL_RESEARCH_PERSIST", "off")
         monkeypatch.setenv("FIRECRAWL_RESEARCH_AUTO_ENV", "0")
         result = run_frun("compare", "fr_test")
@@ -111,7 +112,7 @@ class TestFinishReopenIdempotency:
         assert finish_result.returncode == 0
 
         # Finish again with same outcome - should succeed (idempotent)
-        finish_result2 = run_frun("finish", run_id, "--outcome", "satisfied")
+        run_frun("finish", run_id, "--outcome", "satisfied")
         # The filesystem catalog handles idempotency internally
         # The key invariant is that PostgreSQL commit happens first
 
@@ -141,15 +142,47 @@ class TestFailureOrdering:
 
     def test_filesystem_export_fails_after_db_commit(self, tmp_path, monkeypatch):
         """
-        When filesystem export fails after a successful DB commit,
-        the DB state should remain committed (invariant: export failure
-        must not roll back an already committed authoritative transition).
+        Verify that the frun script uses ``|| true`` on filesystem export,
+        ensuring export failure never rolls back a committed DB state.
+
+        We verify the code invariant by checking the frun script source.
+        The actual DB+export failure ordering is tested in the integration
+        suite (test_research_store_integration.py) where a live PostgreSQL
+        is available.
         """
-        # This test verifies the invariant that export failure doesn't
-        # rollback DB state. In the current implementation, the filesystem
-        # export is done with || true (ignores failures).
-        # The key test is that the DB commit succeeds even when export fails.
-        pass  # Requires live PostgreSQL to test properly
+        frun_path = SCRIPTS / "frun"
+        content = frun_path.read_text()
+
+        # The _compat_export_events function must use || true
+        assert "|| true" in content, (
+            "frun must use || true on filesystem export to prevent "
+            "export failure from rolling back DB state"
+        )
+
+        # The export function should be called after DB commands in start/finish/reopen
+        # Verify the order: DB command before export
+        start_section = (
+            content.split("start)")[1].split(";;")[0] if "start)" in content else ""
+        )
+        finish_section = (
+            content.split("finish)")[1].split(";;")[0] if "finish)" in content else ""
+        )
+        reopen_section = (
+            content.split("reopen)")[1].split(";;")[0] if "reopen)" in content else ""
+        )
+
+        for section_name, section in (
+            ("start", start_section),
+            ("finish", finish_section),
+            ("reopen", reopen_section),
+        ):
+            if "_compat_export_events" in section:
+                # DB command (research-db) should appear before _compat_export_events
+                db_pos = section.find("research-db")
+                export_pos = section.find("_compat_export_events")
+                assert db_pos < export_pos, (
+                    f"{section_name}: DB command must precede filesystem export"
+                )
 
     def test_db_failure_prevents_filesystem_only_commit(self, tmp_path, monkeypatch):
         """

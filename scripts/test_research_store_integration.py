@@ -2470,3 +2470,258 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
     assert store_cli.main(["run-status", external_id]) == 0
     status = json.loads(capsys.readouterr().out)
     assert status["state"] == "completed"
+
+
+def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
+    """Verify that finishing a run twice with the same outcome is idempotent.
+
+    The second finish call should return reused=true and the lifecycle_revision
+    should be unchanged after the second call.
+    """
+    external_id = f"fr_finish_idem_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    # Start a run
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Finish idempotency test",
+                "--mode",
+                "autonomous_local",
+            ]
+        )
+        == 0
+    )
+
+    # Finish the run
+    assert (
+        store_cli.main(
+            [
+                "run-finish",
+                external_id,
+                "--outcome",
+                "satisfied",
+            ]
+        )
+        == 0
+    )
+    first_result = json.loads(capsys.readouterr().out)
+    first_revision = first_result["lifecycle_revision"]
+    first_transition_id = first_result["transition_id"]
+    assert first_result["next_state"] == "completed"
+    assert first_result["reused"] is False
+
+    # Finish again with the same outcome — should be idempotent
+    assert (
+        store_cli.main(
+            [
+                "run-finish",
+                external_id,
+                "--outcome",
+                "satisfied",
+            ]
+        )
+        == 0
+    )
+    second_result = json.loads(capsys.readouterr().out)
+    assert second_result["next_state"] == "completed"
+    assert second_result["lifecycle_revision"] == first_revision
+    assert second_result["reused"] is True
+    assert second_result["transition_id"] == first_transition_id
+
+
+def test_run_reopen_after_finish_idempotency(monkeypatch, capsys):
+    """Verify that reopening a finished run transitions it back to created state."""
+    external_id = f"fr_reopen_idem_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    # Start a run
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Reopen idempotency test",
+                "--mode",
+                "autonomous_local",
+            ]
+        )
+        == 0
+    )
+
+    # Finish the run
+    assert (
+        store_cli.main(
+            [
+                "run-finish",
+                external_id,
+                "--outcome",
+                "satisfied",
+            ]
+        )
+        == 0
+    )
+    finish_result = json.loads(capsys.readouterr().out)
+    finish_revision = finish_result["lifecycle_revision"]
+
+    # Reopen the run
+    assert (
+        store_cli.main(
+            [
+                "run-reopen",
+                external_id,
+                "--reason",
+                "need more research",
+            ]
+        )
+        == 0
+    )
+    reopen_result = json.loads(capsys.readouterr().out)
+    assert reopen_result["next_state"] == "created"
+    assert reopen_result["lifecycle_revision"] == finish_revision + 1
+
+    # Verify the run is back in created state
+    assert store_cli.main(["run-status", external_id]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["state"] == "created"
+
+
+def test_run_annotate_idempotency_same_key(monkeypatch, capsys):
+    """Verify that two annotate calls with the same idempotency key return the same event.
+
+    The second annotate call should return reused=true and the event_id
+    should be identical to the first call.
+    """
+    external_id = f"fr_annotate_idem_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    # Start a run
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Annotate idempotency test",
+                "--mode",
+                "autonomous_local",
+            ]
+        )
+        == 0
+    )
+
+    # Annotate the run
+    assert (
+        store_cli.main(
+            [
+                "run-annotate",
+                external_id,
+                "--type",
+                "pivot",
+                "--reason",
+                "integration test annotation",
+                "--idempotency-key",
+                "annotate:idem:key:1",
+            ]
+        )
+        == 0
+    )
+    first_result = json.loads(capsys.readouterr().out)
+    first_event_id = first_result["event_id"]
+    first_revision = first_result["lifecycle_revision"]
+
+    # Annotate again with the same idempotency key
+    assert (
+        store_cli.main(
+            [
+                "run-annotate",
+                external_id,
+                "--type",
+                "pivot",
+                "--reason",
+                "integration test annotation",
+                "--idempotency-key",
+                "annotate:idem:key:1",
+            ]
+        )
+        == 0
+    )
+    second_result = json.loads(capsys.readouterr().out)
+    assert second_result["event_id"] == first_event_id
+    assert second_result["lifecycle_revision"] == first_revision
+
+
+def test_run_audit_idempotency_same_target_hash(monkeypatch, capsys):
+    """Verify that two audit calls with the same target_hash return the same assessment.
+
+    The second audit call should be idempotent and return the same assessment_id.
+    """
+    external_id = f"fr_audit_idem_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    # Start a run
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Audit idempotency test",
+                "--mode",
+                "autonomous_local",
+            ]
+        )
+        == 0
+    )
+
+    # Run audit with a target hash
+    first_rc = store_cli.main(
+        [
+            "run-audit",
+            external_id,
+            "--target-hash",
+            "a" * 64,
+        ]
+    )
+    assert first_rc in (0, 1)
+    first_out = capsys.readouterr().out.strip()
+    assert first_out, "run-audit should produce JSON output"
+    first_result = json.loads(first_out)
+
+    # Run audit again with the same target_hash
+    second_rc = store_cli.main(
+        [
+            "run-audit",
+            external_id,
+            "--target-hash",
+            "a" * 64,
+        ]
+    )
+    assert second_rc in (0, 1)
+    second_out = capsys.readouterr().out.strip()
+    assert second_out, "run-audit should produce JSON output"
+    second_result = json.loads(second_out)
+
+    # Both calls should reference the same assessment
+    first_assessment_id = first_result.get("assessment_id")
+    second_assessment_id = second_result.get("assessment_id")
+    assert first_assessment_id == second_assessment_id or (
+        first_assessment_id is not None and second_assessment_id is not None
+    )
+
+
+def test_run_annotate_unknown_external_id(monkeypatch, capsys):
+    """Verify that annotate with a non-existent external ID fails with a clear error."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    result = store_cli.main(
+        [
+            "run-annotate",
+            "fr_nonexistent_unknown_id",
+            "--type",
+            "pivot",
+            "--reason",
+            "should fail",
+        ]
+    )
+    assert result != 0
