@@ -488,9 +488,9 @@ class TestParserRegistry:
     def test_prefix_match(self):
         registry = build_default_registry()
         record = registry.select("text/html; charset=utf-8")
-        # Should match via prefix or exact
+        # Should match via prefix or exact — HtmlMainContentParser is now primary
         assert record.selection_method in ("exact", "prefix")
-        assert "HtmlNormalizedParser" in record.selected_parser_type
+        assert "HtmlMainContentParser" in record.selected_parser_type
 
     def test_no_parser_for_unknown_mime(self):
         registry = build_default_registry()
@@ -857,7 +857,7 @@ class TestCorpusServiceIntegration:
 
         # Verify parser_version
         for block in blocks:
-            assert block.parser_version == "html-normalized-v1"
+            assert block.parser_version == "html-main-content-v1"
 
     def test_parse_content_json_registry(self):
         """JSON content parsed through wired registry produces typed blocks."""
