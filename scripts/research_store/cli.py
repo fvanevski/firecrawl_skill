@@ -432,6 +432,31 @@ def parser():
     audit_staleness.add_argument("external_id")
     audit_staleness.add_argument("--target-hash", required=True)
 
+    # ------------------------------------------------------------------
+    # Catalog import commands (issue #37)
+    # ------------------------------------------------------------------
+    catalog_import = sub.add_parser("catalog-import")
+    catalog_import.add_argument(
+        "catalog_root",
+        help="Path to the Catalog v5 root directory to import",
+    )
+    catalog_import.add_argument(
+        "--apply",
+        action="store_true",
+        default=False,
+        help="Apply the import (write to PostgreSQL). Default is dry-run.",
+    )
+    catalog_import.add_argument(
+        "--report",
+        help="Path to write the import report as JSON",
+    )
+
+    catalog_reconcile = sub.add_parser("catalog-reconcile")
+    catalog_reconcile.add_argument(
+        "--report",
+        help="Path to write the reconciliation report as JSON",
+    )
+
     return root
 
 
@@ -2200,6 +2225,86 @@ def main(argv=None):
         )
         result = {"run_id": str(run_id), "stale_assessments": stale}
         print(dumps(result))
+
+    # ------------------------------------------------------------------
+    # Catalog import commands (issue #37)
+    # ------------------------------------------------------------------
+    elif args.command == "catalog-import":
+        config.require_database()
+        from .container import build_catalog_import_service
+
+        catalog_root = Path(args.catalog_root)
+        if not catalog_root.is_dir():
+            raise SystemExit(f"Catalog root not found: {args.catalog_root}")
+
+        import_svc = build_catalog_import_service(config)
+
+        if args.apply:
+            report_path = Path(args.report) if args.report else None
+            report = import_svc.apply(
+                catalog_root,
+                report_file=report_path,
+            )
+        else:
+            # Dry-run is the default
+            report = import_svc.dry_run(catalog_root)
+
+        report_dict = report.to_dict()
+        if args.report:
+            report_path = Path(args.report)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(report_path.parent), suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(report_dict, f, indent=2, default=str)
+                os.replace(tmp_path, str(report_path))
+                print(f"Report written to {report_path}")
+            except BaseException:
+                os.unlink(tmp_path)
+                raise
+        else:
+            print(dumps(report_dict))
+
+        # Exit code: 0 = success, 1 = conflicts/omissions, 2 = errors
+        if report.errors:
+            raise SystemExit(2)
+        elif report.records_conflicting > 0 or report.records_omitted > 0:
+            raise SystemExit(1)
+        elif report.records_malformed > 0 and report.records_inserted == 0:
+            raise SystemExit(2)
+        return 0
+
+    elif args.command == "catalog-reconcile":
+        config.require_database()
+        from .container import build_catalog_import_service
+
+        import_svc = build_catalog_import_service(config)
+        report = import_svc.reconcile()
+        report_dict = {
+            "total_imports": report.total_imports,
+            "imports": report.imports,
+            "conflict_summary": report.conflict_summary,
+            "omission_summary": report.omission_summary,
+        }
+        if args.report:
+            report_path = Path(args.report)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(report_path.parent), suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(report_dict, f, indent=2, default=str)
+                os.replace(tmp_path, str(report_path))
+                print(f"Report written to {report_path}")
+            except BaseException:
+                os.unlink(tmp_path)
+                raise
+        else:
+            print(dumps(report_dict))
+        return 0
 
     else:
         raise AssertionError(args.command)
