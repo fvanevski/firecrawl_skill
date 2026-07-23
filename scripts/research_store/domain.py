@@ -587,6 +587,7 @@ class ExtractionQualityMetrics:
     parser_warnings: int = 0
     code_to_prose_ratio: float = 0.0
     extraction_method_confidence: float = 0.0
+    encoding_anomaly: bool = False
     quality_version: str = "quality-v1"
 
     def to_dict(self) -> dict[str, Any]:
@@ -609,6 +610,7 @@ class ExtractionQualityMetrics:
             "parser_warnings": self.parser_warnings,
             "code_to_prose_ratio": self.code_to_prose_ratio,
             "extraction_method_confidence": self.extraction_method_confidence,
+            "encoding_anomaly": self.encoding_anomaly,
             "quality_version": self.quality_version,
         }
 
@@ -637,6 +639,7 @@ class ExtractionQualityMetrics:
             extraction_method_confidence=float(
                 data.get("extraction_method_confidence", 0.0)
             ),
+            encoding_anomaly=bool(data.get("encoding_anomaly", False)),
             quality_version=data.get("quality_version", "quality-v1"),
         )
 

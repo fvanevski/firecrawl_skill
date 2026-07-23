@@ -17,6 +17,9 @@ from .orchestrator import (
     OrchestratorResult,
     ResearchOrchestrator,
 )
+from .quality_config import QualityConfig
+from .quality_evaluator import evaluate_quality
+from .quality_service import QualityEvaluationError, QualityService
 from .run_service import ResearchRunService
 from .semantic_service import SemanticCallService
 from .service import CorpusService
@@ -44,7 +47,11 @@ __all__ = [
     "LegacyEntryPointAdapter",
     "OrchestratorConfig",
     "OrchestratorResult",
+    "QualityConfig",
+    "QualityEvaluationError",
+    "QualityService",
     "ResearchOrchestrator",
+    "evaluate_quality",
     "ResearchRunService",
     "SearchCompatibilityExporter",
     "SemanticCallService",
