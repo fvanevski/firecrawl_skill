@@ -13,6 +13,7 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -368,7 +369,7 @@ def test_extraction_service_store_normalized_blob():
 # Integration tests (require PostgreSQL)
 # -----------------------------------------------------------------------
 
-from research_store.postgres import connect, migrate
+from research_store.postgres import connect, migrate, require_disposable_database_reset
 
 
 @pytest.fixture
@@ -482,9 +483,7 @@ def test_multiple_ordered_attempts_per_candidate(
 
 
 @_integration()
-def test_failed_then_successful_retry(
-    extraction_service, sample_candidate, sample_run
-):
+def test_failed_then_successful_retry(extraction_service, sample_candidate, sample_run):
     fail_id = extraction_service.create_attempt(
         candidate_id=sample_candidate,
         run_id=sample_run,
@@ -521,9 +520,7 @@ def test_failed_then_successful_retry(
 
 
 @_integration()
-def test_partial_failure_attempt(
-    extraction_service, sample_candidate, sample_run
-):
+def test_partial_failure_attempt(extraction_service, sample_candidate, sample_run):
     aid = extraction_service.create_attempt(
         candidate_id=sample_candidate,
         run_id=sample_run,
@@ -541,9 +538,7 @@ def test_partial_failure_attempt(
 
 
 @_integration()
-def test_select_final_attempt(
-    extraction_service, sample_candidate, sample_run
-):
+def test_select_final_attempt(extraction_service, sample_candidate, sample_run):
     aid1 = extraction_service.create_attempt(
         candidate_id=sample_candidate,
         run_id=sample_run,
@@ -705,9 +700,7 @@ def test_ambiguous_content_disposition(
 
 
 @_integration()
-def test_malformed_html_handling(
-    extraction_service, sample_candidate, sample_run
-):
+def test_malformed_html_handling(extraction_service, sample_candidate, sample_run):
     aid = extraction_service.create_attempt(
         candidate_id=sample_candidate,
         run_id=sample_run,
@@ -730,9 +723,7 @@ def test_malformed_html_handling(
 
 
 @_integration()
-def test_unsupported_mime_type(
-    extraction_service, sample_candidate, sample_run
-):
+def test_unsupported_mime_type(extraction_service, sample_candidate, sample_run):
     aid = extraction_service.create_attempt(
         candidate_id=sample_candidate,
         run_id=sample_run,
@@ -755,9 +746,7 @@ def test_unsupported_mime_type(
 
 
 @_integration()
-def test_deterministic_blob_reference(
-    extraction_service, sample_candidate, sample_run
-):
+def test_deterministic_blob_reference(extraction_service, sample_candidate, sample_run):
     content = b"Same content for deterministic testing"
     ref1 = extraction_service.store_raw_blob(content)
     ref2 = extraction_service.store_raw_blob(content)
@@ -766,9 +755,7 @@ def test_deterministic_blob_reference(
 
 
 @_integration()
-def test_failed_attempt_not_selected(
-    extraction_service, sample_candidate, sample_run
-):
+def test_failed_attempt_not_selected(extraction_service, sample_candidate, sample_run):
     aid = extraction_service.create_attempt(
         candidate_id=sample_candidate,
         run_id=sample_run,
@@ -892,9 +879,7 @@ def test_migration_preserves_existing_data():
 
 
 @_integration()
-def test_attempt_ordering_by_number(
-    extraction_service, sample_candidate, sample_run
-):
+def test_attempt_ordering_by_number(extraction_service, sample_candidate, sample_run):
     """Attempts must be ordered by attempt_number, not creation time."""
     ids = []
     for i in range(5):
@@ -911,9 +896,7 @@ def test_attempt_ordering_by_number(
 
 
 @_integration()
-def test_retry_parent_relationship(
-    extraction_service, sample_candidate, sample_run
-):
+def test_retry_parent_relationship(extraction_service, sample_candidate, sample_run):
     """Retry attempts must link to their parent via retry_parent_id."""
     parent_id = extraction_service.create_attempt(
         candidate_id=sample_candidate,
@@ -957,9 +940,7 @@ def test_list_attempts_for_run(extraction_service, sample_candidate, sample_run)
     assert len(attempts) == 2
 
     for a in attempts:
-        extraction_service.complete_attempt(
-            attempt_id=a.id, exit_status="succeeded"
-        )
+        extraction_service.complete_attempt(attempt_id=a.id, exit_status="succeeded")
 
     with extraction_service.uow_factory() as uow:
         filtered = uow.extraction_attempts.list_attempts_for_run(
@@ -1075,3 +1056,137 @@ def test_multiple_retries_preserve_history(
     assert attempts[0].retry_parent_id is None
     for i in range(1, 4):
         assert attempts[i].retry_parent_id == attempts[i - 1].id
+
+
+# -----------------------------------------------------------------------
+# Service-layer unit tests (mocked UoW)
+# -----------------------------------------------------------------------
+
+
+def test_complete_attempt_raises_on_missing_attempt():
+    """complete_attempt raises ExtractionAttemptError when attempt not found."""
+    tmp_path = Path("/tmp/test_svc_missing")
+    tmp_path.mkdir(exist_ok=True)
+    blob_store = ContentAddressedBlobStore(tmp_path / "blobs")
+    config = replace(
+        StoreConfig.from_env(),
+        database_url="postgresql://localhost/test",
+        blob_root=tmp_path / "blobs",
+    )
+    # Mock UoW that returns None for get_attempt
+    mock_uow = MagicMock()
+    mock_ctx = MagicMock()
+    mock_ctx.extraction_attempts.get_attempt.return_value = None
+    mock_ctx.extraction_attempts.complete_attempt.return_value = None
+    mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+    mock_ctx.__exit__ = MagicMock(return_value=False)
+    mock_ctx.commit = MagicMock()
+    mock_uow.return_value = mock_ctx
+
+    service = ExtractionService(
+        uow_factory=mock_uow,
+        blob_store=blob_store,
+        config=config,
+    )
+    with pytest.raises(ExtractionError, match="not found"):
+        service.complete_attempt(
+            attempt_id=uuid4(),
+            exit_status="succeeded",
+            failure_class="none",
+        )
+
+
+def test_select_final_attempt_raises_on_missing_attempt():
+    """select_final_attempt raises ExtractionAttemptError when attempt not found."""
+    tmp_path = Path("/tmp/test_svc_select_missing")
+    tmp_path.mkdir(exist_ok=True)
+    blob_store = ContentAddressedBlobStore(tmp_path / "blobs")
+    config = replace(
+        StoreConfig.from_env(),
+        database_url="postgresql://localhost/test",
+        blob_root=tmp_path / "blobs",
+    )
+    mock_uow = MagicMock()
+    mock_ctx = MagicMock()
+    mock_ctx.extraction_attempts.get_attempt.return_value = None
+    mock_ctx.extraction_attempts.select_final_attempt.return_value = None
+    mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+    mock_ctx.__exit__ = MagicMock(return_value=False)
+    mock_ctx.commit = MagicMock()
+    mock_uow.return_value = mock_ctx
+
+    service = ExtractionService(
+        uow_factory=mock_uow,
+        blob_store=blob_store,
+        config=config,
+    )
+    with pytest.raises(ExtractionError, match="not found"):
+        service.select_final_attempt(
+            candidate_id=uuid4(),
+            attempt_id=uuid4(),
+            selection_reason="test",
+        )
+
+
+def test_evaluate_and_set_disposition_raises_on_missing_attempt():
+    """evaluate_and_set_disposition raises ExtractionAttemptError when attempt not found."""
+    tmp_path = Path("/tmp/test_svc_eval_missing")
+    tmp_path.mkdir(exist_ok=True)
+    blob_store = ContentAddressedBlobStore(tmp_path / "blobs")
+    config = replace(
+        StoreConfig.from_env(),
+        database_url="postgresql://localhost/test",
+        blob_root=tmp_path / "blobs",
+    )
+    mock_uow = MagicMock()
+    mock_ctx = MagicMock()
+    mock_ctx.extraction_attempts.get_attempt.return_value = None
+    mock_ctx.extraction_attempts.record_quality_metrics.return_value = None
+    mock_ctx.extraction_attempts.update_disposition.return_value = None
+    mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+    mock_ctx.__exit__ = MagicMock(return_value=False)
+    mock_ctx.commit = MagicMock()
+    mock_uow.return_value = mock_ctx
+
+    service = ExtractionService(
+        uow_factory=mock_uow,
+        blob_store=blob_store,
+        config=config,
+    )
+    quality = ExtractionQualityMetrics(byte_length=100)
+    with pytest.raises(ExtractionError, match="not found"):
+        service.evaluate_and_set_disposition(
+            attempt_id=uuid4(),
+            quality_metrics=quality,
+            disposition="acceptable",
+        )
+
+
+def test_blob_store_required_for_raw_blob():
+    """store_raw_blob raises ExtractionError when blob_store is None."""
+    config = replace(
+        StoreConfig.from_env(),
+        database_url="postgresql://localhost/test",
+    )
+    service = ExtractionService(
+        uow_factory=lambda: None,
+        blob_store=None,
+        config=config,
+    )
+    with pytest.raises(ExtractionError, match="blob_store is required"):
+        service.store_raw_blob(b"test")
+
+
+def test_blob_store_required_for_normalized_blob():
+    """store_normalized_blob raises ExtractionError when blob_store is None."""
+    config = replace(
+        StoreConfig.from_env(),
+        database_url="postgresql://localhost/test",
+    )
+    service = ExtractionService(
+        uow_factory=lambda: None,
+        blob_store=None,
+        config=config,
+    )
+    with pytest.raises(ExtractionError, match="blob_store is required"):
+        service.store_normalized_blob(b"test")

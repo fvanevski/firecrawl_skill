@@ -44,14 +44,11 @@ candidate are ordered by ``attempt_number``.
 * ``created_at`` — timestamptz, defaults to ``now()``
 
 Constraints:
-* ``chk_extraction_attempts_exit_status`` — enum constraint.
-* ``chk_extraction_attempts_failure_class`` — enum constraint.
-* ``chk_extraction_attempts_disposition`` — enum constraint.
-* ``chk_extraction_attempts_method`` — enum constraint.
 * ``chk_extraction_attempts_attempt_number`` — must be >= 1.
 * ``chk_extraction_attempts_raw_blob_sha`` — 64-char hex SHA-256 guard.
 * ``chk_extraction_attempts_normalized_blob_sha`` — 64-char hex SHA-256 guard.
 * ``chk_extraction_attempts_quality_metrics`` — non-null JSONB guard.
+* ``uk_extraction_attempts_candidate_attempt`` — unique ordering per candidate.
 
 Indexes:
 * ``idx_extraction_attempts_candidate`` — filter by ``candidate_id``
@@ -240,14 +237,6 @@ def upgrade():
           created_at                  timestamptz NOT NULL DEFAULT now(),
 
           PRIMARY KEY (id),
-          CONSTRAINT chk_extraction_attempts_exit_status
-            CHECK (exit_status IS NOT NULL),
-          CONSTRAINT chk_extraction_attempts_failure_class
-            CHECK (failure_class IS NOT NULL),
-          CONSTRAINT chk_extraction_attempts_disposition
-            CHECK (disposition IS NOT NULL),
-          CONSTRAINT chk_extraction_attempts_method
-            CHECK (method IS NOT NULL),
           CONSTRAINT chk_extraction_attempts_attempt_number
             CHECK (attempt_number >= 1),
           CONSTRAINT chk_extraction_attempts_raw_blob_sha
@@ -267,7 +256,9 @@ def upgrade():
               )
             ),
           CONSTRAINT chk_extraction_attempts_quality_metrics
-            CHECK (quality_metrics IS NULL OR jsonb_typeof(quality_metrics) = 'object')
+            CHECK (quality_metrics IS NULL OR jsonb_typeof(quality_metrics) = 'object'),
+          CONSTRAINT uk_extraction_attempts_candidate_attempt
+            UNIQUE (candidate_id, attempt_number)
         );
         """
     )

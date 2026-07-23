@@ -5656,7 +5656,7 @@ class PostgresUnitOfWork:
 
     # -- Extraction-attempt persistence (issue #40) ---------------------
 
-    def create_extraction_attempt(
+    def create_attempt(
         self,
         candidate_id,
         run_id,
@@ -5744,7 +5744,7 @@ class PostgresUnitOfWork:
             row = cur.fetchone()
             return UUID(str(row[0])) if row else None
 
-    def complete_extraction_attempt(
+    def complete_attempt(
         self,
         attempt_id,
         exit_status,
@@ -5808,7 +5808,7 @@ class PostgresUnitOfWork:
                 ),
             )
 
-    def update_extraction_disposition(self, attempt_id, disposition):
+    def update_disposition(self, attempt_id, disposition):
         """Update the disposition of an extraction attempt."""
         with self.connection.cursor() as cur:
             cur.execute(
@@ -5819,9 +5819,21 @@ class PostgresUnitOfWork:
                 (disposition, str(attempt_id)),
             )
 
-    def select_final_extraction_attempt(
-        self, candidate_id, attempt_id, selection_reason
-    ):
+    def record_quality_metrics(self, attempt_id, quality_metrics):
+        """Update the quality_metrics JSONB column for an extraction attempt."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE extraction_attempts SET quality_metrics = %s
+                WHERE id = %s
+                """,
+                (
+                    quality_metrics.to_dict() if quality_metrics else None,
+                    str(attempt_id),
+                ),
+            )
+
+    def select_final_attempt(self, candidate_id, attempt_id, selection_reason):
         """Mark an attempt as the selected final attempt for a candidate.
 
         Unselects any previously selected attempt for the same candidate.
@@ -5846,7 +5858,7 @@ class PostgresUnitOfWork:
                 (selection_reason, str(attempt_id), str(candidate_id)),
             )
 
-    def get_selected_extraction_attempt(self, candidate_id):
+    def get_selected_attempt(self, candidate_id):
         """Return the selected attempt for a candidate, or None."""
         with self.connection.cursor() as cur:
             cur.execute(
@@ -5872,7 +5884,7 @@ class PostgresUnitOfWork:
                 return None
             return self._row_to_extraction_attempt_mapping(row)
 
-    def list_extraction_attempts_for_candidate(
+    def list_attempts_for_candidate(
         self, candidate_id, run_id=None, limit=100, offset=0
     ):
         """List all attempts for a candidate, ordered by attempt_number."""
@@ -5921,7 +5933,7 @@ class PostgresUnitOfWork:
                 self._row_to_extraction_attempt_mapping(row) for row in cur.fetchall()
             ]
 
-    def list_extraction_attempts_for_run(
+    def list_attempts_for_run(
         self,
         run_id,
         candidate_id=None,
@@ -5973,7 +5985,7 @@ class PostgresUnitOfWork:
                 self._row_to_extraction_attempt_mapping(row) for row in cur.fetchall()
             ]
 
-    def get_extraction_attempt(self, attempt_id, run_id=None):
+    def get_attempt(self, attempt_id, run_id=None):
         """Get a single extraction attempt by ID."""
         with self.connection.cursor() as cur:
             if run_id:

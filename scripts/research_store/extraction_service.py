@@ -170,6 +170,12 @@ class ExtractionService:
         """
         now = end_time or utcnow()
         with self.uow_factory() as uow:
+            existing = uow.extraction_attempts.get_attempt(attempt_id)
+            if existing is None:
+                raise ExtractionAttemptError(
+                    f"attempt {attempt_id} not found",
+                    failure_class="internal",
+                )
             uow.extraction_attempts.complete_attempt(
                 attempt_id=attempt_id,
                 exit_status=exit_status,
@@ -207,6 +213,12 @@ class ExtractionService:
             The attempt with updated quality metrics.
         """
         with self.uow_factory() as uow:
+            existing = uow.extraction_attempts.get_attempt(attempt_id)
+            if existing is None:
+                raise ExtractionAttemptError(
+                    f"attempt {attempt_id} not found",
+                    failure_class="internal",
+                )
             uow.extraction_attempts.record_quality_metrics(attempt_id, quality_metrics)
             uow.extraction_attempts.update_disposition(attempt_id, disposition)
             uow.commit()
@@ -233,6 +245,12 @@ class ExtractionService:
             selection_reason: Why this attempt was chosen.
         """
         with self.uow_factory() as uow:
+            existing = uow.extraction_attempts.get_attempt(attempt_id)
+            if existing is None:
+                raise ExtractionAttemptError(
+                    f"attempt {attempt_id} not found",
+                    failure_class="internal",
+                )
             uow.extraction_attempts.select_final_attempt(
                 candidate_id, attempt_id, selection_reason
             )
