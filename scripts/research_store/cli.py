@@ -28,7 +28,7 @@ from .postgres import PostgresUnitOfWork, connect
 from .qdrant import QdrantIndex
 from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
-from .service import dumps
+from .service import dumps, json_default
 
 
 _KNOWN_PREFIXES = ("result_", "url_")
@@ -1666,7 +1666,7 @@ def main(argv=None):
             conn.rollback()
         probe_path = renamed_path = None
         try:
-            with tempfile.NamedTemporaryFile(
+            with tempfile.NamedTemporaryFile(  # noqa: F823
                 dir=config.blob_root,
                 prefix=".firecrawl-ingest-ready-",
                 delete=False,
