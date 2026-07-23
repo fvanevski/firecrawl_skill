@@ -2725,3 +2725,229 @@ def test_run_annotate_unknown_external_id(monkeypatch, capsys):
         ]
     )
     assert result != 0
+
+
+# ---------------------------------------------------------------------------
+# Catalog import integration tests (issue #37)
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_import_apply_run_and_invocation(tmp_path, monkeypatch):
+    """Verify a full apply() round-trip with run + invocation."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    from research_store.catalog_import import CatalogImportService
+    from research_store.container import build_catalog_import_service
+
+    service = build_catalog_import_service()
+    import_svc = CatalogImportService(
+        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
+    )
+
+    # Create a minimal Catalog v5 root with a run and invocation
+    root = tmp_path / "catalog"
+    runs_dir = root / "runs"
+    runs_dir.mkdir()
+    run_id = "fr_" + "a" * 32
+    run_data = {
+        "schema_version": 5,
+        "research_run_id": run_id,
+        "objective": "Test import",
+    }
+    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
+
+    inv_dir = root / "invocations"
+    inv_dir.mkdir()
+    inv_id = "fc_" + "b" * 32
+    inv_data = {
+        "schema_version": 5,
+        "invocation_id": inv_id,
+        "operation": "search",
+    }
+    (inv_dir / f"{inv_id}.json").write_text(json.dumps(inv_data))
+
+    # Apply the import
+    report = import_svc.apply(root)
+
+    assert report.records_inserted == 2
+    assert report.records_skipped == 0
+    assert report.records_malformed == 0
+    assert report.completed_at is not None
+
+    # Verify records exist in PostgreSQL
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM research_runs WHERE external_run_id = %s",
+            (run_id,),
+        )
+        run_row = cur.fetchone()
+        assert run_row is not None
+
+        cur.execute(
+            "SELECT id FROM research_invocations WHERE external_invocation_id = %s",
+            (inv_id,),
+        )
+        inv_row = cur.fetchone()
+        assert inv_row is not None
+
+
+def test_catalog_import_idempotent_apply(tmp_path, monkeypatch):
+    """Verify that a second apply() is a no-op (idempotent)."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    from research_store.catalog_import import CatalogImportService
+    from research_store.container import build_catalog_import_service
+
+    service = build_catalog_import_service()
+    import_svc = CatalogImportService(
+        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
+    )
+
+    root = tmp_path / "catalog"
+    runs_dir = root / "runs"
+    runs_dir.mkdir()
+    run_id = "fr_" + "c" * 32
+    run_data = {
+        "schema_version": 5,
+        "research_run_id": run_id,
+        "objective": "Test idempotency",
+    }
+    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
+
+    # First apply
+    report1 = import_svc.apply(root)
+    assert report1.records_inserted == 1
+
+    # Second apply — should be idempotent
+    report2 = import_svc.apply(root)
+    assert report2.records_skipped == 1
+    assert report2.records_inserted == 0
+
+
+def test_catalog_import_tracking_table_populated(tmp_path, monkeypatch):
+    """Verify that the tracking table records the import."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    from research_store.catalog_import import CatalogImportService
+    from research_store.container import build_catalog_import_service
+
+    service = build_catalog_import_service()
+    import_svc = CatalogImportService(
+        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
+    )
+
+    root = tmp_path / "catalog"
+    runs_dir = root / "runs"
+    runs_dir.mkdir()
+    run_id = "fr_" + "d" * 32
+    run_data = {
+        "schema_version": 5,
+        "research_run_id": run_id,
+        "objective": "Test tracking",
+    }
+    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
+
+    import_svc.apply(root)
+
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, status, records_inserted FROM catalog_import_tracking ORDER BY started_at DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        assert row is not None
+        import_id, status, inserted = row
+        assert status == "completed"
+        assert inserted == 1
+
+        # Verify the record map exists
+        cur.execute(
+            "SELECT catalog_type, catalog_id, mapping_status FROM catalog_import_record_map WHERE import_run_id = %s",
+            (str(import_id),),
+        )
+        mappings = cur.fetchall()
+        assert len(mappings) == 1
+        assert mappings[0][0] == "run"
+        assert mappings[0][1] == run_id
+        assert mappings[0][2] == "inserted"
+
+
+def test_catalog_import_reconcile_with_history(tmp_path, monkeypatch):
+    """Verify reconcile() returns correct summaries after imports."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    from research_store.catalog_import import CatalogImportService
+    from research_store.container import build_catalog_import_service
+
+    service = build_catalog_import_service()
+    import_svc = CatalogImportService(
+        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
+    )
+
+    # Create and apply an import
+    root = tmp_path / "catalog"
+    runs_dir = root / "runs"
+    runs_dir.mkdir()
+    run_id = "fr_" + "e" * 32
+    run_data = {
+        "schema_version": 5,
+        "research_run_id": run_id,
+        "objective": "Test reconcile",
+    }
+    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
+
+    import_svc.apply(root)
+
+    # Run reconciliation
+    report = import_svc.reconcile()
+
+    assert report.total_imports >= 1
+    assert len(report.imports) >= 1
+    # The import we just did should be in the list
+    found = any(imp.get("catalog_root") == str(root) for imp in report.imports)
+    assert found
+
+
+def test_catalog_import_dry_run_pending_records(tmp_path, monkeypatch):
+    """Verify dry-run marks events/claims/assessments as pending."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    from research_store.catalog_import import CatalogImportService
+    from research_store.container import build_catalog_import_service
+
+    service = build_catalog_import_service()
+    import_svc = CatalogImportService(
+        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
+    )
+
+    # Create a Catalog root with runs + events
+    root = tmp_path / "catalog"
+    runs_dir = root / "runs"
+    runs_dir.mkdir()
+    run_id = "fr_" + "f" * 32
+    run_data = {
+        "schema_version": 5,
+        "research_run_id": run_id,
+        "objective": "Test pending",
+    }
+    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
+
+    events_file = root / "events.jsonl"
+    events_file.write_text(
+        json.dumps({"schema_version": 5, "event_id": "fe_" + "g" * 32, "event": "test"})
+        + "\n"
+    )
+
+    report = import_svc.dry_run(root)
+
+    # Run should be "inserted"
+    inserted = [m for m in report.mappings if m.status == "inserted"]
+    assert len(inserted) == 1
+    assert inserted[0].catalog_type == "run"
+
+    # Event should be "pending" (not "inserted")
+    pending = [m for m in report.mappings if m.status == "pending"]
+    assert len(pending) == 1
+    assert pending[0].catalog_type == "event"
+
+    # Omitted count should include the pending event
+    assert report.records_omitted >= 1

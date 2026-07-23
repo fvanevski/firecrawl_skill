@@ -636,6 +636,11 @@ class CatalogImportService:
                 conflicting.append(mapping)
             elif mapping.status == "omitted":
                 omitted.append(mapping)
+            elif mapping.status == "pending":
+                # N1 fix: pending mappings are categorised as omitted in
+                # the report so the operator sees them as records that
+                # require additional context.
+                omitted.append(mapping)
 
         completed_at = utcnow()
 
@@ -701,31 +706,47 @@ class CatalogImportService:
             )
 
         elif catalog_type == CATALOG_EVENT_TYPE:
-            # Events are append-only; always insertable
+            # N1 fix: events require a run_id context to be inserted into
+            # research_events.  Mark as "pending" so the dry-run report
+            # accurately reflects that apply() will reject these without
+            # additional context.
             return MappingResult(
                 catalog_type=catalog_type,
                 catalog_id=catalog_id,
                 postgresql_id=None,
-                status="inserted",
+                status="pending",
+                details={
+                    "note": "event import requires run_id context",
+                },
             )
 
         elif catalog_type == CATALOG_ASSESSMENT_TYPE:
-            # Assessments may conflict on identity hash
+            # N1 fix: assessments require identity-hash matching against
+            # existing audit_assessments.  Mark as "pending" so the
+            # dry-run report accurately reflects that apply() will reject
+            # these without additional validation.
             return MappingResult(
                 catalog_type=catalog_type,
                 catalog_id=catalog_id,
                 postgresql_id=None,
-                status="inserted",
-                details={"note": "assessment import requires additional validation"},
+                status="pending",
+                details={
+                    "note": "assessment import requires identity-hash validation",
+                },
             )
 
         elif catalog_type == CATALOG_CLAIM_TYPE:
-            # Claims are upserted on (run_id, claim_id)
+            # N1 fix: claims require a run_id context.  Mark as "pending"
+            # so the dry-run report accurately reflects that apply() will
+            # reject these without additional context.
             return MappingResult(
                 catalog_type=catalog_type,
                 catalog_id=catalog_id,
                 postgresql_id=None,
-                status="inserted",
+                status="pending",
+                details={
+                    "note": "claim import requires run_id context",
+                },
             )
 
         return MappingResult(
@@ -803,36 +824,26 @@ class CatalogImportService:
 
                 for mapping in report.mappings:
                     if mapping.status == "inserted":
-                        try:
-                            pg_id = self._insert_record(uow, mapping)
-                            cur.execute(
-                                """INSERT INTO catalog_import_record_map (
-                                    import_run_id, catalog_type, catalog_id,
-                                    postgresql_id, mapping_status
-                                ) VALUES (%s, %s, %s, %s, 'inserted')""",
-                                (
-                                    str(tracking_id),
-                                    mapping.catalog_type,
-                                    mapping.catalog_id,
-                                    str(pg_id),
-                                ),
-                            )
-                            inserted_count += 1
-                        except Exception as exc:
-                            cur.execute(
-                                """INSERT INTO catalog_import_record_map (
-                                    import_run_id, catalog_type, catalog_id,
-                                    postgresql_id, mapping_status, conflict_detail
-                                ) VALUES (%s, %s, %s, %s, 'conflict', %s)""",
-                                (
-                                    str(tracking_id),
-                                    mapping.catalog_type,
-                                    mapping.catalog_id,
-                                    None,
-                                    str(exc),
-                                ),
-                            )
-                            conflicting_count += 1
+                        # B1 fix: let _insert_record exceptions propagate so
+                        # the UoW __exit__ rolls back the entire transaction.
+                        # This gives full-or-nothing semantics — if any single
+                        # record fails to materialise, the whole import is
+                        # rolled back and no partial state is left in the
+                        # tracking table.
+                        pg_id = self._insert_record(uow, mapping)
+                        cur.execute(
+                            """INSERT INTO catalog_import_record_map (
+                                import_run_id, catalog_type, catalog_id,
+                                postgresql_id, mapping_status
+                            ) VALUES (%s, %s, %s, %s, 'inserted')""",
+                            (
+                                str(tracking_id),
+                                mapping.catalog_type,
+                                mapping.catalog_id,
+                                str(pg_id),
+                            ),
+                        )
+                        inserted_count += 1
                     elif mapping.status == "skipped":
                         cur.execute(
                             """INSERT INTO catalog_import_record_map (
@@ -875,6 +886,28 @@ class CatalogImportService:
                                 mapping.catalog_id,
                                 mapping.postgresql_id,
                                 mapping.conflict_detail or "Missing referenced asset",
+                            ),
+                        )
+                        omitted_count += 1
+                    elif mapping.status == "pending":
+                        # N1 fix: pending mappings require additional context
+                        # (run_id for events/claims, identity hash for
+                        # assessments).  They are recorded as "omitted" because
+                        # they cannot be inserted without that context.
+                        detail = mapping.details.get(
+                            "note", "requires additional context"
+                        )
+                        cur.execute(
+                            """INSERT INTO catalog_import_record_map (
+                                import_run_id, catalog_type, catalog_id,
+                                postgresql_id, mapping_status, conflict_detail
+                            ) VALUES (%s, %s, %s, %s, 'omitted', %s)""",
+                            (
+                                str(tracking_id),
+                                mapping.catalog_type,
+                                mapping.catalog_id,
+                                mapping.postgresql_id,
+                                detail,
                             ),
                         )
                         omitted_count += 1
@@ -937,7 +970,24 @@ class CatalogImportService:
         catalog_id = mapping.catalog_id
 
         if catalog_type == CATALOG_RUN_TYPE:
-            # Look up the run by external_run_id
+            # B2 fix: use ON CONFLICT DO NOTHING to eliminate the TOCTOU
+            # race between SELECT and INSERT.  external_run_id has a UNIQUE
+            # constraint (migration 0002), so a concurrent import process
+            # that also sees "no row" will have exactly one succeed and the
+            # other get the existing row back via RETURNING.
+            cur.execute(
+                """INSERT INTO research_runs (
+                    external_run_id, status, lifecycle_revision
+                ) VALUES (%s, %s, %s)
+                ON CONFLICT (external_run_id) DO NOTHING
+                RETURNING id""",
+                (catalog_id, "unknown", 1),
+            )
+            row = cur.fetchone()
+            if row:
+                return UUID(row[0])
+
+            # Conflict occurred — run already exists, look it up
             cur.execute(
                 """SELECT id FROM research_runs
                 WHERE external_run_id = %s""",
@@ -946,19 +996,27 @@ class CatalogImportService:
             row = cur.fetchone()
             if row:
                 return UUID(row[0])
-
-            # Create a new run record
-            cur.execute(
-                """INSERT INTO research_runs (
-                    external_run_id, status, lifecycle_revision
-                ) VALUES (%s, %s, %s)
-                RETURNING id""",
-                (catalog_id, "unknown", 1),
+            raise ImportApplyError(
+                f"Run {catalog_id} disappeared after insert — "
+                "concurrent deletion? (should not happen)"
             )
-            return UUID(cur.fetchone()[0])
 
         elif catalog_type == CATALOG_INVOCATION_TYPE:
-            # Look up by external_invocation_id
+            # B2 fix: same ON CONFLICT pattern for invocations.
+            # external_invocation_id has a UNIQUE constraint (migration 0006).
+            cur.execute(
+                """INSERT INTO research_invocations (
+                    run_id, external_invocation_id, operation, status
+                ) VALUES (%s, %s, %s, %s)
+                ON CONFLICT (external_invocation_id) DO NOTHING
+                RETURNING id""",
+                (uuid4(), catalog_id, "unknown", "unknown"),
+            )
+            row = cur.fetchone()
+            if row:
+                return UUID(row[0])
+
+            # Conflict occurred — invocation already exists, look it up
             cur.execute(
                 """SELECT id FROM research_invocations
                 WHERE external_invocation_id = %s""",
@@ -967,16 +1025,10 @@ class CatalogImportService:
             row = cur.fetchone()
             if row:
                 return UUID(row[0])
-
-            # Create a minimal invocation record
-            cur.execute(
-                """INSERT INTO research_invocations (
-                    run_id, external_invocation_id, operation, status
-                ) VALUES (%s, %s, %s, %s)
-                RETURNING id""",
-                (uuid4(), catalog_id, "unknown", "unknown"),
+            raise ImportApplyError(
+                f"Invocation {catalog_id} disappeared after insert — "
+                "concurrent deletion? (should not happen)"
             )
-            return UUID(cur.fetchone()[0])
 
         elif catalog_type == CATALOG_EVENT_TYPE:
             # Events need a run_id; skip if not available
