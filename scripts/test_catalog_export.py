@@ -466,3 +466,67 @@ def test_golden_export(config, run_service, tmp_path):
     assert manifest_data["schema_version"] == 5
     assert "claims" in manifest_data
     assert "sources" in manifest_data
+
+
+# -----------------------------------------------------------------------
+# Sanitization test
+# -----------------------------------------------------------------------
+
+
+def test_export_no_secret_leakage(config, run_service, tmp_path):
+    """Exported invocation output does not contain raw secrets.
+
+    The invocation catalog service sanitizes input data via
+    ``_sanitize()`` before storing in PostgreSQL.  This test verifies
+    that the exported invocation record does not contain raw secret
+    values that were sanitized at ingest time.
+    """
+    run_id = _create_run_with_data(run_service)
+    exporter = build_catalog_export_service(config)
+
+    uow_factory = partial(
+        PostgresUnitOfWork,
+        config.database_url,
+        config.physical_collection,
+        config.embedding_model,
+        config.embedding_revision,
+        config.embedding_dimension,
+        config.parser_version,
+        config.normalization_version,
+        config.chunker_version,
+    )
+    event_svc = EventService(uow_factory)
+    catalog_svc = InvocationCatalogService(
+        uow_factory, event_service=event_svc
+    )
+
+    # Create an invocation with input that contains a secret-like value.
+    # The catalog service sanitizes it before storing in PG.
+    inv_record = catalog_svc.begin(
+        run_id,
+        external_invocation_id=f"fc-{uuid4()}",
+        operation="search",
+        input_data={
+            "query": "test query",
+            "api_key": "sk-secret-key-12345",
+            "authorization": "Bearer token-abc-def",
+        },
+    )
+
+    result = exporter.export_invocation(
+        inv_record.id, run_id, tmp_path / "sanitization"
+    )
+
+    assert result.status == "complete"
+
+    # Read back the exported invocation
+    inv_file = tmp_path / "sanitization" / "invocations" / f"{inv_record.id}.json"
+    inv_data = json.loads(inv_file.read_text(encoding="utf-8"))
+
+    # Verify the input was sanitized — raw secrets must not appear
+    input_data = inv_data.get("input", {})
+    assert "api_key" not in input_data or "sk-secret-key-12345" not in str(input_data.get("api_key", ""))
+    assert "authorization" not in input_data or "Bearer token-abc-def" not in str(input_data.get("authorization", ""))
+    # The sanitized value should be present but redacted
+    assert input_data.get("api_key") == "[REDACTED]"
+    assert input_data.get("authorization") == "[REDACTED]"

@@ -28,7 +28,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
-import os
 from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID
@@ -193,11 +192,20 @@ def _map_run(row: dict[str, Any]) -> dict[str, Any]:
         Catalog v5 run record.
     """
     lifecycle_state = row.get("state", "created")
-    # Map internal state to Catalog v5 lifecycle
+
+    # Map internal PG state to Catalog v5 lifecycle state
     if lifecycle_state in ("completed", "partial", "failed", "cancelled"):
         catalog_state = "finished"
     else:
         catalog_state = "running"
+
+    # Derive operational_status from lifecycle and declared outcome
+    if catalog_state == "running":
+        operational_status = "running"
+    elif catalog_state == "finished" and row.get("declared_outcome") == "satisfied":
+        operational_status = "succeeded"
+    else:
+        operational_status = "failed"
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -229,7 +237,7 @@ def _map_run(row: dict[str, Any]) -> dict[str, Any]:
             "revision": row.get("lifecycle_revision", 1),
         },
         "declared_outcome": row.get("declared_outcome"),
-        "operational_status": "running" if catalog_state == "running" else "succeeded" if catalog_state == "finished" and row.get("declared_outcome") == "satisfied" else "failed",
+        "operational_status": operational_status,
         "data_completeness": "partial",
         "audit_status": "not_run",
         "assessment_summary": None,
@@ -362,6 +370,7 @@ def _map_assessment(row: dict[str, Any], stages: list[dict[str, Any]]) -> dict[s
         "model": row.get("model"),
         "prompt_hash": row.get("prompt_hash"),
         "model_fingerprint": row.get("model_fingerprint"),
+        "audit_identity_hash": row.get("audit_identity_hash"),
         "elapsed_ms": row.get("elapsed_ms", 0),
         "stage_outputs": stage_outputs,
         "created_at": (
@@ -404,20 +413,18 @@ def _map_claim(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _export_snapshots(
-    run_id: UUID,
     uow_factory: Callable,
 ) -> list[dict[str, Any]]:
-    """Export snapshots for a run.
+    """Export all snapshots from ``asset_snapshots`` and ``documents``.
 
-    Reads from ``asset_snapshots`` and ``documents`` tables.
     Each snapshot is mapped to a Catalog v5-compatible snapshot record.
 
     Note: There is no direct ``run_id`` column on ``documents`` or
-    ``asset_snapshots``.  Snapshots are returned for any run that has
-    associated events — callers should filter if needed.
+    ``asset_snapshots``.  This function returns ALL snapshots in the
+    database.  Callers that need run-scoped snapshots must filter
+    the returned list.
 
     Args:
-        run_id: Research run UUID (used for context, not filtering).
         uow_factory: Unit-of-work factory.
 
     Returns:
@@ -477,14 +484,6 @@ class CatalogExportService:
     ) -> None:
         self.uow_factory = uow_factory
         self.blob_store = blob_store
-
-    def _get_blob_store(self) -> ContentAddressedBlobStore:
-        """Return the configured blob store or a default one."""
-        if self.blob_store is not None:
-            return self.blob_store
-        return ContentAddressedBlobStore(
-            Path(os.environ.get("BLOB_ROOT", "data/blobs"))
-        )
 
     # ------------------------------------------------------------------
     # Run export
@@ -674,7 +673,7 @@ class CatalogExportService:
             files_created.append(events_path)
 
             # Snapshots
-            snapshots = _export_snapshots(run_id, self.uow_factory)
+            snapshots = _export_snapshots(self.uow_factory)
             if snapshots:
                 snapshots_path = target_dir / "snapshots.json"
                 _atomic_write_json(snapshots_path, snapshots)
@@ -693,6 +692,13 @@ class CatalogExportService:
                 files_created.append(assessments_path)
 
             # Manifest (sources + claims summary)
+            #
+            # Note: The ``sources[].url`` field is populated from the
+            # invocation's input query text, not from resolved URLs.
+            # This differs from the legacy ``load_source_manifest`` in
+            # ``catalog_v5.py`` which expects actual URLs.  For pure
+            # search invocations the URL may be empty — that is
+            # intentional and documented.
             manifest = {
                 "schema_version": SCHEMA_VERSION,
                 "export_schema_version": EXPORT_SCHEMA_VERSION,
@@ -946,7 +952,7 @@ class CatalogExportService:
         run_id = UUID(str(run_id))
         target_dir = Path(target_dir)
 
-        snapshots = _export_snapshots(run_id, self.uow_factory)
+        snapshots = _export_snapshots(self.uow_factory)
 
         source_parts = [
             json.dumps(snapshots, sort_keys=True, default=str),
