@@ -5143,11 +5143,11 @@ class PostgresUnitOfWork:
         stage_set: list[str],
         status: str,
         *,
-        audit_identity_hash: str | None = None,
+        audit_identity_hash: str,
         provider: str | None = None,
         model: str | None = None,
         prompt_hash: str | None = None,
-        model_fingerprint: str | None = None,
+        model_fingerprint: str,
         elapsed_ms: int = 0,
         audit_packet_manifest: dict[str, Any] | None = None,
     ) -> UUID:
@@ -5157,10 +5157,9 @@ class PostgresUnitOfWork:
                 """INSERT INTO audit_assessments (
                     run_id, target_type, target_id, target_hash,
                     evaluator_version, prompt_template_version, policy_version,
-                    stage_set, status, audit_identity_hash,
-                    provider, model,
+                    stage_set, status, provider, model,
                     prompt_hash, model_fingerprint, elapsed_ms,
-                    audit_packet_manifest
+                    audit_packet_manifest, audit_identity_hash
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id""",
                 (
@@ -5173,7 +5172,6 @@ class PostgresUnitOfWork:
                     policy_version,
                     stage_set,
                     status,
-                    audit_identity_hash,
                     provider,
                     model,
                     prompt_hash,
@@ -5182,6 +5180,7 @@ class PostgresUnitOfWork:
                     json.dumps(audit_packet_manifest, sort_keys=True)
                     if audit_packet_manifest
                     else None,
+                    audit_identity_hash,
                 ),
             )
             return UUID(str(cur.fetchone()[0]))
@@ -5192,10 +5191,9 @@ class PostgresUnitOfWork:
             cur.execute(
                 """SELECT id, run_id, target_type, target_id, target_hash,
                     evaluator_version, prompt_template_version, policy_version,
-                    stage_set, status, audit_identity_hash,
-                    provider, model,
+                    stage_set, status, provider, model,
                     prompt_hash, model_fingerprint, elapsed_ms,
-                    audit_packet_manifest, created_at
+                    audit_packet_manifest, created_at, audit_identity_hash
                 FROM audit_assessments
                 WHERE id=%s""",
                 (str(assessment_id),),
@@ -5230,10 +5228,9 @@ class PostgresUnitOfWork:
         )
         query = f"""SELECT aa.id, aa.run_id, aa.target_type, aa.target_id, aa.target_hash,
             aa.evaluator_version, aa.prompt_template_version, aa.policy_version,
-            aa.stage_set, aa.status, aa.audit_identity_hash,
-            aa.provider, aa.model,
+            aa.stage_set, aa.status, aa.provider, aa.model,
             aa.prompt_hash, aa.model_fingerprint, aa.elapsed_ms,
-            aa.audit_packet_manifest, aa.created_at
+            aa.audit_packet_manifest, aa.created_at, aa.audit_identity_hash
          FROM audit_assessments aa{where_clause}
          ORDER BY aa.created_at DESC
          LIMIT %s OFFSET %s"""
@@ -5400,38 +5397,139 @@ class PostgresUnitOfWork:
                     invalid_references.append(ref_str)
         return invalid_references
 
-    # -- Audit identity / idempotent scheduling (issue #34) ---------------
+    # -- Audit identity and idempotent scheduling -------------------------
+
+    def validate_audit_target(
+        self, run_id: UUID, target_type: str, target_id: UUID
+    ) -> bool:
+        """Validate the stable target ID and its ownership by the run."""
+        with self.connection.cursor() as cur:
+            if target_type == "run":
+                if target_id != run_id:
+                    return False
+                cur.execute("SELECT 1 FROM research_runs WHERE id = %s", (str(run_id),))
+            elif target_type == "invocation":
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM research_invocations
+                    WHERE id = %s AND run_id = %s
+                    """,
+                    (str(target_id), str(run_id)),
+                )
+            else:
+                return False
+            return cur.fetchone() is not None
 
     def lookup_equivalent_assessment(
-        self, audit_identity_hash: str
+        self,
+        run_id: UUID,
+        target_type: str,
+        target_id: UUID,
+        audit_identity_hash: str,
     ) -> dict[str, Any] | None:
-        """Look up an existing non-failed assessment by audit identity hash.
+        """Return the completed equivalent assessment for one exact target."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, run_id, target_type, target_id, target_hash,
+                       evaluator_version, prompt_template_version, policy_version,
+                       stage_set, status, provider, model, prompt_hash,
+                       model_fingerprint, elapsed_ms, audit_packet_manifest,
+                       created_at, audit_identity_hash
+                FROM audit_assessments
+                WHERE run_id = %s
+                  AND target_type = %s
+                  AND target_id = %s
+                  AND audit_identity_hash = %s
+                  AND status = 'completed'
+                LIMIT 1
+                """,
+                (
+                    str(run_id),
+                    target_type,
+                    str(target_id),
+                    audit_identity_hash,
+                ),
+            )
+            row = cur.fetchone()
+            return (
+                self._row_to_audit_assessment_mapping(row)
+                if row is not None
+                else None
+            )
 
-        Returns the assessment dict (via ``_row_to_audit_assessment_mapping``)
-        if an equivalent non-failed assessment exists, otherwise ``None``.
+    def insert_audit_assessment_if_absent(
+        self,
+        run_id: UUID,
+        target_type: str,
+        target_id: UUID,
+        target_hash: str,
+        evaluator_version: str,
+        prompt_template_version: str,
+        policy_version: str,
+        stage_set: list[str],
+        status: str,
+        *,
+        audit_identity_hash: str,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_hash: str | None = None,
+        model_fingerprint: str,
+        elapsed_ms: int = 0,
+        audit_packet_manifest: dict[str, Any] | None = None,
+    ) -> UUID | None:
+        """Insert once under the completed-assessment partial unique index.
 
-        This is the core lookup for idempotent audit scheduling.  The
-        database partial unique constraint ``uk_audit_assessments_identity``
-        ensures that concurrent equivalent requests cannot create multiple
-        active assessments.
+        Partial and failed attempts do not satisfy the index predicate and are
+        appended normally. Concurrent completed inserts return None to the
+        loser, which can then select the committed winner in the same service
+        operation.
         """
         with self.connection.cursor() as cur:
             cur.execute(
-                """SELECT id, run_id, target_type, target_id, target_hash,
+                """
+                INSERT INTO audit_assessments (
+                    run_id, target_type, target_id, target_hash,
                     evaluator_version, prompt_template_version, policy_version,
-                    stage_set, status, provider, model,
-                    prompt_hash, model_fingerprint, elapsed_ms,
-                    audit_packet_manifest, created_at, audit_identity_hash
-                FROM audit_assessments
-                WHERE audit_identity_hash = %s
-                  AND status != 'failed'
-                LIMIT 1""",
-                (audit_identity_hash,),
+                    stage_set, status, provider, model, prompt_hash,
+                    model_fingerprint, elapsed_ms, audit_packet_manifest,
+                    audit_identity_hash
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (
+                    run_id, target_type, target_id, audit_identity_hash
+                ) WHERE status = 'completed'
+                DO NOTHING
+                RETURNING id
+                """,
+                (
+                    str(run_id),
+                    target_type,
+                    str(target_id),
+                    target_hash,
+                    evaluator_version,
+                    prompt_template_version,
+                    policy_version,
+                    stage_set,
+                    status,
+                    provider,
+                    model,
+                    prompt_hash,
+                    model_fingerprint,
+                    elapsed_ms,
+                    json.dumps(audit_packet_manifest, sort_keys=True)
+                    if audit_packet_manifest
+                    else None,
+                    audit_identity_hash,
+                ),
             )
             row = cur.fetchone()
-            if row is None:
-                return None
-            return self._row_to_audit_assessment_mapping(row)
+            return UUID(str(row[0])) if row is not None else None
+
+    # -- Audit row mappers ------------------------------------------------
 
     @staticmethod
     def _row_to_audit_assessment_mapping(row) -> dict[str, Any]:
@@ -5440,8 +5538,7 @@ class PostgresUnitOfWork:
             "evaluator_version", "prompt_template_version", "policy_version",
             "stage_set", "status", "provider", "model",
             "prompt_hash", "model_fingerprint", "elapsed_ms",
-            "audit_packet_manifest", "created_at",
-            "audit_identity_hash",
+            "audit_packet_manifest", "created_at", "audit_identity_hash",
         )
         result = dict(zip(keys, row))
         for uid_key in ("id", "run_id", "target_id"):
