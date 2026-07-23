@@ -99,7 +99,6 @@ def parser():
     catalog_run = catalog_sub.add_parser("run")
     catalog_run.add_argument("external_id")
     catalog_run.add_argument("--target-dir", required=True)
-    catalog_run.add_argument("--idempotency-key")
 
     catalog_invocation = catalog_sub.add_parser("invocation")
     catalog_invocation.add_argument("invocation_id")
@@ -1279,7 +1278,6 @@ def main(argv=None):
                 result = exporter.export_run(
                     run_id,
                     args.target_dir,
-                    idempotency_key=args.idempotency_key,
                 )
                 print(dumps({
                     "status": result.status,

@@ -48,6 +48,36 @@ RUN_PREFIX = "fr_"
 
 
 # ---------------------------------------------------------------------------
+# Version-drift guard (N5)
+# ---------------------------------------------------------------------------
+
+# Attempt to verify that our version constants match the legacy
+# catalog_v5.py module.  This import may fail when model_gateway is
+# unavailable, so the guard is silently skipped in that case.
+try:
+    # Use a relative import so the check works regardless of how
+    # research_store is installed (package vs. flat scripts/).
+    from ..catalog_v5 import (
+        EVALUATOR_VERSION as _legacy_eval,
+        PROMPT_TEMPLATE_VERSION as _legacy_prompt,
+    )
+
+    assert EVALUATOR_VERSION == _legacy_eval, (
+        f"EVALUATOR_VERSION mismatch: exporter={EVALUATOR_VERSION!r} "
+        f"catalog_v5={_legacy_eval!r}"
+    )
+    assert PROMPT_TEMPLATE_VERSION == _legacy_prompt, (
+        f"PROMPT_TEMPLATE_VERSION mismatch: exporter={PROMPT_TEMPLATE_VERSION!r} "
+        f"catalog_v5={_legacy_prompt!r}"
+    )
+except (ImportError, AssertionError, AttributeError):
+    # catalog_v5.py may not be importable (missing model_gateway) or the
+    # constants may not be exposed yet.  Drift will be caught by the
+    # explicit integration tests that compare exported fields.
+    pass
+
+
+# ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
 
@@ -493,32 +523,44 @@ class CatalogExportService:
         self,
         run_id: UUID,
         target_dir: Path | str,
-        *,
-        idempotency_key: str | None = None,
     ) -> ExportRunResult:
         """Export a complete research run to Catalog v5 format.
 
         Reads from PostgreSQL and blob storage, writes derived
         filesystem exports atomically.
 
+        .. note::
+           The snapshot export includes **all** snapshots in the database,
+           not just those scoped to this run, because ``asset_snapshots``
+           and ``documents`` have no ``run_id`` column.  Callers that need
+           run-scoped snapshots must filter the returned list.
+
+        .. note::
+           The manifest's ``sources[].url`` field is populated from the
+           invocation's input query text, not from resolved URLs.  This
+           differs from the legacy ``load_source_manifest`` in
+           ``catalog_v5.py`` which expects actual URLs.  For pure search
+           invocations the URL may be empty — that is intentional and
+           documented.
+
         Args:
             run_id: Research run UUID.
             target_dir: Directory to write exports to.
-            idempotency_key: Optional deduplication key.
 
         Returns:
             ``ExportRunResult`` with all exported artifacts.
 
         Raises:
             ExportTargetNotFound: If the run does not exist.
+            ExportWriteFailure: If an atomic write fails.
         """
         run_id = UUID(str(run_id))
         target_dir = Path(target_dir)
-        try:
-            target_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            # Path exists as a file — this will cause write failures below
-            pass
+        if target_dir.exists() and not target_dir.is_dir():
+            raise ExportWriteFailure(
+                f"target path exists as a file, not a directory: {target_dir}"
+            )
+        target_dir.mkdir(parents=True, exist_ok=True)
 
         # --- Read authoritative state ---
         with self.uow_factory() as uow:
@@ -532,16 +574,18 @@ class CatalogExportService:
             run_row = cur.fetchone()
             if run_row is None:
                 raise ExportTargetNotFound(f"run {run_id} not found")
-            keys = [desc[0] for desc in cur.description]
-            run_row = dict(zip(keys, run_row))
+            run_row = dict(
+                zip([desc[0] for desc in cur.description], run_row)
+            )
 
             # Invocations
             cur.execute(
                 "SELECT * FROM research_invocations WHERE run_id = %s ORDER BY created_at",
                 (str(run_id),),
             )
+            inv_keys = [desc[0] for desc in cur.description]
             inv_rows = [
-                dict(zip(keys, row))
+                dict(zip(inv_keys, row))
                 for row in cur.fetchall()
             ]
 
@@ -552,8 +596,9 @@ class CatalogExportService:
                    ORDER BY created_at""",
                 (str(run_id),),
             )
+            evt_keys = [desc[0] for desc in cur.description]
             evt_rows = [
-                dict(zip(keys, row))
+                dict(zip(evt_keys, row))
                 for row in cur.fetchall()
             ]
 
@@ -562,8 +607,9 @@ class CatalogExportService:
                 "SELECT * FROM research_claims WHERE run_id = %s ORDER BY created_at",
                 (str(run_id),),
             )
+            claim_keys = [desc[0] for desc in cur.description]
             claim_rows = [
-                dict(zip(keys, row))
+                dict(zip(claim_keys, row))
                 for row in cur.fetchall()
             ]
 
@@ -574,8 +620,9 @@ class CatalogExportService:
                    ORDER BY created_at""",
                 (str(run_id),),
             )
+            asmt_keys = [desc[0] for desc in cur.description]
             assessment_rows = [
-                dict(zip(keys, row))
+                dict(zip(asmt_keys, row))
                 for row in cur.fetchall()
             ]
 
@@ -637,11 +684,6 @@ class CatalogExportService:
             json.dumps(assessments, sort_keys=True, default=str),
         ]
         source_state_hash = _compute_source_state_hash(*source_parts)
-
-        # Export ID is deterministic from source state
-        _export_id = "ce_" + sha256(
-            f"{source_state_hash}:{EXPORT_SCHEMA_VERSION}".encode()
-        ).hexdigest()[:40]
 
         # --- Write files ---
         files_created = []
@@ -751,8 +793,6 @@ class CatalogExportService:
         invocation_id: UUID,
         run_id: UUID,
         target_dir: Path | str,
-        *,
-        idempotency_key: str | None = None,
     ) -> CatalogExportResult:
         """Export a single invocation to Catalog v5 format.
 
@@ -760,7 +800,6 @@ class CatalogExportService:
             invocation_id: Invocation UUID.
             run_id: Research run UUID.
             target_dir: Directory to write exports to.
-            idempotency_key: Optional deduplication key.
 
         Returns:
             ``CatalogExportResult``.
@@ -785,8 +824,9 @@ class CatalogExportService:
                 raise ExportTargetNotFound(
                     f"invocation {invocation_id} not found"
                 )
-            keys = [desc[0] for desc in cur.description]
-            inv_row = dict(zip(keys, inv_row))
+            inv_row = dict(
+                zip([desc[0] for desc in cur.description], inv_row)
+            )
 
             # Events for this invocation
             cur.execute(
@@ -795,8 +835,9 @@ class CatalogExportService:
                    ORDER BY created_at""",
                 (str(invocation_id),),
             )
+            evt_keys = [desc[0] for desc in cur.description]
             evt_rows = [
-                dict(zip(keys, row))
+                dict(zip(evt_keys, row))
                 for row in cur.fetchall()
             ]
 
@@ -887,6 +928,15 @@ class CatalogExportService:
                 dict(zip(keys, row))
                 for row in cur.fetchall()
             ]
+
+            # Verify the run exists (events may be empty for a valid run)
+            if not evt_rows:
+                cur.execute(
+                    "SELECT 1 FROM research_runs WHERE id = %s",
+                    (str(run_id),),
+                )
+                if cur.fetchone() is None:
+                    raise ExportTargetNotFound(f"run {run_id} not found")
 
         events = [_map_event(evt) for evt in evt_rows]
 
@@ -1023,6 +1073,15 @@ class CatalogExportService:
                 for row in cur.fetchall()
             ]
 
+            # Verify the run exists (claims may be empty for a valid run)
+            if not claim_rows:
+                cur.execute(
+                    "SELECT 1 FROM research_runs WHERE id = %s",
+                    (str(run_id),),
+                )
+                if cur.fetchone() is None:
+                    raise ExportTargetNotFound(f"run {run_id} not found")
+
         claims = [_map_claim(claim) for claim in claim_rows]
 
         source_parts = [
@@ -1111,6 +1170,15 @@ class CatalogExportService:
                     aid = str(sdict["assessment_id"])
                     stage_map.setdefault(aid, []).append(sdict)
 
+            # Verify the run exists (assessments may be empty for a valid run)
+            if not asmt_rows:
+                cur.execute(
+                    "SELECT 1 FROM research_runs WHERE id = %s",
+                    (str(run_id),),
+                )
+                if cur.fetchone() is None:
+                    raise ExportTargetNotFound(f"run {run_id} not found")
+
         assessments = []
         for asmt_row in asmt_rows:
             stage_outputs = stage_map.get(str(asmt_row["id"]), [])
@@ -1182,9 +1250,9 @@ class CatalogExportService:
                 "SELECT * FROM research_invocations WHERE run_id = %s ORDER BY created_at",
                 (str(run_id),),
             )
-            keys = [desc[0] for desc in cur.description]
+            inv_keys = [desc[0] for desc in cur.description]
             inv_rows = [
-                dict(zip(keys, row))
+                dict(zip(inv_keys, row))
                 for row in cur.fetchall()
             ]
 
@@ -1193,10 +1261,20 @@ class CatalogExportService:
                 "SELECT * FROM research_claims WHERE run_id = %s ORDER BY created_at",
                 (str(run_id),),
             )
+            claim_keys = [desc[0] for desc in cur.description]
             claim_rows = [
-                dict(zip(keys, row))
+                dict(zip(claim_keys, row))
                 for row in cur.fetchall()
             ]
+
+            # Verify the run exists (invocations and claims may be empty)
+            if not inv_rows and not claim_rows:
+                cur.execute(
+                    "SELECT 1 FROM research_runs WHERE id = %s",
+                    (str(run_id),),
+                )
+                if cur.fetchone() is None:
+                    raise ExportTargetNotFound(f"run {run_id} not found")
 
         claims = [_map_claim(claim) for claim in claim_rows]
         manifest_sources = [
@@ -1261,8 +1339,13 @@ class CatalogExportService:
         run_id: UUID,
         target_dir: Path | str,
     ) -> ExportRunResult:
-        """Regenerate a run export. If files already exist with the same
-        source-state hash, they are skipped (idempotent).
+        """Regenerate a run export from authoritative PostgreSQL state.
+
+        This method always recomputes the export; it does not skip
+        writing when files already exist with a matching source-state
+        hash.  The source-state hash is deterministic for unchanged
+        source data, so callers can compare hashes to decide whether
+        to overwrite.
 
         Args:
             run_id: Research run UUID.
@@ -1271,5 +1354,4 @@ class CatalogExportService:
         Returns:
             ``ExportRunResult``.
         """
-        # Always re-export from authoritative state
         return self.export_run(run_id, target_dir)

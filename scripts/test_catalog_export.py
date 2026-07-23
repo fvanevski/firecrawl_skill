@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from functools import partial
+from hashlib import sha256
 import json
 import sys
 from pathlib import Path
@@ -29,7 +30,11 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.catalog_export import EXPORT_SCHEMA_VERSION, ExportTargetNotFound
+from research_store.catalog_export import (
+    EXPORT_SCHEMA_VERSION,
+    ExportTargetNotFound,
+    ExportWriteFailure,
+)
 from research_store.config import StoreConfig
 from research_store.container import (
     build_catalog_export_service,
@@ -308,10 +313,9 @@ def test_export_failure_isolation(config, run_service, tmp_path):
     blocker = tmp_path / "blocker"
     blocker.write_text("blocker")
 
-    result = exporter.export_run(run_id, blocker)
+    with pytest.raises(ExportWriteFailure, match="exists as a file"):
+        exporter.export_run(run_id, blocker)
 
-    assert result.status == "failed"
-    assert result.error is not None
     # PostgreSQL state is intact
     status = run_service.status(run_id=run_id)
     assert status.state == "corpus_review"
@@ -530,3 +534,184 @@ def test_export_no_secret_leakage(config, run_service, tmp_path):
     # The sanitized value should be present but redacted
     assert input_data.get("api_key") == "[REDACTED]"
     assert input_data.get("authorization") == "[REDACTED]"
+
+
+# -----------------------------------------------------------------------
+# Target-dir file isolation (B2 regression test)
+# -----------------------------------------------------------------------
+
+
+def test_export_run_target_dir_is_file(config, run_service, tmp_path):
+    """Exporting when target_dir is an existing file raises ExportWriteFailure."""
+    from research_store.catalog_export import ExportWriteFailure
+
+    run_id = _create_run_with_data(run_service)
+    exporter = build_catalog_export_service(config)
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("blocker")
+
+    with pytest.raises(ExportWriteFailure, match="exists as a file"):
+        exporter.export_run(run_id, blocker)
+
+
+# -----------------------------------------------------------------------
+# Granular export with unknown run ID
+# -----------------------------------------------------------------------
+
+
+def test_export_events_unknown_run(config, run_service):
+    """export_events raises ExportTargetNotFound for unknown run."""
+    from research_store.catalog_export import ExportTargetNotFound
+
+    exporter = build_catalog_export_service(config)
+    fake_id = uuid4()
+
+    with pytest.raises(ExportTargetNotFound, match="not found"):
+        exporter.export_events(fake_id, Path("/tmp/fake"))
+
+
+def test_export_claims_unknown_run(config, run_service):
+    """export_claims raises ExportTargetNotFound for unknown run."""
+    from research_store.catalog_export import ExportTargetNotFound
+
+    exporter = build_catalog_export_service(config)
+    fake_id = uuid4()
+
+    with pytest.raises(ExportTargetNotFound, match="not found"):
+        exporter.export_claims(fake_id, Path("/tmp/fake"))
+
+
+def test_export_assessments_unknown_run(config, run_service):
+    """export_assessments raises ExportTargetNotFound for unknown run."""
+    from research_store.catalog_export import ExportTargetNotFound
+
+    exporter = build_catalog_export_service(config)
+    fake_id = uuid4()
+
+    with pytest.raises(ExportTargetNotFound, match="not found"):
+        exporter.export_assessments(fake_id, Path("/tmp/fake"))
+
+
+def test_export_manifest_unknown_run(config, run_service):
+    """export_manifest raises ExportTargetNotFound for unknown run."""
+    from research_store.catalog_export import ExportTargetNotFound
+
+    exporter = build_catalog_export_service(config)
+    fake_id = uuid4()
+
+    with pytest.raises(ExportTargetNotFound, match="not found"):
+        exporter.export_manifest(fake_id, Path("/tmp/fake"))
+
+
+# -----------------------------------------------------------------------
+# Minimal run with no invocations
+# -----------------------------------------------------------------------
+
+
+def test_export_run_no_invocations(config, run_service, tmp_path):
+    """Export succeeds for a run that has no invocations."""
+    ext_id = f"run-no-inv-{uuid4()}"
+    run_svc = build_run_service(config)
+    run = run_svc.create(objective="minimal run", external_id=ext_id)
+    run_id = run.id
+
+    # Transition to corpus_review without creating any invocations
+    run_svc.transition(
+        run_id,
+        "planning",
+        expected_revision=run.lifecycle_revision,
+        idempotency_key=f"transition:planning:{run_id}",
+        actor_type="system",
+    )
+    planning_status = run_svc.status(run_id=run_id)
+    run_svc.transition(
+        run_id,
+        "corpus_review",
+        expected_revision=planning_status.lifecycle_revision,
+        idempotency_key=f"transition:corpus_review:{run_id}",
+        actor_type="system",
+    )
+
+    exporter = build_catalog_export_service(config)
+    result = exporter.export_run(run_id, tmp_path / "no_inv")
+
+    assert result.status == "complete"
+    assert len(result.invocations) == 0
+
+
+# -----------------------------------------------------------------------
+# Export with failed-assessment stages
+# -----------------------------------------------------------------------
+
+
+def test_export_with_failed_assessment_stages(config, run_service, tmp_path):
+    """Export includes assessments with failed stages."""
+    from research_store.service import AuditService
+
+    run_id = _create_run_with_data(run_service)
+    exporter = build_catalog_export_service(config)
+
+    # Create an assessment with a failed stage via the audit service
+    audit_svc = AuditService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
+    )
+
+    # Create an assessment with a failed rubric stage
+    assessment_id = audit_svc.create_assessment(
+        run_id=run_id,
+        target_type="run",
+        target_id=run_id,
+        target_hash=sha256(b"test-packet").hexdigest(),
+        evaluator_version="catalog-v5.0",
+        prompt_template_version="staged-research-audit-v1",
+        policy_version="audit-policy-v1",
+        stage_set=["rubric", "acquisition"],
+        status="partial",
+        provider="local",
+        model="test-model",
+        model_fingerprint="fp-test",
+    )
+
+    # Add a failed rubric stage
+    audit_svc.add_stage_output(
+        assessment_id=assessment_id,
+        stage="rubric",
+        sequence_number=1,
+        status="failed",
+        error="rubric evaluation failed",
+    )
+
+    # Add a successful acquisition stage
+    audit_svc.add_stage_output(
+        assessment_id=assessment_id,
+        stage="acquisition",
+        sequence_number=1,
+        status="completed",
+        output={"score": 0.8},
+    )
+
+    result = exporter.export_run(run_id, tmp_path / "failed_stage")
+
+    assert result.status == "complete"
+    assert len(result.assessments) == 1
+
+    asmt = result.assessments[0]
+    assert asmt["status"] == "partial"  # partial because one stage failed
+    assert len(asmt["stage_outputs"]) == 2
+
+    # Verify the failed stage is present
+    failed_stages = [s for s in asmt["stage_outputs"] if s["status"] == "failed"]
+    assert len(failed_stages) == 1
+    assert failed_stages[0]["stage"] == "rubric"
+    assert failed_stages[0]["error"] == "rubric evaluation failed"
