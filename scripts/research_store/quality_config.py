@@ -127,6 +127,6 @@ class QualityConfig:
                 "QUALITY_MIN_EXTRACTION_METHOD_CONFIDENCE", 0.3
             ),
             min_title_present=_bool("QUALITY_MIN_TITLE_PRESENT", False),
-            anti_bot_hard_fail=_bool("QUALITY_ANIT_BOT_HARD_FAIL", True),
+            anti_bot_hard_fail=_bool("QUALITY_ANTI_BOT_HARD_FAIL", True),
             max_parser_warnings=_int("QUALITY_MAX_PARSER_WARNINGS", 3),
         )

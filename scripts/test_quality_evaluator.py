@@ -705,6 +705,23 @@ class TestQualityServiceIntegration:
         ):  # Could be ExtractionAttemptError or QualityEvaluationError
             quality.auto_evaluate(uuid4())
 
+    def test_auto_evaluate_blob_store_failure(self):
+        """Test auto_evaluate raises when blob_store.get raises."""
+        mock_service = MagicMock()
+        mock_attempt = MagicMock()
+        mock_attempt.id = uuid4()
+        mock_attempt.raw_blob = MagicMock(uri="blob://missing")
+        mock_service.get_attempt.return_value = mock_attempt
+        mock_service.blob_store.get.side_effect = FileNotFoundError("blob not found")
+
+        config = QualityConfig(anti_bot_hard_fail=True)
+        quality = QualityService(mock_service, config=config)
+
+        with pytest.raises(Exception):
+            quality.auto_evaluate(uuid4())
+        # Should have attempted to read the blob
+        mock_service.blob_store.get.assert_called_once()
+
     def test_evaluate_from_content(self):
         """Test evaluate_from_content computes and applies metrics."""
         mock_service = MagicMock()
@@ -749,7 +766,7 @@ class TestQualityConfig:
             {
                 "QUALITY_MIN_VISIBLE_TEXT_LENGTH": "100",
                 "QUALITY_MAX_LINK_DENSITY": "0.5",
-                "QUALITY_ANIT_BOT_HARD_FAIL": "false",
+                "QUALITY_ANTI_BOT_HARD_FAIL": "false",
             },
         ):
             config = QualityConfig.from_env()
@@ -819,6 +836,26 @@ class TestEdgeCases:
         m1 = evaluate_quality(content)
         m2 = evaluate_quality(content)
         assert m1.to_dict() == m2.to_dict()
+
+    def test_encoding_anomaly_utf8(self):
+        """Pure ASCII/UTF-8 content has no encoding anomaly."""
+        content = b"Hello world, this is ASCII."
+        metrics = evaluate_quality(content)
+        assert metrics.encoding_anomaly is False
+
+    def test_encoding_anomaly_latin1(self):
+        """Latin-1-only content flags an encoding anomaly."""
+        content = "caf\u00e9 r\u00e9sum\u00e9".encode("latin-1")
+        metrics = evaluate_quality(content)
+        assert metrics.encoding_anomaly is True
+
+    def test_encoding_anomaly_roundtrip(self):
+        """encoding_anomaly survives to_dict/from_dict roundtrip."""
+        content = "caf\u00e9".encode("latin-1")
+        metrics = evaluate_quality(content)
+        d = metrics.to_dict()
+        restored = ExtractionQualityMetrics.from_dict(d)
+        assert restored.encoding_anomaly is True
 
 
 # -----------------------------------------------------------------------

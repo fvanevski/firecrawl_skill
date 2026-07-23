@@ -118,6 +118,7 @@ def evaluate_quality(
         parser_warnings=parser_warnings,
         code_to_prose_ratio=round(code_to_prose_ratio, 4),
         extraction_method_confidence=round(extraction_method_confidence, 4),
+        encoding_anomaly=encoding_anomaly,
         quality_version=config.quality_version,
     )
 
@@ -196,7 +197,7 @@ def _count_headings(text: str) -> int:
     """Count ATX-style headings (# ...) and HTML heading tags."""
     atx = len(re.findall(r"^#{1,6}\s", text, re.MULTILINE))
     html_tags = len(re.findall(r"<h[1-6][\s>]", text, re.IGNORECASE))
-    return max(atx, html_tags)
+    return atx + html_tags
 
 
 def _count_lists(text: str) -> int:
@@ -204,7 +205,7 @@ def _count_lists(text: str) -> int:
     unordered = len(re.findall(r"^\s*[-*+]\s", text, re.MULTILINE))
     ordered = len(re.findall(r"^\s*\d+\.\s", text, re.MULTILINE))
     html_items = len(re.findall(r"<li[\s>]", text, re.IGNORECASE))
-    return max(unordered + ordered, html_items)
+    return unordered + ordered + html_items
 
 
 def _count_tables(text: str) -> int:
@@ -305,8 +306,20 @@ def _compute_boilerplate_ratio(text: str) -> float:
     combined = " | ".join(boilerplate_patterns)
     boilerplate_matches = len(re.findall(combined, text, re.IGNORECASE))
 
-    # Count lines that are purely navigational
-    nav_pattern = r"^\s*(?:[-*+]\s+)?(?:[a-zA-Z][a-zA-Z\s&,-]+)\s*$"
+    # Count lines that are purely navigational — match common nav patterns
+    # like "Back to Top", "Next Post", "Previous Post", breadcrumbs, and
+    # lines with arrow/separator characters.  This is intentionally narrower
+    # than a generic "any alphabetic line" pattern to avoid false positives
+    # on section headings such as "Introduction" or "Conclusion".
+    nav_pattern = (
+        r"^\s*(?:[-*+]\s+)?"
+        r"(?:"
+        r"(?:Back\s+(?:to\s+)?(?:Top|Home))"
+        r"|(?:Next|Previous)\s+Post"
+        r"|(?:[«»‹]|\.\.\.|[-–—]+)\s*"
+        r"|[-*+]\s+(?:[A-Za-z][A-Za-z\s&,-]*\s+)?(?:Next|Previous|Back|Top)\b"
+        r")\s*$"
+    )
     nav_lines = len(re.findall(nav_pattern, text, re.MULTILINE))
     total_lines = max(len(text.split("\n")), 1)
 
@@ -426,7 +439,7 @@ def _count_anti_bot_markers(text: str) -> int:
     count = 0
     lower_text = text.lower()
     for marker in markers:
-        if re.search(marker, lower_text, re.IGNORECASE):
+        if re.search(marker, lower_text):
             count += 1
     return count
 
@@ -521,7 +534,7 @@ def _compute_code_to_prose_ratio(text: str) -> float:
     if code_regions > 0:
         code_lines = max(code_lines, code_regions * 3)
 
-    return code_lines / total_lines
+    return min(code_lines / total_lines, 1.0)
 
 
 def _count_required_structured(
