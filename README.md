@@ -1,3 +1,5 @@
+<!-- @format -->
+
 # Firecrawl Research Skill
 
 This Codex skill combines Firecrawl web acquisition with a persistent, auditable research corpus. PostgreSQL is authoritative, content-addressed blobs retain immutable payloads, Qdrant supplies a rebuildable dense-retrieval projection, and Valkey provides optional worker wakeups. Scratch directories and Catalog v5 remain available for compatibility, debugging, and acquisition audits.
@@ -17,19 +19,19 @@ This Codex skill combines Firecrawl web acquisition with a persistent, auditable
 
 ## First use
 
-Resolve `<skill-root>` to the directory containing `SKILL.md`, and keep `rtk proxy` at the agent-visible boundary.
+Resolve `<skill-root>` to the directory containing `SKILL.md`.
 
 ```bash
 # Inspect and retrieve retained assets first.
-rtk proxy "<skill-root>/scripts/research-db" corpus-overview
-rtk proxy "<skill-root>/scripts/research-db" search-assets "<query>" --limit 20
-rtk proxy "<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --max-tokens 2000
-rtk proxy "<skill-root>/scripts/research-db" expand-relationships "<candidate-id>" --max-hops 1
-rtk proxy "<skill-root>/scripts/research-db" build-evidence-packet "<candidate-id-1>" "<candidate-id-2>"
+"<skill-root>/scripts/research-db" corpus-overview
+"<skill-root>/scripts/research-db" search-assets "<query>" --limit 20
+"<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --max-tokens 2000
+"<skill-root>/scripts/research-db" expand-relationships "<candidate-id>" --max-hops 1
+"<skill-root>/scripts/research-db" build-evidence-packet "<candidate-id-1>" "<candidate-id-2>"
 
 # Acquire new evidence only when the retained corpus is insufficient.
-rtk proxy "<skill-root>/scripts/fsearch_smart" "<research objective>"
-rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/article"
+"<skill-root>/scripts/fsearch_smart" "<research objective>"
+"<skill-root>/scripts/fscrape" "https://example.com/article"
 ```
 
 Wrappers write `firecrawl_scratch/fc_<uuid>/...` artifacts. When persistence is enabled they also commit an invocation batch and produce `_corpus.json` with stable source, snapshot, document, and chunk IDs.
@@ -50,7 +52,7 @@ Use both switches for private acquisition:
 
 ```bash
 FIRECRAWL_CATALOG_DISABLED=1 FIRECRAWL_RESEARCH_PERSIST=off \
-  rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/private"
+  "<skill-root>/scripts/fscrape" "https://example.com/private"
 ```
 
 Explicit `DATABASE_URL`, Qdrant/Valkey endpoints and keys, blob root, and `FIRECRAWL_RESEARCH_PYTHON` take precedence over `scripts/research-env`. See `references/research-store-operations.md` for the full configuration surface.
@@ -58,26 +60,26 @@ Explicit `DATABASE_URL`, Qdrant/Valkey endpoints and keys, blob root, and `FIREC
 ## Corpus and index lifecycle
 
 ```bash
-rtk proxy "<skill-root>/scripts/research-db" migrate
-rtk proxy "<skill-root>/scripts/research-db" status
-rtk proxy "<skill-root>/scripts/research-db" ingest-ready
-rtk proxy "<skill-root>/scripts/research-db" doctor
+"<skill-root>/scripts/research-db" migrate
+"<skill-root>/scripts/research-db" status
+"<skill-root>/scripts/research-db" ingest-ready
+"<skill-root>/scripts/research-db" doctor
 
 # Run persistently through firecrawl-research-indexer.service.
-rtk proxy "<skill-root>/scripts/research-db" worker --batch-size 32 --poll-seconds 5 --lease-seconds 300 --max-attempts 5
+"<skill-root>/scripts/research-db" worker --batch-size 32 --poll-seconds 5 --lease-seconds 300 --max-attempts 5
 
 # Build a fingerprinted physical collection, verify it, and switch the stable alias.
-rtk proxy "<skill-root>/scripts/research-db" index-list
-rtk proxy "<skill-root>/scripts/research-db" index-build --current-config --all
-rtk proxy "<skill-root>/scripts/research-db" reconcile-qdrant
-rtk proxy "<skill-root>/scripts/research-db" index-activate "<index-id>"
-rtk proxy "<skill-root>/scripts/research-db" index-rollback "<prior-index-id>"
-rtk proxy "<skill-root>/scripts/research-db" index-prune --dry-run
+"<skill-root>/scripts/research-db" index-list
+"<skill-root>/scripts/research-db" index-build --current-config --all
+"<skill-root>/scripts/research-db" reconcile-qdrant
+"<skill-root>/scripts/research-db" index-activate "<index-id>"
+"<skill-root>/scripts/research-db" index-rollback "<prior-index-id>"
+"<skill-root>/scripts/research-db" index-prune --dry-run
 
 # Rebuild parser/chunker derivations or reconstruct an interrupted compatibility export.
-rtk proxy "<skill-root>/scripts/research-db" rederive --snapshot "<snapshot-id>"
-rtk proxy "<skill-root>/scripts/research-db" export-invocation "fc_<uuid>" --output _corpus.json
-rtk proxy "<skill-root>/scripts/research-db" import-scratch "<scratch-dir>" --dry-run
+"<skill-root>/scripts/research-db" rederive --snapshot "<snapshot-id>"
+"<skill-root>/scripts/research-db" export-invocation "fc_<uuid>" --output _corpus.json
+"<skill-root>/scripts/research-db" import-scratch "<scratch-dir>" --dry-run
 ```
 
 Physical Qdrant collections use `research_chunks_<12-character-fingerprint>`; retrieval uses the stable `research_chunks_active` alias. Dense retrieval runs only when that alias matches the configured fingerprint, otherwise queries remain lexical and `doctor` reports the mismatch. PostgreSQL jobs carry leases and exact embedding-manifest identities, so crashed workers can be reclaimed without losing or misattributing work. Default `doctor` is read-only.
@@ -85,28 +87,28 @@ Physical Qdrant collections use `research_chunks_<12-character-fingerprint>`; re
 ## Research-run provenance
 
 ```bash
-RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start "<research objective>" --profile auto)"
-rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-run-id "$RUN_ID"
-rtk proxy "<skill-root>/scripts/research-db" search-assets "<query>" --research-run-id "$RUN_ID" --limit 20
-rtk proxy "<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --research-run-id "$RUN_ID" --max-tokens 2000
-rtk proxy "<skill-root>/scripts/frun" finish "$RUN_ID" --outcome satisfied --source-manifest sources.json --answer-file final.md --auto-audit
+RUN_ID="$("<skill-root>/scripts/frun" start "<research objective>" --profile auto)"
+"<skill-root>/scripts/fsearch_smart" "<topic>" --research-run-id "$RUN_ID"
+"<skill-root>/scripts/research-db" search-assets "<query>" --research-run-id "$RUN_ID" --limit 20
+"<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --research-run-id "$RUN_ID" --max-tokens 2000
+"<skill-root>/scripts/frun" finish "$RUN_ID" --outcome satisfied --source-manifest sources.json --answer-file final.md --auto-audit
 
 # Manage run lifecycle, pivots, and audits
-rtk proxy "<skill-root>/scripts/frun" reopen "$RUN_ID" --reason "acquire official whitepaper"
-rtk proxy "<skill-root>/scripts/frun" annotate "$RUN_ID" --type pivot --reason "switched focus to primary spec"
-rtk proxy "<skill-root>/scripts/frun" audit "$RUN_ID" --llm local
-rtk proxy "<skill-root>/scripts/frun" compare "$RUN_ID" "$OTHER_RUN_ID"
-rtk proxy "<skill-root>/scripts/frun" purge --keep-last 10
+"<skill-root>/scripts/frun" reopen "$RUN_ID" --reason "acquire official whitepaper"
+"<skill-root>/scripts/frun" annotate "$RUN_ID" --type pivot --reason "switched focus to primary spec"
+"<skill-root>/scripts/frun" audit "$RUN_ID" --llm local
+"<skill-root>/scripts/frun" compare "$RUN_ID" "$OTHER_RUN_ID"
+"<skill-root>/scripts/frun" purge --keep-last 10
 
 # Inspect and mutate the authoritative PostgreSQL state machine
-rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
-rtk proxy "<skill-root>/scripts/research-db" run-mode-change "$RUN_ID" autonomous_local \
+"<skill-root>/scripts/research-db" run-status "$RUN_ID"
+"<skill-root>/scripts/research-db" run-mode-change "$RUN_ID" autonomous_local \
   --expected-revision 0 --idempotency-key 'mode-change-command-id' \
   --requested-by 'operator' --approved-by 'reviewer' \
   --reason 'continue with the configured local model'
-rtk proxy "<skill-root>/scripts/research-db" run-transition "$RUN_ID" planning \
+"<skill-root>/scripts/research-db" run-transition "$RUN_ID" planning \
   --expected-revision 1 --idempotency-key 'planning-command-id'
-rtk proxy "<skill-root>/scripts/research-db" run-cancel "$RUN_ID" \
+"<skill-root>/scripts/research-db" run-cancel "$RUN_ID" \
   --expected-revision 2 --idempotency-key 'cancel-command-id' \
   --reason 'operator request'
 ```
@@ -131,7 +133,7 @@ ledger with `research-db legacy-comparisons --divergent-only`. See
 Run the full deterministic suite without network access:
 
 ```bash
-rtk proxy env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
+env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
   "<skill-root>/scripts/test_classifier.py" \
   "<skill-root>/scripts/test_workflow.py" \
   "<skill-root>/scripts/test_budget_policy.py" \
