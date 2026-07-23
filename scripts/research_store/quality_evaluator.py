@@ -68,7 +68,11 @@ def evaluate_quality(
     if config is None:
         config = QualityConfig.from_env()
 
-    # Decode content for analysis
+    # Decode content for analysis.
+    # Note: _check_content_type_consistency decodes raw_content again to
+    # detect HTML patterns that _strip_html_tags already removed.  This
+    # duplicate decode is intentional — the MIME consistency check needs
+    # access to the original HTML markup to verify type alignment.
     visible_text, encoding_anomaly = _decode_visible(content)
 
     # Compute each signal
@@ -265,6 +269,15 @@ def _compute_boilerplate_ratio(text: str) -> float:
 
     Checks for common boilerplate patterns: navigation lines,
     cookie consent, social sharing, copyright notices.
+
+    The ``boilerplate_patterns`` list and the ``nav_pattern`` regex
+    can both match the same line (e.g., a line containing "About Us"
+    matches pattern #18 and the nav-line regex).  This overlap is
+    intentional — it produces a higher score for lines that are both
+    boilerplate-text AND purely navigational, which is the strongest
+    indicator of low-quality content.  The weighted combination
+    (pattern_score * 0.6 + nav_score * 0.4) dampens the overlap rather
+    than eliminating it.
     """
     if not text.strip():
         return 0.0
@@ -324,7 +337,17 @@ def _check_content_type_consistency(
     text: str,
     raw_content: bytes,
 ) -> bool:
-    """Check whether the MIME type is consistent with the content."""
+    """Check whether the MIME type is consistent with the content.
+
+    Args:
+        mime_type: Declared MIME type from the extraction backend.
+        expected_mime_type: Expected MIME type for consistency check.
+        text: Visible (HTML-stripped) text for plain-text heuristics.
+        raw_content: Original bytes for HTML pattern detection.
+
+    Returns:
+        True if the MIME type is consistent with the content structure.
+    """
     if not mime_type:
         return True  # No MIME info — assume consistent
     declared = mime_type.lower().strip()
@@ -336,8 +359,10 @@ def _check_content_type_consistency(
     except Exception:
         raw_text = raw_content.decode("latin-1", errors="replace")
 
-    # If declared is HTML but content is clearly plain text
-    if "text/html" in declared and _is_plain_text_heuristic(text):
+    # If declared is HTML but content is clearly plain text.
+    # Pass raw_text (not stripped text) so the heuristic can detect
+    # HTML patterns that were already removed by _strip_html_tags.
+    if "text/html" in declared and _is_plain_text_heuristic(raw_text):
         if expected and "text/html" not in expected:
             return False
     # If declared is plain text but content has HTML structure

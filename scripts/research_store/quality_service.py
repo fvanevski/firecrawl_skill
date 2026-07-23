@@ -91,16 +91,10 @@ class QualityService:
             QualityEvaluationError: If evaluation fails.
             ExtractionAttemptError: If the attempt is not found.
         """
-        attempt = self.extraction_service.get_selected_attempt(
-            UUID("00000000-0000-0000-0000-000000000000")
-        )
-        # Fall back to listing attempts to find by ID
-        attempts = self.extraction_service.list_attempts(attempt_id, run_id=None)
-        for a in attempts:
-            if a.id == attempt_id:
-                attempt = a
-                break
-        else:
+        # Retrieve the attempt directly by ID via the extraction service.
+        attempt = self.extraction_service.get_attempt(attempt_id)
+
+        if attempt is None:
             raise ExtractionAttemptError(
                 f"attempt {attempt_id} not found",
                 failure_class="internal",
@@ -161,9 +155,26 @@ class QualityService:
     def map_disposition(self, metrics: ExtractionQualityMetrics) -> str:
         """Map quality metrics to a disposition.
 
-        This is the core disposition-mapping logic.  It implements the
-        invariant that no single metric independently determines
-        disposition.
+        Decision tree (evaluated in order):
+
+        1. **Hard-fail checks** — anti-bot markers, no visible text,
+           excessive boilerplate, excessive link density, high duplicate
+           content, content type inconsistency → ``"poor"``.
+        2. **Insufficient content** — neither ``min_visible_text_length``
+           nor ``min_paragraph_count``/``min_heading_count`` met →
+           ``"acceptable"`` if title + confidence are strong, else
+           ``"ambiguous"``.
+        3. **Content without structure** — meets length but not
+           structural requirements → ``"acceptable"`` if title + low
+           boilerplate, else ``"ambiguous"``.
+        4. **Content with structure** — meets both length and structure.
+           Counts degradation signals (link density ≥ 70 % threshold,
+           boilerplate ≥ 70 %, parser warnings, low language confidence).
+           Two or more → ``"ambiguous"``. One or zero + sufficient
+           extraction confidence → ``"acceptable"``.
+
+        This implements the invariant that no single metric independently
+        determines disposition.
 
         Args:
             metrics: Quality metrics to evaluate.
@@ -228,7 +239,13 @@ class QualityService:
             return "ambiguous"
 
         if has_content and has_structure:
-            # Good content with structure — check for degradation signals
+            # Good content with structure — check for degradation signals.
+            # Two or more degradation signals indicate mixed quality that
+            # warrants semantic adjudication rather than automatic acceptance.
+            # Note: parser_warnings and language_confidence are independent
+            # checks — both can trigger simultaneously (e.g., a well-structured
+            # document with parser warnings AND low language confidence),
+            # which is the intended behavior for flagging ambiguous content.
             degradation_signals = 0
             if metrics.link_density > self.config.max_link_density * 0.7:
                 degradation_signals += 1

@@ -328,6 +328,23 @@ class ExtractionService:
             )
             uow.commit()
 
+    def get_attempt(self, attempt_id: UUID) -> ExtractionAttempt | None:
+        """Return an extraction attempt by its ID, or ``None``.
+
+        This is a read-only lookup that does not modify any state.
+
+        Args:
+            attempt_id: The attempt UUID to look up.
+
+        Returns:
+            The ``ExtractionAttempt`` or ``None`` if not found.
+        """
+        with self.uow_factory() as uow:
+            result = uow.extraction_attempts.get_attempt(attempt_id)
+            if result is None:
+                return None
+            return ExtractionAttempt.from_mapping(result)
+
     def get_selected_attempt(self, candidate_id: UUID) -> ExtractionAttempt | None:
         """Return the currently selected final attempt for a candidate.
 
