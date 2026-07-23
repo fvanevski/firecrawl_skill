@@ -56,6 +56,7 @@ class IngestRequest:
     firecrawl_version: str | None = None
     crawl_options: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    extraction_attempt_id: UUID | None = None
 
 
 @dataclass(frozen=True)

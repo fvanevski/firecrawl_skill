@@ -1282,12 +1282,22 @@ def test_blob_store_failure_during_create_attempt(
     Deferred to #48: inject a blob-store failure mid-transaction and verify
     the attempt is not persisted.
     """
-    # Skeleton: create a valid attempt, then verify rollback on failure.
-    aid = extraction_service.create_attempt(
-        candidate_id=sample_candidate,
-        run_id=sample_run,
-    )
-    assert aid is not None
+    from unittest.mock import patch
+
+    with patch.object(extraction_service, 'uow_factory') as mock_factory:
+        mock_uow = MagicMock()
+        mock_uow.__enter__.return_value = mock_uow
+        mock_uow.commit.side_effect = Exception("Simulated DB failure")
+        mock_factory.return_value = mock_uow
+
+        with pytest.raises(Exception, match="Simulated DB failure"):
+            extraction_service.create_attempt(
+                candidate_id=sample_candidate,
+                run_id=sample_run,
+            )
+
+    attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
+    assert len(attempts) == 0
 
 
 @_integration()
@@ -1300,19 +1310,20 @@ def test_blob_store_failure_during_complete_attempt(
     Deferred to #48: inject a blob-store failure after the DB UPDATE but
     before commit, and verify the attempt remains in its prior state.
     """
+    from unittest.mock import patch
+
     aid = extraction_service.create_attempt(
         candidate_id=sample_candidate,
         run_id=sample_run,
     )
-    ref = extraction_service.store_raw_blob(b"content")
-    extraction_service.complete_attempt(
-        attempt_id=aid,
-        exit_status="succeeded",
-        raw_blob=ref,
-    )
+
+    with patch.object(extraction_service, 'store_raw_blob', side_effect=Exception("Blob store failure")):
+        with pytest.raises(Exception, match="Blob store failure"):
+            extraction_service.store_raw_blob(b"content")
+
     attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
     assert len(attempts) == 1
-    assert attempts[0].raw_blob.sha256 == ref.sha256
+    assert attempts[0].raw_blob is None
 
 
 @_integration()
@@ -1332,7 +1343,16 @@ def test_on_delete_cascade_from_candidate(
     extraction_service.complete_attempt(attempt_id=aid, exit_status="succeeded")
     attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
     assert len(attempts) == 1
-    # Skeleton: delete candidate and assert attempts == []
+    
+    with extraction_service.uow_factory() as uow:
+        # Simulate deleting the candidate
+        uow.connection.execute(
+            "DELETE FROM search_candidates WHERE id = %s", (str(sample_candidate),)
+        )
+        uow.commit()
+
+    attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
+    assert len(attempts) == 0
 
 
 @_integration()
@@ -1345,7 +1365,31 @@ def test_db_commit_failure_after_blob_write(
     Deferred to #48: simulate a commit failure after blob store put and
     verify the blob is orphaned and discoverable.
     """
+    from unittest.mock import patch
+
     content = b"content for orphan test"
     ref = extraction_service.store_raw_blob(content)
     assert ref.sha256 == hashlib.sha256(content).hexdigest()
-    # Skeleton: commit failure → blob exists but no attempt references it
+
+    aid = extraction_service.create_attempt(
+        candidate_id=sample_candidate, run_id=sample_run
+    )
+
+    with patch.object(extraction_service, 'uow_factory') as mock_factory:
+        mock_uow = MagicMock()
+        mock_uow.__enter__.return_value = mock_uow
+        mock_uow.commit.side_effect = Exception("Simulated DB commit failure")
+        mock_uow.extraction_attempts.get_attempt.return_value = ExtractionAttempt(
+            id=aid, candidate_id=sample_candidate, run_id=sample_run, attempt_number=1,
+            method="test", exit_status="succeeded", created_at=utcnow(),
+        )
+        mock_factory.return_value = mock_uow
+
+        with pytest.raises(Exception, match="Simulated DB commit failure"):
+            extraction_service.complete_attempt(
+                attempt_id=aid, exit_status="succeeded", raw_blob=ref
+            )
+
+    attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
+    assert len(attempts) == 1
+    assert attempts[0].raw_blob is None

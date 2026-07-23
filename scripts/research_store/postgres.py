@@ -191,8 +191,8 @@ class PostgresUnitOfWork:
                 prior = cur.fetchone()
                 cur.execute(
                     """INSERT INTO asset_snapshots(source_id,requested_url,final_url,retrieved_at,http_status,etag,last_modified,mime_type,
-                    content_sha256,raw_blob_uri,raw_byte_length,firecrawl_version,crawl_options,parent_snapshot_id)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                    content_sha256,raw_blob_uri,raw_byte_length,firecrawl_version,crawl_options,parent_snapshot_id,extraction_attempt_id)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                     (
                         source_id,
                         request.requested_url,
@@ -208,6 +208,7 @@ class PostgresUnitOfWork:
                         request.firecrawl_version,
                         json.dumps(request.crawl_options),
                         prior[0] if prior else None,
+                        request.extraction_attempt_id,
                     ),
                 )
                 snapshot_id = cur.fetchone()[0]
@@ -235,8 +236,8 @@ class PostgresUnitOfWork:
             else:
                 cur.execute(
                     """INSERT INTO documents(snapshot_id,title,published_at,normalized_markdown,normalized_text,parser_name,
-                    parser_version,normalization_version,document_sha256,metadata)
-                    VALUES(%s,%s,%s,%s,%s,'markdown',%s,%s,%s,%s) RETURNING id""",
+                    parser_version,normalization_version,document_sha256,metadata,extraction_attempt_id)
+                    VALUES(%s,%s,%s,%s,%s,'markdown',%s,%s,%s,%s,%s) RETURNING id""",
                     (
                         snapshot_id,
                         request.title,
@@ -247,6 +248,7 @@ class PostgresUnitOfWork:
                         normalization_version,
                         document_hash,
                         json.dumps(request.metadata),
+                        request.extraction_attempt_id,
                     ),
                 )
                 document_id = cur.fetchone()[0]
