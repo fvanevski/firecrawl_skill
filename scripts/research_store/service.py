@@ -81,7 +81,15 @@ class CorpusService:
         )
 
     def _parse_content(self, raw: bytes, mime_type: str | None) -> list:
-        """Parse content using the typed parser registry or legacy fallback.
+        """Parse content using the typed parser registry with HTML fallback.
+
+        Selection order:
+        1. Typed parser from the registry (e.g. ``HtmlMainContentParser``
+           for ``text/html``).
+        2. When the primary HTML parser fails, try the legacy
+           ``HtmlNormalizedParser`` as an intermediate fallback.
+        3. When both HTML parsers fail, fall back to the legacy
+           ``structural_blocks()`` regex parser (Markdown-only).
 
         Args:
             raw: Raw byte payload.
@@ -113,22 +121,90 @@ class CorpusService:
                 return [b.to_legacy_block() for b in parse_result.blocks]
             except (UnsupportedFormatError, ParserSelectionError):
                 raise
-            except (ValueError, KeyError, AttributeError, ImportError, json.JSONDecodeError) as exc:
-                # Expected parser failures — fall through to legacy
+            except (
+                ValueError,
+                KeyError,
+                AttributeError,
+                ImportError,
+                json.JSONDecodeError,
+            ) as exc:
+                # Expected parser failures — try HTML normalized fallback
+                # before falling through to legacy regex
+                if self._is_html_content(mime_type, raw):
+                    logging.getLogger(__name__).debug(
+                        "Primary HTML parser failed (%s), trying normalized HTML fallback: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
+                    normalized_result = self._try_normalized_html(raw, mime_type)
+                    if normalized_result is not None:
+                        return normalized_result
                 logging.getLogger(__name__).debug(
                     "Typed parser failed (%s), falling back to legacy: %s",
                     type(exc).__name__,
                     exc,
                 )
             except Exception as exc:
-                # Unexpected errors — log but still fall back to legacy
+                # Unexpected errors — try HTML normalized fallback
+                # before falling through to legacy regex
+                if self._is_html_content(mime_type, raw):
+                    logging.getLogger(__name__).exception(
+                        "Unexpected parser error, trying normalized HTML fallback: %s",
+                        exc,
+                    )
+                    normalized_result = self._try_normalized_html(raw, mime_type)
+                    if normalized_result is not None:
+                        return normalized_result
                 logging.getLogger(__name__).exception(
                     "Unexpected parser error, falling back to legacy: %s", exc
                 )
 
+        if self._is_html_content(mime_type, raw):
+            raise ValueError("HTML parsing failed for both primary and fallback parsers")
+
         # Legacy fallback: Markdown-only structural parser
         text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
         return structural_blocks(text)
+
+    @staticmethod
+    def _is_html_content(mime_type: str | None, raw: bytes) -> bool:
+        """Return ``True`` when *raw* appears to be HTML content."""
+        if mime_type is not None:
+            lower = mime_type.lower().split(";")[0].strip()
+            if lower in ("text/html", "application/xhtml+xml"):
+                return True
+        # Content sniff: check for HTML markers in the first 512 bytes
+        if raw:
+            snippet = raw[:512].decode("utf-8", errors="replace").lower()
+            html_markers = (
+                "<!doctype",
+                "<html",
+                "<head",
+                "<body",
+                "<main",
+                "<article",
+            )
+            return any(snippet.startswith(m) for m in html_markers)
+        return False
+
+    def _try_normalized_html(self, raw: bytes, mime_type: str | None) -> list | None:
+        """Try the legacy HtmlNormalizedParser as an intermediate fallback.
+
+        Returns a list of legacy ``Block`` instances on success, or
+        ``None`` when the normalized parser also fails.
+        """
+        try:
+            from .html_parser import HtmlNormalizedParser
+
+            parser = HtmlNormalizedParser()
+            parse_result = parser.parse(raw, mime_type=mime_type)
+            if parse_result.success and parse_result.blocks:
+                return [b.to_legacy_block() for b in parse_result.blocks]
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Normalized HTML fallback also failed"
+            )
+        return None
 
     def ingest_batch(
         self,
@@ -630,7 +706,11 @@ class ClaimManifestService:
                     inserted_links += 1
                 except Exception as exc:
                     exc_str = str(exc).lower()
-                    if "unique constraint" in exc_str or "uk_claim_evidence_links" in exc_str or "duplicate key" in exc_str:
+                    if (
+                        "unique constraint" in exc_str
+                        or "uk_claim_evidence_links" in exc_str
+                        or "duplicate key" in exc_str
+                    ):
                         inserted_links += 1
                     else:
                         failed_links.append(
@@ -736,7 +816,9 @@ def compute_audit_identity_hash(
     if empty:
         raise ValueError("audit identity fields must be non-empty: " + ", ".join(empty))
     normalized_stages = sorted(set(stage_set))
-    if not normalized_stages or any(not stage or not stage.strip() for stage in normalized_stages):
+    if not normalized_stages or any(
+        not stage or not stage.strip() for stage in normalized_stages
+    ):
         raise ValueError("stage_set must contain non-empty stages")
     identity = {
         "identity_version": AUDIT_IDENTITY_VERSION,
@@ -757,7 +839,16 @@ def _extract_evidence_references(obj: Any) -> list[str]:
     if isinstance(obj, dict):
         for k, v in obj.items():
             k_lower = str(k).lower()
-            if k_lower in ("evidence_refs", "evidence_references", "claim_id", "claim_ids", "passage_id", "passage_ids", "snapshot_id", "snapshot_ids"):
+            if k_lower in (
+                "evidence_refs",
+                "evidence_references",
+                "claim_id",
+                "claim_ids",
+                "passage_id",
+                "passage_ids",
+                "snapshot_id",
+                "snapshot_ids",
+            ):
                 if isinstance(v, (list, tuple, set)):
                     refs.extend([str(item) for item in v if item])
                 elif v:

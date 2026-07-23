@@ -21,12 +21,13 @@ output, offset preservation, and version tracking.
 
 ## Built-in parsers
 
-| Parser class             | MIME type(s)              | Version        |
-|--------------------------|---------------------------|----------------|
-| ``MarkdownParser``       | ``text/markdown``         | ``markdown-v1`` |
-| ``HtmlNormalizedParser`` | ``text/html``             | ``html-normalized-v1`` |
-| ``JsonParser``           | ``application/json``      | ``json-v1``    |
-| ``PlainTextParser``      | ``text/plain``            | ``text-v1``    |
+| Parser class               | MIME type(s)              | Version              |
+|----------------------------|---------------------------|----------------------|
+| ``MarkdownParser``         | ``text/markdown``         | ``markdown-v1``      |
+| ``HtmlMainContentParser``  | ``text/html``             | ``html-main-content-v1`` |
+| ``HtmlNormalizedParser``   | ``text/html-fallback``    | ``html-normalized-v1`` |
+| ``JsonParser``             | ``application/json``      | ``json-v1``          |
+| ``PlainTextParser``        | ``text/plain``            | ``text-v1``          |
 
 ## Extension points
 

@@ -26,7 +26,8 @@ can log or audit which parser was chosen and why.
 | MIME type / prefix        | Parser class              |
 |---------------------------|---------------------------|
 | ``text/markdown``         | ``MarkdownParser``        |
-| ``text/html``             | ``HtmlNormalizedParser``  |
+| ``text/html``             | ``HtmlMainContentParser`` |
+| ``text/html-fallback``    | ``HtmlNormalizedParser``  |
 | ``application/json``      | ``JsonParser``            |
 | ``text/plain``            | ``PlainTextParser``       |
 | ``application/pdf``       | Extension point (stub)    |
@@ -261,10 +262,18 @@ def build_default_registry() -> ParserRegistry:
         mime_types=["text/markdown", "text/x-markdown"],
     )
 
-    # HTML
+    # HTML — main-content parser (preferred) + normalized fallback
+    from .html_main_content import HtmlMainContentParser
+
+    registry.register(
+        HtmlMainContentParser,
+        mime_types=["text/html", "application/xhtml+xml"],
+    )
+    # Register the normalized parser as a secondary fallback for HTML.
+    # It is used when the main-content parser fails (handled in service layer).
     registry.register(
         HtmlNormalizedParser,
-        mime_types=["text/html", "application/xhtml+xml"],
+        mime_types=["text/html-fallback", "application/xhtml+xml-fallback"],
     )
 
     # JSON — with content sniffer for MIME-type-less selection
