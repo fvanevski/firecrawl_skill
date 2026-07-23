@@ -1,89 +1,26 @@
-"""Add audit identity hash and idempotency constraint.
+"""Add target-scoped audit identity and completed-assessment idempotency.
 
-This migration introduces the audit identity hash column and partial
-unique constraint required by issue #34 (Idempotent audit scheduling).
+Revision 0018 constrained assessments only by target hash. That prevented a
+new assessment when evaluator, prompt, policy, model, or stage configuration
+changed. This migration replaces that rule with a target-scoped identity for
+completed assessments.
 
-## Schema changes
+Partial and failed assessments are retained as historical attempts and are not
+reused. A later completed retry can therefore coexist with them.
 
-### New column on ``audit_assessments``
-
-* ``audit_identity_hash`` — text, SHA-256 hex digest of the canonical
-  JSON representation of the audit identity components:
-  ``target_hash``, ``evaluator_version``, ``prompt_template_version``,
-  ``model_fingerprint``, ``policy_version``, and ``stage_set`` (sorted).
-  This hash is the deterministic key that identifies an "equivalent"
-  audit.  Two assessments with the same ``audit_identity_hash`` are
-  considered equivalent and the scheduler reuses the existing one.
-
-### New partial unique constraint
-
-* ``uk_audit_assessments_identity`` — UNIQUE
-  ``(audit_identity_hash)`` WHERE ``status != 'failed'``.
-
-  This partial index enforces idempotency at the database level:
-  concurrent equivalent audit requests cannot create multiple active
-  assessments.  Failed assessments are excluded so that a retried audit
-  can still be created.
-
-### New index
-
-* ``idx_audit_assessments_identity_hash`` — on
-  ``audit_identity_hash`` for fast lookup during reuse checks.
-
-### Backfill
-
-Existing assessments from migration 0018 are backfilled with an MD5
-hash derived from their existing columns.  The backfill uses MD5
-because it is universally available in PostgreSQL without extensions.
-New assessments use SHA-256 computed at the application layer.  The
-hash algorithm difference means legacy backfilled hashes will never
-collide with new SHA-256 hashes, so the partial unique constraint is
-safe.
-
-**Legacy rows become orphaned under the constraint.**  Because the
-backfilled MD5 hash does not match the SHA-256 hash that Python
-would compute for the same six canonical fields, a re-audit of a
-legacy target will produce a new SHA-256 hash.  The partial unique
-constraint will not block this new row (its hash differs from the
-legacy MD5 hash), so the legacy row and the new row coexist as
-separate rows.  ``schedule_assessment()`` will always create a new
-row for a re-audited legacy target — it will never reuse the
-backfilled MD5 row.  This is intentional: the legacy MD5 hash is not
-a valid fingerprint and must not be treated as equivalent to a
-genuine SHA-256 identity.
-
-## Deterministic identity policy (PRD Section 17.3)
-
-Semantic outputs may be reused only when all of the following match:
-
-* stage (represented by ``stage_set``);
-* prompt-template version (``prompt_template_version``);
-* schema version (implicit in ``evaluator_version``);
-* provider and model fingerprint (``model_fingerprint``);
-* normalized input hash (``target_hash``);
-* applicable policy version (``policy_version``).
-
-The ``audit_identity_hash`` is computed from exactly these six fields.
-
-## Import/export behavior
-
-* ``audit-export`` — includes ``audit_identity_hash`` in the export
-  JSON so downstream consumers can detect equivalence.
-* ``audit-query`` — ``audit_identity_hash`` is included in result rows.
-
-## Forward-repair
-
-If this migration is interrupted, re-run ``upgrade head`` from the
-last successful revision.  The migration uses ``IF NOT EXISTS`` guards
-for all DDL.
-
-## Downgrade
-
-Migrations are forward-only.  Restore PostgreSQL from the pre-v19
-recovery boundary or apply a forward-repair migration.
+The Python backfill intentionally uses the same canonical JSON and SHA-256
+implementation as research_store.service.compute_audit_identity_hash. Keeping
+the helper local makes the migration immutable while tests lock the two
+implementations together.
 """
 
+from __future__ import annotations
+
+from hashlib import sha256
+import json
+
 from alembic import op
+import sqlalchemy as sa
 
 
 revision = "0019_audit_identity"
@@ -91,117 +28,162 @@ down_revision = "0018_audit_assessments"
 branch_labels = None
 depends_on = None
 
+_IDENTITY_VERSION = "audit-identity-v1"
+_LEGACY_MODEL_VERSION = "legacy-audit-model-v1"
+
+
+def _canonical_hash(
+    *,
+    target_hash,
+    evaluator_version,
+    prompt_template_version,
+    policy_version,
+    stage_set,
+    model_fingerprint,
+):
+    identity = {
+        "identity_version": _IDENTITY_VERSION,
+        "evaluator_version": evaluator_version,
+        "model_fingerprint": model_fingerprint,
+        "policy_version": policy_version,
+        "prompt_template_version": prompt_template_version,
+        "stage_set": sorted(set(stage_set)),
+        "target_hash": target_hash,
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _legacy_model_fingerprint(row):
+    identity = {
+        "implementation_version": _LEGACY_MODEL_VERSION,
+        "provider": row["provider"] or "unknown",
+        "model": row["model"] or "unknown",
+        "evaluator_version": row["evaluator_version"],
+        "prompt_template_version": row["prompt_template_version"],
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
 
 def upgrade():
-    # ----------------------------------------------------------------
-    # 1. Add audit_identity_hash column (nullable initially for backfill)
-    # ----------------------------------------------------------------
+    bind = op.get_bind()
+
     op.execute(
         """
         ALTER TABLE audit_assessments
-        ADD COLUMN IF NOT EXISTS audit_identity_hash text;
+        ADD COLUMN IF NOT EXISTS audit_identity_hash text
         """
     )
 
-    # ----------------------------------------------------------------
-    # 2. Backfill existing rows with a deterministic hash.
-    #    We use md5() because it is universally available in PostgreSQL.
-    #    New rows will use SHA-256 computed in Python; the different
-    #    algorithm means legacy hashes never collide with new ones.
-    #    Canonical JSON: sort keys, sort stage_set, null-safe handling.
-    # ----------------------------------------------------------------
-    op.execute(
-        """
-        UPDATE audit_assessments
-        SET audit_identity_hash = md5(
-            COALESCE(target_hash, '') || '|' ||
-            COALESCE(evaluator_version, '') || '|' ||
-            COALESCE(prompt_template_version, '') || '|' ||
-            COALESCE(model_fingerprint, '') || '|' ||
-            COALESCE(policy_version, '') || '|' ||
-            array_to_string(
-                (SELECT json_agg(s) FROM (
-                    SELECT unnest(stage_set) AS s ORDER BY s
-                ) sub),
-                ','
+    rows = list(
+        bind.execute(
+            sa.text(
+                """
+                SELECT id, target_hash, evaluator_version,
+                       prompt_template_version, policy_version, stage_set,
+                       model_fingerprint, provider, model
+                FROM audit_assessments
+                WHERE audit_identity_hash IS NULL
+                   OR length(audit_identity_hash) <> 64
+                   OR audit_identity_hash !~ '^[0-9a-f]{64}$'
+                   OR model_fingerprint IS NULL
+                   OR length(trim(model_fingerprint)) = 0
+                ORDER BY id
+                """
             )
-        )
-        WHERE audit_identity_hash IS NULL;
-        """
+        ).mappings()
     )
 
-    # ----------------------------------------------------------------
-    # 3. Add NOT NULL constraint
-    # ----------------------------------------------------------------
+    for row in rows:
+        fingerprint = row["model_fingerprint"] or _legacy_model_fingerprint(row)
+        identity_hash = _canonical_hash(
+            target_hash=row["target_hash"],
+            evaluator_version=row["evaluator_version"],
+            prompt_template_version=row["prompt_template_version"],
+            policy_version=row["policy_version"],
+            stage_set=list(row["stage_set"]),
+            model_fingerprint=fingerprint,
+        )
+        bind.execute(
+            sa.text(
+                """
+                UPDATE audit_assessments
+                SET model_fingerprint = :model_fingerprint,
+                    audit_identity_hash = :audit_identity_hash
+                WHERE id = :id
+                """
+            ),
+            {
+                "id": row["id"],
+                "model_fingerprint": fingerprint,
+                "audit_identity_hash": identity_hash,
+            },
+        )
+
     op.execute(
         """
         ALTER TABLE audit_assessments
-        ALTER COLUMN audit_identity_hash SET NOT NULL;
+        DROP CONSTRAINT IF EXISTS uk_audit_assessments_target
         """
     )
-
-    # ----------------------------------------------------------------
-    # 4. Add NOT NULL check constraint (idempotent)
-    # ----------------------------------------------------------------
+    op.execute(
+        """
+        ALTER TABLE audit_assessments
+        ALTER COLUMN model_fingerprint SET NOT NULL,
+        ALTER COLUMN audit_identity_hash SET NOT NULL
+        """
+    )
     op.execute(
         """
         DO $$
         BEGIN
           IF NOT EXISTS (
             SELECT 1 FROM pg_constraint
+            WHERE conname = 'chk_audit_assessments_model_fingerprint'
+              AND conrelid = 'audit_assessments'::regclass
+          ) THEN
+            ALTER TABLE audit_assessments
+            ADD CONSTRAINT chk_audit_assessments_model_fingerprint
+            CHECK (length(trim(model_fingerprint)) > 0);
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
             WHERE conname = 'chk_audit_assessments_audit_identity_hash'
+              AND conrelid = 'audit_assessments'::regclass
           ) THEN
             ALTER TABLE audit_assessments
             ADD CONSTRAINT chk_audit_assessments_audit_identity_hash
-            CHECK (length(trim(audit_identity_hash)) > 0);
+            CHECK (
+              length(audit_identity_hash) = 64
+              AND audit_identity_hash ~ '^[0-9a-f]{64}$'
+            );
           END IF;
         END $$;
         """
     )
-
-    # ----------------------------------------------------------------
-    # 5. Add partial unique constraint (WHERE status != 'failed')
-    #    Failed assessments are excluded so retried audits can be created.
-    # ----------------------------------------------------------------
     op.execute(
         """
-        ALTER TABLE audit_assessments
-        ADD CONSTRAINT uk_audit_assessments_identity
-        UNIQUE (audit_identity_hash)
-        WHERE status != 'failed';
+        CREATE UNIQUE INDEX IF NOT EXISTS
+          uk_audit_assessments_completed_identity
+        ON audit_assessments (
+          run_id, target_type, target_id, audit_identity_hash
+        )
+        WHERE status = 'completed'
         """
     )
-
-    # ----------------------------------------------------------------
-    # 6. Add lookup index
-    # ----------------------------------------------------------------
     op.execute(
         """
-        DO $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM pg_indexes
-            WHERE tablename = 'audit_assessments'
-              AND indexname = 'idx_audit_assessments_identity_hash'
-          ) THEN
-            CREATE INDEX idx_audit_assessments_identity_hash
-              ON audit_assessments (audit_identity_hash);
-          END IF;
-        END $$;
+        INSERT INTO schema_migrations(version)
+        VALUES (19)
+        ON CONFLICT DO NOTHING
         """
-    )
-
-    # ----------------------------------------------------------------
-    # 7. Record migration
-    # ----------------------------------------------------------------
-    op.execute(
-        "INSERT INTO schema_migrations(version) VALUES (19) ON CONFLICT DO NOTHING"
     )
 
 
 def downgrade():
     raise RuntimeError(
         "Research workflow migrations are forward-only; restore PostgreSQL "
-        "from the pre-v19 recovery boundary or apply a forward repair "
-        "migration."
+        "from the pre-v19 recovery boundary or apply a forward repair migration."
     )
+
