@@ -435,3 +435,41 @@ class TestReconciliation:
         assert report.imports == []
         assert report.conflict_summary == {}
         assert report.omission_summary == {}
+
+
+# ---------------------------------------------------------------------------
+# Relative path hash (N3/R4)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeDirSha256RelativePath:
+    def test_same_files_different_subdirs_different_hashes(self, tmp_path):
+        """Two catalogs with same-named files in different subdirs produce different hashes."""
+        root_a = tmp_path / "a"
+        root_b = tmp_path / "b"
+        root_a.mkdir()
+        root_b.mkdir()
+
+        # Same content, different subdirectory structure
+        (root_a / "runs" / "test.json").parent.mkdir(parents=True)
+        (root_a / "runs" / "test.json").write_text('{"a": 1}')
+
+        (root_b / "invocations" / "test.json").parent.mkdir(parents=True)
+        (root_b / "invocations" / "test.json").write_text('{"a": 1}')
+
+        h_a = _compute_dir_sha256(root_a)
+        h_b = _compute_dir_sha256(root_b)
+        assert h_a != h_b
+
+    def test_same_content_same_structure_same_hash(self, tmp_path):
+        """Identical catalogs produce identical hashes."""
+        root1 = tmp_path / "1"
+        root2 = tmp_path / "2"
+        root1.mkdir()
+        root2.mkdir()
+
+        for root in (root1, root2):
+            (root / "runs").mkdir()
+            (root / "runs" / "test.json").write_text('{"a": 1}')
+
+        assert _compute_dir_sha256(root1) == _compute_dir_sha256(root2)

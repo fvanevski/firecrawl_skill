@@ -2273,10 +2273,13 @@ def main(argv=None):
             print(dumps(report_dict))
 
         # Exit code: 0 = success, 1 = conflicts/omissions, 2 = errors
-        if report.errors:
-            raise SystemExit(2)
-        elif report.records_conflicting > 0 or report.records_omitted > 0:
+        # Check conflicts/omissions (including pending records) before
+        # general errors so that a warning about pending records does not
+        # escalate to exit code 2.
+        if report.records_conflicting > 0 or report.records_omitted > 0:
             raise SystemExit(1)
+        elif report.errors:
+            raise SystemExit(2)
         elif report.records_malformed > 0 and report.records_inserted == 0:
             raise SystemExit(2)
         return 0

@@ -2951,3 +2951,130 @@ def test_catalog_import_dry_run_pending_records(tmp_path, monkeypatch):
 
     # Omitted count should include the pending event
     assert report.records_omitted >= 1
+
+
+def test_catalog_import_apply_all_malformed_raises(tmp_path, monkeypatch):
+    """Verify apply() raises ImportApplyError when all records are malformed."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    from research_store.catalog_import import (
+        CatalogImportService,
+        ImportApplyError,
+    )
+    from research_store.container import build_catalog_import_service
+
+    service = build_catalog_import_service()
+    import_svc = CatalogImportService(
+        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
+    )
+
+    # Create a Catalog with only malformed records (bad schema version + bad ID)
+    root = tmp_path / "catalog"
+    runs_dir = root / "runs"
+    runs_dir.mkdir()
+    run_data = {
+        "schema_version": 3,
+        "research_run_id": "not-a-valid-id",
+    }
+    (runs_dir / "bad.json").write_text(json.dumps(run_data))
+
+    with pytest.raises(ImportApplyError, match="all records are malformed"):
+        import_svc.apply(root)
+
+
+def test_catalog_import_cli_dry_run(monkeypatch, capsys, tmp_path):
+    """Verify catalog-import CLI produces JSON output in dry-run mode."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    from research_store import cli as store_cli
+
+    # Create a minimal Catalog root
+    root = tmp_path / "catalog"
+    runs_dir = root / "runs"
+    runs_dir.mkdir(parents=True)
+    run_id = "fr_" + "a" * 32
+    run_data = {
+        "schema_version": 5,
+        "research_run_id": run_id,
+        "objective": "Test CLI dry-run",
+    }
+    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
+
+    assert store_cli.main(["catalog-import", str(root)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["dry_run"] is True
+    assert report["total_records"] == 1
+    assert report["valid_records"] == 1
+    assert report["records_inserted"] == 1
+    assert report["records_malformed"] == 0
+
+
+def test_catalog_import_cli_reconcile(monkeypatch, capsys, tmp_path):
+    """Verify catalog-reconcile CLI produces JSON output."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    from research_store import cli as store_cli
+    from research_store.catalog_import import CatalogImportService
+    from research_store.container import build_catalog_import_service
+
+    # First do an import so there is history to reconcile
+    service = build_catalog_import_service()
+    import_svc = CatalogImportService(
+        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
+    )
+    root = tmp_path / "catalog"
+    runs_dir = root / "runs"
+    runs_dir.mkdir(parents=True)
+    run_id = "fr_" + "b" * 32
+    run_data = {
+        "schema_version": 5,
+        "research_run_id": run_id,
+        "objective": "Test reconcile CLI",
+    }
+    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
+    import_svc.apply(root)
+
+    assert store_cli.main(["catalog-reconcile"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["total_imports"] >= 1
+    assert len(report["imports"]) >= 1
+
+
+def test_catalog_import_apply_pending_warning(tmp_path, monkeypatch):
+    """Verify apply() includes a warning when pending records are present."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    from research_store.catalog_import import CatalogImportService
+    from research_store.container import build_catalog_import_service
+
+    service = build_catalog_import_service()
+    import_svc = CatalogImportService(
+        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
+    )
+
+    # Create a Catalog root with a run and an event
+    root = tmp_path / "catalog"
+    runs_dir = root / "runs"
+    runs_dir.mkdir()
+    run_id = "fr_" + "c" * 32
+    run_data = {
+        "schema_version": 5,
+        "research_run_id": run_id,
+        "objective": "Test pending warning",
+    }
+    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
+
+    events_file = root / "events.jsonl"
+    events_file.write_text(
+        json.dumps({"schema_version": 5, "event_id": "fe_" + "d" * 32, "event": "test"})
+        + "\n"
+    )
+
+    report = import_svc.apply(root)
+
+    # Run should be inserted
+    assert report.records_inserted >= 1
+    # Event should be omitted (pending)
+    assert report.records_omitted >= 1
+    # Report should include a warning about pending records
+    assert any("additional context" in err for err in report.errors)

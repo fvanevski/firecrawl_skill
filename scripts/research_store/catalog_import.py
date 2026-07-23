@@ -100,6 +100,8 @@ def _compute_dir_sha256(root: Path) -> str:
 
     Includes all ``.json`` files and ``events.jsonl`` so that two catalogs
     with identical JSON but different event counts produce different hashes.
+    Uses relative paths so that two catalogs with the same files in different
+    subdirectories produce different hashes.
     """
     h = hashlib.sha256()
     for path in sorted(root.rglob("*")):
@@ -108,7 +110,11 @@ def _compute_dir_sha256(root: Path) -> str:
         # Include all .json files and the events.jsonl file (which is
         # scanned by _parse_events_file but was previously excluded).
         if path.name.endswith(".json") or path.name == "events.jsonl":
-            h.update(path.name.encode())
+            # N3/R4 — use relative path instead of basename for a more
+            # robust hash that distinguishes same-named files in different
+            # subdirectories.
+            rel = str(path.relative_to(root))
+            h.update(rel.encode())
             try:
                 h.update(path.read_bytes())
             except OSError:
@@ -805,6 +811,18 @@ class CatalogImportService:
                 f"{report.records_inserted} insertable"
             )
 
+        # R1 — Warn about pending records that cannot be imported without
+        # additional context (run_id for events/claims, identity hash for
+        # assessments).  These are recorded as "omitted" in the tracking
+        # table but the user must see an explicit warning.
+        pending_count = sum(1 for m in report.mappings if m.status == "pending")
+        if pending_count > 0:
+            report.errors.append(
+                f"{pending_count} record(s) require additional context "
+                "(run_id for events/claims, identity hash for assessments) "
+                "and were not imported."
+            )
+
         # Perform actual PostgreSQL writes
         try:
             with self.uow_factory() as uow:
@@ -813,8 +831,9 @@ class CatalogImportService:
                 # Create import tracking record
                 cur.execute(
                     """INSERT INTO catalog_import_tracking (
-                        import_run_id, catalog_root, source_state_sha256, status
-                    ) VALUES (%s, %s, %s, 'running')
+                        import_run_id, catalog_root, source_state_sha256,
+                        status, dry_run
+                    ) VALUES (%s, %s, %s, 'running', false)
                     RETURNING id""",
                     (
                         str(import_run_id),
@@ -1038,22 +1057,10 @@ class CatalogImportService:
                 "concurrent deletion? (should not happen)"
             )
 
-        elif catalog_type == CATALOG_EVENT_TYPE:
-            # Events need a run_id; skip if not available
-            raise ImportApplyError(
-                f"Event {catalog_id} requires a run_id; "
-                "event imports require additional context"
-            )
-
-        elif catalog_type == CATALOG_ASSESSMENT_TYPE:
-            raise ImportApplyError(
-                f"Assessment {catalog_id} requires additional validation"
-            )
-
-        elif catalog_type == CATALOG_CLAIM_TYPE:
-            raise ImportApplyError(f"Claim {catalog_id} requires a run_id context")
-
-        raise ImportApplyError(f"Unknown catalog type: {catalog_type}")
+        # N1 — Events, assessments, and claims are marked "pending" by
+        # dry_run() and never reach this method through the normal apply
+        # loop.  Any unexpected type is treated as unknown.
+        raise ImportApplyError(f"Unknown or unsupported catalog type: {catalog_type}")
 
     # ------------------------------------------------------------------
     # Reconciliation
@@ -1074,7 +1081,8 @@ class CatalogImportService:
                 """SELECT id, import_run_id, catalog_root, source_state_sha256,
                           status, records_inserted, records_skipped,
                           records_conflicting, records_malformed,
-                          records_omitted, started_at, completed_at
+                          records_omitted, started_at, completed_at,
+                          dry_run
                    FROM catalog_import_tracking
                    ORDER BY started_at DESC"""
             )
@@ -1092,6 +1100,7 @@ class CatalogImportService:
                 "records_omitted",
                 "started_at",
                 "completed_at",
+                "dry_run",
             ]
 
             imports = []

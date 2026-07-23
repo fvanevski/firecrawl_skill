@@ -175,6 +175,7 @@ def upgrade():
           records_omitted             bigint NOT NULL DEFAULT 0,
           started_at                  timestamptz NOT NULL DEFAULT now(),
           completed_at                timestamptz,
+          dry_run                     boolean NOT NULL DEFAULT false,
 
           PRIMARY KEY (id),
           CONSTRAINT chk_catalog_import_tracking_status
