@@ -719,14 +719,15 @@ def _cmd_normalize(config, args) -> int:
                 block_cur.execute(
                     """INSERT INTO normalized_blocks
                        (id, source_block_id, document_id, ordinal, block_type,
-                        text, heading_path, disposition, rule_version,
-                        transformation_reason, parser_version)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (source_block_id) DO UPDATE SET
+                        text, heading_path, char_start, char_end, disposition,
+                        rule_version, transformation_reason, parser_version)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (source_block_id, rule_version) DO UPDATE SET
                          disposition = EXCLUDED.disposition,
-                         rule_version = EXCLUDED.rule_version,
                          transformation_reason = EXCLUDED.transformation_reason,
                          text = EXCLUDED.text,
+                         char_start = EXCLUDED.char_start,
+                         char_end = EXCLUDED.char_end,
                          parser_version = EXCLUDED.parser_version""",
                     (
                         str(nb.id),
@@ -736,13 +737,14 @@ def _cmd_normalize(config, args) -> int:
                         nb.block_type,
                         nb.text if nb.disposition != "remove" else "",
                         list(nb.heading_path) if nb.heading_path else None,
+                        nb.char_start,
+                        nb.char_end,
                         nb.disposition,
                         nb.rule_version,
                         nb.transformation_reason,
                         nb.parser_version,
                     ),
                 )
-            conn.commit()
 
         with conn.cursor() as transform_cur:
             for tr in norm_result.transformations:
@@ -751,7 +753,7 @@ def _cmd_normalize(config, args) -> int:
                        (id, normalized_block_id, rule_id, rule_version,
                         reason, before_text, after_text, confidence)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (id) DO UPDATE SET
+                       ON CONFLICT (normalized_block_id, rule_id) DO UPDATE SET
                          rule_id = EXCLUDED.rule_id,
                          reason = EXCLUDED.reason,
                          before_text = EXCLUDED.before_text,

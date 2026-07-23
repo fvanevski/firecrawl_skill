@@ -867,6 +867,8 @@ class NormalizedBlock:
     block_type: str
     text: str
     heading_path: tuple[str, ...] = ()
+    char_start: int | None = None
+    char_end: int | None = None
     disposition: str = "keep"
     rule_version: str = "normalization-v1"
     transformation_reason: str | None = None
@@ -888,10 +890,13 @@ class NormalizedBlock:
         block_type: str,
         text: str,
         heading_path: tuple[str, ...] = (),
+        char_start: int | None = None,
+        char_end: int | None = None,
         disposition: str = "keep",
         rule_version: str = "normalization-v1",
         transformation_reason: str | None = None,
         parser_version: str = "canonical-v1",
+        id: UUID | None = None,
     ) -> "NormalizedBlock":
         """Create a normalized block from a source block snapshot.
 
@@ -911,13 +916,15 @@ class NormalizedBlock:
             A new ``NormalizedBlock`` instance.
         """
         return cls(
-            id=uuid4(),
+            id=id or uuid4(),
             source_block_id=source_block_id,
             document_id=document_id,
             ordinal=ordinal,
             block_type=block_type,
             text=text,
             heading_path=heading_path,
+            char_start=char_start,
+            char_end=char_end,
             disposition=disposition,
             rule_version=rule_version,
             transformation_reason=transformation_reason,

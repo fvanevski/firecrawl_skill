@@ -78,7 +78,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from .domain import (
     NormalizedBlock,
@@ -401,6 +401,10 @@ class NormalizationService:
         if isinstance(heading_path, list):
             heading_path = tuple(heading_path)
 
+        char_start = getattr(block, "char_start", None)
+        char_end = getattr(block, "char_end", None)
+        nb_id = uuid4()
+
         disposition = "keep"
         reasons: list[str] = []
         transformations: list[TransformationRecord] = []
@@ -444,7 +448,7 @@ class NormalizationService:
                 disposition = "keep"
                 reasons.append("citation-preserved")
                 record = TransformationRecord.create(
-                    normalized_block_id=source_block_id or UUID(int=0),
+                    normalized_block_id=nb_id,
                     rule_id="preserve-citation",
                     reason="Citation reference detected — preserved",
                     before_text=text,
@@ -459,7 +463,7 @@ class NormalizationService:
                 disposition = "keep"
                 reasons.append("short-heading-preserved")
                 record = TransformationRecord.create(
-                    normalized_block_id=source_block_id or UUID(int=0),
+                    normalized_block_id=nb_id,
                     rule_id="preserve-short-heading",
                     reason="Short meaningful heading — preserved",
                     before_text=text,
@@ -474,7 +478,7 @@ class NormalizationService:
                 disposition = "keep"
                 reasons.append("footnote-preserved")
                 record = TransformationRecord.create(
-                    normalized_block_id=source_block_id or UUID(int=0),
+                    normalized_block_id=nb_id,
                     rule_id="preserve-footnote",
                     reason="Footnote reference detected — preserved",
                     before_text=text,
@@ -489,7 +493,7 @@ class NormalizationService:
                 disposition = "keep"
                 reasons.append("source-url-preserved")
                 record = TransformationRecord.create(
-                    normalized_block_id=source_block_id or UUID(int=0),
+                    normalized_block_id=nb_id,
                     rule_id="preserve-source-url",
                     reason="Source URL detected — preserved",
                     before_text=text,
@@ -521,7 +525,7 @@ class NormalizationService:
                     disposition = "suppress"
                     reasons.append("doc-type-footer")
                     record = TransformationRecord.create(
-                        normalized_block_id=source_block_id or UUID(int=0),
+                        normalized_block_id=nb_id,
                         rule_id="doc-type-footer-digest",
                         reason=f"Document-type-sensitive footer ({doc_type}) — suppressed, not removed",
                         before_text=text,
@@ -542,7 +546,7 @@ class NormalizationService:
                 disposition = "remove"
                 reasons.append("cookie-notice")
                 record = TransformationRecord.create(
-                    normalized_block_id=source_block_id or UUID(int=0),
+                    normalized_block_id=nb_id,
                     rule_id="strip-cookie-notice",
                     reason="Cookie policy / consent line detected",
                     before_text=text,
@@ -561,7 +565,7 @@ class NormalizationService:
                 disposition = "remove"
                 reasons.append("navigation")
                 record = TransformationRecord.create(
-                    normalized_block_id=source_block_id or UUID(int=0),
+                    normalized_block_id=nb_id,
                     rule_id="strip-navigation",
                     reason="Navigation-like line detected",
                     before_text=text,
@@ -580,7 +584,7 @@ class NormalizationService:
                 disposition = "remove"
                 reasons.append("social-links")
                 record = TransformationRecord.create(
-                    normalized_block_id=source_block_id or UUID(int=0),
+                    normalized_block_id=nb_id,
                     rule_id="strip-social-links",
                     reason="Social media link detected",
                     before_text=text,
@@ -599,7 +603,7 @@ class NormalizationService:
                 disposition = "remove"
                 reasons.append("boilerplate")
                 record = TransformationRecord.create(
-                    normalized_block_id=source_block_id or UUID(int=0),
+                    normalized_block_id=nb_id,
                     rule_id="strip-boilerplate-heading",
                     reason="Boilerplate heading / footer line detected",
                     before_text=text,
@@ -624,7 +628,7 @@ class NormalizationService:
                             disposition = "remove"
                             reasons.append("link-density-navigation")
                             record = TransformationRecord.create(
-                                normalized_block_id=source_block_id or UUID(int=0),
+                                normalized_block_id=nb_id,
                                 rule_id="strip-navigation",
                                 reason="Link-density navigation block detected",
                                 before_text=text,
@@ -639,7 +643,7 @@ class NormalizationService:
                 disposition = "keep"
                 reasons.append("no-change")
                 record = TransformationRecord.create(
-                    normalized_block_id=source_block_id or UUID(int=0),
+                    normalized_block_id=nb_id,
                     rule_id="no-change",
                     reason="No rule matched — block kept as-is",
                     before_text=text,
@@ -670,10 +674,13 @@ class NormalizationService:
                 block_type=block_type,
                 text="",
                 heading_path=heading_path,
+                char_start=char_start,
+                char_end=char_end,
                 disposition=disposition,
                 rule_version=NORMALIZATION_VERSION,
                 transformation_reason="; ".join(reasons) if reasons else "removed",
                 parser_version=parser_version,
+                id=nb_id,
             )
 
         # For keep/alter/suppress, return the normalized block
@@ -684,10 +691,13 @@ class NormalizationService:
             block_type=block_type,
             text=text,
             heading_path=heading_path,
+            char_start=char_start,
+            char_end=char_end,
             disposition=disposition,
             rule_version=NORMALIZATION_VERSION,
             transformation_reason="; ".join(reasons) if reasons else "no-change",
             parser_version=parser_version,
+            id=nb_id,
         )
 
     # ------------------------------------------------------------------

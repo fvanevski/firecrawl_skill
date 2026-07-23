@@ -97,6 +97,8 @@ def upgrade():
           block_type                  text NOT NULL,
           text                        text NOT NULL DEFAULT '',
           heading_path                text[],
+          char_start                  int,
+          char_end                    int,
           disposition                 text NOT NULL DEFAULT 'keep',
           rule_version                text NOT NULL DEFAULT 'normalization-v1',
           transformation_reason       text,
@@ -105,8 +107,8 @@ def upgrade():
           PRIMARY KEY (id),
           CONSTRAINT chk_normalized_blocks_disposition
             CHECK (disposition IN ('keep', 'alter', 'suppress', 'remove')),
-          CONSTRAINT uk_normalized_blocks_source_block
-            UNIQUE (source_block_id)
+          CONSTRAINT uk_normalized_blocks_source_block_rule
+            UNIQUE (source_block_id, rule_version)
         );
         """
     )
@@ -147,7 +149,7 @@ def upgrade():
         """
         CREATE TABLE IF NOT EXISTS transformation_records (
           id                          uuid NOT NULL DEFAULT gen_random_uuid(),
-          normalized_block_id         uuid REFERENCES document_blocks(id) ON DELETE CASCADE,
+          normalized_block_id         uuid REFERENCES normalized_blocks(id) ON DELETE CASCADE,
           rule_id                     text NOT NULL,
           rule_version                text NOT NULL DEFAULT 'normalization-v1',
           reason                      text NOT NULL DEFAULT '',
@@ -172,7 +174,9 @@ def upgrade():
               'no-change'
             )),
           CONSTRAINT chk_transformation_records_confidence
-            CHECK (confidence >= 0.0 AND confidence <= 1.0)
+            CHECK (confidence >= 0.0 AND confidence <= 1.0),
+          CONSTRAINT uk_transformation_records_block_rule
+            UNIQUE (normalized_block_id, rule_id)
         );
         """
     )
