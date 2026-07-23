@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import UUID
 
@@ -177,9 +177,9 @@ class ResearchRunService:
         """
         if self._event_service is None:
             from .invocation_events import EventService
+
             self._event_service = EventService(self.uow_factory)
         return self._event_service
-
 
     def create(
         self,
@@ -640,7 +640,10 @@ class ResearchRunService:
             return uow.runs.list_candidate_occurrences(candidate_id, run_id=run_id)
 
     def assign_duplicate_group(
-        self, candidate_ids: list[UUID], group_id: UUID | None = None, run_id: UUID | None = None
+        self,
+        candidate_ids: list[UUID],
+        group_id: UUID | None = None,
+        run_id: UUID | None = None,
     ) -> UUID:
         with self.uow_factory() as uow:
             return uow.runs.assign_duplicate_group(
@@ -812,3 +815,233 @@ class ResearchRunService:
             limit=limit,
             offset=offset,
         )
+
+    def annotate(
+        self,
+        run_id: UUID,
+        event_type: str,
+        reason: str,
+        *,
+        from_invocation: str | None = None,
+        to_invocation: str | None = None,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+        actor_type: str = "cli",
+    ) -> dict[str, Any]:
+        """Append an annotation event to a research run.
+
+        This is a compatibility command routed through PostgreSQL (issue #36).
+        Annotations are stored as events in ``research_events``.
+
+        Args:
+            run_id: Research run UUID.
+            event_type: Annotation type (pivot, retry, decision).
+            reason: Human-readable reason.
+            from_invocation: Optional source invocation ID.
+            to_invocation: Optional target invocation ID.
+            expected_revision: Compare-and-swap revision.
+            idempotency_key: Deduplication key.
+            actor_type: Actor type.
+
+        Returns:
+            Dict with event_id, run_id, lifecycle_revision, prior_revision.
+        """
+        if not reason.strip():
+            raise ValueError("annotate reason is required")
+        if expected_revision is None:
+            with self.uow_factory() as uow:
+                status_data = uow.runs.get_run_status(run_id=run_id)
+                expected_revision = status_data["lifecycle_revision"]
+        if expected_revision < 0:
+            raise ValueError("expected revision must be non-negative")
+        key = idempotency_key or f"run:annotate:{run_id}:{event_type}:{reason}"
+        payload: dict[str, Any] = {
+            "event_type": event_type,
+            "reason": reason,
+        }
+        if from_invocation:
+            payload["from_invocation"] = from_invocation
+        if to_invocation:
+            payload["to_invocation"] = to_invocation
+        with self.uow_factory() as uow:
+            # Read current state for compare-and-swap
+            status_data = uow.runs.get_run_status(run_id=run_id)
+            if status_data["lifecycle_revision"] != expected_revision:
+                raise RunStateError(
+                    f"stale research run revision: expected {expected_revision}, "
+                    f"got {status_data['lifecycle_revision']}"
+                )
+            event_id = uow.runs.append_event(
+                run_id,
+                "annotation",
+                actor_type,
+                key,
+                payload=payload,
+            )
+            # Bump lifecycle revision
+            new_revision = expected_revision + 1
+            uow.connection.execute(
+                "UPDATE research_runs SET lifecycle_revision=%s WHERE id=%s",
+                (new_revision, run_id),
+            )
+        return {
+            "event_id": str(event_id),
+            "run_id": str(run_id),
+            "lifecycle_revision": new_revision,
+            "prior_revision": expected_revision,
+            "event_type": event_type,
+        }
+
+    def verify(self, run_id: UUID) -> dict[str, Any]:
+        """Verify blob integrity for a research run.
+
+        Checks all snapshot blobs referenced by invocations in the run.
+
+        Args:
+            run_id: Research run UUID.
+
+        Returns:
+            Verification report with available, missing, hash_mismatch counts.
+        """
+        with self.uow_factory() as uow:
+            # Get all invocations for this run
+            invocations = uow.runs.list_invocations(run_id)
+            total = 0
+            available = 0
+            missing = 0
+            hash_mismatch = 0
+            artifacts = []
+
+            for inv in invocations:
+                output = inv.get("output") or {}
+                for result in output.get("results", []):
+                    for artifact_key in ("snapshot", "artifacts"):
+                        artifact = result.get(artifact_key)
+                        if isinstance(artifact, dict):
+                            path = artifact.get("path")
+                            expected_hash = artifact.get("sha256")
+                            if path and expected_hash:
+                                total += 1
+                                if self.blob_store and self.blob_store.verify(
+                                    expected_hash
+                                ):
+                                    available += 1
+                                    artifacts.append(
+                                        {
+                                            "invocation_id": str(inv["id"]),
+                                            "path": path,
+                                            "state": "available",
+                                        }
+                                    )
+                                else:
+                                    hash_mismatch += 1
+                                    artifacts.append(
+                                        {
+                                            "invocation_id": str(inv["id"]),
+                                            "path": path,
+                                            "state": "hash_mismatch",
+                                        }
+                                    )
+                        elif isinstance(artifact, list):
+                            for item in artifact:
+                                path = item.get("path")
+                                expected_hash = item.get("sha256")
+                                if path and expected_hash:
+                                    total += 1
+                                    if self.blob_store and self.blob_store.verify(
+                                        expected_hash
+                                    ):
+                                        available += 1
+                                        artifacts.append(
+                                            {
+                                                "invocation_id": str(inv["id"]),
+                                                "path": path,
+                                                "state": "available",
+                                            }
+                                        )
+                                    else:
+                                        hash_mismatch += 1
+                                        artifacts.append(
+                                            {
+                                                "invocation_id": str(inv["id"]),
+                                                "path": path,
+                                                "state": "hash_mismatch",
+                                            }
+                                        )
+
+            return {
+                "target": str(run_id),
+                "verified_at": datetime.now(timezone).isoformat(),
+                "total": total,
+                "available": available,
+                "missing": missing,
+                "hash_mismatch": hash_mismatch,
+                "artifacts": artifacts,
+            }
+
+    def trigger_audit(
+        self,
+        run_id: UUID,
+        *,
+        target_hash: str,
+        provider: str = "local",
+        model: str | None = None,
+        force: bool = False,
+        stages: list[str] | None = None,
+        max_calls: int | None = None,
+        max_input_tokens: int | None = None,
+        fallback_provider: str | None = None,
+        fallback_model: str | None = None,
+    ) -> dict[str, Any]:
+        """Trigger a semantic audit for a research run.
+
+        This delegates to the audit service. The audit is stored in
+        PostgreSQL and the result is returned.
+
+        Args:
+            run_id: Research run UUID.
+            target_hash: SHA-256 hash of the audit packet.
+            provider: LLM provider (local, openai, gemini).
+            model: Model name.
+            force: Force re-audit even if current assessment exists.
+            stages: Stages to run (rubric, acquisition, evidence, synthesis).
+            max_calls: Maximum LLM calls.
+            max_input_tokens: Target input tokens per chunk.
+            fallback_provider: Commercial fallback provider.
+            fallback_model: Fallback model name.
+
+        Returns:
+            Audit result dict with assessment_id, status, stages.
+        """
+        from .container import build_audit_service
+        from .config import StoreConfig
+        from .postgres import PostgresUnitOfWork
+
+        config = StoreConfig.from_env()
+        audit_service = build_audit_service(
+            lambda: PostgresUnitOfWork(
+                config.database_url,
+                config.physical_collection,
+                config.embedding_model,
+                config.embedding_revision,
+                config.embedding_dimension,
+                config.parser_version,
+                config.normalization_version,
+                config.chunker_version,
+            )
+        )
+        stage_set = stages or ["rubric", "acquisition", "evidence", "synthesis"]
+        result = audit_service.schedule_assessment(
+            run_id,
+            target_type="run",
+            target_id=run_id,
+            target_hash=target_hash,
+            evaluator_version="catalog-v5.0",
+            prompt_template_version="staged-research-audit-v1",
+            policy_version="audit-policy-v1",
+            stage_set=stage_set,
+            status="partial",
+            provider=provider,
+            model=model,
+        )
+        return result
