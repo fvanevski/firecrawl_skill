@@ -273,7 +273,7 @@ class PostgresUnitOfWork:
                     block_ids[block.ordinal] = cur.fetchone()[0]
 
             tokenizer_name = chunks[0].tokenizer_name if chunks else None
-            
+
             if tokenizer_name is not None:
                 cur.execute(
                     """SELECT id FROM chunks WHERE document_id=%s
@@ -6142,3 +6142,485 @@ class PostgresUnitOfWork:
             result["quality_metrics"] = None
 
         return result
+
+    # ------------------------------------------------------------------
+    # Derivation repository methods (issue #47)
+    # ------------------------------------------------------------------
+
+    def list_all_targets(self) -> list[dict]:
+        """List all document→snapshot pairs for rederive targets.
+
+        Returns rows with keys: document_id, snapshot_id, parser_version,
+        normalization_version, configuration_sha256.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT d.id AS document_id,
+                       a.id AS snapshot_id,
+                       d.parser_version,
+                       d.normalization_version,
+                       dd.configuration_sha256
+                FROM documents d
+                JOIN asset_snapshots a ON a.id = d.snapshot_id
+                LEFT JOIN document_derivations dd
+                  ON dd.document_id = d.id
+                  AND dd.status IN ('pending', 'active')
+                ORDER BY d.id, a.id
+                """
+            )
+            keys = (
+                "document_id",
+                "snapshot_id",
+                "parser_version",
+                "normalization_version",
+                "configuration_sha256",
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    def get_document_for_snapshot(self, snapshot_id: UUID) -> list[dict]:
+        """Get document(s) linked to a snapshot.
+
+        Returns rows with keys: document_id, parser_version,
+        normalization_version, configuration_sha256.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT d.id AS document_id,
+                       d.parser_version,
+                       d.normalization_version,
+                       dd.configuration_sha256
+                FROM documents d
+                JOIN asset_snapshots a ON a.id = d.snapshot_id
+                LEFT JOIN document_derivations dd
+                  ON dd.document_id = d.id
+                  AND dd.status IN ('pending', 'active')
+                WHERE a.id = %s
+                ORDER BY d.id
+                """,
+                (str(snapshot_id),),
+            )
+            keys = (
+                "document_id",
+                "parser_version",
+                "normalization_version",
+                "configuration_sha256",
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    def get_snapshots_for_document(self, document_id: UUID) -> list[dict]:
+        """Get all snapshots linked to a document.
+
+        Returns rows with keys: snapshot_id, parser_version,
+        normalization_version, configuration_sha256.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT a.id AS snapshot_id,
+                       d.parser_version,
+                       d.normalization_version,
+                       dd.configuration_sha256
+                FROM documents d
+                JOIN asset_snapshots a ON a.id = d.snapshot_id
+                LEFT JOIN document_derivations dd
+                  ON dd.document_id = d.id
+                  AND dd.status IN ('pending', 'active')
+                WHERE d.id = %s
+                ORDER BY a.id
+                """,
+                (str(document_id),),
+            )
+            keys = (
+                "snapshot_id",
+                "parser_version",
+                "normalization_version",
+                "configuration_sha256",
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    def get_snapshot_info(self, snapshot_id: UUID) -> dict | None:
+        """Get snapshot info including raw blob reference.
+
+        Returns a dict with keys: content_sha256, mime_type, title,
+        requested_url, final_url, retrieved_at, http_status.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT a.content_sha256,
+                       a.mime_type,
+                       d.title,
+                       a.requested_url,
+                       a.final_url,
+                       a.retrieved_at,
+                       a.http_status
+                FROM asset_snapshots a
+                JOIN documents d ON d.snapshot_id = a.id
+                WHERE a.id = %s
+                ORDER BY d.id DESC
+                LIMIT 1
+                """,
+                (str(snapshot_id),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            keys = (
+                "content_sha256",
+                "mime_type",
+                "title",
+                "requested_url",
+                "final_url",
+                "retrieved_at",
+                "http_status",
+            )
+            return dict(zip(keys, row))
+
+    def find_by_configuration(
+        self,
+        document_id: UUID,
+        configuration_sha256: str,
+    ) -> dict | None:
+        """Find an existing derivation with the given configuration.
+
+        Returns ``None`` when no matching derivation exists.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, status, parser_version, normalization_version,
+                       chunker_name, chunker_version, tokenizer_name
+                FROM document_derivations
+                WHERE document_id = %s
+                  AND configuration_sha256 = %s
+                  AND status IN ('pending', 'active')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (str(document_id), configuration_sha256),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            keys = (
+                "id",
+                "status",
+                "parser_version",
+                "normalization_version",
+                "chunker_name",
+                "chunker_version",
+                "tokenizer_name",
+            )
+            return dict(zip(keys, row))
+
+    def create(
+        self,
+        document_id: UUID,
+        snapshot_id: UUID,
+        parser_version: str,
+        normalization_version: str,
+        chunker_name: str,
+        chunker_version: str,
+        tokenizer_name: str,
+        chunk_count: int | None,
+        block_count: int | None,
+        configuration_sha256: str,
+        status: str = "pending",
+        error_message: str | None = None,
+    ) -> DerivationAttempt:  # noqa: F821
+        """Create a new derivation attempt.
+
+        Returns the created ``DerivationAttempt``.
+        """
+        from .domain import DerivationAttempt
+
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO document_derivations(
+                  document_id, snapshot_id, status,
+                  parser_version, normalization_version,
+                  chunker_name, chunker_version, tokenizer_name,
+                  chunk_count, block_count,
+                  configuration_sha256, error_message
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, document_id, snapshot_id, status,
+                  parser_version, normalization_version,
+                  chunker_name, chunker_version, tokenizer_name,
+                  chunk_count, block_count, configuration_sha256,
+                  error_message, created_at
+                """,
+                (
+                    str(document_id),
+                    str(snapshot_id),
+                    status,
+                    parser_version,
+                    normalization_version,
+                    chunker_name,
+                    chunker_version,
+                    tokenizer_name,
+                    chunk_count,
+                    block_count,
+                    configuration_sha256,
+                    error_message,
+                ),
+            )
+            row = cur.fetchone()
+            keys = (
+                "id",
+                "document_id",
+                "snapshot_id",
+                "status",
+                "parser_version",
+                "normalization_version",
+                "chunker_name",
+                "chunker_version",
+                "tokenizer_name",
+                "chunk_count",
+                "block_count",
+                "configuration_sha256",
+                "error_message",
+                "created_at",
+            )
+            return DerivationAttempt.from_mapping(dict(zip(keys, row)))
+
+    def get(self, derivation_id: UUID) -> DerivationAttempt | None:  # noqa: F821
+        """Get a derivation attempt by ID."""
+        from .domain import DerivationAttempt
+
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, document_id, snapshot_id, status,
+                  parser_version, normalization_version,
+                  chunker_name, chunker_version, tokenizer_name,
+                  chunk_count, block_count, configuration_sha256,
+                  error_message, created_at
+                FROM document_derivations
+                WHERE id = %s
+                """,
+                (str(derivation_id),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            keys = (
+                "id",
+                "document_id",
+                "snapshot_id",
+                "status",
+                "parser_version",
+                "normalization_version",
+                "chunker_name",
+                "chunker_version",
+                "tokenizer_name",
+                "chunk_count",
+                "block_count",
+                "configuration_sha256",
+                "error_message",
+                "created_at",
+            )
+            return DerivationAttempt.from_mapping(dict(zip(keys, row)))
+
+    def list(
+        self,
+        document_id: UUID | None = None,
+        snapshot_id: UUID | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List derivation attempts with optional filters."""
+        conditions = []
+        params: list = []
+
+        if document_id is not None:
+            conditions.append("document_id = %s")
+            params.append(str(document_id))
+        if snapshot_id is not None:
+            conditions.append("snapshot_id = %s")
+            params.append(str(snapshot_id))
+        if status is not None:
+            conditions.append("status = %s")
+            params.append(status)
+
+        where = ""
+        if conditions:
+            where = "WHERE " + " AND ".join(conditions)
+
+        with self.connection.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, document_id, snapshot_id, status,
+                  parser_version, normalization_version,
+                  chunker_name, chunker_version, tokenizer_name,
+                  chunk_count, block_count, configuration_sha256,
+                  error_message, created_at
+                FROM document_derivations
+                {where}
+                ORDER BY created_at DESC
+                """,
+                params,
+            )
+            keys = (
+                "id",
+                "document_id",
+                "snapshot_id",
+                "status",
+                "parser_version",
+                "normalization_version",
+                "chunker_name",
+                "chunker_version",
+                "tokenizer_name",
+                "chunk_count",
+                "block_count",
+                "configuration_sha256",
+                "error_message",
+                "created_at",
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    def activate(self, derivation_id: UUID) -> DerivationAttempt:  # noqa: F821
+        """Activate a pending derivation.
+
+        Sets the derivation to ``active`` and marks any prior active
+        derivation for the same document as ``superseded``.
+
+        Raises:
+            ValueError: When the derivation is not found or not pending.
+        """
+        from .domain import DerivationAttempt
+
+        with self.connection.cursor() as cur:
+            # Get the derivation
+            cur.execute(
+                """
+                SELECT id, document_id, snapshot_id, status,
+                  parser_version, normalization_version,
+                  chunker_name, chunker_version, tokenizer_name,
+                  chunk_count, block_count, configuration_sha256,
+                  error_message, created_at
+                FROM document_derivations
+                WHERE id = %s
+                """,
+                (str(derivation_id),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"derivation not found: {derivation_id}")
+
+            keys = (
+                "id",
+                "document_id",
+                "snapshot_id",
+                "status",
+                "parser_version",
+                "normalization_version",
+                "chunker_name",
+                "chunker_version",
+                "tokenizer_name",
+                "chunk_count",
+                "block_count",
+                "configuration_sha256",
+                "error_message",
+                "created_at",
+            )
+            current = dict(zip(keys, row))
+
+            if current["status"] != "pending":
+                raise ValueError(
+                    f"derivation {derivation_id} is not pending (status: {current['status']})"
+                )
+
+            # Mark prior active derivations as superseded
+            cur.execute(
+                """
+                UPDATE document_derivations
+                SET status = 'superseded'
+                WHERE document_id = %s
+                  AND status = 'active'
+                  AND id != %s
+                """,
+                (current["document_id"], str(derivation_id)),
+            )
+
+            # Activate this derivation
+            cur.execute(
+                """
+                UPDATE document_derivations
+                SET status = 'active'
+                WHERE id = %s
+                RETURNING id, document_id, snapshot_id, status,
+                  parser_version, normalization_version,
+                  chunker_name, chunker_version, tokenizer_name,
+                  chunk_count, block_count, configuration_sha256,
+                  error_message, created_at
+                """,
+                (str(derivation_id),),
+            )
+            row = cur.fetchone()
+            return DerivationAttempt.from_mapping(dict(zip(keys, row)))
+
+    def count_chunks_for_derivation(self, derivation_id: UUID) -> int | None:
+        """Count chunks for a derivation via its document."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT chunk_count
+                FROM document_derivations
+                WHERE id = %s AND chunk_count IS NOT NULL
+                """,
+                (str(derivation_id),),
+            )
+            row = cur.fetchone()
+            if row:
+                return row[0]
+            # Fallback: count actual chunks for the document
+            cur.execute(
+                """
+                SELECT dd.document_id
+                FROM document_derivations dd
+                WHERE dd.id = %s
+                """,
+                (str(derivation_id),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cur.execute(
+                "SELECT count(*) FROM chunks WHERE document_id = %s",
+                (str(row[0]),),
+            )
+            return cur.fetchone()[0]
+
+    def count_blocks_for_derivation(self, derivation_id: UUID) -> int | None:
+        """Count blocks for a derivation via its document."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT block_count
+                FROM document_derivations
+                WHERE id = %s AND block_count IS NOT NULL
+                """,
+                (str(derivation_id),),
+            )
+            row = cur.fetchone()
+            if row:
+                return row[0]
+            # Fallback: count actual blocks for the document
+            cur.execute(
+                """
+                SELECT dd.document_id
+                FROM document_derivations dd
+                WHERE dd.id = %s
+                """,
+                (str(derivation_id),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cur.execute(
+                "SELECT count(*) FROM document_blocks WHERE document_id = %s",
+                (str(row[0]),),
+            )
+            return cur.fetchone()[0]
