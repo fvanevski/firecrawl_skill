@@ -36,7 +36,10 @@ One row per transformation applied during normalization.  Provides
 full audit trail for reversible normalization.
 
 * ``id`` — UUID PK, ``gen_random_uuid()``
-* ``normalized_block_id`` — FK to ``normalized_blocks(id)`` ON DELETE CASCADE
+* ``normalized_block_id`` — FK to ``document_blocks(id)`` ON DELETE CASCADE
+  (references the source block that was transformed; the column name is
+  retained for API stability — it points to the source, not a
+  ``normalized_blocks`` row).
 * ``rule_id`` — rule identifier (constrained to known rule IDs via check)
 * ``rule_version`` — normalization rule version
 * ``reason`` — human-readable reason for the transformation
@@ -89,7 +92,7 @@ def upgrade():
         CREATE TABLE IF NOT EXISTS normalized_blocks (
           id                          uuid NOT NULL DEFAULT gen_random_uuid(),
           source_block_id             uuid NOT NULL REFERENCES document_blocks(id) ON DELETE CASCADE,
-          document_id                 uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+          document_id                 uuid REFERENCES documents(id) ON DELETE CASCADE,
           ordinal                     int NOT NULL,
           block_type                  text NOT NULL,
           text                        text NOT NULL DEFAULT '',
@@ -144,7 +147,7 @@ def upgrade():
         """
         CREATE TABLE IF NOT EXISTS transformation_records (
           id                          uuid NOT NULL DEFAULT gen_random_uuid(),
-          normalized_block_id         uuid REFERENCES normalized_blocks(id) ON DELETE CASCADE,
+          normalized_block_id         uuid REFERENCES document_blocks(id) ON DELETE CASCADE,
           rule_id                     text NOT NULL,
           rule_version                text NOT NULL DEFAULT 'normalization-v1',
           reason                      text NOT NULL DEFAULT '',
@@ -165,7 +168,8 @@ def upgrade():
               'preserve-short-heading',
               'preserve-footnote',
               'preserve-source-url',
-              'doc-type-footer-digest'
+              'doc-type-footer-digest',
+              'no-change'
             )),
           CONSTRAINT chk_transformation_records_confidence
             CHECK (confidence >= 0.0 AND confidence <= 1.0)

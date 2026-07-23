@@ -837,6 +837,7 @@ VALID_NORMALIZATION_RULE_IDS = frozenset(
         "preserve-footnote",
         "preserve-source-url",
         "doc-type-footer-digest",
+        "no-change",
     }
 )
 
@@ -861,7 +862,7 @@ class NormalizedBlock:
 
     id: UUID
     source_block_id: UUID
-    document_id: UUID
+    document_id: UUID | None
     ordinal: int
     block_type: str
     text: str
@@ -882,7 +883,7 @@ class NormalizedBlock:
     def from_source_block(
         cls,
         source_block_id: UUID,
-        document_id: UUID,
+        document_id: UUID | None,
         ordinal: int,
         block_type: str,
         text: str,

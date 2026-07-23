@@ -27,31 +27,31 @@ with full transformation provenance.
 
 ## Known limitations
 
-* **Deferred DB persistence:** The ``normalized_blocks`` and
-  ``transformation_records`` tables (migration 0024) are created but
-  not yet written to by Python code.  A follow-up issue will wire
-  normalization into the ingestion pipeline and add a repository layer
-  for persistent writes.  Until then, normalization is an in-memory
-  diagnostic pass only (invoked via ``research-db normalize``).
 * **Not yet integrated:** Normalization does not run automatically
   during corpus ingestion.  The ``NormalizationService`` must be called
-  explicitly.
+  explicitly.  A follow-up issue will wire normalization into the
+  ingestion pipeline so that normalized blocks and transformation
+  records are persisted automatically.
+* **Re-normalization trigger:** If the parser version changes, existing
+  normalized blocks are not automatically invalidated.  A follow-up
+  issue will add a re-normalization trigger on parser version change.
 
 ## Normalization rules
 
-| Rule ID                      | Disposition | Description                                        |
-|------------------------------|-------------|----------------------------------------------------|
-| ``strip-cookie-notice``      | remove      | Cookie-policy / consent lines.                     |
-| ``strip-navigation``         | remove      | Navigation-like lines (skip-to-content, menu).     |
-| ``strip-social-links``       | remove      | "Share on Facebook", "Follow us on X".             |
-| ``strip-boilerplate-heading``| remove      | Boilerplate headings (Sign in, Create account).    |
-| ``preserve-citation``        | keep        | Citation links (e.g. ``[1]`` style references).    |
-| ``preserve-code-block``      | keep        | Code fences are never stripped.                    |
-| ``preserve-meaningful-link`` | keep        | Links with meaningful anchor text.                 |
-| ``preserve-short-heading``   | keep        | Short headings (< 80 chars) are preserved.         |
-| ``preserve-footnote``        | keep        | Footnote references and content.                   |
-| ``preserve-source-url``      | keep        | Source URL metadata.                               |
-| ``doc-type-footer-digest``   | suppress    | Document-type-sensitive footer digestion.          |
+| Rule ID                     | Disposition | Description                                        |
+|-----------------------------|-------------|----------------------------------------------------|
+| ``strip-cookie-notice``     | remove      | Cookie-policy / consent lines.                     |
+| ``strip-navigation``        | remove      | Navigation-like lines (skip-to-content, menu).     |
+| ``strip-social-links``      | remove      | "Share on Facebook", "Follow us on X".             |
+| ``strip-boilerplate-heading``| remove     | Boilerplate headings (Sign in, Create account).    |
+| ``preserve-citation``       | keep        | Citation links (e.g. ``[1]`` style references).    |
+| ``preserve-code-block``     | keep        | Code fences are never stripped.                    |
+| ``preserve-meaningful-link``| keep        | Links with meaningful anchor text.                 |
+| ``preserve-short-heading``  | keep        | Short headings (< 80 chars) are preserved.         |
+| ``preserve-footnote``       | keep        | Footnote references and content.                   |
+| ``preserve-source-url``     | keep        | Source URL metadata.                               |
+| ``doc-type-footer-digest``  | suppress    | Document-type-sensitive footer digestion.          |
+| ``no-change``               | keep        | Fallback when no rule matches (kept as-is).        |
 
 ## Usage
 
@@ -640,7 +640,7 @@ class NormalizationService:
                 reasons.append("no-change")
                 record = TransformationRecord.create(
                     normalized_block_id=source_block_id or UUID(int=0),
-                    rule_id="preserve-meaningful-link",
+                    rule_id="no-change",
                     reason="No rule matched — block kept as-is",
                     before_text=text,
                     after_text=text,
@@ -695,7 +695,7 @@ class NormalizationService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def clean_markdown_compat(content: str) -> str:
+    def clean_markdown_compat(content: str) -> NormalizationResult:
         """Compatibility adapter for the legacy ``clean_markdown`` function.
 
         Applies the same rules as the legacy ``cleanup.clean_markdown``

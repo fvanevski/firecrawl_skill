@@ -609,6 +609,11 @@ def _uow_factory(config):
 def _cmd_normalize(config, args) -> int:
     """Run normalization diagnostics on document blocks (issue #45).
 
+    Runs normalization on document blocks and persists the results to
+    ``normalized_blocks`` and ``transformation_records`` tables.  The
+    operation is idempotent — re-running normalizes the same blocks and
+    upserts the results.
+
     Args:
         config: Store configuration.
         args: Parsed CLI arguments.
@@ -667,21 +672,20 @@ def _cmd_normalize(config, args) -> int:
     )
 
     results = []
+    upserted_blocks = 0
+    upserted_transforms = 0
+
     for doc_key, doc_rows in docs.items():
         doc_id = _UUID(doc_key[0])
         title = doc_key[1]
         url = doc_key[2]
         sha = doc_key[3]
 
-        blocks = []
         block_ids = []
         for row in doc_rows:
-            blocks.append(
-                row
-            )  # (block_id, ordinal, block_type, char_start, char_end, text, parser_version)
             block_ids.append(_UUID(row[4]))
 
-        # Build TypedBlock-like dicts for normalization
+        # Build TypedBlock for normalization
         from research_store.parsing.interfaces import TypedBlock
 
         typed_blocks = []
@@ -704,6 +708,74 @@ def _cmd_normalize(config, args) -> int:
             document_id=doc_id,
             document_type=args.document_type,
         )
+
+        # Persist normalized blocks and transformation records
+        with conn.cursor() as block_cur:
+            for nb in (
+                norm_result.blocks
+                + norm_result.suppressed_blocks
+                + norm_result.removed_blocks
+            ):
+                block_cur.execute(
+                    """INSERT INTO normalized_blocks
+                       (id, source_block_id, document_id, ordinal, block_type,
+                        text, heading_path, disposition, rule_version,
+                        transformation_reason, parser_version)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (source_block_id) DO UPDATE SET
+                         disposition = EXCLUDED.disposition,
+                         rule_version = EXCLUDED.rule_version,
+                         transformation_reason = EXCLUDED.transformation_reason,
+                         text = EXCLUDED.text,
+                         parser_version = EXCLUDED.parser_version""",
+                    (
+                        str(nb.id),
+                        str(nb.source_block_id),
+                        str(nb.document_id) if nb.document_id else None,
+                        nb.ordinal,
+                        nb.block_type,
+                        nb.text if nb.disposition != "remove" else "",
+                        list(nb.heading_path) if nb.heading_path else None,
+                        nb.disposition,
+                        nb.rule_version,
+                        nb.transformation_reason,
+                        nb.parser_version,
+                    ),
+                )
+            conn.commit()
+
+        with conn.cursor() as transform_cur:
+            for tr in norm_result.transformations:
+                transform_cur.execute(
+                    """INSERT INTO transformation_records
+                       (id, normalized_block_id, rule_id, rule_version,
+                        reason, before_text, after_text, confidence)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (id) DO UPDATE SET
+                         rule_id = EXCLUDED.rule_id,
+                         reason = EXCLUDED.reason,
+                         before_text = EXCLUDED.before_text,
+                         after_text = EXCLUDED.after_text,
+                         confidence = EXCLUDED.confidence""",
+                    (
+                        str(tr.id),
+                        str(tr.normalized_block_id) if tr.normalized_block_id else None,
+                        tr.rule_id,
+                        tr.rule_version,
+                        tr.reason,
+                        tr.before_text,
+                        tr.after_text,
+                        tr.confidence,
+                    ),
+                )
+            conn.commit()
+
+        upserted_blocks += len(
+            norm_result.blocks
+            + norm_result.suppressed_blocks
+            + norm_result.removed_blocks
+        )
+        upserted_transforms += len(norm_result.transformations)
 
         results.append(
             {
@@ -728,6 +800,8 @@ def _cmd_normalize(config, args) -> int:
         "aggressive": args.aggressive,
         "document_type": args.document_type,
         "documents_processed": len(results),
+        "normalized_blocks_upserted": upserted_blocks,
+        "transformation_records_upserted": upserted_transforms,
         "documents": results,
     }
     print(dumps(output))

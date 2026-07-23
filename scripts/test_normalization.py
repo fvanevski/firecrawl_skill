@@ -22,6 +22,8 @@ Covers:
 
 from __future__ import annotations
 
+# ruff: noqa: E402 - load the sibling script package without installing it.
+
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -611,8 +613,8 @@ class TestRoundTripRecovery:
             cookie_transform[0].before_text == "Use cookies to improve your experience."
         )
 
-    def test_altered_content_has_before_and_after(self):
-        """Altered content should have before_text and after_text."""
+    def test_no_change_block_has_before_and_after(self):
+        """A kept block (no rule matched) should have before_text and after_text."""
         block = TypedBlock(
             ordinal=0,
             block_type="paragraph",
@@ -625,12 +627,12 @@ class TestRoundTripRecovery:
         # The block should be kept
         assert len(result.blocks) == 1
         # The transformation should have before and after
-        keep_transform = [
-            t for t in result.transformations if t.rule_id == "preserve-meaningful-link"
+        no_change_transform = [
+            t for t in result.transformations if t.rule_id == "no-change"
         ]
-        if keep_transform:
-            assert keep_transform[0].before_text == "Hello world"
-            assert keep_transform[0].after_text == "Hello world"
+        if no_change_transform:
+            assert no_change_transform[0].before_text == "Hello world"
+            assert no_change_transform[0].after_text == "Hello world"
 
 
 # ---------------------------------------------------------------------------
@@ -774,3 +776,31 @@ class TestEdgeCases:
         result = service.normalize([block])
         assert len(result.blocks) == 1
         assert result.blocks[0].document_id is None
+
+    def test_list_block_preserved(self):
+        """Markdown list blocks should survive normalization unchanged."""
+        block = TypedBlock(
+            ordinal=0,
+            block_type="list_item",
+            text="- First item\n- Second item\n- Third item",
+            parser_version="html-normalized-v1",
+        )
+        service = NormalizationService(aggressive=False)
+        result = service.normalize([block])
+        assert len(result.blocks) == 1
+        assert result.blocks[0].disposition == "keep"
+        assert result.blocks[0].text == "- First item\n- Second item\n- Third item"
+
+    def test_table_block_preserved(self):
+        """Table blocks should survive normalization unchanged."""
+        block = TypedBlock(
+            ordinal=0,
+            block_type="table",
+            text="| Col A | Col B |\n|-------|-------|\n| val1  | val2  |",
+            parser_version="html-normalized-v1",
+        )
+        service = NormalizationService(aggressive=False)
+        result = service.normalize([block])
+        assert len(result.blocks) == 1
+        assert result.blocks[0].disposition == "keep"
+        assert result.blocks[0].text == block.text
