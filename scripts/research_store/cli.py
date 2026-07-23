@@ -330,7 +330,7 @@ def parser():
     audit.add_argument("--provider", default="local")
     audit.add_argument("--model")
     audit.add_argument("--prompt-hash")
-    audit.add_argument("--model-fingerprint")
+    audit.add_argument("--model-fingerprint", required=True)
     audit.add_argument("--elapsed-ms", type=int, default=0)
     audit.add_argument("--packet-manifest-file")
 
