@@ -1600,7 +1600,7 @@ def main(argv=None):
             or f"run:annotate:{args.external_id}:{args.type}:{args.reason}",
             actor_type=args.actor,
         )
-        print(dumps(result.to_dict()))
+        print(dumps(result))
         return 0
     if args.command == "run-verify":
         run_service = build_run_service(config)
@@ -1608,14 +1608,14 @@ def main(argv=None):
         result = run_service.verify(status.id)
         output_file = args.output
         if output_file == "-":
-            print(dumps(result.to_dict()))
+            print(dumps(result))
         else:
             import tempfile
 
             with tempfile.NamedTemporaryFile(
                 "w", suffix=".json", delete=False, dir=str(Path(output_file).parent)
             ) as f:
-                json.dump(result.to_dict(), f, indent=2, sort_keys=True)
+                json.dump(result, f, indent=2, sort_keys=True)
                 f.write("\n")
             print(dumps({"status": "written", "path": f.name}))
         return 0
@@ -1634,7 +1634,7 @@ def main(argv=None):
             fallback_provider=args.commercial_fallback,
             fallback_model=args.fallback_model,
         )
-        print(dumps(result.to_dict()))
+        print(dumps(result))
         return 0
     if args.command == "run-compare":
         run_service = build_run_service(config)

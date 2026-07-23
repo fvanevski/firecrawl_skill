@@ -831,7 +831,14 @@ class ResearchRunService:
         """Append an annotation event to a research run.
 
         This is a compatibility command routed through PostgreSQL (issue #36).
-        Annotations are stored as events in ``research_events``.
+        Annotations are stored as events in ``research_events`` and the
+        lifecycle_revision is bumped.
+
+        Unlike full state transitions, annotations do not change the run
+        ``state``.  They are recorded in ``research_events`` (event_type
+        ``annotation``) rather than ``research_run_transitions``, because
+        the transition table enforces ``prior_state <> next_state`` and
+        annotations are metadata, not lifecycle changes.
 
         Args:
             run_id: Research run UUID.
@@ -878,12 +885,9 @@ class ResearchRunService:
                 key,
                 payload=payload,
             )
-            # Bump lifecycle revision
+            # Bump lifecycle revision within the same transaction
             new_revision = expected_revision + 1
-            uow.connection.execute(
-                "UPDATE research_runs SET lifecycle_revision=%s WHERE id=%s",
-                (new_revision, run_id),
-            )
+            uow.runs._bump_lifecycle_revision(run_id, new_revision)
         return {
             "event_id": str(event_id),
             "run_id": str(run_id),
@@ -998,6 +1002,10 @@ class ResearchRunService:
         This delegates to the audit service. The audit is stored in
         PostgreSQL and the result is returned.
 
+        Uses the same ``uow_factory`` as other run-service methods to
+        ensure the audit assessment is recorded against the same
+        database connection pool.
+
         Args:
             run_id: Research run UUID.
             target_hash: SHA-256 hash of the audit packet.
@@ -1014,22 +1022,8 @@ class ResearchRunService:
             Audit result dict with assessment_id, status, stages.
         """
         from .container import build_audit_service
-        from .config import StoreConfig
-        from .postgres import PostgresUnitOfWork
 
-        config = StoreConfig.from_env()
-        audit_service = build_audit_service(
-            lambda: PostgresUnitOfWork(
-                config.database_url,
-                config.physical_collection,
-                config.embedding_model,
-                config.embedding_revision,
-                config.embedding_dimension,
-                config.parser_version,
-                config.normalization_version,
-                config.chunker_version,
-            )
-        )
+        audit_service = build_audit_service(self.uow_factory)
         stage_set = stages or ["rubric", "acquisition", "evidence", "synthesis"]
         result = audit_service.schedule_assessment(
             run_id,
