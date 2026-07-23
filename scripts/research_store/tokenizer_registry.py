@@ -126,19 +126,19 @@ class _BpeTokenizer:
         while changed:
             changed = False
             for pair in self._merge_rules:
-                merged = pair[0] + pair[1]
+                merged = pair
+                target_a = pair[0]
+                target_b = pair[1:] # if length is 2, pair[1]
                 i = 0
                 new_tokens: list[str] = []
                 while i < len(tokens):
-                    remaining = "".join(tokens[i:])
-                    pos = remaining.find(merged)
-                    if pos == -1:
-                        new_tokens.extend(tokens[i:])
-                        break
-                    new_tokens.extend(tokens[i : i + pos])
-                    new_tokens.append(merged)
-                    i = i + pos + len(merged)
-                    changed = True
+                    if i < len(tokens) - 1 and tokens[i] == target_a and tokens[i+1] == target_b:
+                        new_tokens.append(merged)
+                        i += 2
+                        changed = True
+                    else:
+                        new_tokens.append(tokens[i])
+                        i += 1
                 tokens = new_tokens
         return [self._vocab.get(t, 0) for t in tokens]
 

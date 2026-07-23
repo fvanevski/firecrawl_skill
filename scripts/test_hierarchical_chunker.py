@@ -604,7 +604,7 @@ class TestValidation:
                 heading_path=(),
             )
         ]
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError, match="zero tokens"):
             _validate_chunks(chunks, max_tokens=100)
 
     def test_exceeded_max_tokens_fails(self):
@@ -620,7 +620,7 @@ class TestValidation:
                 heading_path=(),
             )
         ]
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError, match="exceeds max_tokens"):
             _validate_chunks(chunks, max_tokens=100)
 
     def test_empty_sha256_fails(self):
@@ -636,7 +636,7 @@ class TestValidation:
                 heading_path=(),
             )
         ]
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError, match="empty content_sha256"):
             _validate_chunks(chunks, max_tokens=100)
 
 
@@ -729,6 +729,11 @@ class TestMigration:
         """Migration has correct revision and down_revision."""
         import importlib.util
 
+        try:
+            import alembic
+        except ImportError:
+            pytest.skip("alembic not installed")
+
         spec = importlib.util.spec_from_file_location(
             "migration_0025", self._migration_path
         )
@@ -791,8 +796,10 @@ class TestServiceIntegration:
             reranker_model="rerank",
             reranker_api_key="",
             reranker_candidate_limit=40,
+            chunker_name="hierarchical",
             chunker_version="hierarchical-v1",
             chunker_max_tokens=1000,
+            tokenizer_name="cl100k_base",
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
             parser_registry_version="canonical-v1",

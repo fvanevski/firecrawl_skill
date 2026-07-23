@@ -343,6 +343,52 @@ def _split_on_whitespace(
 
     for word in words:
         word_tokens = tokenizer.count(word + " ")
+        if word_tokens > max_tokens:
+            # Word is too large; flush current words first
+            if current_words:
+                result.append(
+                    AtomicBlock(
+                        text=" ".join(current_words) + " ",
+                        block_type=atomic.block_type,
+                        heading_path=atomic.heading_path,
+                        ordinal=atomic.ordinal,
+                        char_start=atomic.char_start,
+                        char_end=None,
+                        is_atomic=False,
+                    )
+                )
+                current_words = []
+                current_tokens = 0
+            
+            # Slice the oversized word mechanically
+            remaining_chars = list(word)
+            while remaining_chars:
+                chunk_chars = []
+                for char in remaining_chars:
+                    if tokenizer.count("".join(chunk_chars) + char + " ") <= max_tokens:
+                        chunk_chars.append(char)
+                    else:
+                        if not chunk_chars:
+                            # Fallback if a single char > max_tokens (rare)
+                            chunk_chars.append(char)
+                        break
+                part = "".join(chunk_chars)
+                # If this was the end of the original word, add a trailing space
+                is_end = len(chunk_chars) == len(remaining_chars)
+                result.append(
+                    AtomicBlock(
+                        text=part + " " if is_end else part,
+                        block_type=atomic.block_type,
+                        heading_path=atomic.heading_path,
+                        ordinal=atomic.ordinal,
+                        char_start=atomic.char_start,
+                        char_end=None,
+                        is_atomic=False,
+                    )
+                )
+                remaining_chars = remaining_chars[len(chunk_chars):]
+            continue
+            
         if current_words and current_tokens + word_tokens > max_tokens:
             result.append(
                 AtomicBlock(
@@ -423,6 +469,12 @@ def hierarchical_chunks(
 
     # Phase 1: Classify blocks into atomic units
     atomic_blocks: list[AtomicBlock] = [_classify_block(b) for b in blocks]
+    
+    # Map heading path to the block ordinal representing that heading
+    heading_path_to_ordinal: dict[tuple[str, ...], int] = {}
+    for b in blocks:
+        if b.block_type == "heading":
+            heading_path_to_ordinal[b.heading_path] = b.ordinal
 
     # Phase 2: Split oversized atomic blocks
     expanded: list[AtomicBlock] = []
@@ -446,6 +498,11 @@ def hierarchical_chunks(
         text = "\n\n".join(a.text for a in current)
         token_count = tokenizer.count(text)
         heading_path = current[-1].heading_path if current else ()
+        
+        parent_block_ordinal = None
+        # Use the heading path of the last block in the chunk to represent the chunk's section
+        if current and current[-1].heading_path:
+            parent_block_ordinal = heading_path_to_ordinal.get(current[-1].heading_path)
 
         chunks.append(
             HierarchicalChunk(
@@ -459,7 +516,7 @@ def hierarchical_chunks(
                 chunker_name=chunker_name,
                 chunker_version=chunker_version,
                 tokenizer_name=tokenizer_name,
-                parent_block_ordinal=current[0].ordinal,
+                parent_block_ordinal=parent_block_ordinal,
                 metadata={
                     "block_count": len(current),
                     "block_types": [a.block_type for a in current],
@@ -513,16 +570,20 @@ def _validate_chunks(chunks: list[HierarchicalChunk], max_tokens: int) -> None:
     """Validate chunk invariants.
 
     Raises:
-        AssertionError: When any invariant is violated.
+        ValueError: When any invariant is violated.
     """
     for chunk in chunks:
-        assert chunk.token_count > 0, f"Chunk {chunk.ordinal} has zero tokens"
-        assert chunk.token_count <= max_tokens, (
-            f"Chunk {chunk.ordinal} exceeds max_tokens: "
-            f"{chunk.token_count} > {max_tokens}"
-        )
-        assert chunk.content_sha256, f"Chunk {chunk.ordinal} has empty content_sha256"
-        assert chunk.first_block_ordinal <= chunk.last_block_ordinal, (
-            f"Chunk {chunk.ordinal} has invalid block ordinals: "
-            f"{chunk.first_block_ordinal} > {chunk.last_block_ordinal}"
-        )
+        if not (chunk.token_count > 0):
+            raise ValueError(f"Chunk {chunk.ordinal} has zero tokens")
+        if not (chunk.token_count <= max_tokens):
+            raise ValueError(
+                f"Chunk {chunk.ordinal} exceeds max_tokens: "
+                f"{chunk.token_count} > {max_tokens}"
+            )
+        if not chunk.content_sha256:
+            raise ValueError(f"Chunk {chunk.ordinal} has empty content_sha256")
+        if not (chunk.first_block_ordinal <= chunk.last_block_ordinal):
+            raise ValueError(
+                f"Chunk {chunk.ordinal} has invalid block ordinals: "
+                f"{chunk.first_block_ordinal} > {chunk.last_block_ordinal}"
+            )

@@ -70,9 +70,9 @@ class CorpusService:
         chunks = hierarchical_chunks(
             blocks,
             max_tokens=self.config.chunker_max_tokens,
-            tokenizer_name="cl100k_base",
+            tokenizer_name=self.config.tokenizer_name,
             chunker_version=self.config.chunker_version,
-            chunker_name="hierarchical",
+            chunker_name=self.config.chunker_name,
         )
         # Convert HierarchicalChunk to legacy Chunk for DB persistence
         from .domain import Chunk
@@ -102,7 +102,7 @@ class CorpusService:
             self.config.parser_version,
             self.config.chunker_version,
             self.config.normalization_version,
-            "hierarchical",
+            self.config.chunker_name,
         )
 
     def _parse_content(self, raw: bytes, mime_type: str | None) -> list:

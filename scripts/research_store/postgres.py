@@ -272,11 +272,20 @@ class PostgresUnitOfWork:
                     )
                     block_ids[block.ordinal] = cur.fetchone()[0]
 
-            cur.execute(
-                """SELECT id FROM chunks WHERE document_id=%s
-                AND chunker_name=%s AND chunker_version=%s ORDER BY ordinal""",
-                (document_id, chunker_name, chunker_version),
-            )
+            tokenizer_name = chunks[0].tokenizer_name if chunks else None
+            
+            if tokenizer_name is not None:
+                cur.execute(
+                    """SELECT id FROM chunks WHERE document_id=%s
+                    AND chunker_name=%s AND chunker_version=%s AND tokenizer_name=%s ORDER BY ordinal""",
+                    (document_id, chunker_name, chunker_version, tokenizer_name),
+                )
+            else:
+                cur.execute(
+                    """SELECT id FROM chunks WHERE document_id=%s
+                    AND chunker_name=%s AND chunker_version=%s AND tokenizer_name IS NULL ORDER BY ordinal""",
+                    (document_id, chunker_name, chunker_version),
+                )
             chunk_ids = [row[0] for row in cur.fetchall()]
             reused_chunks = bool(chunk_ids)
             if not chunk_ids:
