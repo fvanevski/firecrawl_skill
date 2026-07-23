@@ -689,3 +689,88 @@ class TestNormalizationResult:
         diag = result.diagnostics()
         assert diag["total_source_blocks"] == 0
         assert diag["kept"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Edge-case tests
+# ---------------------------------------------------------------------------
+
+
+class TestEdgeCases:
+    """Tests for edge cases in normalization."""
+
+    def test_empty_string_block(self):
+        """Empty string text should produce a kept block with no transformation."""
+        block = TypedBlock(
+            ordinal=0,
+            block_type="paragraph",
+            text="",
+            parser_version="html-normalized-v1",
+        )
+        service = NormalizationService(aggressive=False)
+        result = service.normalize([block])
+        # Empty text: no rule matches, block kept as-is
+        assert len(result.blocks) == 1
+        assert result.blocks[0].text == ""
+        assert result.blocks[0].disposition == "keep"
+
+    def test_whitespace_only_block(self):
+        """Whitespace-only text should produce a kept block with no transformation."""
+        block = TypedBlock(
+            ordinal=0,
+            block_type="paragraph",
+            text="   \n  \n  ",
+            parser_version="html-normalized-v1",
+        )
+        service = NormalizationService(aggressive=False)
+        result = service.normalize([block])
+        # Whitespace-only: stripped is empty, no rule matches
+        assert len(result.blocks) == 1
+        assert result.blocks[0].text == "   \n  \n  "
+        assert result.blocks[0].disposition == "keep"
+
+    def test_unicode_content(self):
+        """Unicode content should be handled without exception."""
+        block = TypedBlock(
+            ordinal=0,
+            block_type="paragraph",
+            text="Café résumé naïve",
+            parser_version="html-normalized-v1",
+        )
+        service = NormalizationService(aggressive=False)
+        result = service.normalize([block])
+        assert len(result.blocks) == 1
+        assert result.blocks[0].text == "Café résumé naïve"
+
+    def test_document_id_passed_through(self):
+        """document_id should be propagated to normalized blocks."""
+        doc_id = uuid4()
+        src_id = uuid4()
+        block = TypedBlock(
+            ordinal=0,
+            block_type="paragraph",
+            text="Hello",
+            parser_version="html-normalized-v1",
+        )
+        service = NormalizationService(aggressive=False)
+        result = service.normalize(
+            [block],
+            source_block_ids=[src_id],
+            document_id=doc_id,
+        )
+        assert len(result.blocks) == 1
+        assert result.blocks[0].document_id == doc_id
+        assert result.blocks[0].source_block_id == src_id
+
+    def test_document_id_none_when_not_provided(self):
+        """When document_id is not provided, it should be None in normalized blocks."""
+        block = TypedBlock(
+            ordinal=0,
+            block_type="paragraph",
+            text="Hello",
+            parser_version="html-normalized-v1",
+        )
+        service = NormalizationService(aggressive=False)
+        result = service.normalize([block])
+        assert len(result.blocks) == 1
+        assert result.blocks[0].document_id is None

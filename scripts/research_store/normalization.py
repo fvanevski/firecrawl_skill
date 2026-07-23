@@ -25,27 +25,33 @@ with full transformation provenance.
   available as a compatibility adapter that maps its output to the new
   block-level model.
 
+## Known limitations
+
+* **Deferred DB persistence:** The ``normalized_blocks`` and
+  ``transformation_records`` tables (migration 0024) are created but
+  not yet written to by Python code.  A follow-up issue will wire
+  normalization into the ingestion pipeline and add a repository layer
+  for persistent writes.  Until then, normalization is an in-memory
+  diagnostic pass only (invoked via ``research-db normalize``).
+* **Not yet integrated:** Normalization does not run automatically
+  during corpus ingestion.  The ``NormalizationService`` must be called
+  explicitly.
+
 ## Normalization rules
 
 | Rule ID                      | Disposition | Description                                        |
 |------------------------------|-------------|----------------------------------------------------|
-| ``strip-html-comments``      | remove      | HTML comments are always stripped.                 |
-| ``collapse-blank-lines``     | alter       | Collapse 3+ consecutive blank lines to 2.          |
 | ``strip-cookie-notice``      | remove      | Cookie-policy / consent lines.                     |
 | ``strip-navigation``         | remove      | Navigation-like lines (skip-to-content, menu).     |
 | ``strip-social-links``       | remove      | "Share on Facebook", "Follow us on X".             |
 | ``strip-boilerplate-heading``| remove      | Boilerplate headings (Sign in, Create account).    |
-| ``strip-copyright-footer``   | remove      | Copyright / Terms / Privacy footer lines.          |
-| ``strip-tracking-params``    | alter       | Remove UTM/ref tracking from URLs.                 |
-| ``strip-image-markdown-wrapper``| alter    | Simplify ``![alt](url)`` to ``[alt]``.             |
 | ``preserve-citation``        | keep        | Citation links (e.g. ``[1]`` style references).    |
 | ``preserve-code-block``      | keep        | Code fences are never stripped.                    |
 | ``preserve-meaningful-link`` | keep        | Links with meaningful anchor text.                 |
-| ``preserve-image-source``    | keep        | Image alt text and source URLs.                    |
 | ``preserve-short-heading``   | keep        | Short headings (< 80 chars) are preserved.         |
 | ``preserve-footnote``        | keep        | Footnote references and content.                   |
 | ``preserve-source-url``      | keep        | Source URL metadata.                               |
-| ``doc-type-footer-digest``   | alter       | Document-type-sensitive footer digestion.          |
+| ``doc-type-footer-digest``   | suppress    | Document-type-sensitive footer digestion.          |
 
 ## Usage
 
@@ -303,6 +309,7 @@ class NormalizationService:
         blocks: list[Any],
         *,
         source_block_ids: list[UUID] | None = None,
+        document_id: UUID | None = None,
         document_type: str | None = None,
         confidence_threshold: float | None = None,
     ) -> NormalizationResult:
@@ -312,6 +319,8 @@ class NormalizationService:
             blocks: List of ``TypedBlock`` or ``Block`` instances.
             source_block_ids: Optional list of source block UUIDs.
                 Must match ``len(blocks)`` when provided.
+            document_id: FK to the parent ``documents`` row.  All normalized
+                blocks will reference this document.
             document_type: Override document type for this run.
             confidence_threshold: Override confidence threshold for this run.
 
@@ -339,6 +348,7 @@ class NormalizationService:
             normalized = self._normalize_block(
                 block,
                 source_block_id=src_id,
+                document_id=document_id,
                 doc_type=doc_type,
                 threshold=threshold,
                 result=result,
@@ -363,13 +373,23 @@ class NormalizationService:
         block: Any,
         *,
         source_block_id: UUID | None = None,
+        document_id: UUID | None = None,
         doc_type: str = "web",
         threshold: float = 0.8,
         result: NormalizationResult | None = None,
     ) -> NormalizedBlock | None:
         """Normalize a single block and return a NormalizedBlock.
 
-        Returns ``None`` when the block disposition is ``remove``.
+        Args:
+            block: A TypedBlock or Block instance.
+            source_block_id: FK to the source document_blocks row.
+            document_id: FK to the parent documents row.
+            doc_type: Document type for sensitive rules.
+            threshold: Confidence threshold for aggressive rules.
+            result: NormalizationResult to accumulate transformations.
+
+        Returns:
+            A NormalizedBlock or None when disposition is ``remove``.
         """
         # Extract block attributes (support both TypedBlock and Block)
         ordinal = getattr(block, "ordinal", 0)
@@ -399,8 +419,8 @@ class NormalizationService:
             if result is not None:
                 result.transformations.append(record)
             return NormalizedBlock.from_source_block(
-                source_block_id=source_block_id or UUID(int=0),
-                document_id=source_block_id or UUID(int=0),
+                source_block_id=source_block_id,
+                document_id=document_id,
                 ordinal=ordinal,
                 block_type=block_type,
                 text=text,
@@ -644,8 +664,8 @@ class NormalizationService:
         # Return None for removed blocks (they are tracked in removed_blocks)
         if disposition == "remove":
             return NormalizedBlock.from_source_block(
-                source_block_id=source_block_id or UUID(int=0),
-                document_id=source_block_id or UUID(int=0),
+                source_block_id=source_block_id,
+                document_id=document_id,
                 ordinal=ordinal,
                 block_type=block_type,
                 text="",
@@ -658,8 +678,8 @@ class NormalizationService:
 
         # For keep/alter/suppress, return the normalized block
         return NormalizedBlock.from_source_block(
-            source_block_id=source_block_id or UUID(int=0),
-            document_id=source_block_id or UUID(int=0),
+            source_block_id=source_block_id,
+            document_id=document_id,
             ordinal=ordinal,
             block_type=block_type,
             text=text,

@@ -826,19 +826,13 @@ class ExtractionAttempt:
 VALID_NORMALIZATION_DISPOSITIONS = frozenset({"keep", "alter", "suppress", "remove"})
 VALID_NORMALIZATION_RULE_IDS = frozenset(
     {
-        "strip-html-comments",
-        "collapse-blank-lines",
         "strip-cookie-notice",
         "strip-navigation",
         "strip-social-links",
         "strip-boilerplate-heading",
-        "strip-copyright-footer",
-        "strip-tracking-params",
-        "strip-image-markdown-wrapper",
         "preserve-citation",
         "preserve-code-block",
         "preserve-meaningful-link",
-        "preserve-image-source",
         "preserve-short-heading",
         "preserve-footnote",
         "preserve-source-url",

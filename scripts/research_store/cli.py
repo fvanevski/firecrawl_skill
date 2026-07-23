@@ -701,6 +701,7 @@ def _cmd_normalize(config, args) -> int:
         norm_result = service.normalize(
             blocks=typed_blocks,
             source_block_ids=block_ids,
+            document_id=doc_id,
             document_type=args.document_type,
         )
 
