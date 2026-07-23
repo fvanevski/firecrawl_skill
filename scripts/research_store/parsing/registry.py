@@ -40,6 +40,7 @@ can log or audit which parser was chosen and why.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Any
 
 from .interfaces import Parser, ParserSelectionError, ParseResult
@@ -336,14 +337,8 @@ def parse(
     if registry is None:
         registry = get_registry()
     record = registry.select(mime_type, raw=raw)
-    parser = registry.get_parser(
-        mime_type or record.selected_parser_type.split(".")[-1].lower()
-    )
-    if parser is None:
-        # Fallback: instantiate from the selected parser type name
-        from importlib import import_module
-
-        module_name, class_name = record.selected_parser_type.rsplit(".", 1)
-        mod = import_module(module_name)
-        parser = getattr(mod, class_name)()
+    # Instantiate the parser from its fully-qualified type name
+    module_name, class_name = record.selected_parser_type.rsplit(".", 1)
+    mod = import_module(module_name)
+    parser = getattr(mod, class_name)()
     return parser.parse(raw, mime_type=mime_type)

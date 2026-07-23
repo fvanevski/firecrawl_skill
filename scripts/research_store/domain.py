@@ -27,7 +27,9 @@ class Block:
     char_start: int | None = None
     char_end: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    parser_version: str = "markdown-v1"
+    # Legacy placeholder default — typed parsers override this with their
+    # own version string (e.g. "markdown-v1", "html-normalized-v1").
+    parser_version: str = "canonical-v1"
 
 
 @dataclass(frozen=True)

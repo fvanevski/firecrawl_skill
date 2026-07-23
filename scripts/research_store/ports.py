@@ -393,17 +393,6 @@ class BlobStore(Protocol):
     def verify(self, digest: str) -> bool: ...
 
 
-class ParserRepository(Protocol):
-    """Protocol for parser selection and execution."""
-
-    def select(
-        self,
-        raw: bytes,
-        *,
-        mime_type: str | None = None,
-    ) -> tuple[SelectionRecord, ParseResult]: ...
-
-
 class RetrievalIndex(Protocol):
     def ensure_schema(self) -> None: ...
     def upsert(self, points: list[dict[str, Any]]) -> None: ...

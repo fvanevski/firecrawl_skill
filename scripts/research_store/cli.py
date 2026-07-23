@@ -143,7 +143,7 @@ def parser():
     # ------------------------------------------------------------------
     # Parser info (issue #44)
     # ------------------------------------------------------------------
-    sub.add_parser("parser-info")
+    sub.add_parser("parser-info", help="Show parser registry information")
 
     imp = sub.add_parser("import-scratch")
     imp.add_argument("path", nargs="?")

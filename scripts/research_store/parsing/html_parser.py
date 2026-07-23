@@ -31,7 +31,10 @@ Uses only Python stdlib (``html.parser``) — no external dependencies.
 ## Structural preservation
 
 * Heading hierarchy is tracked via the ``heading_path`` field.
-* Source offsets are approximate (byte-level from the decoded string).
+* Source offsets (``char_start`` / ``char_end``) are **not computed** for
+  HTML blocks — the HTML source tree does not map cleanly to character
+  offsets after normalization (comments stripped, whitespace collapsed,
+  elements restructured).  Both fields are always ``None``.
 * Tables are preserved as pipe-delimited rows.
 
 .. versionchanged:: P5-04

@@ -3,6 +3,7 @@ from __future__ import annotations
 from hashlib import sha256
 from io import BytesIO
 import json
+import logging
 from typing import Any, Callable
 from uuid import UUID
 
@@ -112,9 +113,18 @@ class CorpusService:
                 return [b.to_legacy_block() for b in parse_result.blocks]
             except (UnsupportedFormatError, ParserSelectionError):
                 raise
-            except Exception:
-                # On unexpected parser failure, fall through to legacy
-                pass
+            except (ValueError, KeyError, AttributeError, ImportError, json.JSONDecodeError) as exc:
+                # Expected parser failures — fall through to legacy
+                logging.getLogger(__name__).debug(
+                    "Typed parser failed (%s), falling back to legacy: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+            except Exception as exc:
+                # Unexpected errors — log but still fall back to legacy
+                logging.getLogger(__name__).exception(
+                    "Unexpected parser error, falling back to legacy: %s", exc
+                )
 
         # Legacy fallback: Markdown-only structural parser
         text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")

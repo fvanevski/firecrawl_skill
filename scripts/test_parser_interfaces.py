@@ -961,7 +961,7 @@ class TestBackwardCompatibility:
             text="Title",
         )
         assert hasattr(block, "parser_version")
-        assert block.parser_version == "markdown-v1"  # default
+        assert block.parser_version == "canonical-v1"  # default
 
     def test_typed_block_to_legacy_preserves_parser_version(self):
         """TypedBlock.to_legacy_block() must propagate parser_version."""

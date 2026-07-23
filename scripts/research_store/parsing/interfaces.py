@@ -29,7 +29,8 @@ hierarchy used for unsupported-format and extraction-failure reporting.
 string** (after UTF-8 decoding). They are inclusive at the start and exclusive
 at the end, matching Python string slicing semantics: ``source[start:end]``
 yields the block text.  When a parser cannot determine offsets (e.g. a
-JSON adapter that reconstructs text), both fields are ``None``.
+JSON adapter that reconstructs text, or an HTML adapter that normalizes the
+source tree), both fields are ``None``.
 
 ## Parser version policy
 
