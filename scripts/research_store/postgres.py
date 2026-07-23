@@ -3069,7 +3069,28 @@ class PostgresUnitOfWork:
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                   CASE WHEN %s IN ('complete','failed') THEN now() ELSE NULL END)
                 ON CONFLICT(run_id,idempotency_key) DO UPDATE
-                  SET idempotency_key=excluded.idempotency_key
+                  SET status=CASE
+                        WHEN compatibility_exports.status='complete' THEN 'complete'
+                        ELSE excluded.status
+                      END,
+                      database_revision=excluded.database_revision,
+                      event_cursor=excluded.event_cursor,
+                      blob_uri=coalesce(excluded.blob_uri,compatibility_exports.blob_uri),
+                      filesystem_path=coalesce(
+                        excluded.filesystem_path,
+                        compatibility_exports.filesystem_path
+                      ),
+                      error=CASE
+                        WHEN compatibility_exports.status='complete' THEN NULL
+                        ELSE excluded.error
+                      END,
+                      metadata=compatibility_exports.metadata || excluded.metadata,
+                      completed_at=CASE
+                        WHEN compatibility_exports.status='complete'
+                          THEN compatibility_exports.completed_at
+                        WHEN excluded.status IN ('complete','failed') THEN now()
+                        ELSE NULL
+                      END
                 RETURNING id,export_type,source_state_sha256""",
                 (
                     run_id,

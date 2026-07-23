@@ -1,0 +1,27 @@
+{
+  "assessment_path": "assessments/fr_00000000000000000000000000000001/fa_00000000000000000000000000000003.json",
+  "event": {
+    "event": "run_started",
+    "event_id": "fe_00000000000000000000000000000004",
+    "invocation_id": null,
+    "research_run_id": "fr_00000000000000000000000000000001",
+    "schema_version": 5,
+    "sequence_number": 1
+  },
+  "invocation_path": "invocations/fc_00000000000000000000000000000002.json",
+  "run": {
+    "audit_status": "not_run",
+    "data_completeness": "partial",
+    "declared_outcome": null,
+    "invocation_ids": [],
+    "lifecycle": {
+      "revision": 1,
+      "state": "running"
+    },
+    "objective": "golden objective",
+    "operational_status": "running",
+    "research_run_id": "fr_00000000000000000000000000000001",
+    "schema_version": 5
+  },
+  "run_path": "runs/fr_00000000000000000000000000000001.json"
+}

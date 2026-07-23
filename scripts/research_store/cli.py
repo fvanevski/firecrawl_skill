@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 from functools import partial
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -11,9 +12,15 @@ import tempfile
 from uuid import UUID, uuid4
 
 from .blob import ContentAddressedBlobStore
+from .catalog_export import EXPORT_SCHEMA_VERSION
 from .compat import export_json, import_scratch
 from .config import StoreConfig
-from .container import build_run_service, build_service, build_audit_service
+from .container import (
+    build_audit_service,
+    build_catalog_export_service,
+    build_run_service,
+    build_service,
+)
 from .domain import IngestRequest
 from .indexing import IndexWorker, OpenAICompatibleEmbedder
 from .postgres import PostgresUnitOfWork, connect
@@ -85,6 +92,47 @@ def parser():
     export_run = sub.add_parser("export-run")
     export_run.add_argument("id")
     export_run.add_argument("--output", required=True)
+
+    # ------------------------------------------------------------------
+    # Catalog v5 compatibility export (issue #35)
+    # ------------------------------------------------------------------
+    catalog_export = sub.add_parser("catalog-export")
+    catalog_sub = catalog_export.add_subparsers(
+        dest="catalog_command", required=True
+    )
+
+    catalog_run = catalog_sub.add_parser("run")
+    catalog_run.add_argument("external_id")
+    catalog_run.add_argument("--target-dir", required=True)
+
+    catalog_invocation = catalog_sub.add_parser("invocation")
+    catalog_invocation.add_argument("invocation_id")
+    catalog_invocation.add_argument("run_id")
+    catalog_invocation.add_argument("--target-dir", required=True)
+
+    catalog_events = catalog_sub.add_parser("events")
+    catalog_events.add_argument("external_id")
+    catalog_events.add_argument("--target-dir", required=True)
+
+    catalog_snapshots = catalog_sub.add_parser("snapshots")
+    catalog_snapshots.add_argument("external_id")
+    catalog_snapshots.add_argument("--target-dir", required=True)
+
+    catalog_claims = catalog_sub.add_parser("claims")
+    catalog_claims.add_argument("external_id")
+    catalog_claims.add_argument("--target-dir", required=True)
+
+    catalog_assessments = catalog_sub.add_parser("assessments")
+    catalog_assessments.add_argument("external_id")
+    catalog_assessments.add_argument("--target-dir", required=True)
+
+    catalog_manifest = catalog_sub.add_parser("manifest")
+    catalog_manifest.add_argument("external_id")
+    catalog_manifest.add_argument("--target-dir", required=True)
+
+    catalog_regenerate = catalog_sub.add_parser("regenerate")
+    catalog_regenerate.add_argument("external_id")
+    catalog_regenerate.add_argument("--target-dir", required=True)
 
     run_start = sub.add_parser("run-start")
     run_start.add_argument("external_id")
@@ -1216,6 +1264,146 @@ def main(argv=None):
             events = [row[0] for row in cur.fetchall()]
         export_json(Path(args.output), {"run": run[0], "retrieval_events": events})
         return 0
+
+    # ------------------------------------------------------------------
+    # Catalog v5 compatibility export (issue #35)
+    # ------------------------------------------------------------------
+    if args.command == "catalog-export":
+        from .catalog_export import ExportTargetNotFound
+
+        exporter = build_catalog_export_service(config)
+
+        try:
+            if args.catalog_command == "run":
+                run_id = _resolve_any_run_id(config, args.external_id)
+                result = exporter.export_run(
+                    run_id,
+                    args.target_dir,
+                )
+                print(dumps({
+                    "status": result.status,
+                    "export_id": "ce_" + sha256(
+                        f"{result.source_state_sha256}:{EXPORT_SCHEMA_VERSION}".encode()
+                    ).hexdigest()[:40],
+                    "source_state_sha256": result.source_state_sha256,
+                    "export_schema_version": result.export_schema_version,
+                    "target_dir": str(result.target_dir),
+                    "files_created": [str(f) for f in result.files_created],
+                    "invocation_count": len(result.invocations),
+                    "event_count": len(result.events),
+                    "claim_count": len(result.claims),
+                    "assessment_count": len(result.assessments),
+                    "error": result.error,
+                }))
+                return 0 if result.status == "complete" else 1
+
+            elif args.catalog_command == "invocation":
+                invocation_id = UUID(args.invocation_id)
+                run_id = _resolve_any_run_id(config, args.run_id)
+                result = exporter.export_invocation(
+                    invocation_id,
+                    run_id,
+                    args.target_dir,
+                )
+                print(dumps({
+                    "status": result.status,
+                    "export_id": result.export_id,
+                    "source_state_sha256": result.source_state_sha256,
+                    "export_schema_version": result.export_schema_version,
+                    "target_dir": str(result.target_dir),
+                    "files_created": [str(f) for f in result.files_created],
+                    "error": result.error,
+                }))
+                return 0 if result.status == "complete" else 1
+
+            elif args.catalog_command == "events":
+                run_id = _resolve_any_run_id(config, args.external_id)
+                result = exporter.export_events(run_id, args.target_dir)
+                print(dumps({
+                    "status": result.status,
+                    "export_id": result.export_id,
+                    "source_state_sha256": result.source_state_sha256,
+                    "export_schema_version": result.export_schema_version,
+                    "target_dir": str(result.target_dir),
+                    "files_created": [str(f) for f in result.files_created],
+                    "error": result.error,
+                }))
+                return 0 if result.status == "complete" else 1
+
+            elif args.catalog_command == "snapshots":
+                run_id = _resolve_any_run_id(config, args.external_id)
+                result = exporter.export_snapshots(run_id, args.target_dir)
+                print(dumps({
+                    "status": result.status,
+                    "export_id": result.export_id,
+                    "source_state_sha256": result.source_state_sha256,
+                    "export_schema_version": result.export_schema_version,
+                    "target_dir": str(result.target_dir),
+                    "files_created": [str(f) for f in result.files_created],
+                    "error": result.error,
+                }))
+                return 0 if result.status == "complete" else 1
+
+            elif args.catalog_command == "claims":
+                run_id = _resolve_any_run_id(config, args.external_id)
+                result = exporter.export_claims(run_id, args.target_dir)
+                print(dumps({
+                    "status": result.status,
+                    "export_id": result.export_id,
+                    "source_state_sha256": result.source_state_sha256,
+                    "export_schema_version": result.export_schema_version,
+                    "target_dir": str(result.target_dir),
+                    "files_created": [str(f) for f in result.files_created],
+                    "error": result.error,
+                }))
+                return 0 if result.status == "complete" else 1
+
+            elif args.catalog_command == "assessments":
+                run_id = _resolve_any_run_id(config, args.external_id)
+                result = exporter.export_assessments(run_id, args.target_dir)
+                print(dumps({
+                    "status": result.status,
+                    "export_id": result.export_id,
+                    "source_state_sha256": result.source_state_sha256,
+                    "export_schema_version": result.export_schema_version,
+                    "target_dir": str(result.target_dir),
+                    "files_created": [str(f) for f in result.files_created],
+                    "error": result.error,
+                }))
+                return 0 if result.status == "complete" else 1
+
+            elif args.catalog_command == "manifest":
+                run_id = _resolve_any_run_id(config, args.external_id)
+                result = exporter.export_manifest(run_id, args.target_dir)
+                print(dumps({
+                    "status": result.status,
+                    "export_id": result.export_id,
+                    "source_state_sha256": result.source_state_sha256,
+                    "export_schema_version": result.export_schema_version,
+                    "target_dir": str(result.target_dir),
+                    "files_created": [str(f) for f in result.files_created],
+                    "error": result.error,
+                }))
+                return 0 if result.status == "complete" else 1
+
+            elif args.catalog_command == "regenerate":
+                run_id = _resolve_any_run_id(config, args.external_id)
+                result = exporter.regenerate_run_export(run_id, args.target_dir)
+                print(dumps({
+                    "status": result.status,
+                    "source_state_sha256": result.source_state_sha256,
+                    "export_schema_version": result.export_schema_version,
+                    "target_dir": str(result.target_dir),
+                    "files_created": [str(f) for f in result.files_created],
+                    "error": result.error,
+                }))
+                return 0 if result.status == "complete" else 1
+
+        except ExportTargetNotFound as exc:
+            raise SystemExit(str(exc)) from exc
+        except Exception as exc:
+            raise SystemExit(f"catalog export failed: {exc}") from exc
+
     if args.command == "run-start":
         status = build_run_service(config).create(
             args.objective,
