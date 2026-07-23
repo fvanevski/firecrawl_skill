@@ -178,7 +178,6 @@ class CorpusService:
                 "<html",
                 "<head",
                 "<body",
-                "<div",
                 "<main",
                 "<article",
             )

@@ -753,8 +753,11 @@ class TestContentSniffing:
 
         assert CorpusService._is_html_content(None, b"<html><body>")
         assert CorpusService._is_html_content(None, b"<main><article>")
-        assert CorpusService._is_html_content(None, b"<div><p>")
         assert CorpusService._is_html_content(None, b"<!doctype html>")
+        # <div> is no longer a sniff marker — it's too broad
+        # These are the actual sniff markers
+        assert CorpusService._is_html_content(None, b"<head><title>")
+        assert CorpusService._is_html_content(None, b"<body><div>")
 
     def test_content_sniff_not_html(self):
         from research_store.service import CorpusService
@@ -900,3 +903,84 @@ class TestRepresentativeFixtures:
         assert "Sunset over the ocean" in captions[0].text
         assert "Mountains at dawn" in captions[1].text
         assert "City skyline at night" in captions[2].text
+
+
+# ---------------------------------------------------------------------------
+# Integration test — full ingest round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestIngestRoundTrip:
+    """Integration test exercising the full pipeline:
+    _prepare_ingest → _parse_content → deterministic_chunks.
+    """
+
+    def test_html_ingest_produces_blocks_and_chunks(self):
+        """Verify that HTML content parsed by HtmlMainContentParser
+        produces both blocks and chunks through the full pipeline."""
+        from research_store.parsing import deterministic_chunks
+        from research_store.parsing import build_default_registry
+
+        # Minimal mock config
+        config = type(
+            "Config",
+            (),
+            {
+                "parser_version": "test-v1",
+                "chunker_version": "test-v1",
+                "normalization_version": "test-v1",
+            },
+        )()
+        registry = build_default_registry()
+
+        # Use the actual service's _parse_content method
+        from research_store.service import CorpusService
+
+        service_obj = CorpusService(
+            config=config,
+            uow_factory=lambda: None,
+            blob_store=None,
+            parser_registry=registry,
+        )
+
+        # HTML content with multiple structural elements
+        raw = (
+            b"<main>"
+            b"<h1>Test Article</h1>"
+            b"<p>Introduction paragraph with <a href='https://example.com'>link</a>.</p>"
+            b"<h2>Section</h2>"
+            b"<ul><li>Item one</li><li>Item two</li></ul>"
+            b"<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>"
+            b"<pre><code>code snippet</code></pre>"
+            b"</main>"
+        )
+        mime_type = "text/html"
+
+        # Parse through service layer
+        blocks = service_obj._parse_content(raw, mime_type)
+        assert len(blocks) >= 1
+
+        # Verify block types
+        types = [b.block_type for b in blocks]
+        assert "heading" in types
+        assert "paragraph" in types
+        assert "list_item" in types
+        assert "table_row" in types
+        assert "code" in types
+
+        # Verify parser version is recorded
+        for block in blocks:
+            assert hasattr(block, "parser_version")
+            assert block.parser_version == "html-main-content-v1"
+
+        # Run deterministic_chunks on the blocks
+        chunks = deterministic_chunks(blocks, max_chars=3000)
+        assert len(chunks) >= 1
+
+        # Verify chunk structure
+        for chunk in chunks:
+            assert hasattr(chunk, "text")
+            assert hasattr(chunk, "content_sha256")
+            assert hasattr(chunk, "token_count")
+            assert chunk.token_count > 0
+            assert chunk.content_sha256  # Non-empty hash

@@ -61,6 +61,17 @@ that cannot be decoded), it returns a ``ParseResult`` with
 * Links are converted to Markdown link syntax.
 * Images are converted to ``[alt]`` syntax.
 
+## Known limitations
+
+* **Mixed-content headings:** When a heading element immediately contains
+  child headings (e.g. ``<h2>B<h3>C</h3></h2>``), the parent heading text
+  ``B`` is not captured because ``html.parser.HTMLParser`` fires separate
+  events for each element. The child heading's ``heading_path`` may contain
+  an empty string at the parent level (e.g. ``("A", "")``).  This does not
+  cause data corruption — empty strings are simply less informative than
+  actual text.  Common cases where headings contain only text content are
+  handled correctly.
+
 .. versionchanged:: P5-03
    Introduced as part of Phase 5 DOM-aware HTML extraction.
 """
@@ -145,6 +156,24 @@ class _MainContentCollector(HTMLParser):
         self._in_title = False
         self._title_pending = False
         self._pending_heading_title: str = ""  # Temp storage for current heading text
+
+    # ------------------------------------------------------------------
+    # Public accessor for metadata (avoids private attribute access from parse())
+    # ------------------------------------------------------------------
+
+    @property
+    def metadata(self) -> dict[str, str]:
+        """Return the extracted metadata dict.
+
+        This property provides public access to the internal ``_metadata``
+        dict so that the ``HtmlMainContentParser.parse()`` method does not
+        need to reach into a private attribute.
+        """
+        return self._metadata
+
+    @metadata.setter
+    def metadata(self, value: dict[str, str]) -> None:
+        self._metadata = value
 
     # ------------------------------------------------------------------
     # Start-tag handling
@@ -526,10 +555,10 @@ class HtmlMainContentParser(Parser):
             )
 
         # Use first h1 as title if no <title> was found
-        if not collector._metadata.get("title"):
+        if not collector.metadata.get("title"):
             for block in collector.blocks:
                 if block.block_type == "heading" and block.text:
-                    collector._metadata["title"] = block.text
+                    collector.metadata["title"] = block.text
                     break
 
         return ParseResult(
@@ -543,7 +572,7 @@ class HtmlMainContentParser(Parser):
                 "block_type_counts": self._count_block_types(collector.blocks),
                 "extractor_version": "html-main-content-v1",
                 "fallback_version": "html-normalized-v1",
-                "metadata": collector._metadata,
+                "metadata": collector.metadata,
             },
         )
 
