@@ -5,7 +5,7 @@ description: "Acquire, retain, retrieve, and audit web research with Firecrawl. 
 
 # Firecrawl Research Corpus and Acquisition
 
-Use the database first for retained research. Use Firecrawl acquisition wrappers when the corpus lacks current evidence, then retrieve through compact database manifests and bounded passages. Preserve scratch files and Catalog v5 records as compatibility, debugging, and audit surfaces; do not routinely scan scratch trees when PostgreSQL contains the retained assets. Use direct MCP tools only when the CLI workflow is unavailable.
+PostgreSQL is the sole authority for research workflow state, claims, audits, and retrieval indices. Catalog v5 and scratch directories are derived compatibility artifacts — generated after database commits, never read to determine current state. Use the database first for retained research. Use Firecrawl acquisition wrappers when the corpus lacks current evidence, then retrieve through compact database manifests and bounded passages.
 
 ## Choose the First Operation
 
@@ -116,7 +116,7 @@ See `references/cli-script-disambiguation.md` when the `firecrawl` command is mi
 
 ## Authoritative Research Asset Store
 
-PostgreSQL is authoritative; content-addressed blobs retain immutable payload bytes; versioned Qdrant collections are rebuildable retrieval projections; Valkey provides optional wakeups only. Successful wrappers persist an invocation batch and write `_corpus.json` with stable source, snapshot, document, and chunk IDs. Attach `--research-run-id fr_<uuid>` to link batches, assets, and retrieval events to the matching Catalog v5 run.
+PostgreSQL is authoritative; content-addressed blobs retain immutable payload bytes; versioned Qdrant collections are rebuildable retrieval projections; Valkey provides optional wakeups only. Catalog v5 and scratch files are derived compatibility artifacts — written only after database commits succeed. Successful wrappers persist an invocation batch and write `_corpus.json` with stable source, snapshot, document, and chunk IDs. Attach `--research-run-id fr_<uuid>` to link batches, assets, and retrieval events to the matching Catalog v5 run.
 
 Set `FIRECRAWL_RESEARCH_PERSIST=auto|on|off`. Use `auto` to persist when a database resolves, `on` to require persistence before acquisition begins, and `off` for filesystem-only acquisition. Persistence is fail-closed: if an enabled store cannot retain every successful Firecrawl result, preserve diagnostic scratch output and the partial corpus manifest, then return nonzero. Never silently downgrade to scratch-only mode. For private runs, disable both durable systems:
 
