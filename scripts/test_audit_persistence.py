@@ -939,7 +939,7 @@ if TEST_DSN:
         require_disposable_database_reset,
     )
 
-    @pytest.fixture(scope="session")
+    @pytest.fixture(scope="session", autouse=True)
     def prepared_database_for_audit():
         """Exercise both fresh-head and populated-0018 upgrade migrations."""
         require_disposable_database_reset(
