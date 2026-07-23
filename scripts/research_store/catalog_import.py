@@ -96,10 +96,18 @@ def _sha256_hex(data: bytes) -> str:
 
 
 def _compute_dir_sha256(root: Path) -> str:
-    """Compute a deterministic SHA-256 of all files in a Catalog root."""
+    """Compute a deterministic SHA-256 of all files in a Catalog root.
+
+    Includes all ``.json`` files and ``events.jsonl`` so that two catalogs
+    with identical JSON but different event counts produce different hashes.
+    """
     h = hashlib.sha256()
     for path in sorted(root.rglob("*")):
-        if path.is_file() and path.name.endswith(".json"):
+        if not path.is_file():
+            continue
+        # Include all .json files and the events.jsonl file (which is
+        # scanned by _parse_events_file but was previously excluded).
+        if path.name.endswith(".json") or path.name == "events.jsonl":
             h.update(path.name.encode())
             try:
                 h.update(path.read_bytes())

@@ -444,7 +444,12 @@ def parser():
         "--apply",
         action="store_true",
         default=False,
-        help="Apply the import (write to PostgreSQL). Default is dry-run.",
+        help=(
+            "Apply the import (write to PostgreSQL). "
+            "Default is dry-run (no writes). "
+            "Exit codes: 0 = success, 1 = conflicts/omissions detected, "
+            "2 = errors (e.g. all records malformed)."
+        ),
     )
     catalog_import.add_argument(
         "--report",

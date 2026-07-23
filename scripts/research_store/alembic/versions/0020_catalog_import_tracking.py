@@ -245,6 +245,12 @@ def upgrade():
               ON catalog_import_tracking (status);
           END IF;
           IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes WHERE tablename = 'catalog_import_tracking' AND indexname = 'idx_catalog_import_tracking_source_state'
+          ) THEN
+            CREATE INDEX idx_catalog_import_tracking_source_state
+              ON catalog_import_tracking (source_state_sha256);
+          END IF;
+          IF NOT EXISTS (
             SELECT 1 FROM pg_indexes WHERE tablename = 'catalog_import_record_map' AND indexname = 'idx_catalog_import_record_map_catalog'
           ) THEN
             CREATE INDEX idx_catalog_import_record_map_catalog
