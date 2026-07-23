@@ -324,7 +324,15 @@ def _split_on_whitespace(
     tokenizer: Tokenizer,
     max_tokens: int,
 ) -> list[AtomicBlock]:
-    """Split text on whitespace boundaries."""
+    """Split text on whitespace boundaries.
+
+    Intermediate chunks receive a trailing space to preserve word separation;
+    the final chunk does not.  This avoids trailing whitespace on the last
+    chunk but means the concatenated token count of split chunks may not
+    exactly equal the original block's token count — which is acceptable
+    because chunk boundaries are defined by the hard ``max_tokens`` limit,
+    not by token-count parity with the source block.
+    """
     words = atomic.text.split()
     if not words:
         return [atomic]

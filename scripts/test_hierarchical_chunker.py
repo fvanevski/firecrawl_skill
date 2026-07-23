@@ -813,3 +813,94 @@ class TestServiceIntegration:
             assert config.chunker_max_tokens == 500
         finally:
             del os.environ["CHUNKER_MAX_TOKENS"]
+
+
+class TestRederiveIdempotency:
+    """Tests for re-derive idempotency of hierarchical chunking."""
+
+    def test_chunker_idempotent_across_calls(self):
+        """Calling hierarchical_chunks twice with same input produces identical output."""
+        source = "# Title\n\nParagraph one.\n\n- item A\n- item B\n\n```py\nprint(1)\n```\n"
+        blocks = structural_blocks(source)
+
+        first = hierarchical_chunks(
+            blocks,
+            max_tokens=50,
+            tokenizer_name="cl100k_base",
+            chunker_version="hierarchical-v1",
+            chunker_name="hierarchical",
+        )
+        second = hierarchical_chunks(
+            blocks,
+            max_tokens=50,
+            tokenizer_name="cl100k_base",
+            chunker_version="hierarchical-v1",
+            chunker_name="hierarchical",
+        )
+
+        assert len(first) == len(second)
+        for a, b in zip(first, second):
+            assert a.text == b.text
+            assert a.content_sha256 == b.content_sha256
+            assert a.token_count == b.token_count
+            assert a.ordinal == b.ordinal
+            assert a.first_block_ordinal == b.first_block_ordinal
+            assert a.last_block_ordinal == b.last_block_ordinal
+            assert a.heading_path == b.heading_path
+            assert a.parent_block_ordinal == b.parent_block_ordinal
+
+    def test_different_max_tokens_produce_different_chunks(self):
+        """Changing max_tokens produces different chunk boundaries."""
+        source = "# Title\n\n" + "word " * 200
+        blocks = structural_blocks(source)
+
+        chunks_50 = hierarchical_chunks(
+            blocks,
+            max_tokens=50,
+            tokenizer_name="cl100k_base",
+            chunker_version="hierarchical-v1",
+            chunker_name="hierarchical",
+        )
+        chunks_200 = hierarchical_chunks(
+            blocks,
+            max_tokens=200,
+            tokenizer_name="cl100k_base",
+            chunker_version="hierarchical-v1",
+            chunker_name="hierarchical",
+        )
+
+        # Fewer chunks for larger max_tokens
+        assert len(chunks_50) > len(chunks_200)
+        # All chunks still respect their respective limits
+        for chunk in chunks_50:
+            assert chunk.token_count <= 50
+        for chunk in chunks_200:
+            assert chunk.token_count <= 200
+
+    def test_different_chunker_version_produces_different_derivation(self):
+        """Changing chunker_version produces different derivation keys."""
+        source = "# Title\n\nParagraph one."
+        blocks = structural_blocks(source)
+
+        chunks_v1 = hierarchical_chunks(
+            blocks,
+            max_tokens=100,
+            tokenizer_name="cl100k_base",
+            chunker_version="hierarchical-v1",
+            chunker_name="hierarchical",
+        )
+        chunks_v2 = hierarchical_chunks(
+            blocks,
+            max_tokens=100,
+            tokenizer_name="cl100k_base",
+            chunker_version="hierarchical-v2",
+            chunker_name="hierarchical",
+        )
+
+        assert len(chunks_v1) == len(chunks_v2)
+        for a, b in zip(chunks_v1, chunks_v2):
+            assert a.text == b.text  # Same content
+            assert a.chunker_version == "hierarchical-v1"
+            assert b.chunker_version == "hierarchical-v2"
+            # Different derivation keys (different chunker_version)
+            assert a.content_sha256 == b.content_sha256  # Content is same

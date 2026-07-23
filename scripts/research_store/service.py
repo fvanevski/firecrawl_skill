@@ -88,6 +88,8 @@ class CorpusService:
                     last_block_ordinal=hc.last_block_ordinal,
                     token_count=hc.token_count,
                     heading_path=hc.heading_path,
+                    tokenizer_name=hc.tokenizer_name,
+                    parent_block_ordinal=hc.parent_block_ordinal,
                 )
             )
         return (

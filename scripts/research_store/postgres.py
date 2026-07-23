@@ -284,10 +284,10 @@ class PostgresUnitOfWork:
                     metadata_dict: dict[str, object] = {
                         "heading_path": list(chunk.heading_path),
                     }
-                    # Add hierarchical metadata if present
-                    if hasattr(chunk, "tokenizer_name"):
+                    # Include hierarchical metadata when present
+                    if chunk.tokenizer_name is not None:
                         metadata_dict["tokenizer_name"] = chunk.tokenizer_name
-                    if hasattr(chunk, "parent_block_ordinal"):
+                    if chunk.parent_block_ordinal is not None:
                         metadata_dict["parent_block_ordinal"] = (
                             chunk.parent_block_ordinal
                         )
@@ -305,9 +305,9 @@ class PostgresUnitOfWork:
                             chunk.content_sha256,
                             chunker_name,
                             chunker_version,
-                            getattr(chunk, "tokenizer_name", None),
-                            block_ids.get(getattr(chunk, "parent_block_ordinal"))
-                            if getattr(chunk, "parent_block_ordinal", None) is not None
+                            chunk.tokenizer_name,
+                            block_ids.get(chunk.parent_block_ordinal)
+                            if chunk.parent_block_ordinal is not None
                             else None,
                             json.dumps(metadata_dict),
                         ),
