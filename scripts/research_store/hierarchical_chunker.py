@@ -114,6 +114,7 @@ class AtomicBlock:
         block_type: Semantic type (heading, paragraph, code, list_item,
             table_row, quotation, caption).
         heading_path: Tuple of ancestor heading titles.
+        ordinal: The original block ordinal in the parse result.
         char_start: Inclusive character offset into the source.
         char_end: Exclusive character offset into the source.
         is_atomic: Whether this block can be safely split.
@@ -123,6 +124,7 @@ class AtomicBlock:
     text: str
     block_type: str
     heading_path: tuple[str, ...] = ()
+    ordinal: int | None = None
     char_start: int | None = None
     char_end: int | None = None
     is_atomic: bool = False
@@ -140,6 +142,7 @@ def _classify_block(block: Block) -> AtomicBlock:
         text=block.text,
         block_type=block.block_type,
         heading_path=block.heading_path,
+        ordinal=block.ordinal,
         char_start=block.char_start,
         char_end=block.char_end,
         is_atomic=block.block_type in atomic_types,
@@ -263,6 +266,9 @@ def _split_by_lines(
                     text="\n".join(current_lines) + "\n",
                     block_type=template.block_type,
                     heading_path=template.heading_path,
+                    ordinal=template.ordinal,
+                    char_start=template.char_start,
+                    char_end=None,
                     is_atomic=False,
                 )
             )
@@ -278,6 +284,9 @@ def _split_by_lines(
                 text="\n".join(current_lines) + ("\n" if current_lines[-1] else ""),
                 block_type=template.block_type,
                 heading_path=template.heading_path,
+                ordinal=template.ordinal,
+                char_start=template.char_start,
+                char_end=None,
                 is_atomic=False,
             )
         )
@@ -306,6 +315,9 @@ def _split_by_parts(
                     text=separator.join(current_parts) + separator,
                     block_type=template.block_type,
                     heading_path=template.heading_path,
+                    ordinal=template.ordinal,
+                    char_start=template.char_start,
+                    char_end=None,
                     is_atomic=False,
                 )
             )
@@ -321,6 +333,9 @@ def _split_by_parts(
                 text=separator.join(current_parts) + separator,
                 block_type=template.block_type,
                 heading_path=template.heading_path,
+                ordinal=template.ordinal,
+                char_start=template.char_start,
+                char_end=None,
                 is_atomic=False,
             )
         )
@@ -350,6 +365,7 @@ def _split_on_whitespace(
                     text=" ".join(current_words) + " ",
                     block_type=atomic.block_type,
                     heading_path=atomic.heading_path,
+                    ordinal=atomic.ordinal,
                     char_start=atomic.char_start,
                     char_end=None,
                     is_atomic=False,
@@ -367,6 +383,7 @@ def _split_on_whitespace(
                 text=" ".join(current_words),
                 block_type=atomic.block_type,
                 heading_path=atomic.heading_path,
+                ordinal=atomic.ordinal,
                 char_start=atomic.char_start,
                 char_end=atomic.char_end,
                 is_atomic=False,
@@ -452,13 +469,13 @@ def hierarchical_chunks(
                 text=text,
                 content_sha256=hashlib.sha256(text.encode()).hexdigest(),
                 first_block_ordinal=first_block_ordinal or 0,
-                last_block_ordinal=current[-1].char_start or 0,
+                last_block_ordinal=current[-1].ordinal or 0,
                 token_count=token_count,
                 heading_path=heading_path,
                 chunker_name=chunker_name,
                 chunker_version=chunker_version,
                 tokenizer_name=tokenizer_name,
-                parent_block_ordinal=current[0].char_start,
+                parent_block_ordinal=current[0].ordinal,
                 metadata={
                     "block_count": len(current),
                     "block_types": [a.block_type for a in current],
@@ -498,7 +515,7 @@ def hierarchical_chunks(
         current.append(atomic)
         current_tokens += atomic_tokens
         if first_block_ordinal is None:
-            first_block_ordinal = atomic.char_start
+            first_block_ordinal = atomic.ordinal
 
     _emit_chunk()
 
