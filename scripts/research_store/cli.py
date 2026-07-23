@@ -97,9 +97,7 @@ def parser():
     # Catalog v5 compatibility export (issue #35)
     # ------------------------------------------------------------------
     catalog_export = sub.add_parser("catalog-export")
-    catalog_sub = catalog_export.add_subparsers(
-        dest="catalog_command", required=True
-    )
+    catalog_sub = catalog_export.add_subparsers(dest="catalog_command", required=True)
 
     catalog_run = catalog_sub.add_parser("run")
     catalog_run.add_argument("external_id")
@@ -192,6 +190,38 @@ def parser():
     run_cancel.add_argument("--expected-revision", type=int)
     run_cancel.add_argument("--idempotency-key")
     run_cancel.add_argument("--actor", default="cli")
+    # ------------------------------------------------------------------
+    # Compatibility commands routed through PostgreSQL (issue #36)
+    # ------------------------------------------------------------------
+    run_annotate = sub.add_parser("run-annotate")
+    run_annotate.add_argument("external_id")
+    run_annotate.add_argument(
+        "--type", choices=("pivot", "retry", "decision"), required=True
+    )
+    run_annotate.add_argument("--reason", required=True)
+    run_annotate.add_argument("--from-invocation")
+    run_annotate.add_argument("--to-invocation")
+    run_annotate.add_argument("--expected-revision", type=int)
+    run_annotate.add_argument("--idempotency-key")
+    run_annotate.add_argument("--actor", default="cli")
+    run_verify = sub.add_parser("run-verify")
+    run_verify.add_argument("external_id")
+    run_verify.add_argument("--output", default="-")
+    run_audit = sub.add_parser("run-audit")
+    run_audit.add_argument("external_id")
+    run_audit.add_argument("--target-hash")
+    run_audit.add_argument(
+        "--llm", choices=("local", "openai", "gemini"), default="local"
+    )
+    run_audit.add_argument("--model")
+    run_audit.add_argument("--force", action="store_true")
+    run_audit.add_argument("--stages")
+    run_audit.add_argument("--max-calls", type=int)
+    run_audit.add_argument("--max-input-tokens", type=int)
+    run_audit.add_argument("--commercial-fallback", choices=("openai", "gemini"))
+    run_audit.add_argument("--fallback-model")
+    run_compare = sub.add_parser("run-compare")
+    run_compare.add_argument("external_ids", nargs="+")
     budget_record = sub.add_parser("budget-record")
     budget_record.add_argument("external_id")
     budget_record.add_argument("--research-spec", required=True)
@@ -374,7 +404,9 @@ def parser():
     audit.add_argument("--prompt-template-version", default="staged-research-audit-v1")
     audit.add_argument("--policy-version", default="audit-policy-v1")
     audit.add_argument("--stages", default="rubric,acquisition,evidence,synthesis")
-    audit.add_argument("--status", default="partial", choices=["completed", "partial", "failed"])
+    audit.add_argument(
+        "--status", default="partial", choices=["completed", "partial", "failed"]
+    )
     audit.add_argument("--provider", default="local")
     audit.add_argument("--model")
     audit.add_argument("--prompt-hash")
@@ -1280,21 +1312,26 @@ def main(argv=None):
                     run_id,
                     args.target_dir,
                 )
-                print(dumps({
-                    "status": result.status,
-                    "export_id": "ce_" + sha256(
-                        f"{result.source_state_sha256}:{EXPORT_SCHEMA_VERSION}".encode()
-                    ).hexdigest()[:40],
-                    "source_state_sha256": result.source_state_sha256,
-                    "export_schema_version": result.export_schema_version,
-                    "target_dir": str(result.target_dir),
-                    "files_created": [str(f) for f in result.files_created],
-                    "invocation_count": len(result.invocations),
-                    "event_count": len(result.events),
-                    "claim_count": len(result.claims),
-                    "assessment_count": len(result.assessments),
-                    "error": result.error,
-                }))
+                print(
+                    dumps(
+                        {
+                            "status": result.status,
+                            "export_id": "ce_"
+                            + sha256(
+                                f"{result.source_state_sha256}:{EXPORT_SCHEMA_VERSION}".encode()
+                            ).hexdigest()[:40],
+                            "source_state_sha256": result.source_state_sha256,
+                            "export_schema_version": result.export_schema_version,
+                            "target_dir": str(result.target_dir),
+                            "files_created": [str(f) for f in result.files_created],
+                            "invocation_count": len(result.invocations),
+                            "event_count": len(result.events),
+                            "claim_count": len(result.claims),
+                            "assessment_count": len(result.assessments),
+                            "error": result.error,
+                        }
+                    )
+                )
                 return 0 if result.status == "complete" else 1
 
             elif args.catalog_command == "invocation":
@@ -1305,98 +1342,126 @@ def main(argv=None):
                     run_id,
                     args.target_dir,
                 )
-                print(dumps({
-                    "status": result.status,
-                    "export_id": result.export_id,
-                    "source_state_sha256": result.source_state_sha256,
-                    "export_schema_version": result.export_schema_version,
-                    "target_dir": str(result.target_dir),
-                    "files_created": [str(f) for f in result.files_created],
-                    "error": result.error,
-                }))
+                print(
+                    dumps(
+                        {
+                            "status": result.status,
+                            "export_id": result.export_id,
+                            "source_state_sha256": result.source_state_sha256,
+                            "export_schema_version": result.export_schema_version,
+                            "target_dir": str(result.target_dir),
+                            "files_created": [str(f) for f in result.files_created],
+                            "error": result.error,
+                        }
+                    )
+                )
                 return 0 if result.status == "complete" else 1
 
             elif args.catalog_command == "events":
                 run_id = _resolve_any_run_id(config, args.external_id)
                 result = exporter.export_events(run_id, args.target_dir)
-                print(dumps({
-                    "status": result.status,
-                    "export_id": result.export_id,
-                    "source_state_sha256": result.source_state_sha256,
-                    "export_schema_version": result.export_schema_version,
-                    "target_dir": str(result.target_dir),
-                    "files_created": [str(f) for f in result.files_created],
-                    "error": result.error,
-                }))
+                print(
+                    dumps(
+                        {
+                            "status": result.status,
+                            "export_id": result.export_id,
+                            "source_state_sha256": result.source_state_sha256,
+                            "export_schema_version": result.export_schema_version,
+                            "target_dir": str(result.target_dir),
+                            "files_created": [str(f) for f in result.files_created],
+                            "error": result.error,
+                        }
+                    )
+                )
                 return 0 if result.status == "complete" else 1
 
             elif args.catalog_command == "snapshots":
                 run_id = _resolve_any_run_id(config, args.external_id)
                 result = exporter.export_snapshots(run_id, args.target_dir)
-                print(dumps({
-                    "status": result.status,
-                    "export_id": result.export_id,
-                    "source_state_sha256": result.source_state_sha256,
-                    "export_schema_version": result.export_schema_version,
-                    "target_dir": str(result.target_dir),
-                    "files_created": [str(f) for f in result.files_created],
-                    "error": result.error,
-                }))
+                print(
+                    dumps(
+                        {
+                            "status": result.status,
+                            "export_id": result.export_id,
+                            "source_state_sha256": result.source_state_sha256,
+                            "export_schema_version": result.export_schema_version,
+                            "target_dir": str(result.target_dir),
+                            "files_created": [str(f) for f in result.files_created],
+                            "error": result.error,
+                        }
+                    )
+                )
                 return 0 if result.status == "complete" else 1
 
             elif args.catalog_command == "claims":
                 run_id = _resolve_any_run_id(config, args.external_id)
                 result = exporter.export_claims(run_id, args.target_dir)
-                print(dumps({
-                    "status": result.status,
-                    "export_id": result.export_id,
-                    "source_state_sha256": result.source_state_sha256,
-                    "export_schema_version": result.export_schema_version,
-                    "target_dir": str(result.target_dir),
-                    "files_created": [str(f) for f in result.files_created],
-                    "error": result.error,
-                }))
+                print(
+                    dumps(
+                        {
+                            "status": result.status,
+                            "export_id": result.export_id,
+                            "source_state_sha256": result.source_state_sha256,
+                            "export_schema_version": result.export_schema_version,
+                            "target_dir": str(result.target_dir),
+                            "files_created": [str(f) for f in result.files_created],
+                            "error": result.error,
+                        }
+                    )
+                )
                 return 0 if result.status == "complete" else 1
 
             elif args.catalog_command == "assessments":
                 run_id = _resolve_any_run_id(config, args.external_id)
                 result = exporter.export_assessments(run_id, args.target_dir)
-                print(dumps({
-                    "status": result.status,
-                    "export_id": result.export_id,
-                    "source_state_sha256": result.source_state_sha256,
-                    "export_schema_version": result.export_schema_version,
-                    "target_dir": str(result.target_dir),
-                    "files_created": [str(f) for f in result.files_created],
-                    "error": result.error,
-                }))
+                print(
+                    dumps(
+                        {
+                            "status": result.status,
+                            "export_id": result.export_id,
+                            "source_state_sha256": result.source_state_sha256,
+                            "export_schema_version": result.export_schema_version,
+                            "target_dir": str(result.target_dir),
+                            "files_created": [str(f) for f in result.files_created],
+                            "error": result.error,
+                        }
+                    )
+                )
                 return 0 if result.status == "complete" else 1
 
             elif args.catalog_command == "manifest":
                 run_id = _resolve_any_run_id(config, args.external_id)
                 result = exporter.export_manifest(run_id, args.target_dir)
-                print(dumps({
-                    "status": result.status,
-                    "export_id": result.export_id,
-                    "source_state_sha256": result.source_state_sha256,
-                    "export_schema_version": result.export_schema_version,
-                    "target_dir": str(result.target_dir),
-                    "files_created": [str(f) for f in result.files_created],
-                    "error": result.error,
-                }))
+                print(
+                    dumps(
+                        {
+                            "status": result.status,
+                            "export_id": result.export_id,
+                            "source_state_sha256": result.source_state_sha256,
+                            "export_schema_version": result.export_schema_version,
+                            "target_dir": str(result.target_dir),
+                            "files_created": [str(f) for f in result.files_created],
+                            "error": result.error,
+                        }
+                    )
+                )
                 return 0 if result.status == "complete" else 1
 
             elif args.catalog_command == "regenerate":
                 run_id = _resolve_any_run_id(config, args.external_id)
                 result = exporter.regenerate_run_export(run_id, args.target_dir)
-                print(dumps({
-                    "status": result.status,
-                    "source_state_sha256": result.source_state_sha256,
-                    "export_schema_version": result.export_schema_version,
-                    "target_dir": str(result.target_dir),
-                    "files_created": [str(f) for f in result.files_created],
-                    "error": result.error,
-                }))
+                print(
+                    dumps(
+                        {
+                            "status": result.status,
+                            "source_state_sha256": result.source_state_sha256,
+                            "export_schema_version": result.export_schema_version,
+                            "target_dir": str(result.target_dir),
+                            "files_created": [str(f) for f in result.files_created],
+                            "error": result.error,
+                        }
+                    )
+                )
                 return 0 if result.status == "complete" else 1
 
         except ExportTargetNotFound as exc:
@@ -1512,6 +1577,78 @@ def main(argv=None):
             reason=args.reason,
         )
         print(dumps(result.to_dict()))
+        return 0
+    # ------------------------------------------------------------------
+    # Compatibility commands routed through PostgreSQL (issue #36)
+    # ------------------------------------------------------------------
+    if args.command == "run-annotate":
+        run_service = build_run_service(config)
+        status = run_service.status(external_id=args.external_id)
+        expected_revision = (
+            args.expected_revision
+            if args.expected_revision is not None
+            else status.lifecycle_revision
+        )
+        result = run_service.annotate(
+            status.id,
+            event_type=args.type,
+            reason=args.reason,
+            from_invocation=args.from_invocation,
+            to_invocation=args.to_invocation,
+            expected_revision=expected_revision,
+            idempotency_key=args.idempotency_key
+            or f"run:annotate:{args.external_id}:{args.type}:{args.reason}",
+            actor_type=args.actor,
+        )
+        print(dumps(result))
+        return 0
+    if args.command == "run-verify":
+        run_service = build_run_service(config)
+        status = run_service.status(external_id=args.external_id)
+        result = run_service.verify(status.id)
+        output_file = args.output
+        if output_file == "-":
+            print(dumps(result))
+        else:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".json", delete=False, dir=str(Path(output_file).parent)
+            ) as f:
+                json.dump(result, f, indent=2, sort_keys=True)
+                f.write("\n")
+            print(dumps({"status": "written", "path": f.name}))
+        return 0
+    if args.command == "run-audit":
+        run_service = build_run_service(config)
+        status = run_service.status(external_id=args.external_id)
+        
+        target_hash = args.target_hash
+        if not target_hash:
+            from research_store.audit_packet import compute_audit_packet_hash_from_db
+            target_hash = compute_audit_packet_hash_from_db(status.id, run_service.uow_factory)
+            
+        result = run_service.trigger_audit(
+            status.id,
+            target_hash=target_hash,
+            provider=args.llm,
+            model=args.model,
+            force=args.force,
+            stages=args.stages.split(",") if args.stages else None,
+            max_calls=args.max_calls,
+            max_input_tokens=args.max_input_tokens,
+            fallback_provider=args.commercial_fallback,
+            fallback_model=args.fallback_model,
+        )
+        print(dumps(result))
+        return 0
+    if args.command == "run-compare":
+        run_service = build_run_service(config)
+        results = []
+        for external_id in args.external_ids:
+            run_status = run_service.status(external_id=external_id)
+            results.append(run_status.to_dict())
+        print(dumps({"comparison": results, "count": len(results)}))
         return 0
     if args.command == "budget-record":
         from research_domain import load_model, serialize_model
@@ -1964,7 +2101,9 @@ def main(argv=None):
         audit_svc = build_audit_service(config)
         run_id = _resolve_run_id(config, args.external_id)
         if run_id is None:
-            raise SystemExit(f"research run not found or not running: {args.external_id}")
+            raise SystemExit(
+                f"research run not found or not running: {args.external_id}"
+            )
 
         stage_set = [s.strip() for s in args.stages.split(",") if s.strip()]
         manifest = None
@@ -2035,9 +2174,7 @@ def main(argv=None):
         else:
             output_path = Path(args.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(output_path.parent), suffix=".tmp"
-            )
+            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
                     json.dump(export, f, indent=2, default=json_default)
@@ -2051,7 +2188,9 @@ def main(argv=None):
         audit_svc = build_audit_service(config)
         run_id = _resolve_run_id(config, args.external_id)
         if run_id is None:
-            raise SystemExit(f"research run not found or not running: {args.external_id}")
+            raise SystemExit(
+                f"research run not found or not running: {args.external_id}"
+            )
 
         stale = audit_svc.detect_stale_assessments(
             run_id=run_id,

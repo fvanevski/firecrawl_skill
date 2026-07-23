@@ -52,7 +52,9 @@ def connect(database_url: str):
     return psycopg.connect(database_url)
 
 
-def require_disposable_database_reset(database_url: str, acknowledgement: str = "") -> str:
+def require_disposable_database_reset(
+    database_url: str, acknowledgement: str = ""
+) -> str:
     """Reject destructive test setup unless database is disposable and reset is acknowledged."""
     database_name = unquote(urlsplit(database_url).path.rsplit("/", 1)[-1])
     test_segments = database_name.replace("-", "_").replace(".", "_").split("_")
@@ -1293,6 +1295,37 @@ class PostgresUnitOfWork:
                 "created_at",
             )
             return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    def _bump_lifecycle_revision(self, run_id, new_revision, expected_revision=None):
+        """Bump the lifecycle_revision counter for a research run.
+
+        This is a lightweight helper used by compatibility commands
+        (e.g. annotations) that need to advance the revision counter
+        without performing a full state transition.
+
+        Args:
+            run_id: Research run UUID.
+            new_revision: The new lifecycle_revision value.
+            expected_revision: The expected current revision (for CAS).
+
+        Returns:
+            The number of rows affected.
+        """
+        with self.connection.cursor() as cur:
+            if expected_revision is not None:
+                cur.execute(
+                    "UPDATE research_runs SET lifecycle_revision=%s WHERE id=%s AND lifecycle_revision=%s",
+                    (new_revision, run_id, expected_revision),
+                )
+            else:
+                cur.execute(
+                    "UPDATE research_runs SET lifecycle_revision=%s WHERE id=%s",
+                    (new_revision, run_id),
+                )
+            if expected_revision is not None and cur.rowcount == 0:
+                from .run_service import RunStateError
+                raise RunStateError(f"Concurrency error: expected revision {expected_revision} for run {run_id}")
+            return cur.rowcount
 
     def append_event(
         self,
@@ -5133,7 +5166,9 @@ class PostgresUnitOfWork:
         # receive JSON-safe data regardless of the psycopg2 return types.
         def _stringify_row(row: dict) -> dict:
             return {
-                k: _json_serial(v) if not isinstance(v, (str, int, float, bool, type(None))) else v
+                k: _json_serial(v)
+                if not isinstance(v, (str, int, float, bool, type(None)))
+                else v
                 for k, v in row.items()
             }
 
@@ -5146,7 +5181,6 @@ class PostgresUnitOfWork:
             "claims": [_stringify_row(c) for c in claims],
             "links": [_stringify_row(lnk) for lnk in links],
         }
-
 
     # ------------------------------------------------------------------
     # Audit assessment repository methods (issue #33)
@@ -5244,9 +5278,7 @@ class PostgresUnitOfWork:
             conditions.append("aa.status = %s")
             params.append(status)
 
-        where_clause = (
-            " WHERE " + " AND ".join(conditions) if conditions else ""
-        )
+        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
         query = f"""SELECT aa.id, aa.run_id, aa.target_type, aa.target_id, aa.target_hash,
             aa.evaluator_version, aa.prompt_template_version, aa.policy_version,
             aa.stage_set, aa.status, aa.provider, aa.model,
@@ -5259,7 +5291,9 @@ class PostgresUnitOfWork:
 
         with self.connection.cursor() as cur:
             cur.execute(query, params)
-            return [self._row_to_audit_assessment_mapping(row) for row in cur.fetchall()]
+            return [
+                self._row_to_audit_assessment_mapping(row) for row in cur.fetchall()
+            ]
 
     def detect_stale_assessments(
         self, run_id: UUID, target_type: str, target_id: UUID, current_hash: str
@@ -5279,7 +5313,12 @@ class PostgresUnitOfWork:
             )
             rows = cur.fetchall()
             return [
-                {"id": str(row[0]), "target_hash": row[1], "status": row[2], "created_at": row[3]}
+                {
+                    "id": str(row[0]),
+                    "target_hash": row[1],
+                    "status": row[2],
+                    "created_at": row[3],
+                }
                 for row in rows
             ]
 
@@ -5361,7 +5400,9 @@ class PostgresUnitOfWork:
 
         with self.connection.cursor() as cur:
             cur.execute(query, params)
-            return [self._row_to_audit_stage_output_mapping(row) for row in cur.fetchall()]
+            return [
+                self._row_to_audit_stage_output_mapping(row) for row in cur.fetchall()
+            ]
 
     def validate_assessment_exists(self, assessment_id: UUID) -> bool:
         """Check whether an assessment ID exists."""
@@ -5412,7 +5453,13 @@ class PostgresUnitOfWork:
                     EXISTS (SELECT 1 FROM asset_snapshots WHERE id = %s) OR
                     EXISTS (SELECT 1 FROM research_runs WHERE id = %s) OR
                     EXISTS (SELECT 1 FROM research_invocations WHERE id = %s)""",
-                    (str(ref_uuid), str(ref_uuid), str(ref_uuid), str(ref_uuid), str(ref_uuid)),
+                    (
+                        str(ref_uuid),
+                        str(ref_uuid),
+                        str(ref_uuid),
+                        str(ref_uuid),
+                        str(ref_uuid),
+                    ),
                 )
                 if cur.fetchone() is None:
                     invalid_references.append(ref_str)
@@ -5475,9 +5522,7 @@ class PostgresUnitOfWork:
             )
             row = cur.fetchone()
             return (
-                self._row_to_audit_assessment_mapping(row)
-                if row is not None
-                else None
+                self._row_to_audit_assessment_mapping(row) if row is not None else None
             )
 
     def insert_audit_assessment_if_absent(
@@ -5555,11 +5600,24 @@ class PostgresUnitOfWork:
     @staticmethod
     def _row_to_audit_assessment_mapping(row) -> dict[str, Any]:
         keys = (
-            "id", "run_id", "target_type", "target_id", "target_hash",
-            "evaluator_version", "prompt_template_version", "policy_version",
-            "stage_set", "status", "provider", "model",
-            "prompt_hash", "model_fingerprint", "elapsed_ms",
-            "audit_packet_manifest", "created_at", "audit_identity_hash",
+            "id",
+            "run_id",
+            "target_type",
+            "target_id",
+            "target_hash",
+            "evaluator_version",
+            "prompt_template_version",
+            "policy_version",
+            "stage_set",
+            "status",
+            "provider",
+            "model",
+            "prompt_hash",
+            "model_fingerprint",
+            "elapsed_ms",
+            "audit_packet_manifest",
+            "created_at",
+            "audit_identity_hash",
         )
         result = dict(zip(keys, row))
         for uid_key in ("id", "run_id", "target_id"):
@@ -5575,9 +5633,17 @@ class PostgresUnitOfWork:
     @staticmethod
     def _row_to_audit_stage_output_mapping(row) -> dict[str, Any]:
         keys = (
-            "id", "assessment_id", "stage", "sequence_number",
-            "status", "output", "error", "error_details",
-            "call_count", "used_fallback", "created_at",
+            "id",
+            "assessment_id",
+            "stage",
+            "sequence_number",
+            "status",
+            "output",
+            "error",
+            "error_details",
+            "call_count",
+            "used_fallback",
+            "created_at",
         )
         result = dict(zip(keys, row))
         for uid_key in ("id", "assessment_id"):
