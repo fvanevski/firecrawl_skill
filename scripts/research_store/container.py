@@ -281,3 +281,34 @@ def build_catalog_export_service(config: StoreConfig | None = None):
         ),
         blob_store=ContentAddressedBlobStore(config.blob_root),
     )
+
+
+def build_catalog_import_service(config: StoreConfig | None = None):
+    """Build a CatalogImportService wired to the PostgreSQL database.
+
+    Args:
+        config: Store config. Uses ``StoreConfig.from_env()`` when
+            ``None``.
+
+    Returns:
+        A ``CatalogImportService`` instance wired to the configured
+        PostgreSQL connection.
+    """
+    from .catalog_import import CatalogImportService
+    from .postgres import PostgresUnitOfWork
+
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    return CatalogImportService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
+    )
