@@ -41,6 +41,11 @@ class Chunk:
     last_block_ordinal: int
     token_count: int
     heading_path: tuple[str, ...] = ()
+    # Hierarchical chunking fields (P5-06).  Legacy structural chunks leave
+    # these at their default (None).  Hierarchical chunks set them explicitly
+    # during the HierarchicalChunk → Chunk conversion in CorpusService.
+    tokenizer_name: str | None = None
+    parent_block_ordinal: int | None = None
 
 
 @dataclass(frozen=True)

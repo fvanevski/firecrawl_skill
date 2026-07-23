@@ -18,6 +18,8 @@ output, offset preservation, and version tracking.
 * ``parse()`` — Convenience function: select + parse.
 * ``structural_blocks()`` — Legacy Markdown structural parser (for compatibility).
 * ``deterministic_chunks()`` — Legacy chunking function (for compatibility).
+* ``hierarchical_chunks()`` — Tokenizer-backed hierarchical chunker.
+* ``HierarchicalChunk`` — Chunk model with parent-child metadata.
 
 ## Built-in parsers
 
@@ -55,6 +57,10 @@ output, offset preservation, and version tracking.
     if parser:
         result = parser.parse(html_bytes, mime_type="text/html")
 
+.. versionchanged:: P5-06
+   Added ``hierarchical_chunks`` and ``HierarchicalChunk`` for
+   tokenizer-backed hierarchical chunking.
+
 .. versionchanged:: P5-04
    Introduced as part of Phase 5 canonical parser interfaces.
 """
@@ -87,6 +93,12 @@ from ..parsing_legacy import (
     structural_blocks,
 )
 
+# Hierarchical chunking (P5-06)
+from ..hierarchical_chunker import (
+    HierarchicalChunk,
+    hierarchical_chunks,
+)
+
 __all__ = [
     "Parser",
     "ParseResult",
@@ -102,4 +114,6 @@ __all__ = [
     "parse",
     "parse_raw_search_response",
     "structural_blocks",
+    "hierarchical_chunks",
+    "HierarchicalChunk",
 ]

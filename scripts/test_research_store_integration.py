@@ -3214,3 +3214,297 @@ def test_catalog_import_apply_conflict_detection_integration(tmp_path, monkeypat
     assert report.records_inserted == 0
     assert report.records_skipped == 1
     assert report.mappings[0].conflict_detail is not None
+
+
+# ---------------------------------------------------------------------------
+# P5-06 hierarchical chunking: migration integration tests
+# ---------------------------------------------------------------------------
+
+
+def test_hierarchical_chunk_columns_exist_after_migration():
+    """Verify migration 0025 adds tokenizer_name and parent_block_id columns."""
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT column_name, column_default, is_nullable
+            FROM information_schema.columns
+            WHERE table_name = 'chunks'
+              AND column_name IN ('tokenizer_name', 'parent_block_id')
+            ORDER BY column_name
+            """
+        )
+        rows = cursor.fetchall()
+        col_map = {r[0]: {"default": r[1], "nullable": r[2]} for r in rows}
+        assert "tokenizer_name" in col_map
+        assert "parent_block_id" in col_map
+        # Both should be nullable (tokenizer_name gets default on existing rows)
+        assert col_map["tokenizer_name"]["nullable"] == "YES"
+        assert col_map["parent_block_id"]["nullable"] == "YES"
+
+
+def test_hierarchical_chunk_derivation_key_constraint():
+    """Verify the updated chunks_derivation_key includes tokenizer_name."""
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        # Insert a source, snapshot, document, and block
+        cursor.execute(
+            """INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id""",
+            ("https://test-derivation-key.example/",),
+        )
+        source_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO asset_snapshots(
+                source_id,requested_url,retrieved_at,content_sha256
+            ) VALUES (%s,%s,now(),%s) RETURNING id""",
+            (source_id, "https://test-derivation-key.example/", "d" * 64),
+        )
+        snapshot_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO documents(
+                snapshot_id,normalized_text,parser_name,parser_version,
+                normalization_version,document_sha256
+            ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (snapshot_id, "test", "markdown", "v1", "v1", "e" * 64),
+        )
+        document_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO document_blocks(
+                document_id,block_type,ordinal,text
+            ) VALUES (%s,%s,%s,%s) RETURNING id""",
+            (document_id, "paragraph", 0, "block text"),
+        )
+        block_id = cursor.fetchone()[0]
+
+        # Insert first chunk
+        cursor.execute(
+            """INSERT INTO chunks(
+                document_id,first_block_id,last_block_id,ordinal,text,
+                content_sha256,chunker_name,chunker_version,tokenizer_name
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (
+                document_id,
+                block_id,
+                block_id,
+                0,
+                "chunk text",
+                "f" * 64,
+                "hierarchical",
+                "hierarchical-v1",
+                "cl100k_base",
+            ),
+        )
+        cursor.connection.commit()
+
+        # Try to insert duplicate — should fail
+        with pytest.raises(Exception):
+            with connect(TEST_DSN) as conn, conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO chunks(
+                        document_id,first_block_id,last_block_id,ordinal,text,
+                        content_sha256,chunker_name,chunker_version,tokenizer_name
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (
+                        document_id,
+                        block_id,
+                        block_id,
+                        0,
+                        "chunk text",
+                        "f" * 64,
+                        "hierarchical",
+                        "hierarchical-v1",
+                        "cl100k_base",
+                    ),
+                )
+                conn.commit()
+
+
+def test_hierarchical_chunk_parent_block_fk():
+    """Verify parent_block_id FK rejects invalid UUIDs."""
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id""",
+            ("https://test-parent-fk.example/",),
+        )
+        source_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO asset_snapshots(
+                source_id,requested_url,retrieved_at,content_sha256
+            ) VALUES (%s,%s,now(),%s) RETURNING id""",
+            (source_id, "https://test-parent-fk.example/", "g" * 64),
+        )
+        snapshot_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO documents(
+                snapshot_id,normalized_text,parser_name,parser_version,
+                normalization_version,document_sha256
+            ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (snapshot_id, "test", "markdown", "v1", "v1", "h" * 64),
+        )
+        document_id = cursor.fetchone()[0]
+        # Create a block
+        cursor.execute(
+            """INSERT INTO document_blocks(
+                document_id,block_type,ordinal,text
+            ) VALUES (%s,%s,%s,%s) RETURNING id""",
+            (document_id, "paragraph", 0, "parent block"),
+        )
+        valid_block_id = cursor.fetchone()[0]
+
+        # Insert chunk with valid parent_block_id — should succeed
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,first_block_id,last_block_id,ordinal,text,
+                    content_sha256,chunker_name,chunker_version,tokenizer_name,
+                    parent_block_id
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    document_id,
+                    valid_block_id,
+                    valid_block_id,
+                    0,
+                    "chunk with parent",
+                    "i" * 64,
+                    "hierarchical",
+                    "hierarchical-v1",
+                    "cl100k_base",
+                    valid_block_id,
+                ),
+            )
+            conn.commit()
+
+        # Try invalid parent_block_id — should fail
+        invalid_uuid = str(uuid4())
+        with pytest.raises(Exception):
+            with connect(TEST_DSN) as conn, conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO chunks(
+                        document_id,first_block_id,last_block_id,ordinal,text,
+                        content_sha256,chunker_name,chunker_version,tokenizer_name,
+                        parent_block_id
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (
+                        document_id,
+                        valid_block_id,
+                        valid_block_id,
+                        1,
+                        "chunk with invalid parent",
+                        "j" * 64,
+                        "hierarchical",
+                        "hierarchical-v1",
+                        "cl100k_base",
+                        invalid_uuid,
+                    ),
+                )
+                conn.commit()
+
+
+def test_hierarchical_chunk_persist_ingest_sets_parent_block_id():
+    """Verify persist_ingest produces non-NULL parent_block_id when blocks exist."""
+    from research_store.domain import IngestRequest
+    from research_store.container import build_service
+    from dataclasses import replace
+
+    svc = build_service(
+        replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp/test_blobs"),
+            qdrant_collection="test_hier_parent",
+            embedding_dimension=4,
+        )
+    )
+    request = IngestRequest(
+        requested_url="https://test-persist.example/",
+        content=b"# Title\n\nParagraph one.",
+        mime_type="text/markdown",
+    )
+    result = svc.ingest(request)
+    assert result.chunk_ids
+
+    # Verify parent_block_id is non-NULL for all chunks
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        placeholders = ",".join(["%s"] * len(result.chunk_ids))
+        cursor.execute(
+            f"""SELECT id, parent_block_id FROM chunks
+                WHERE id IN ({placeholders})""",
+            list(result.chunk_ids),
+        )
+        rows = cursor.fetchall()
+        assert len(rows) == len(result.chunk_ids)
+        for chunk_id, parent_block_id in rows:
+            assert parent_block_id is not None, (
+                f"Chunk {chunk_id} has NULL parent_block_id"
+            )
+
+
+def test_hierarchical_chunk_migration_preserves_legacy_data():
+    """Verify existing structural chunks survive migration to 0025."""
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        # Create legacy-style data (pre-migration)
+        cursor.execute(
+            """INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id""",
+            ("https://test-legacy.example/",),
+        )
+        source_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO asset_snapshots(
+                source_id,requested_url,retrieved_at,content_sha256
+            ) VALUES (%s,%s,now(),%s) RETURNING id""",
+            (source_id, "https://test-legacy.example/", "k" * 64),
+        )
+        snapshot_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO documents(
+                snapshot_id,normalized_text,parser_name,parser_version,
+                normalization_version,document_sha256
+            ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (snapshot_id, "legacy content", "markdown", "v1", "v1", "l" * 64),
+        )
+        document_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO document_blocks(
+                document_id,block_type,ordinal,text
+            ) VALUES (%s,%s,%s,%s) RETURNING id""",
+            (document_id, "paragraph", 0, "legacy block"),
+        )
+        block_id = cursor.fetchone()[0]
+
+        # Insert legacy chunk (no tokenizer_name, no parent_block_id)
+        cursor.execute(
+            """INSERT INTO chunks(
+                document_id,first_block_id,last_block_id,ordinal,text,
+                content_sha256,chunker_name,chunker_version
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (
+                document_id,
+                block_id,
+                block_id,
+                0,
+                "legacy chunk",
+                "m" * 64,
+                "structural",
+                "structural-v1",
+            ),
+        )
+        legacy_chunk_id = cursor.fetchone()[0]
+        cursor.connection.commit()
+
+    # Migrate to head (applies 0025)
+    assert migrate(TEST_DSN) >= 25
+
+    # Verify legacy chunk still exists and is queryable
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT chunker_name, chunker_version, tokenizer_name,
+                      parent_block_id, first_block_id
+               FROM chunks WHERE id = %s""",
+            (legacy_chunk_id,),
+        )
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == "structural"  # chunker_name
+        assert row[1] == "structural-v1"  # chunker_version
+        # tokenizer_name should be NULL (migration sets default on new rows only)
+        # parent_block_id should be NULL (legacy chunks have no parent)
+        # first_block_id should still point to the block
+        assert row[4] == block_id
