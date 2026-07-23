@@ -248,3 +248,36 @@ def build_audit_service(config: StoreConfig | None = None):
             config.chunker_version,
         )
     )
+
+
+def build_catalog_export_service(config: StoreConfig | None = None):
+    """Build a Catalog v5 compatibility exporter.
+
+    Args:
+        config: Store config. Uses ``StoreConfig.from_env()`` when
+            ``None``.
+
+    Returns:
+        A ``CatalogExportService`` instance wired to the configured
+        PostgreSQL connection and blob store.
+    """
+    from .blob import ContentAddressedBlobStore
+    from .catalog_export import CatalogExportService
+    from .postgres import PostgresUnitOfWork
+
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    return CatalogExportService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        ),
+        blob_store=ContentAddressedBlobStore(config.blob_root),
+    )
