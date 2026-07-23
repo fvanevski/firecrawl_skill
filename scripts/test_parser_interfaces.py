@@ -234,6 +234,29 @@ class TestHtmlNormalizedAdapter:
         types = [b.block_type for b in result.blocks]
         assert "caption" in types
 
+    def test_parses_table_rows(self):
+        from research_store.parsing.html_parser import HtmlNormalizedParser
+
+        parser = HtmlNormalizedParser()
+        source = b"<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>"
+        result = parser.parse(source)
+        assert result.success
+        rows = [b.text for b in result.blocks if b.block_type == "table_row"]
+        assert len(rows) == 2
+        assert rows[0] == "| Name | Age |"
+        assert rows[1] == "| Alice | 30 |"
+
+    def test_parses_links(self):
+        from research_store.parsing.html_parser import HtmlNormalizedParser
+
+        parser = HtmlNormalizedParser()
+        source = b'<p>Read <a href="https://example.com">this link</a>.</p>'
+        result = parser.parse(source)
+        assert result.success
+        paragraphs = [b for b in result.blocks if b.block_type == "paragraph"]
+        assert len(paragraphs) == 1
+        assert paragraphs[0].text == "Read [this link](https://example.com)."
+
     def test_handles_malformed_html(self):
         from research_store.parsing.html_parser import HtmlNormalizedParser
 

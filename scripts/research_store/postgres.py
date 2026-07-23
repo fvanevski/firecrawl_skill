@@ -255,8 +255,8 @@ class PostgresUnitOfWork:
                 block_ids = {}
                 for block in blocks:
                     cur.execute(
-                        """INSERT INTO document_blocks(document_id,block_type,heading_path,ordinal,char_start,char_end,text,metadata)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                        """INSERT INTO document_blocks(document_id,block_type,heading_path,ordinal,char_start,char_end,text,metadata,parser_version)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                         (
                             document_id,
                             block.block_type,
@@ -266,6 +266,7 @@ class PostgresUnitOfWork:
                             block.char_end,
                             block.text,
                             json.dumps(block.metadata),
+                            parser_version,
                         ),
                     )
                     block_ids[block.ordinal] = cur.fetchone()[0]

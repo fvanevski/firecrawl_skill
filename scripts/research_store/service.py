@@ -630,11 +630,7 @@ class ClaimManifestService:
                     inserted_links += 1
                 except Exception as exc:
                     exc_str = str(exc).lower()
-                    if (
-                        "unique constraint" in exc_str
-                        or "uk_claim_evidence_links" in exc_str
-                        or "duplicate key" in exc_str
-                    ):
+                    if "unique constraint" in exc_str or "uk_claim_evidence_links" in exc_str or "duplicate key" in exc_str:
                         inserted_links += 1
                     else:
                         failed_links.append(
@@ -740,9 +736,7 @@ def compute_audit_identity_hash(
     if empty:
         raise ValueError("audit identity fields must be non-empty: " + ", ".join(empty))
     normalized_stages = sorted(set(stage_set))
-    if not normalized_stages or any(
-        not stage or not stage.strip() for stage in normalized_stages
-    ):
+    if not normalized_stages or any(not stage or not stage.strip() for stage in normalized_stages):
         raise ValueError("stage_set must contain non-empty stages")
     identity = {
         "identity_version": AUDIT_IDENTITY_VERSION,
@@ -763,16 +757,7 @@ def _extract_evidence_references(obj: Any) -> list[str]:
     if isinstance(obj, dict):
         for k, v in obj.items():
             k_lower = str(k).lower()
-            if k_lower in (
-                "evidence_refs",
-                "evidence_references",
-                "claim_id",
-                "claim_ids",
-                "passage_id",
-                "passage_ids",
-                "snapshot_id",
-                "snapshot_ids",
-            ):
+            if k_lower in ("evidence_refs", "evidence_references", "claim_id", "claim_ids", "passage_id", "passage_ids", "snapshot_id", "snapshot_ids"):
                 if isinstance(v, (list, tuple, set)):
                     refs.extend([str(item) for item in v if item])
                 elif v:

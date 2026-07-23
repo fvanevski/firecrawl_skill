@@ -86,6 +86,8 @@ class _HtmlBlockCollector(HTMLParser):
         self._in_list = False
         self._in_blockquote = False
         self._in_table = False
+        self._in_tr = False
+        self._current_href: str = ""
         self._current_text: list[str] = []
         self._pending_heading_depth: int | None = None
 
@@ -130,6 +132,14 @@ class _HtmlBlockCollector(HTMLParser):
         elif tag == "table":
             self._flush_text()
             self._in_table = True
+        elif tag == "tr":
+            self._flush_text()
+            self._in_tr = True
+            self._current_text.append("| ")
+        elif tag == "a":
+            href = dict(attrs).get("href", "")
+            self._current_href = href
+            self._current_text.append("[")
         elif tag == "img":
             alt = dict(attrs).get("alt", "")
             self._flush_text()
@@ -182,6 +192,17 @@ class _HtmlBlockCollector(HTMLParser):
             self._flush_text()
         elif tag == "table":
             self._in_table = False
+        elif tag == "tr":
+            self._flush_text(block_type="table_row")
+            self._in_tr = False
+        elif tag in ("td", "th"):
+            self._current_text.append(" | ")
+        elif tag == "a":
+            if self._current_href:
+                self._current_text.append(f"]({self._current_href})")
+                self._current_href = ""
+            else:
+                self._current_text.append("]")
         elif tag in _BLOCK_END_TAGS:
             # Flush text on block-level container close
             self._flush_text()
@@ -199,17 +220,18 @@ class _HtmlBlockCollector(HTMLParser):
         # Strip HTML comments
         pass
 
-    def _flush_text(self) -> None:
+    def _flush_text(self, block_type: str | None = None) -> None:
         text = "".join(self._current_text)
-        if not text.strip():
+        if not text.strip() or text.strip() == "|":
             self._current_text = []
             return
         # Normalize whitespace
         normalized = " ".join(text.split())
         if self._in_blockquote:
             normalized = "> " + normalized
-        if normalized.strip():
-            block_type = "code" if self._in_code else "paragraph"
+        if normalized.strip() and normalized.strip() != "|":
+            if block_type is None:
+                block_type = "code" if self._in_code else "paragraph"
             self.blocks.append(
                 TypedBlock(
                     ordinal=len(self.blocks),
