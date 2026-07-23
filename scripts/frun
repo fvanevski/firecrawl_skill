@@ -235,5 +235,5 @@ case "${1:-}" in
   recompute) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" recompute "$@" ;;
   migrate) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" migrate "$@" ;;
   purge) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" purge "$@" ;;
-  *) echo "Usage: frun {start <objective> [--profile PROFILE]|finish <fr_id> --outcome OUTCOME [--source-manifest FILE] [--answer-file FILE] [--auto-audit]|reopen <fr_id> --reason TEXT|annotate <fr_id> --type TYPE --reason TEXT|status <fr_id>|verify <id>|audit <id> [--llm PROVIDER] [--stages LIST]|audit-status <id>|compare <fr_id>...|export <fr_id> <target-dir>|aggregate|recompute <id>|migrate [--apply]|purge [filters] [--force]}" >&2; exit 2 ;;
+  *) echo "Usage: frun {start <objective> [--mode MODE]|finish <fr_id> --outcome OUTCOME [--source-manifest FILE] [--answer-file FILE] [--auto-audit]|reopen <fr_id> --reason TEXT|annotate <fr_id> --type TYPE --reason TEXT|status <fr_id>|verify <id>|audit <id> [--llm PROVIDER] [--stages LIST]|audit-status <id>|compare <fr_id>...|export <fr_id> <target-dir>|aggregate|recompute <id>|migrate [--apply]|purge [filters] [--force]}" >&2; exit 2 ;;
 esac

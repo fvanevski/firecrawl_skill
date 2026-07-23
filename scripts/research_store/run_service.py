@@ -900,12 +900,16 @@ class ResearchRunService:
         """Verify blob integrity for a research run.
 
         Checks all snapshot blobs referenced by invocations in the run.
+        Older runs may have file-based snapshots (paths without SHA-256)
+        that cannot be verified against the blob store; these are counted
+        separately so the report reflects true coverage.
 
         Args:
             run_id: Research run UUID.
 
         Returns:
-            Verification report with available, missing, hash_mismatch counts.
+            Verification report with available, missing, hash_mismatch,
+            and file_based counts.
         """
         with self.uow_factory() as uow:
             # Get all invocations for this run
@@ -914,64 +918,71 @@ class ResearchRunService:
             available = 0
             missing = 0
             hash_mismatch = 0
+            file_based = 0  # paths without SHA-256 (older runs)
             artifacts = []
+
+            def _check_artifact(inv_id, artifact):
+                """Recursively check an artifact for path/hash pairs."""
+                nonlocal total, available, missing, hash_mismatch, file_based
+                if isinstance(artifact, dict):
+                    path = artifact.get("path")
+                    expected_hash = artifact.get("sha256")
+                    if path and expected_hash:
+                        total += 1
+                        if self.blob_store and self.blob_store.verify(
+                            expected_hash
+                        ):
+                            available += 1
+                            artifacts.append(
+                                {
+                                    "invocation_id": str(inv_id),
+                                    "path": path,
+                                    "state": "available",
+                                }
+                            )
+                        else:
+                            hash_mismatch += 1
+                            artifacts.append(
+                                {
+                                    "invocation_id": str(inv_id),
+                                    "path": path,
+                                    "state": "hash_mismatch",
+                                }
+                            )
+                    elif path:
+                        # File-based snapshot without hash — cannot verify
+                        file_based += 1
+                        artifacts.append(
+                            {
+                                "invocation_id": str(inv_id),
+                                "path": path,
+                                "state": "file_based_unverified",
+                            }
+                        )
+                    else:
+                        # Dict artifact without path/hash — skip silently
+                        pass
+                elif isinstance(artifact, list):
+                    for item in artifact:
+                        _check_artifact(inv_id, item)
+                elif isinstance(artifact, str):
+                    # Bare string path (older format)
+                    file_based += 1
+                    artifacts.append(
+                        {
+                            "invocation_id": str(inv_id),
+                            "path": artifact,
+                            "state": "file_based_unverified",
+                        }
+                    )
 
             for inv in invocations:
                 output = inv.get("output") or {}
                 for result in output.get("results", []):
                     for artifact_key in ("snapshot", "artifacts"):
                         artifact = result.get(artifact_key)
-                        if isinstance(artifact, dict):
-                            path = artifact.get("path")
-                            expected_hash = artifact.get("sha256")
-                            if path and expected_hash:
-                                total += 1
-                                if self.blob_store and self.blob_store.verify(
-                                    expected_hash
-                                ):
-                                    available += 1
-                                    artifacts.append(
-                                        {
-                                            "invocation_id": str(inv["id"]),
-                                            "path": path,
-                                            "state": "available",
-                                        }
-                                    )
-                                else:
-                                    hash_mismatch += 1
-                                    artifacts.append(
-                                        {
-                                            "invocation_id": str(inv["id"]),
-                                            "path": path,
-                                            "state": "hash_mismatch",
-                                        }
-                                    )
-                        elif isinstance(artifact, list):
-                            for item in artifact:
-                                path = item.get("path")
-                                expected_hash = item.get("sha256")
-                                if path and expected_hash:
-                                    total += 1
-                                    if self.blob_store and self.blob_store.verify(
-                                        expected_hash
-                                    ):
-                                        available += 1
-                                        artifacts.append(
-                                            {
-                                                "invocation_id": str(inv["id"]),
-                                                "path": path,
-                                                "state": "available",
-                                            }
-                                        )
-                                    else:
-                                        hash_mismatch += 1
-                                        artifacts.append(
-                                            {
-                                                "invocation_id": str(inv["id"]),
-                                                "path": path,
-                                                "state": "hash_mismatch",
-                                            }
-                                        )
+                        if artifact is not None:
+                            _check_artifact(inv["id"], artifact)
 
             return {
                 "target": str(run_id),
@@ -980,6 +991,7 @@ class ResearchRunService:
                 "available": available,
                 "missing": missing,
                 "hash_mismatch": hash_mismatch,
+                "file_based_unverified": file_based,
                 "artifacts": artifacts,
             }
 

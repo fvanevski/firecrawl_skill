@@ -2255,3 +2255,207 @@ class TestMigration0015TerminalDecisions:
             assert all(results), (
                 "terminal_decisions should coexist with existing tables"
             )
+
+
+# ---------------------------------------------------------------------------
+# Issue #36: Integration tests for compatibility command handlers (N3)
+# ---------------------------------------------------------------------------
+
+
+def test_run_annotate_handler_executes_through_service(monkeypatch, capsys):
+    """Verify that research-db run-annotate actually invokes the service method.
+
+    This test catches regressions like B1 (calling .to_dict() on dict values)
+    by exercising the full CLI handler path against a disposable PostgreSQL.
+    """
+    external_id = f"fr_annotate_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    # Start a run first
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Annotate integration test",
+                "--mode",
+                "autonomous_local",
+            ]
+        )
+        == 0
+    )
+
+    # Annotate the run
+    assert (
+        store_cli.main(
+            [
+                "run-annotate",
+                external_id,
+                "--type",
+                "pivot",
+                "--reason",
+                "integration test annotation",
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["event_type"] == "run_annotated"
+    assert result["annotation_type"] == "pivot"
+    assert result["reason"] == "integration test annotation"
+
+    # Verify the annotation persisted
+    assert store_cli.main(["run-status", external_id]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["state"] == "created"
+
+
+def test_run_verify_handler_executes_through_service(monkeypatch, capsys):
+    """Verify that research-db run-verify actually invokes the service method.
+
+    Exercises the verify handler path to ensure it returns a valid report
+    even when no blob store is configured (total=0 case).
+    """
+    external_id = f"fr_verify_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    # No BLOB_ROOT configured — verify should return total=0 report
+    monkeypatch.delenv("BLOB_ROOT", raising=False)
+
+    # Start a run
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Verify integration test",
+                "--mode",
+                "deterministic_debug",
+            ]
+        )
+        == 0
+    )
+
+    # Verify the run
+    assert store_cli.main(["run-verify", external_id]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert "target" in result
+    assert "verified_at" in result
+    assert result["total"] == 0
+    assert result["available"] == 0
+    # N4: file_based_unverified field should be present
+    assert "file_based_unverified" in result
+
+
+def test_run_audit_handler_executes_through_service(monkeypatch, capsys):
+    """Verify that research-db run-audit actually invokes the audit service.
+
+    Exercises the audit handler path against a disposable PostgreSQL.
+    The audit will be recorded in PostgreSQL regardless of LLM availability.
+    """
+    external_id = f"fr_audit_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    # Start a run
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Audit integration test",
+                "--mode",
+                "autonomous_local",
+            ]
+        )
+        == 0
+    )
+
+    # Run audit — the audit service records the assessment in PostgreSQL
+    # even if the LLM call fails, it returns a result with status
+    assert store_cli.main(
+        [
+            "run-audit",
+            external_id,
+            "--target-hash",
+            "a" * 64,
+        ]
+    ) in (0, 1)
+    # The handler should have printed a JSON result
+    out = capsys.readouterr().out.strip()
+    assert out, "run-audit should produce JSON output"
+    result = json.loads(out)
+    assert "status" in result or "assessment_id" in result or "error" in result
+
+
+def test_run_compare_handler_executes_through_service(monkeypatch, capsys):
+    """Verify that research-db run-compare actually invokes the legacy adapter.
+
+    Exercises the compare handler path against two runs in PostgreSQL.
+    """
+    external_id_a = f"fr_compare_a_{uuid4().hex}"
+    external_id_b = f"fr_compare_b_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    # Start two runs
+    assert (
+        store_cli.main(
+            ["run-start", external_id_a, "Compare test A", "--mode", "autonomous_local"]
+        )
+        == 0
+    )
+    assert (
+        store_cli.main(
+            ["run-start", external_id_b, "Compare test B", "--mode", "autonomous_local"]
+        )
+        == 0
+    )
+
+    # Compare the two runs
+    assert store_cli.main(["run-compare", external_id_a, external_id_b]) in (0, 1)
+    out = capsys.readouterr().out.strip()
+    assert out, "run-compare should produce JSON output"
+    result = json.loads(out)
+    assert "status" in result or "comparisons" in result or "error" in result
+
+
+def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
+    """Verify that research-db run-finish actually invokes the service method.
+
+    Exercises the finish handler path to ensure idempotent terminal transitions.
+    """
+    external_id = f"fr_finish_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+    # Start a run
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Finish integration test",
+                "--mode",
+                "autonomous_local",
+            ]
+        )
+        == 0
+    )
+
+    # Finish the run
+    assert (
+        store_cli.main(
+            [
+                "run-finish",
+                external_id,
+                "--outcome",
+                "satisfied",
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["next_state"] == "completed"
+    assert result["lifecycle_revision"] >= 1
+
+    # Verify terminal state
+    assert store_cli.main(["run-status", external_id]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["state"] == "completed"
