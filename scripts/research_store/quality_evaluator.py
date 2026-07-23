@@ -69,24 +69,20 @@ def evaluate_quality(
         config = QualityConfig.from_env()
 
     # Decode content for analysis.
-    # Note: _check_content_type_consistency decodes raw_content again to
-    # detect HTML patterns that _strip_html_tags already removed.  This
-    # duplicate decode is intentional — the MIME consistency check needs
-    # access to the original HTML markup to verify type alignment.
-    visible_text, encoding_anomaly = _decode_visible(content)
+    raw_text, visible_text, encoding_anomaly = _decode_visible(content)
 
     # Compute each signal
     byte_length = len(content)
     visible_text_length = len(visible_text)
     paragraph_count = _count_paragraphs(visible_text)
-    heading_count = _count_headings(visible_text)
-    list_count = _count_lists(visible_text)
-    table_count = _count_tables(visible_text)
-    link_density = _compute_link_density(visible_text)
+    heading_count = _count_headings(visible_text, raw_text)
+    list_count = _count_lists(visible_text, raw_text)
+    table_count = _count_tables(visible_text, raw_text)
+    link_density = _compute_link_density(visible_text, raw_text)
     boilerplate_ratio = _compute_boilerplate_ratio(visible_text)
-    title_present = _check_title_present(visible_text, title)
+    title_present = _check_title_present(visible_text, raw_text, title)
     content_type_consistent = _check_content_type_consistency(
-        mime_type, expected_mime_type, visible_text, content
+        mime_type, expected_mime_type, raw_text
     )
     anti_bot_markers = _count_anti_bot_markers(visible_text)
     language_confidence = _compute_language_confidence(visible_text)
@@ -94,7 +90,7 @@ def evaluate_quality(
     extraction_method_confidence = _compute_extraction_confidence(
         visible_text_length, heading_count, paragraph_count
     )
-    code_to_prose_ratio = _compute_code_to_prose_ratio(visible_text)
+    code_to_prose_ratio = _compute_code_to_prose_ratio(visible_text, raw_text)
     parser_warnings = 0  # Populated by the parser; evaluator starts at 0
 
     return ExtractionQualityMetrics(
@@ -128,33 +124,34 @@ def evaluate_quality(
 # -----------------------------------------------------------------------
 
 
-def _decode_visible(content: bytes) -> tuple[str, bool]:
+def _decode_visible(content: bytes) -> tuple[str, str, bool]:
     """Decode bytes to visible text and detect encoding anomalies.
 
     Returns:
-        A tuple of (decoded text, encoding_anomaly bool).
+        A tuple of (raw_text, decoded visible text, encoding_anomaly bool).
     """
     encoding_anomaly = False
+    raw_text = ""
     for encoding in ("utf-8", "latin-1"):
         try:
-            text = content.decode(encoding)
+            raw_text = content.decode(encoding)
             if encoding == "latin-1":
                 # latin-1 always succeeds — flag if non-ASCII present
-                encoding_anomaly = any(ord(c) > 127 for c in text)
+                encoding_anomaly = any(ord(c) > 127 for c in raw_text)
             # Strip HTML tags for visible text
-            text = _strip_html_tags(text)
+            text = _strip_html_tags(raw_text)
             text = html.unescape(text)
             # Strip leading/trailing whitespace and collapse internal
             text = "\n".join(line.rstrip() for line in text.split("\n"))
             # Strip all-whitespace lines
             text = "\n".join(line for line in text.split("\n") if line.strip())
-            return text, encoding_anomaly
+            return raw_text, text, encoding_anomaly
         except (UnicodeDecodeError, ValueError):
             continue
     # Fallback: errors='replace'
-    text = content.decode("utf-8", errors="replace")
-    text = _strip_html_tags(text)
-    return text, True
+    raw_text = content.decode("utf-8", errors="replace")
+    text = _strip_html_tags(raw_text)
+    return raw_text, text, True
 
 
 def _strip_html_tags(text: str) -> str:
@@ -193,22 +190,22 @@ def _count_paragraphs_in_block(text: str) -> int:
     return paragraphs
 
 
-def _count_headings(text: str) -> int:
+def _count_headings(text: str, raw_text: str) -> int:
     """Count ATX-style headings (# ...) and HTML heading tags."""
     atx = len(re.findall(r"^#{1,6}\s", text, re.MULTILINE))
-    html_tags = len(re.findall(r"<h[1-6][\s>]", text, re.IGNORECASE))
+    html_tags = len(re.findall(r"<h[1-6][\s>]", raw_text, re.IGNORECASE))
     return atx + html_tags
 
 
-def _count_lists(text: str) -> int:
+def _count_lists(text: str, raw_text: str) -> int:
     """Count unordered and ordered list items."""
     unordered = len(re.findall(r"^\s*[-*+]\s", text, re.MULTILINE))
     ordered = len(re.findall(r"^\s*\d+\.\s", text, re.MULTILINE))
-    html_items = len(re.findall(r"<li[\s>]", text, re.IGNORECASE))
+    html_items = len(re.findall(r"<li[\s>]", raw_text, re.IGNORECASE))
     return unordered + ordered + html_items
 
 
-def _count_tables(text: str) -> int:
+def _count_tables(text: str, raw_text: str) -> int:
     """Count Markdown pipe tables and HTML table elements.
 
     Markdown pipe tables require a header row followed by a separator
@@ -216,7 +213,7 @@ def _count_tables(text: str) -> int:
     """
     lines = text.split("\n")
     # Count HTML table elements
-    html_tables = len(re.findall(r"<table[\s>]", text, re.IGNORECASE))
+    html_tables = len(re.findall(r"<table[\s>]", raw_text, re.IGNORECASE))
 
     # Count Markdown pipe tables: look for header + separator pattern
     markdown_tables = 0
@@ -236,7 +233,7 @@ def _count_tables(text: str) -> int:
     return max(markdown_tables, html_tables)
 
 
-def _compute_link_density(text: str) -> float:
+def _compute_link_density(text: str, raw_text: str) -> float:
     """Compute the ratio of characters inside links to total text length.
 
     Counts both link text and link URLs as link characters.
@@ -249,7 +246,7 @@ def _compute_link_density(text: str) -> float:
     # HTML links: <a href="...">text</a>
     html_links = re.findall(
         r"<a[^>]*href=[\"\']([^\"\']*)[\"\'][^>]*>([^<]*)</a>",
-        text,
+        raw_text,
         re.IGNORECASE,
     )
 
@@ -329,7 +326,7 @@ def _compute_boilerplate_ratio(text: str) -> float:
     return pattern_score * 0.6 + nav_score * 0.4
 
 
-def _check_title_present(text: str, declared_title: str | None) -> bool:
+def _check_title_present(text: str, raw_text: str, declared_title: str | None) -> bool:
     """Check whether a title is present in the content."""
     if declared_title and declared_title.strip():
         return True
@@ -338,7 +335,7 @@ def _check_title_present(text: str, declared_title: str | None) -> bool:
     if h1:
         return True
     # Check for HTML h1
-    html_h1 = re.findall(r"<h1[^>]*>([^<]+)</h1>", text, re.IGNORECASE)
+    html_h1 = re.findall(r"<h1[^>]*>([^<]+)</h1>", raw_text, re.IGNORECASE)
     if html_h1:
         return True
     return False
@@ -347,16 +344,14 @@ def _check_title_present(text: str, declared_title: str | None) -> bool:
 def _check_content_type_consistency(
     mime_type: str | None,
     expected_mime_type: str | None,
-    text: str,
-    raw_content: bytes,
+    raw_text: str,
 ) -> bool:
     """Check whether the MIME type is consistent with the content.
 
     Args:
         mime_type: Declared MIME type from the extraction backend.
         expected_mime_type: Expected MIME type for consistency check.
-        text: Visible (HTML-stripped) text for plain-text heuristics.
-        raw_content: Original bytes for HTML pattern detection.
+        raw_text: Raw decoded text for HTML pattern detection.
 
     Returns:
         True if the MIME type is consistent with the content structure.
@@ -366,15 +361,7 @@ def _check_content_type_consistency(
     declared = mime_type.lower().strip()
     expected = (expected_mime_type or "").lower().strip()
 
-    # Decode raw content for HTML detection
-    try:
-        raw_text = raw_content.decode("utf-8", errors="replace")
-    except Exception:
-        raw_text = raw_content.decode("latin-1", errors="replace")
-
     # If declared is HTML but content is clearly plain text.
-    # Pass raw_text (not stripped text) so the heuristic can detect
-    # HTML patterns that were already removed by _strip_html_tags.
     if "text/html" in declared and _is_plain_text_heuristic(raw_text):
         if expected and "text/html" not in expected:
             return False
@@ -519,13 +506,13 @@ def _compute_extraction_confidence(
     return round(0.5 * length_score + 0.5 * structure_score, 4)
 
 
-def _compute_code_to_prose_ratio(text: str) -> float:
+def _compute_code_to_prose_ratio(text: str, raw_text: str) -> float:
     """Estimate the ratio of code blocks to prose.
 
     Returns a value in [0.0, 1.0].
     """
     code_blocks = len(re.findall(r"^```", text, re.MULTILINE))
-    html_pre = len(re.findall(r"<pre[\s>]", text, re.IGNORECASE))
+    html_pre = len(re.findall(r"<pre[\s>]", raw_text, re.IGNORECASE))
     code_regions = max(code_blocks // 2, html_pre)
 
     lines = text.split("\n")

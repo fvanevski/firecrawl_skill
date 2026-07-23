@@ -5,16 +5,12 @@ Tests cover:
 * Disposition mapping across threshold boundaries.
 * Service integration with ExtractionService.
 * Normal successful extraction.
-* Multiple ordered attempts.
-* Failed attempt followed by success.
-* Partial failure.
+* Normal successful extraction.
 * Concise valid content.
 * Long anti-bot content.
 * Ambiguous content.
 * Malformed HTML.
-* Structural HTML preservation.
-* Unsupported MIME.
-* Deterministic chunk identity.
+* HTML structure metrics.
 * Threshold boundary tests.
 * Regression tests for the 50-word defect (length alone is not dispositive).
 """
@@ -145,6 +141,21 @@ def high_link_density_content():
 
 
 @pytest.fixture
+def html_structure_content():
+    """Content with HTML headings, lists, tables, and links."""
+    return (
+        b"<html><body>"
+        b"<h1>HTML Report</h1>"
+        b"<p>Intro text</p>"
+        b"<ul><li>Item A</li><li>Item B</li></ul>"
+        b"<table><tr><th>Col 1</th></tr><tr><td>Val</td></tr></table>"
+        b"<a href='http://example.com/long-url-path'>Click here</a>"
+        b"<pre>code block content here</pre>"
+        b"</body></html>"
+    )
+
+
+@pytest.fixture
 def quality_config():
     """Default quality config."""
     return QualityConfig.from_env()
@@ -250,6 +261,15 @@ class TestQualityMetricComputation:
     def test_content_type_consistent(self):
         metrics = evaluate_quality(b"plain text", mime_type="text/plain")
         assert metrics.content_type_consistent is True
+
+    def test_html_structure_metrics(self, html_structure_content):
+        metrics = evaluate_quality(html_structure_content)
+        assert metrics.heading_count >= 1
+        assert metrics.list_count >= 2
+        assert metrics.table_count >= 1
+        assert metrics.code_to_prose_ratio > 0.0
+        assert metrics.link_density > 0.0
+        assert metrics.required_structured_fields >= 3
 
     def test_content_type_inconsistent(self):
         metrics = evaluate_quality(
