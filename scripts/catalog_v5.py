@@ -165,52 +165,6 @@ def stable_excerpt_id(candidate_id, position, text):
     return "fex_" + hashlib.sha256(f"{candidate_id}\0{position}\0{text}".encode()).hexdigest()[:24]
 
 
-def _resolve_audit_target(identifier, config):
-    """Resolve (run_id, target_type, target_id) for an audit target.
-
-    Returns ``(run_id, target_type, target_id)`` when the identifier
-    corresponds to a known research run (``fr_*``) or invocation
-    (``fc_*``), or ``None`` when the identifier is not found in
-    PostgreSQL.
-
-    ``model_fingerprint`` is always ``None`` in this resolution path
-    because ``catalog_v5.py`` does not track model fingerprints at the
-    invocation level.  The identity hash therefore varies across five
-    fields (not six): target_hash, evaluator_version,
-    prompt_template_version, policy_version, and stage_set.
-    """
-    from functools import partial
-
-    if identifier.startswith(RUN_PREFIX):
-        from research_store.container import build_run_service
-
-        run_svc = build_run_service(config)
-        run = run_svc.get_run_by_external_id(identifier)
-        if run:
-            return run.get("id"), "run", run.get("id")
-    elif identifier.startswith("fc_"):
-        from research_store.postgres import PostgresUnitOfWork
-
-        uow_factory = partial(
-            PostgresUnitOfWork,
-            config.database_url,
-            config.physical_collection,
-            config.embedding_model,
-            config.embedding_revision,
-            config.embedding_dimension,
-            config.parser_version,
-            config.normalization_version,
-            config.chunker_version,
-        )
-        with uow_factory() as uow:
-            inv = uow.get_invocation_status(
-                external_invocation_id=identifier
-            )
-            if inv:
-                return inv.get("run_id"), "invocation", inv.get("id")
-    return None
-
-
 def _text_blocks(path):
     if not path or not Path(path).is_file():
         return []
@@ -806,49 +760,6 @@ def _run_stage_with_fallback(stage, provider, model, payload, fallback_provider,
 def audit_target(identifier, provider="local", model=None, force=False, quiet=False, fallback_provider=None, fallback_model=None, stages=None, max_calls=None, max_input_tokens=None):
     packet = build_audit_packet(identifier)
     packet_hash = hashlib.sha256(json.dumps(packet, sort_keys=True).encode()).hexdigest()
-
-    # -- Idempotent audit scheduling (issue #34) --------------------------
-    # When PostgreSQL is available, check for an equivalent existing
-    # assessment before running any LLM calls.  This prevents duplicate
-    # audits for equivalent targets and evaluator configurations.
-    postgres_reuse = None
-    try:
-        from research_store.container import build_audit_service
-        from research_store.config import StoreConfig
-
-        config = StoreConfig.from_env()
-        if config.database_url:
-            audit_svc = build_audit_service(config)
-            resolved = _resolve_audit_target(identifier, config)
-            if resolved is not None:
-                run_id, target_type, target_id = resolved
-                reuse = audit_svc.schedule_assessment(
-                    run_id=run_id,
-                    target_type=target_type,
-                    target_id=target_id,
-                    target_hash=packet_hash,
-                    evaluator_version=EVALUATOR_VERSION,
-                    prompt_template_version=PROMPT_TEMPLATE_VERSION,
-                    policy_version=POLICY_VERSION,
-                    stage_set=stages or ["rubric", "acquisition", "evidence", "synthesis"],
-                    status="partial",
-                    model_fingerprint=None,
-                    dry_run=True,
-                )
-                if reuse.get("action") == "dry_run_match":
-                    postgres_reuse = reuse
-    except (ImportError, RuntimeError, KeyError, AttributeError):
-        # If PostgreSQL is unavailable, the service is misconfigured, or
-        # any import fails, fall through to the filesystem-based audit.
-        pass
-
-    if postgres_reuse is not None:
-        assessment = dict(postgres_reuse.get("assessment", {}))
-        assessment["reuse"] = True
-        assessment["reuse_source"] = "postgres_equivalent"
-        if not quiet:
-            print(json.dumps(assessment, indent=2, sort_keys=True))
-        return assessment
     max_calls = max_calls or int(AUDIT_POLICY["max_calls"]); target_tokens = max_input_tokens or int(AUDIT_POLICY["target_input_tokens"])
     requested = stages or ["rubric", "acquisition", "evidence", "synthesis"]
     outputs, calls, stage_errors = {}, [], []
@@ -887,39 +798,6 @@ def audit_target(identifier, provider="local", model=None, force=False, quiet=Fa
     assessment_id = "fa_" + uuid4().hex
     assessment = {"schema_version": 5, "assessment_id": assessment_id, "target_id": identifier, "target_hash": packet_hash, "evaluator_version": EVALUATOR_VERSION, "prompt_template_version": PROMPT_TEMPLATE_VERSION, "policy_version": POLICY_VERSION, "created_at": now(), "status": status, "provider_policy": "local-first-commercial-opt-in", "evidence_scope": "audit_packet_with_bounded_excerpts", "audit_packet_manifest": packet["context_manifest"], "stages": outputs, "stage_errors": stage_errors, "calls": calls, "elapsed_ms": int((time.monotonic() - started) * 1000)}
     atomic_write(assessment_path(identifier, assessment_id), assessment)
-
-    # -- Persist to PostgreSQL (issue #34 idempotent scheduling) -----------
-    try:
-        from research_store.container import build_audit_service
-        from research_store.config import StoreConfig
-
-        config = StoreConfig.from_env()
-        if config.database_url:
-            resolved = _resolve_audit_target(identifier, config)
-            if resolved is not None:
-                run_id, target_type, target_id = resolved
-                audit_svc = build_audit_service(config)
-                audit_svc.schedule_assessment(
-                    run_id=run_id,
-                    target_type=target_type,
-                    target_id=target_id,
-                    target_hash=packet_hash,
-                    evaluator_version=EVALUATOR_VERSION,
-                    prompt_template_version=PROMPT_TEMPLATE_VERSION,
-                    policy_version=POLICY_VERSION,
-                    stage_set=stages or ["rubric", "acquisition", "evidence", "synthesis"],
-                    status=status,
-                    model_fingerprint=None,
-                    provider=provider,
-                    model=model,
-                    elapsed_ms=int((time.monotonic() - started) * 1000),
-                    audit_packet_manifest=packet["context_manifest"],
-                )
-    except (ImportError, RuntimeError, KeyError, AttributeError):
-        # PostgreSQL persistence failure must NOT roll back the
-        # filesystem write.  Export failure is reported separately
-        # from workflow failure (FR-018).
-        pass
     path = run_path(identifier) if identifier.startswith(RUN_PREFIX) else invocation_path(identifier)
     with catalog_lock(identifier):
         target = read_run(identifier) if identifier.startswith(RUN_PREFIX) else read_record(identifier)
