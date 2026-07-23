@@ -82,9 +82,6 @@ case "${1:-}" in
       if [[ -n "$answer_file" ]]; then
         db_args+=(--answer-sha256 "$(sha256sum "$answer_file" | awk '{print $1}')")
       fi
-      if [[ "$auto_audit" == "1" ]]; then
-        db_args+=(--auto-audit)
-      fi
       "$SCRIPT_DIR/research-db" "${db_args[@]}" >/dev/null
       # Derive filesystem catalog record from committed PostgreSQL state
       if [[ "${FIRECRAWL_CATALOG_DISABLED:-}" != "1" ]]; then
@@ -99,13 +96,7 @@ case "${1:-}" in
       --idempotency-key "legacy-adapter:$run_id:frun:finish:$outcome:{workflow_revision}" >/dev/null
     printf '%s\n' "${run_id:-${output:-}}"
     if [[ "$auto_audit" == "1" ]]; then
-      # When PostgreSQL is active, auto-audit is triggered inside
-      # finish_run() (catalog_v5.py line 594) which also persists to
-      # PostgreSQL.  Only call the filesystem-based audit when DB is
-      # not active (legacy path).
-      if [[ "$DB_ACTIVE" != "1" ]]; then
-        "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit "$run_id"
-      fi
+      "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit "$run_id"
     fi
     ;;
   reopen)
