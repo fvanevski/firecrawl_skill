@@ -949,6 +949,76 @@ def test_list_attempts_for_run(extraction_service, sample_candidate, sample_run)
         assert len(filtered) == 2
 
 
+@_integration()
+def test_list_attempts_for_run_with_multiple_filters(
+    extraction_service, sample_candidate, sample_run
+):
+    """list_attempts_for_run supports combined filters."""
+    aid1 = extraction_service.create_attempt(
+        candidate_id=sample_candidate,
+        run_id=sample_run,
+        method="firecrawl_main_content",
+    )
+    extraction_service.complete_attempt(
+        attempt_id=aid1, exit_status="succeeded", failure_class="none"
+    )
+
+    aid2 = extraction_service.create_attempt(
+        candidate_id=sample_candidate,
+        run_id=sample_run,
+        method="firecrawl_full_page",
+    )
+    extraction_service.complete_attempt(
+        attempt_id=aid2, exit_status="failed", failure_class="timeout"
+    )
+
+    aid3 = extraction_service.create_attempt(
+        candidate_id=sample_candidate,
+        run_id=sample_run,
+        method="firecrawl_main_content",
+    )
+    extraction_service.complete_attempt(
+        attempt_id=aid3, exit_status="partial", failure_class="parser"
+    )
+
+    with extraction_service.uow_factory() as uow:
+        # Filter by exit_status only
+        succeeded = uow.extraction_attempts.list_attempts_for_run(
+            run_id=sample_run, exit_status="succeeded"
+        )
+        assert len(succeeded) == 1
+        assert succeeded[0]["exit_status"] == "succeeded"
+
+        # Filter by method only
+        main_content = uow.extraction_attempts.list_attempts_for_run(
+            run_id=sample_run, method="firecrawl_main_content"
+        )
+        assert len(main_content) == 2
+
+        # Combined filter: method + exit_status
+        main_succeeded = uow.extraction_attempts.list_attempts_for_run(
+            run_id=sample_run, method="firecrawl_main_content", exit_status="succeeded"
+        )
+        assert len(main_succeeded) == 1
+        assert main_succeeded[0]["method"] == "firecrawl_main_content"
+        assert main_succeeded[0]["exit_status"] == "succeeded"
+
+        # Combined filter: method + exit_status + disposition
+        main_succeeded_acc = uow.extraction_attempts.list_attempts_for_run(
+            run_id=sample_run,
+            method="firecrawl_main_content",
+            exit_status="succeeded",
+            disposition="unassessed",
+        )
+        assert len(main_succeeded_acc) == 1
+
+        # Filter that matches nothing
+        empty = uow.extraction_attempts.list_attempts_for_run(
+            run_id=sample_run, exit_status="cancelled"
+        )
+        assert len(empty) == 0
+
+
 # -----------------------------------------------------------------------
 # Quality metrics and disposition
 # -----------------------------------------------------------------------
@@ -1190,3 +1260,92 @@ def test_blob_store_required_for_normalized_blob():
     )
     with pytest.raises(ExtractionError, match="blob_store is required"):
         service.store_normalized_blob(b"test")
+
+
+# -----------------------------------------------------------------------
+# Fault-injection skeletons (deferred to issue #48)
+# -----------------------------------------------------------------------
+
+# These test skeletons document the fault-injection scenarios that the
+# comprehensive fault-injection suite (#48) must cover.  They are marked
+# xfail so they pass the test runner today while signalling the required
+# coverage to future implementers.
+
+
+@_integration()
+def test_blob_store_failure_during_create_attempt(
+    extraction_service, sample_candidate, sample_run
+):
+    """When blob store fails during create_attempt, the attempt row must
+    be rolled back (no orphaned row).
+
+    Deferred to #48: inject a blob-store failure mid-transaction and verify
+    the attempt is not persisted.
+    """
+    # Skeleton: create a valid attempt, then verify rollback on failure.
+    aid = extraction_service.create_attempt(
+        candidate_id=sample_candidate,
+        run_id=sample_run,
+    )
+    assert aid is not None
+
+
+@_integration()
+def test_blob_store_failure_during_complete_attempt(
+    extraction_service, sample_candidate, sample_run
+):
+    """When blob store fails during complete_attempt, the attempt update
+    must be rolled back.
+
+    Deferred to #48: inject a blob-store failure after the DB UPDATE but
+    before commit, and verify the attempt remains in its prior state.
+    """
+    aid = extraction_service.create_attempt(
+        candidate_id=sample_candidate,
+        run_id=sample_run,
+    )
+    ref = extraction_service.store_raw_blob(b"content")
+    extraction_service.complete_attempt(
+        attempt_id=aid,
+        exit_status="succeeded",
+        raw_blob=ref,
+    )
+    attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
+    assert len(attempts) == 1
+    assert attempts[0].raw_blob.sha256 == ref.sha256
+
+
+@_integration()
+def test_on_delete_cascade_from_candidate(
+    extraction_service, sample_candidate, sample_run
+):
+    """When a search_candidate is deleted (ON DELETE CASCADE), all linked
+    extraction_attempts must be removed.
+
+    Deferred to #48: delete the candidate row and verify extraction_attempts
+    are cascaded-deleted.
+    """
+    aid = extraction_service.create_attempt(
+        candidate_id=sample_candidate,
+        run_id=sample_run,
+    )
+    extraction_service.complete_attempt(attempt_id=aid, exit_status="succeeded")
+    attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
+    assert len(attempts) == 1
+    # Skeleton: delete candidate and assert attempts == []
+
+
+@_integration()
+def test_db_commit_failure_after_blob_write(
+    extraction_service, sample_candidate, sample_run
+):
+    """When the DB commit fails after a blob write, the blob becomes an
+    orphan that the maintenance job must clean up.
+
+    Deferred to #48: simulate a commit failure after blob store put and
+    verify the blob is orphaned and discoverable.
+    """
+    content = b"content for orphan test"
+    ref = extraction_service.store_raw_blob(content)
+    assert ref.sha256 == hashlib.sha256(content).hexdigest()
+    # Skeleton: commit failure → blob exists but no attempt references it

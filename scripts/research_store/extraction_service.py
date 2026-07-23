@@ -98,36 +98,83 @@ class ExtractionService:
             The UUID of the newly created attempt.
         """
         now = start_time or utcnow()
-        with self.uow_factory() as uow:
-            attempts = uow.extraction_attempts.list_attempts_for_candidate(
-                candidate_id, run_id=run_id
-            )
-            next_number = len(attempts) + 1
-            attempt_id = uow.extraction_attempts.create_attempt(
-                candidate_id=candidate_id,
-                run_id=run_id,
-                invocation_id=invocation_id,
-                attempt_number=next_number,
-                method=method,
-                method_version=method_version or self.config.parser_version,
-                requested_format=requested_format,
-                start_time=now,
-                end_time=None,
-                exit_status="succeeded",
-                http_status=None,
-                backend_status=None,
-                raw_blob=None,
-                normalized_blob=None,
-                parser_used=None,
-                quality_metrics=None,
-                failure_class="none",
-                retry_parent_id=retry_parent_id,
-                disposition="unassessed",
-                error_message=None,
-                selection_reason=None,
-            )
-            uow.commit()
-        return attempt_id
+        max_retries = 3
+        for retry in range(max_retries):
+            with self.uow_factory() as uow:
+                attempts = uow.extraction_attempts.list_attempts_for_candidate(
+                    candidate_id, run_id=run_id
+                )
+                next_number = len(attempts) + 1
+                try:
+                    attempt_id = uow.extraction_attempts.create_attempt(
+                        candidate_id=candidate_id,
+                        run_id=run_id,
+                        invocation_id=invocation_id,
+                        attempt_number=next_number,
+                        method=method,
+                        method_version=method_version or self.config.parser_version,
+                        requested_format=requested_format,
+                        start_time=now,
+                        end_time=None,
+                        exit_status="succeeded",
+                        http_status=None,
+                        backend_status=None,
+                        raw_blob=None,
+                        normalized_blob=None,
+                        parser_used=None,
+                        quality_metrics=None,
+                        failure_class="none",
+                        retry_parent_id=retry_parent_id,
+                        disposition="unassessed",
+                        error_message=None,
+                        selection_reason=None,
+                    )
+                    uow.commit()
+                    return attempt_id
+                except Exception as exc:
+                    # UNIQUE (candidate_id, attempt_number) collision due to
+                    # concurrent callers computing the same next_number.
+                    # Retry with an incremented attempt_number after refreshing
+                    # the candidate's attempt list.
+                    if retry < max_retries - 1 and self._is_unique_violation(exc):
+                        continue
+                    raise
+        # Fallback: should never reach here, but mypy needs a return.
+        raise ExtractionAttemptError(
+            f"failed to create attempt after {max_retries} retries",
+            failure_class="internal",
+        )
+
+    @staticmethod
+    def _is_unique_violation(exc: Exception) -> bool:
+        """Return True if *exc* is a database unique-constraint violation.
+
+        Detects PostgreSQL ``psycopg.errors.UniqueViolation`` and the generic
+        ``sqlalchemy.exc.IntegrityError`` / ``sqlite3.IntegrityError`` so that
+        callers can retry with an incremented ``attempt_number``.
+        """
+        # psycopg 3 (native)
+        try:
+            import psycopg.errors
+
+            if isinstance(exc, psycopg.errors.UniqueViolation):
+                return True
+        except ImportError:
+            pass
+        # psycopg 3 with SQLAlchemy wrapper
+        try:
+            from sqlalchemy.exc import IntegrityError
+
+            if isinstance(exc, IntegrityError):
+                return True
+        except ImportError:
+            pass
+        # sqlite3 / built-in
+        import sqlite3
+
+        if isinstance(exc, sqlite3.IntegrityError):
+            return True
+        return False
 
     def complete_attempt(
         self,
@@ -149,13 +196,27 @@ class ExtractionService:
         It updates the attempt row with timing, blobs, quality metrics,
         and failure classification.
 
+        **Partial-update semantics (COALESCE):**  When a blob argument
+        (``raw_blob``, ``normalized_blob``) or ``parser_used`` is ``None``,
+        the corresponding database column is *not* changed — the existing
+        value is preserved.  This allows callers to update only the fields
+        they have values for.  To explicitly clear a blob reference, call
+        ``evaluate_and_set_disposition`` or ``record_quality_metrics``
+        through the repository port with ``None``.
+
         Args:
             attempt_id: The attempt to complete.
             exit_status: One of succeeded, partial, failed, cancelled.
             raw_blob: Content-addressed reference to the raw payload.
-            normalized_blob: Content-addressed reference to the normalized artifact.
-            parser_used: Parser version used for extraction.
-            quality_metrics: Deterministic quality evaluation.
+                      Pass ``None`` to leave the existing value unchanged.
+            normalized_blob: Content-addressed reference to the normalized
+                             artifact.  Pass ``None`` to leave unchanged.
+            parser_used: Parser version used for extraction.  Pass ``None``
+                         to leave unchanged.
+            quality_metrics: Deterministic quality evaluation.  Pass ``None``
+                             to leave unchanged.  Note that
+                             ``evaluate_and_set_disposition`` will
+                             overwrite this field if called afterward.
             failure_class: Classification of failure (if failed).
             http_status: HTTP status code from the backend.
             backend_status: Backend-specific status string.
@@ -204,9 +265,20 @@ class ExtractionService:
         attempt record so that re-evaluation does not mutate the attempt
         itself.
 
+        **Authoritative quality source:**  This method performs a full
+        overwrite of the ``quality_metrics`` JSONB column.  If
+        ``complete_attempt`` was previously called with quality_metrics,
+        those values will be replaced by the metrics passed here.  Callers
+        that wish to update quality metrics without changing disposition
+        should use ``evaluate_and_set_disposition`` with the existing
+        disposition, or update metrics directly through the repository
+        port.
+
         Args:
             attempt_id: The attempt to evaluate.
             quality_metrics: Deterministic quality evaluation results.
+                             Replaces any prior quality_metrics set by
+                             ``complete_attempt``.
             disposition: One of acceptable, poor, ambiguous, unassessed.
 
         Returns:
@@ -358,33 +430,44 @@ class ExtractionService:
         Returns:
             The new attempt's UUID.
         """
-        with self.uow_factory() as uow:
-            attempts = uow.extraction_attempts.list_attempts_for_candidate(
-                candidate_id, run_id=run_id
-            )
-            next_number = len(attempts) + 1
-            attempt_id = uow.extraction_attempts.create_attempt(
-                candidate_id=candidate_id,
-                run_id=run_id,
-                invocation_id=invocation_id,
-                attempt_number=next_number,
-                method=method,
-                method_version=method_version or self.config.parser_version,
-                requested_format=None,
-                start_time=utcnow(),
-                end_time=None,
-                exit_status="succeeded",
-                http_status=None,
-                backend_status=None,
-                raw_blob=None,
-                normalized_blob=None,
-                parser_used=None,
-                quality_metrics=None,
-                failure_class="none",
-                retry_parent_id=parent_attempt_id,
-                disposition="unassessed",
-                error_message=None,
-                selection_reason=None,
-            )
-            uow.commit()
-        return attempt_id
+        max_retries = 3
+        for retry in range(max_retries):
+            with self.uow_factory() as uow:
+                attempts = uow.extraction_attempts.list_attempts_for_candidate(
+                    candidate_id, run_id=run_id
+                )
+                next_number = len(attempts) + 1
+                try:
+                    attempt_id = uow.extraction_attempts.create_attempt(
+                        candidate_id=candidate_id,
+                        run_id=run_id,
+                        invocation_id=invocation_id,
+                        attempt_number=next_number,
+                        method=method,
+                        method_version=method_version or self.config.parser_version,
+                        requested_format=None,
+                        start_time=utcnow(),
+                        end_time=None,
+                        exit_status="succeeded",
+                        http_status=None,
+                        backend_status=None,
+                        raw_blob=None,
+                        normalized_blob=None,
+                        parser_used=None,
+                        quality_metrics=None,
+                        failure_class="none",
+                        retry_parent_id=parent_attempt_id,
+                        disposition="unassessed",
+                        error_message=None,
+                        selection_reason=None,
+                    )
+                    uow.commit()
+                    return attempt_id
+                except Exception as exc:
+                    if retry < max_retries - 1 and self._is_unique_violation(exc):
+                        continue
+                    raise
+        raise ExtractionAttemptError(
+            f"failed to create retry after {max_retries} retries",
+            failure_class="internal",
+        )
