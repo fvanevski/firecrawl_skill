@@ -256,7 +256,9 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             invocation_id=invocation_id,
             payload={"source": "integration"},
         )
-        assert event_id == (second_event["event_id"] if isinstance(second_event, dict) else second_event)
+        assert event_id == (
+            second_event["event_id"] if isinstance(second_event, dict) else second_event
+        )
         spec_id = uow.record_research_spec(
             run_id,
             1,
@@ -2024,7 +2026,10 @@ class TestResearchOrchestratorIntegration:
 
         from budget_policy import conservative_research_spec
         from research_domain import serialize_model
-        spec = serialize_model(conservative_research_spec("Integration test objective", "fact_finding"))
+
+        spec = serialize_model(
+            conservative_research_spec("Integration test objective", "fact_finding")
+        )
 
         qid = spec["questions"][0]["question_id"]
         search_plan = {
@@ -2040,7 +2045,12 @@ class TestResearchOrchestratorIntegration:
                     "target_claim_ids": [],
                     "intended_source_classes": [],
                     "expected_organizations": [],
-                    "freshness_requirement": {"start": None, "end": None, "description": "unconstrained", "uncertainty": "none"},
+                    "freshness_requirement": {
+                        "start": None,
+                        "end": None,
+                        "description": "unconstrained",
+                        "uncertainty": "none",
+                    },
                     "expected_contribution": "overview",
                     "domain_restrictions": [],
                     "negative_terms": [],
@@ -2213,6 +2223,7 @@ class TestMigration0015TerminalDecisions:
 
         from alembic import command
         from alembic.config import Config
+
         root = Path(__file__).parents[1]
         config = Config(str(root / "alembic.ini"))
         old_env = os.environ.get("DATABASE_URL")

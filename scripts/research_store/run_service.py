@@ -929,9 +929,7 @@ class ResearchRunService:
                     expected_hash = artifact.get("sha256")
                     if path and expected_hash:
                         total += 1
-                        if self.blob_store and self.blob_store.verify(
-                            expected_hash
-                        ):
+                        if self.blob_store and self.blob_store.verify(expected_hash):
                             available += 1
                             artifacts.append(
                                 {
