@@ -11,7 +11,6 @@ from .domain import (
     IngestResult,
     SearchAdapterResult,
 )
-from .parsing import ParseResult, SelectionRecord
 
 
 class SourceRepository(Protocol):

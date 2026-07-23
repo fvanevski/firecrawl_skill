@@ -5,8 +5,8 @@ Revises: 0021_extraction_attempts
 Create Date: 2026-07-22
 
 """
+
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = "0022_extraction_attempt_linkage"
