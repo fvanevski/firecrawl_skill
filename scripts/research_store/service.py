@@ -618,34 +618,75 @@ class ClaimManifestService:
 # ---------------------------------------------------------------------------
 
 
+AUDIT_IDENTITY_VERSION = "audit-identity-v1"
+AUDIT_MODEL_IMPLEMENTATION_VERSION = "audit-evaluator-v1"
+
+
+def resolve_model_fingerprint(
+    *,
+    model_fingerprint: str | None,
+    provider: str | None,
+    model: str | None,
+    evaluator_version: str,
+    prompt_template_version: str,
+) -> str:
+    """Return a stable, non-empty evaluator/model fingerprint.
+
+    Callers may supply a provider-issued fingerprint. Otherwise both provider
+    and a fixed model identifier are required, and the service derives a
+    deterministic fingerprint that also retains evaluator schema, prompt
+    schema, and implementation versions.
+    """
+    if model_fingerprint is not None:
+        fingerprint = model_fingerprint.strip()
+        if not fingerprint:
+            raise ValueError("model_fingerprint must be non-empty")
+        return fingerprint
+    if not provider or not provider.strip() or not model or not model.strip():
+        raise ValueError(
+            "model_fingerprint is required unless provider and model are both supplied"
+        )
+    identity = {
+        "implementation_version": AUDIT_MODEL_IMPLEMENTATION_VERSION,
+        "provider": provider.strip(),
+        "model": model.strip(),
+        "evaluator_version": evaluator_version,
+        "prompt_template_version": prompt_template_version,
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def compute_audit_identity_hash(
+    *,
     target_hash: str,
     evaluator_version: str,
     prompt_template_version: str,
     policy_version: str,
     stage_set: list[str],
-    model_fingerprint: str | None = None,
+    model_fingerprint: str,
 ) -> str:
-    """Compute the deterministic audit identity hash (SHA-256).
-
-    The identity is derived from the six fields that PRD Section 17.3
-    requires to match for semantic-output reuse:
-
-    * ``target_hash`` — input/evidence hash
-    * ``evaluator_version`` — evaluator schema version
-    * ``prompt_template_version`` — prompt template version
-    * ``policy_version`` — audit policy version
-    * ``stage_set`` — sorted list of audit stages
-    * ``model_fingerprint`` — model fingerprint (nullable)
-
-    Returns the SHA-256 hex digest of the canonical JSON representation.
-    """
+    """Compute the canonical SHA-256 identity for reusable audit output."""
+    required = {
+        "target_hash": target_hash,
+        "evaluator_version": evaluator_version,
+        "prompt_template_version": prompt_template_version,
+        "policy_version": policy_version,
+        "model_fingerprint": model_fingerprint,
+    }
+    empty = [name for name, value in required.items() if not value or not value.strip()]
+    if empty:
+        raise ValueError("audit identity fields must be non-empty: " + ", ".join(empty))
+    normalized_stages = sorted(set(stage_set))
+    if not normalized_stages or any(not stage or not stage.strip() for stage in normalized_stages):
+        raise ValueError("stage_set must contain non-empty stages")
     identity = {
+        "identity_version": AUDIT_IDENTITY_VERSION,
         "evaluator_version": evaluator_version,
         "model_fingerprint": model_fingerprint,
         "policy_version": policy_version,
         "prompt_template_version": prompt_template_version,
-        "stage_set": sorted(stage_set),
+        "stage_set": normalized_stages,
         "target_hash": target_hash,
     }
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
@@ -683,6 +724,45 @@ class AuditService:
     def __init__(self, uow_factory: Callable):
         self.uow_factory = uow_factory
 
+    def _identity(
+        self,
+        *,
+        target_hash: str,
+        evaluator_version: str,
+        prompt_template_version: str,
+        policy_version: str,
+        stage_set: list[str],
+        provider: str | None,
+        model: str | None,
+        model_fingerprint: str | None,
+    ) -> tuple[str, str]:
+        fingerprint = resolve_model_fingerprint(
+            model_fingerprint=model_fingerprint,
+            provider=provider,
+            model=model,
+            evaluator_version=evaluator_version,
+            prompt_template_version=prompt_template_version,
+        )
+        identity_hash = compute_audit_identity_hash(
+            target_hash=target_hash,
+            evaluator_version=evaluator_version,
+            prompt_template_version=prompt_template_version,
+            policy_version=policy_version,
+            stage_set=stage_set,
+            model_fingerprint=fingerprint,
+        )
+        return fingerprint, identity_hash
+
+    @staticmethod
+    def _validate_target(uow, run_id: UUID, target_type: str, target_id: UUID) -> None:
+        if target_type not in {"run", "invocation"}:
+            raise ValueError(f"invalid audit target_type: {target_type}")
+        if not uow.validate_audit_target(run_id, target_type, target_id):
+            raise ValueError(
+                f"audit target not found or not owned by run: "
+                f"{run_id}/{target_type}/{target_id}"
+            )
+
     def create_assessment(
         self,
         run_id: UUID,
@@ -695,7 +775,6 @@ class AuditService:
         stage_set: list[str],
         status: str,
         *,
-        audit_identity_hash: str | None = None,
         provider: str | None = None,
         model: str | None = None,
         prompt_hash: str | None = None,
@@ -703,10 +782,23 @@ class AuditService:
         elapsed_ms: int = 0,
         audit_packet_manifest: dict[str, Any] | None = None,
     ) -> UUID:
-        """Create an audit assessment record. Returns the assessment ``id``."""
-        sanitized_manifest = _sanitize(audit_packet_manifest) if audit_packet_manifest else None
+        """Append an assessment with an internally computed identity."""
+        fingerprint, identity_hash = self._identity(
+            target_hash=target_hash,
+            evaluator_version=evaluator_version,
+            prompt_template_version=prompt_template_version,
+            policy_version=policy_version,
+            stage_set=stage_set,
+            provider=provider,
+            model=model,
+            model_fingerprint=model_fingerprint,
+        )
+        sanitized_manifest = (
+            _sanitize(audit_packet_manifest) if audit_packet_manifest else None
+        )
         with self.uow_factory() as uow:
-            assessment_id = uow.create_audit_assessment(
+            self._validate_target(uow, run_id, target_type, target_id)
+            assessment_id = uow.insert_audit_assessment_if_absent(
                 run_id=run_id,
                 target_type=target_type,
                 target_id=target_id,
@@ -716,15 +808,24 @@ class AuditService:
                 policy_version=policy_version,
                 stage_set=stage_set,
                 status=status,
-                audit_identity_hash=audit_identity_hash,
+                audit_identity_hash=identity_hash,
                 provider=provider,
                 model=model,
                 prompt_hash=prompt_hash,
-                model_fingerprint=model_fingerprint,
+                model_fingerprint=fingerprint,
                 elapsed_ms=elapsed_ms,
                 audit_packet_manifest=sanitized_manifest,
             )
-        return assessment_id
+            if assessment_id is not None:
+                return assessment_id
+            existing = uow.lookup_equivalent_assessment(
+                run_id, target_type, target_id, identity_hash
+            )
+            if existing is None:
+                raise RuntimeError(
+                    "completed audit conflict did not resolve to an assessment"
+                )
+            return UUID(existing["id"])
 
     def add_stage_output(
         self,
@@ -855,28 +956,27 @@ class AuditService:
         prompt_template_version: str,
         policy_version: str,
         stage_set: list[str],
+        *,
+        provider: str | None = None,
+        model: str | None = None,
         model_fingerprint: str | None = None,
     ) -> dict[str, Any] | None:
-        """Look up an existing equivalent non-failed audit assessment.
-
-        Returns ``None`` when no equivalent assessment exists.  When one
-        exists, returns the assessment dict including ``audit_identity_hash``
-        and ``id`` so the caller can reuse the existing assessment rather
-        than creating a new one.
-
-        This implements PRD Section 17.3 caching: semantic outputs are
-        reused only when all identity components match.
-        """
-        identity_hash = compute_audit_identity_hash(
+        """Return the completed equivalent assessment for this exact target."""
+        _fingerprint, identity_hash = self._identity(
             target_hash=target_hash,
             evaluator_version=evaluator_version,
             prompt_template_version=prompt_template_version,
             policy_version=policy_version,
             stage_set=stage_set,
+            provider=provider,
+            model=model,
             model_fingerprint=model_fingerprint,
         )
         with self.uow_factory() as uow:
-            return uow.lookup_equivalent_assessment(identity_hash)
+            self._validate_target(uow, run_id, target_type, target_id)
+            return uow.lookup_equivalent_assessment(
+                run_id, target_type, target_id, identity_hash
+            )
 
     def schedule_assessment(
         self,
@@ -896,131 +996,74 @@ class AuditService:
         model_fingerprint: str | None = None,
         elapsed_ms: int = 0,
         audit_packet_manifest: dict[str, Any] | None = None,
-        dry_run: bool = False,
-        external_run_id: str | None = None,
     ) -> dict[str, Any]:
-        """Schedule an audit assessment idempotently.
+        """Append an audit attempt or reuse one completed equivalent assessment.
 
-        If an equivalent non-failed assessment already exists (matching
-        ``audit_identity_hash``), returns the existing assessment without
-        creating a new row.  This prevents concurrent equivalent requests
-        from creating duplicate active audits.
-
-        When ``dry_run=True``, only checks for an existing equivalent
-        assessment without creating or modifying any rows.
-
-        Returns a dict with:
-        * ``action`` — ``"reuse"`` | ``"create"`` | ``"dry_run_no_match"`` | ``"dry_run_match"``
-        * ``assessment_id`` — the assessment UUID
-        * ``audit_identity_hash`` — the computed identity hash
-        * ``existing`` — bool indicating if an existing assessment was reused
-        * ``assessment`` — full export when action is ``"reuse"`` or ``"create"``
+        Only completed assessments are reusable. Partial and failed rows remain
+        immutable historical attempts and do not prevent a completed retry.
         """
-        identity_hash = compute_audit_identity_hash(
+        fingerprint, identity_hash = self._identity(
             target_hash=target_hash,
             evaluator_version=evaluator_version,
             prompt_template_version=prompt_template_version,
             policy_version=policy_version,
             stage_set=stage_set,
+            provider=provider,
+            model=model,
             model_fingerprint=model_fingerprint,
         )
-
+        sanitized_manifest = (
+            _sanitize(audit_packet_manifest) if audit_packet_manifest else None
+        )
         with self.uow_factory() as uow:
-            existing = uow.lookup_equivalent_assessment(identity_hash)
-
-        if existing is not None:
-            export = self.export_assessment(UUID(existing["id"]))
-            if export is None:
-                export = {}
-            export["existing"] = True
-            export["audit_identity_hash"] = identity_hash
-            if dry_run:
-                return {
-                    "action": "dry_run_match",
-                    "assessment_id": str(existing["id"]),
-                    "audit_identity_hash": identity_hash,
-                    "existing": True,
-                    "assessment": export,
-                }
-            return {
-                "action": "reuse",
-                "assessment_id": str(existing["id"]),
-                "audit_identity_hash": identity_hash,
-                "existing": True,
-                "assessment": export,
-            }
-
-        if dry_run:
-            return {
-                "action": "dry_run_no_match",
-                "assessment_id": None,
-                "audit_identity_hash": identity_hash,
-                "existing": False,
-            }
-
-        # No equivalent found — create a new assessment.
-        # The partial unique constraint uk_audit_assessments_identity
-        # prevents concurrent duplicate creation.
-        try:
-            assessment_id = self.create_assessment(
-                run_id=run_id,
-                target_type=target_type,
-                target_id=target_id,
-                target_hash=target_hash,
-                evaluator_version=evaluator_version,
-                prompt_template_version=prompt_template_version,
-                policy_version=policy_version,
-                stage_set=stage_set,
-                status=status,
-                audit_identity_hash=identity_hash,
-                provider=provider,
-                model=model,
-                prompt_hash=prompt_hash,
-                model_fingerprint=model_fingerprint,
-                elapsed_ms=elapsed_ms,
-                audit_packet_manifest=audit_packet_manifest,
+            self._validate_target(uow, run_id, target_type, target_id)
+            existing = uow.lookup_equivalent_assessment(
+                run_id, target_type, target_id, identity_hash
             )
-        except Exception as exc:
-            # If the unique constraint fired (concurrent duplicate create),
-            # fall through to a lookup and return the existing assessment.
-            exc_str = str(exc).lower()
-            if (
-                "unique" not in exc_str
-                and "duplicate" not in exc_str
-                and "constraint" not in exc_str
-            ):
-                raise
-            with self.uow_factory() as uow:
-                existing = uow.lookup_equivalent_assessment(identity_hash)
             if existing is not None:
-                export = self.export_assessment(UUID(existing["id"]))
-                if export is None:
-                    export = {}
-                export["existing"] = True
-                export["audit_identity_hash"] = identity_hash
-                return {
-                    "action": "reuse",
-                    "assessment_id": str(existing["id"]),
-                    "audit_identity_hash": identity_hash,
-                    "existing": True,
-                    "assessment": export,
-                }
-            raise  # Re-raise if we still can't find it
+                assessment_id = UUID(existing["id"])
+                action = "reuse"
+            else:
+                assessment_id = uow.insert_audit_assessment_if_absent(
+                    run_id=run_id,
+                    target_type=target_type,
+                    target_id=target_id,
+                    target_hash=target_hash,
+                    evaluator_version=evaluator_version,
+                    prompt_template_version=prompt_template_version,
+                    policy_version=policy_version,
+                    stage_set=stage_set,
+                    status=status,
+                    audit_identity_hash=identity_hash,
+                    provider=provider,
+                    model=model,
+                    prompt_hash=prompt_hash,
+                    model_fingerprint=fingerprint,
+                    elapsed_ms=elapsed_ms,
+                    audit_packet_manifest=sanitized_manifest,
+                )
+                if assessment_id is None:
+                    existing = uow.lookup_equivalent_assessment(
+                        run_id, target_type, target_id, identity_hash
+                    )
+                    if existing is None:
+                        raise RuntimeError(
+                            "completed audit conflict did not resolve to an assessment"
+                        )
+                    assessment_id = UUID(existing["id"])
+                    action = "reuse"
+                else:
+                    action = "create"
 
-        export = self.export_assessment(assessment_id)
-        if export:
-            export["existing"] = False
-            export["audit_identity_hash"] = identity_hash
-        result = {
-            "action": "create",
+        export = self.export_assessment(assessment_id) or {}
+        export["existing"] = action == "reuse"
+        return {
+            "action": action,
             "assessment_id": str(assessment_id),
             "audit_identity_hash": identity_hash,
-            "existing": False,
-            "assessment": export or {},
+            "existing": action == "reuse",
+            "assessment": export,
         }
-        if external_run_id is not None:
-            result["external_run_id"] = external_run_id
-        return result
 
     def export_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
         """Export a complete audit assessment with all stage outputs."""
@@ -1045,20 +1088,8 @@ class AuditService:
         elapsed_ms: int = 0,
         audit_packet_manifest: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Create an assessment for a research run and return it.
-
-        Convenience method that creates the assessment and returns the
-        full export including stage outputs.
-        """
-        identity_hash = compute_audit_identity_hash(
-            target_hash=target_hash,
-            evaluator_version=evaluator_version,
-            prompt_template_version=prompt_template_version,
-            policy_version=policy_version,
-            stage_set=stage_set,
-            model_fingerprint=model_fingerprint,
-        )
-        assessment_id = self.create_assessment(
+        """Schedule a target-scoped run assessment idempotently."""
+        result = self.schedule_assessment(
             run_id=run_id,
             target_type="run",
             target_id=run_id,
@@ -1068,7 +1099,6 @@ class AuditService:
             policy_version=policy_version,
             stage_set=stage_set,
             status=status,
-            audit_identity_hash=identity_hash,
             provider=provider,
             model=model,
             prompt_hash=prompt_hash,
@@ -1076,11 +1106,10 @@ class AuditService:
             elapsed_ms=elapsed_ms,
             audit_packet_manifest=audit_packet_manifest,
         )
-        export = self.export_assessment(assessment_id)
-        if export:
-            export["external_run_id"] = external_run_id
-            export["audit_identity_hash"] = identity_hash
-        return export or {}
+        assessment = dict(result["assessment"])
+        assessment["external_run_id"] = external_run_id
+        assessment["action"] = result["action"]
+        return assessment
 
     def assess_invocation(
         self,
@@ -1100,21 +1129,8 @@ class AuditService:
         elapsed_ms: int = 0,
         audit_packet_manifest: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Create an assessment for an invocation and return it.
-
-        Convenience method that creates the assessment with
-        ``target_type="invocation"`` and returns the full export
-        including stage outputs.
-        """
-        identity_hash = compute_audit_identity_hash(
-            target_hash=target_hash,
-            evaluator_version=evaluator_version,
-            prompt_template_version=prompt_template_version,
-            policy_version=policy_version,
-            stage_set=stage_set,
-            model_fingerprint=model_fingerprint,
-        )
-        assessment_id = self.create_assessment(
+        """Schedule a target-scoped invocation assessment idempotently."""
+        result = self.schedule_assessment(
             run_id=run_id,
             target_type="invocation",
             target_id=invocation_id,
@@ -1124,7 +1140,6 @@ class AuditService:
             policy_version=policy_version,
             stage_set=stage_set,
             status=status,
-            audit_identity_hash=identity_hash,
             provider=provider,
             model=model,
             prompt_hash=prompt_hash,
@@ -1132,8 +1147,8 @@ class AuditService:
             elapsed_ms=elapsed_ms,
             audit_packet_manifest=audit_packet_manifest,
         )
-        export = self.export_assessment(assessment_id)
-        if export:
-            export["invocation_id"] = str(invocation_id)
-            export["audit_identity_hash"] = identity_hash
-        return export or {}
+        assessment = dict(result["assessment"])
+        assessment["invocation_id"] = str(invocation_id)
+        assessment["action"] = result["action"]
+        return assessment
+
