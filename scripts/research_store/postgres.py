@@ -3491,6 +3491,12 @@ class PostgresUnitOfWork:
             ]
             return result
 
+    # ------------------------------------------------------------------
+    # DEPRECATED: use log_retrieval_batch() instead.
+    # This method is kept only for the CLI inspect-asset command (cli.py).
+    # It does not populate retrieval_execution_id, so events written via
+    # this path are not queryable via get_retrieval_trace().
+    # ------------------------------------------------------------------
     def log_retrieval(self, run_id, event):
         fields = (
             "stage",

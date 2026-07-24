@@ -1318,3 +1318,64 @@ def test_reranked_stage_events_with_fused_intermediate():
     assert len(results) == 1
     assert results[0]["candidate_id"] == str(candidate_id)
 
+
+def test_search_assets_empty_input_no_events_logged():
+    """Verify that when both lexical and semantic are empty, no stage events are logged."""
+    from uuid import uuid4
+
+    run_id = uuid4()
+
+    _logged_events = []
+
+    class Repo:
+        documents = None
+        retrieval_events = None
+
+        def __init__(self):
+            self.documents = self
+            self.retrieval_events = self
+
+        def search_lexical(self, *_args):
+            return []
+
+        def fetch_passages(self, *_args):
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            pass
+
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            _logged_events.extend(events)
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="test",
+        reranker_candidate_limit=40,
+        parser_version="v1",
+        normalization_version="v1",
+        chunker_version="v1",
+        embedding_fingerprint="abc",
+    )
+
+    service = CorpusService(
+        config,
+        Repo,
+        blob_store=None,
+        index=None,
+        embedder=None,
+    )
+
+    execution, results = service.search_assets(
+        "empty", candidate_limit=5, run_id=run_id, requested_mode="lexical"
+    )
+
+    assert len(results) == 0
+    assert len(_logged_events) == 0
+    assert execution.mechanical_status.name == "SUCCEEDED"
+
