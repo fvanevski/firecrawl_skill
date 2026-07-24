@@ -58,14 +58,20 @@ class QdrantIndex:
     def inspect_schema(self) -> dict:
         """Inspect collection compatibility without creating or updating it."""
         try:
-            response = self._request("GET", f"/collections/{quote(self.collection, safe='')}")
+            response = self._request(
+                "GET", f"/collections/{quote(self.collection, safe='')}"
+            )
         except HTTPError as exc:
             if exc.code == 404:
                 return {
                     "collection": self.collection,
                     "exists": False,
                     "compatible": False,
-                    "expected": {"size": self.dimension, "distance": self.distance, "sparse": False},
+                    "expected": {
+                        "size": self.dimension,
+                        "distance": self.distance,
+                        "sparse": False,
+                    },
                 }
             raise
         params = response["result"]["config"]["params"]

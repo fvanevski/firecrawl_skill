@@ -23,7 +23,10 @@ class FakeRepository:
     def claim_jobs(self, limit, **options):
         self.state.setdefault("claim_history", []).append({"limit": limit, **options})
         self.state["claim_options"] = {"limit": limit, **options}
-        jobs, self.state["jobs"] = self.state["jobs"][:limit], self.state["jobs"][limit:]
+        jobs, self.state["jobs"] = (
+            self.state["jobs"][:limit],
+            self.state["jobs"][limit:],
+        )
         return jobs
 
     def renew_job(self, job_id, lease_token, lease_seconds):
@@ -63,7 +66,12 @@ class FakeIndex:
 
     def for_collection(self, collection, dimension=None, distance=None):
         self.calls.append(("select", collection, dimension, distance))
-        return FakeIndex(self.calls, collection, dimension or self.dimension, distance or self.distance)
+        return FakeIndex(
+            self.calls,
+            collection,
+            dimension or self.dimension,
+            distance or self.distance,
+        )
 
     def ensure_schema(self):
         self.calls.append(("schema", self.collection, self.dimension, self.distance))
@@ -78,16 +86,18 @@ class FakeIndex:
 def _state():
     chunk_id, job_id, manifest_id = uuid4(), uuid4(), uuid4()
     return {
-        "jobs": [{
-            "id": job_id,
-            "manifest_id": manifest_id,
-            "entity_id": chunk_id,
-            "operation": "upsert",
-            "lease_token": uuid4(),
-            "physical_collection": "research_chunks_abc123",
-            "dimension": 3,
-            "distance_metric": "Cosine",
-        }],
+        "jobs": [
+            {
+                "id": job_id,
+                "manifest_id": manifest_id,
+                "entity_id": chunk_id,
+                "operation": "upsert",
+                "lease_token": uuid4(),
+                "physical_collection": "research_chunks_abc123",
+                "dimension": 3,
+                "distance_metric": "Cosine",
+            }
+        ],
         "records": [{"chunk_id": chunk_id, "text": "exact text", "source_id": uuid4()}],
         "renewals": [],
         "finishes": [],
@@ -97,14 +107,21 @@ def _state():
 
 def test_worker_uses_exact_manifest_collection_and_token():
     state, calls = _state(), []
-    worker = IndexWorker(lambda: FakeUow(state), FakeIndex(calls), lambda _: [0.1, 0.2, 0.3], worker_id="w1")
+    worker = IndexWorker(
+        lambda: FakeUow(state),
+        FakeIndex(calls),
+        lambda _: [0.1, 0.2, 0.3],
+        worker_id="w1",
+    )
     result = worker.run_batch(10)
     job = state["finishes"][0]
     assert result["complete"] == 1 and result["failed"] == 0
     assert state["chunk_lookup"][1] is not None
     assert job[1] == state["renewals"][0][1] and job[2] is None
     assert ("schema", "research_chunks_abc123", 3, "Cosine") in calls
-    assert next(call for call in calls if call[0] == "upsert")[2][0]["id"] == str(state["records"][0]["chunk_id"])
+    assert next(call for call in calls if call[0] == "upsert")[2][0]["id"] == str(
+        state["records"][0]["chunk_id"]
+    )
 
 
 def test_worker_claims_each_lease_only_when_processing_starts():
@@ -113,6 +130,7 @@ def test_worker_claims_each_lease_only_when_processing_starts():
     second["id"] = uuid4()
     second["lease_token"] = uuid4()
     state["jobs"].append(second)
+
     def embedder(_text):
         return [0.1, 0.2, 0.3]
 
@@ -133,7 +151,9 @@ def test_worker_claims_each_lease_only_when_processing_starts():
 def test_worker_does_not_finish_after_lease_loss():
     state, calls = _state(), []
     state["owns_lease"] = False
-    result = IndexWorker(lambda: FakeUow(state), FakeIndex(calls), lambda _: [0, 0, 0]).run_batch()
+    result = IndexWorker(
+        lambda: FakeUow(state), FakeIndex(calls), lambda _: [0, 0, 0]
+    ).run_batch()
     assert result["lease_lost"] == 1
     assert state["finishes"] == []
     assert not any(call[0] == "upsert" for call in calls)
@@ -142,7 +162,9 @@ def test_worker_does_not_finish_after_lease_loss():
 def test_worker_reports_stale_completion_after_idempotent_upsert():
     state, calls = _state(), []
     state["owns_at_finish"] = False
-    result = IndexWorker(lambda: FakeUow(state), FakeIndex(calls), lambda _: [0, 0, 0]).run_batch()
+    result = IndexWorker(
+        lambda: FakeUow(state), FakeIndex(calls), lambda _: [0, 0, 0]
+    ).run_batch()
     assert result["lease_lost"] == 1 and result["complete"] == 0
     assert any(call[0] == "upsert" for call in calls)
 
@@ -190,17 +212,39 @@ class FakeQdrant(QdrantIndex):
 
 
 def test_qdrant_schema_inspection_is_read_only():
-    qdrant = FakeQdrant([{"result": {"config": {"params": {"vectors": {"dense": {"size": 3, "distance": "Cosine"}}}}}}])
+    qdrant = FakeQdrant(
+        [
+            {
+                "result": {
+                    "config": {
+                        "params": {
+                            "vectors": {"dense": {"size": 3, "distance": "Cosine"}}
+                        }
+                    }
+                }
+            }
+        ]
+    )
     result = qdrant.inspect_schema()
     assert result["compatible"] is True
     assert qdrant.requests == [("GET", "/collections/physical", None)]
 
 
 def test_qdrant_schema_rejects_unexpected_sparse_vectors():
-    qdrant = FakeQdrant([{"result": {"config": {"params": {
-        "vectors": {"dense": {"size": 3, "distance": "Cosine"}},
-        "sparse_vectors": {"sparse": {}}
-    }}}}])
+    qdrant = FakeQdrant(
+        [
+            {
+                "result": {
+                    "config": {
+                        "params": {
+                            "vectors": {"dense": {"size": 3, "distance": "Cosine"}},
+                            "sparse_vectors": {"sparse": {}},
+                        }
+                    }
+                }
+            }
+        ]
+    )
     result = qdrant.inspect_schema()
     assert result["compatible"] is False
     assert result["actual"]["sparse"] is True
@@ -208,34 +252,66 @@ def test_qdrant_schema_rejects_unexpected_sparse_vectors():
 
 
 def test_qdrant_ensure_schema_raises_on_unexpected_sparse_vectors():
-    qdrant = FakeQdrant([{"result": {"config": {"params": {
-        "vectors": {"dense": {"size": 3, "distance": "Cosine"}},
-        "sparse_vectors": {"sparse": {}}
-    }}}}])
+    qdrant = FakeQdrant(
+        [
+            {
+                "result": {
+                    "config": {
+                        "params": {
+                            "vectors": {"dense": {"size": 3, "distance": "Cosine"}},
+                            "sparse_vectors": {"sparse": {}},
+                        }
+                    }
+                }
+            }
+        ]
+    )
     with pytest.raises(RuntimeError, match="incompatible"):
         qdrant.ensure_schema()
 
 
 def test_qdrant_alias_switch_is_single_atomic_request():
-    qdrant = FakeQdrant([
-        {"result": {"aliases": [{"alias_name": "research_chunks_active", "collection_name": "old"}]}},
-        {"result": {"status": "ok"}},
-    ])
+    qdrant = FakeQdrant(
+        [
+            {
+                "result": {
+                    "aliases": [
+                        {
+                            "alias_name": "research_chunks_active",
+                            "collection_name": "old",
+                        }
+                    ]
+                }
+            },
+            {"result": {"status": "ok"}},
+        ]
+    )
     assert qdrant.switch_alias("research_chunks_active", "new")
     method, path, payload = qdrant.requests[-1]
     assert (method, path) == ("POST", "/collections/aliases")
     assert payload["actions"] == [
         {"delete_alias": {"alias_name": "research_chunks_active"}},
-        {"create_alias": {"collection_name": "new", "alias_name": "research_chunks_active"}},
+        {
+            "create_alias": {
+                "collection_name": "new",
+                "alias_name": "research_chunks_active",
+            }
+        },
     ]
 
 
 def test_once_runtime_does_not_wait_for_queue():
     state, calls = _state(), []
     state["jobs"] = []
-    queue = type("Queue", (), {"wait": lambda self, _: (_ for _ in ()).throw(AssertionError)})()
-    worker = IndexWorker(lambda: FakeUow(state), FakeIndex(calls), lambda _: [], queue=queue)
-    result = worker.run_forever(once=True, stop_event=Event(), install_signal_handlers=False)
+    queue = type(
+        "Queue", (), {"wait": lambda self, _: (_ for _ in ()).throw(AssertionError)}
+    )()
+    worker = IndexWorker(
+        lambda: FakeUow(state), FakeIndex(calls), lambda _: [], queue=queue
+    )
+    result = worker.run_forever(
+        once=True, stop_event=Event(), install_signal_handlers=False
+    )
     assert result["batches"] == 1
 
 
@@ -250,7 +326,9 @@ def test_embedder_enforces_declared_unit_length_and_job_model(monkeypatch):
         def read(self):
             return b'{"data":[{"embedding":[3,4,0]}]}'
 
-    monkeypatch.setattr(indexing_module, "urlopen", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(
+        indexing_module, "urlopen", lambda *_args, **_kwargs: Response()
+    )
     configured = OpenAICompatibleEmbedder("http://embedding/v1", "current", dimension=3)
     job = configured.for_job({"model_name": "immutable-job-model", "dimension": 3})
     assert job.model == "immutable-job-model"
