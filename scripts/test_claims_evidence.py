@@ -21,10 +21,10 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+from research_domain.models import EvidenceGroup
 from research_store.cli import parser as research_store_parser
 from research_store.domain import ClaimEvidenceLink, ClaimRecord
 from research_store.service import ClaimManifestService
-from research_domain.models import EvidenceGroup
 
 # ---------------------------------------------------------------------------
 # Domain model tests

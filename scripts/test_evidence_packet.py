@@ -158,6 +158,7 @@ from dataclasses import replace
 from research_store.config import StoreConfig
 from research_store.container import build_evidence_service
 
+
 @pytest.fixture(scope="session")
 def prepared_database_for_evidence_packets(prepared_database_for_claims):
     # prepared_database_for_claims already upgrades to head which now includes 0029
