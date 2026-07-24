@@ -18,6 +18,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
+          cache-dependency-path: requirements-research-store.txt
       - run: python -m venv .venv
       - run: source .venv/bin/activate && pip install -r requirements-research-store.txt
       - run: source .venv/bin/activate && python -m pytest -q -p no:cacheprovider scripts/test_research_store.py scripts/test_classifier.py scripts/test_workflow.py scripts/test_budget_policy.py scripts/test_index_runtime.py
@@ -29,7 +30,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
       - run: python -m venv .venv
       - run: source .venv/bin/activate && pip install ruff
       - run: source .venv/bin/activate && ruff check .
