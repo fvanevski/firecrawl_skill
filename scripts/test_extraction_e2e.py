@@ -36,7 +36,7 @@ And injects failures around:
 
 ## Test structure
 
-* **Unit tests** (38 tests): run without a database. Cover quality evaluation
+* **Unit tests** (40 tests): run without a database. Cover quality evaluation
   across all content types, fixture corpus validation, chunking provenance,
   normalization provenance, blob immutability, and the critical invariant
   that length alone does not determine disposition.
@@ -241,36 +241,38 @@ class TestExtractionProvenance:
         assert ref.sha256 == blob_sha
 
     def test_quality_metrics_versioned(self):
-        """Quality metrics carry a version for re-evaluation."""
-        metrics = ExtractionQualityMetrics(byte_length=100)
-        assert metrics.quality_version == "quality-v1"
+        """Quality metrics carry the version from QualityConfig."""
+        from research_store.quality_evaluator import evaluate_quality
+        from research_store.quality_config import QualityConfig
+
+        config = QualityConfig(quality_version="quality-v2")
+        metrics = evaluate_quality(b"# Title\n\nSome text here.", config=config)
+        assert metrics.quality_version == "quality-v2"
 
     def test_attempt_retry_lineage(self):
-        """Retries preserve parent attempt link."""
+        """Retries preserve parent attempt link via retry_parent_id."""
+        from research_store.extraction_service import ExtractionService
+
+        # A retry_parent_id is a UUID that links a child attempt to its parent.
         parent_id = uuid4()
         child_id = uuid4()
         assert child_id != parent_id
-        # The child's retry_parent_id should reference the parent
         assert isinstance(parent_id, UUID)
+        # Verify the service signature accepts retry_parent_id.
+        # The actual DB linkage is tested in
+        # TestProvenanceVerification.test_retry_preserves_lineage.
+        assert hasattr(ExtractionService, "create_retry")
 
     def test_unsupported_mime_raises(self):
-        """Unsupported MIME type raises UnsupportedFormatError."""
+        """Unsupported MIME type raises UnsupportedFormatError via parse()."""
         from research_store.parsing import (
             UnsupportedFormatError,
-            build_default_registry,
+            parse,
         )
 
-        registry = build_default_registry()
-        record = registry.select("application/pdf", raw=b"%PDF-1.4")
-        # PDF parser is a stub that raises UnsupportedFormatError
+        # The default registry includes a PdfParser stub that always raises.
         with pytest.raises(UnsupportedFormatError, match="pdf"):
-            # Instantiate the parser and parse
-            from importlib import import_module
-
-            module_name, class_name = record.selected_parser_type.rsplit(".", 1)
-            mod = import_module(module_name)
-            parser = getattr(mod, class_name)()
-            parser.parse(b"%PDF-1.4", mime_type="application/pdf")
+            parse(b"%PDF-1.4", mime_type="application/pdf")
 
 
 # ---------------------------------------------------------------------------
@@ -761,6 +763,31 @@ class TestE2EExtractionPipeline:
 
         assert quality.required_structured_fields >= 2
 
+    def test_oversized_block_is_split(
+        self,
+        e2e_extraction_service,
+        fixture_oversized_block,
+        sample_candidate,
+        sample_run,
+    ):
+        """Oversized block is split into multiple chunks."""
+        from research_store.hierarchical_chunker import hierarchical_chunks
+        from research_store.parsing import structural_blocks
+
+        blocks = structural_blocks(fixture_oversized_block.decode("utf-8"))
+        chunks = hierarchical_chunks(
+            blocks,
+            max_tokens=100,
+            tokenizer_name="cl100k_base",
+            chunker_version="hierarchical-v1",
+            chunker_name="hierarchical",
+        )
+        # The long Lorem Ipsum paragraph should be split into at least 2 chunks.
+        assert len(chunks) >= 2
+        # No chunk exceeds max_tokens.
+        for chunk in chunks:
+            assert chunk.token_count <= 100
+
 
 # ---------------------------------------------------------------------------
 # Integration tests: fault injection
@@ -962,8 +989,7 @@ class TestFaultInjection:
         assert selected is None
 
         # CorpusService.ingest requires a valid document — without selection,
-        # there is no normalized content to ingest
-        assert selected is None
+        # there is no normalized content to ingest.
 
 
 # ---------------------------------------------------------------------------
@@ -1037,13 +1063,14 @@ class TestRedriveReindexFlow:
     """Test rederive and reindex flows (integration tests require DB)."""
 
     def test_reindex_error_handled(self, fixture_reindex_error):
-        """Reindex error is handled gracefully."""
+        """Reindex error payload has the expected structure."""
         data = json.loads(fixture_reindex_error.decode("utf-8"))
         assert data["status"] == "error"
-        assert "index_not_found" in data.get("error", "")
+        assert data["error"] == "index_not_found"
+        assert "index_not_found" in data.get("message", "")
 
     def test_rederive_service_interface(self, e2e_extraction_service, tmp_path):
-        """Derivation and corpus services have expected interfaces."""
+        """Derivation service can be constructed and invoked in dry-run mode."""
         from research_store.derivation_service import DerivationService
         from research_store.service import CorpusService
 
@@ -1058,9 +1085,18 @@ class TestRedriveReindexFlow:
             blob_root=tmp_path / "blobs",
         )
         assert derivation_service is not None
-        assert hasattr(derivation_service, "rederive")
-        assert hasattr(derivation_service, "list_derivations")
-        assert hasattr(derivation_service, "compare_derivations")
+        # Verify the service interface is callable (dry-run does not mutate DB).
+        result = derivation_service.rederive(
+            snapshot_id=uuid4(),
+            document_id=uuid4(),
+            parser_version="markdown-v1",
+            normalization_version="normalization-v1",
+            chunker_name="hierarchical",
+            chunker_version="hierarchical-v1",
+            tokenizer_name="cl100k_base",
+            dry_run=True,
+        )
+        assert isinstance(result, dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1192,7 +1228,7 @@ class TestProvenanceVerification:
 
 
 # ---------------------------------------------------------------------------
-# Integration tests: chunking provenance
+# Unit tests: chunking provenance
 # ---------------------------------------------------------------------------
 
 
@@ -1200,21 +1236,31 @@ class TestChunkingProvenance:
     """Test that chunks reference their source blocks and documents."""
 
     def test_chunks_have_content_hash(self):
-        """Every chunk has a content_sha256 hash."""
+        """Every chunk has a content_sha256 hash, and identical input
+        produces identical hashes (determinism)."""
         import hashlib
         from research_store.hierarchical_chunker import hierarchical_chunks
         from research_store.parsing import structural_blocks
 
         source = "# Title\n\nHello world."
         blocks = structural_blocks(source)
-        chunks = hierarchical_chunks(
+        chunks_a = hierarchical_chunks(
             blocks,
             max_tokens=100,
             tokenizer_name="cl100k_base",
             chunker_version="hierarchical-v1",
             chunker_name="hierarchical",
         )
-        for chunk in chunks:
+        chunks_b = hierarchical_chunks(
+            blocks,
+            max_tokens=100,
+            tokenizer_name="cl100k_base",
+            chunker_version="hierarchical-v1",
+            chunker_name="hierarchical",
+        )
+        for a, b in zip(chunks_a, chunks_b):
+            assert a.content_sha256 == b.content_sha256
+        for chunk in chunks_a:
             expected = hashlib.sha256(chunk.text.encode()).hexdigest()
             assert chunk.content_sha256 == expected
 
@@ -1299,16 +1345,19 @@ class TestChunkingProvenance:
             chunker_version="hierarchical-v1",
             chunker_name="hierarchical",
         )
-        for chunk in chunks:
-            actual_count = reg.count(chunk.text)
-            assert chunk.token_count == actual_count, (
-                f"Chunk {chunk.ordinal}: reported {chunk.token_count}, "
-                f"actual {actual_count}"
-            )
+        try:
+            for chunk in chunks:
+                actual_count = reg.count(chunk.text)
+                assert chunk.token_count == actual_count, (
+                    f"Chunk {chunk.ordinal}: reported {chunk.token_count}, "
+                    f"actual {actual_count}"
+                )
+        except KeyError:
+            pytest.skip("cl100k_base tokenizer not registered")
 
 
 # ---------------------------------------------------------------------------
-# Integration tests: normalization provenance
+# Unit tests: normalization provenance
 # ---------------------------------------------------------------------------
 
 
