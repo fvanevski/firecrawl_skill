@@ -1,0 +1,1 @@
+{"status": "success", "data": {"id": 123, "name": "Test Document", "content": "This is a JSON payload that should be handled gracefully.", "metadata": {"author": "test", "created": "2026-01-01"}}}
