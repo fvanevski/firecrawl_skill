@@ -121,105 +121,105 @@ def test_build_evidence_packet_token_limits_enforced():
 
     # Only 1 passage should be included due to limits
     assert len(packet.passages) == 1
+    assert len(packet.omitted_passages) == 1
 
     # Near duplicate group should have the omitted candidates
     assert len(packet.near_duplicate_groups) == 1
     group = packet.near_duplicate_groups[0]
     assert group.rationale == "omitted_due_to_budget"
     assert not group.evaluated
-    assert len(group.passage_ids) == 0
+    assert len(group.passage_ids) == 1
+    assert group.passage_ids[0] == packet.omitted_passages[0].passage_id
 
 
-if TEST_DSN:
+def ensure_run_exists(dsn, run_id):
+    from research_store.postgres import connect
 
-    def ensure_run_exists(dsn, run_id):
-        from research_store.postgres import connect
-
-        with connect(dsn) as conn, conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO research_runs (id, original_request, query_plan, skill_version, llm_model, status, state, execution_mode, objective)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (id) DO NOTHING""",
-                (
-                    str(run_id),
-                    "test request",
-                    "{}",
-                    "1.0",
-                    "test",
-                    "running",
-                    "created",
-                    "agent_led",
-                    "test request",
-                ),
-            )
-
-    from dataclasses import replace
-
-    from research_store.config import StoreConfig
-    from research_store.container import build_evidence_service
-
-    @pytest.fixture(scope="session")
-    def prepared_database_for_evidence_packets(prepared_database_for_claims):
-        # prepared_database_for_claims already upgrades to head which now includes 0029
-        pass
-
-    @INTEGRATION_MARK
-    def test_evidence_packet_persistence_and_immutability(
-        tmp_path, prepared_database_for_evidence_packets
-    ):
-        config = replace(
-            StoreConfig.from_env(),
-            database_url=TEST_DSN,
-            blob_root=tmp_path / "blobs",
-        )
-        svc = build_evidence_service(config)
-        run_id = uuid4()
-        ensure_run_exists(TEST_DSN, run_id)
-        spec_id = uuid4()
-
-        caps = ResourceCaps.from_mapping(
-            {
-                **DEFAULT_POLICY.profiles["standard"].to_dict(),
-                "max_evidence_packet_tokens": 8000,
-            }
+    with connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs (id, original_request, query_plan, skill_version, llm_model, status, state, execution_mode, objective)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO NOTHING""",
+            (
+                str(run_id),
+                "test request",
+                "{}",
+                "1.0",
+                "test",
+                "running",
+                "created",
+                "agent_led",
+                "test request",
+            ),
         )
 
-        packet1 = svc.build_evidence_packet(
-            run_id=run_id,
-            research_spec_id=spec_id,
-            coverage_revision=1,
-            candidates=[_make_candidate()],
-            retrieval_events=[],
-            effective_caps=caps,
-        )
+from dataclasses import replace
 
-        # Persist first packet
-        rev1 = svc.persist_packet(packet1)
-        assert rev1 == 1
+from research_store.config import StoreConfig
+from research_store.container import build_evidence_service
 
-        # Persist second packet (simulate a new revision)
-        packet2 = svc.build_evidence_packet(
-            run_id=run_id,
-            research_spec_id=spec_id,
-            coverage_revision=2,
-            candidates=[_make_candidate(), _make_candidate()],
-            retrieval_events=[],
-            effective_caps=caps,
-        )
-        rev2 = svc.persist_packet(packet2)
-        assert rev2 == 2
+@pytest.fixture(scope="session")
+def prepared_database_for_evidence_packets(prepared_database_for_claims):
+    # prepared_database_for_claims already upgrades to head which now includes 0029
+    pass
 
-        # Export them back
-        exported1 = svc.export_packet(run_id, 1)
-        assert exported1["packet_revision"] == 1
-        assert exported1["coverage_revision"] == 1
-        assert len(exported1["payload"]["passages"]) == 1
+@INTEGRATION_MARK
+def test_evidence_packet_persistence_and_immutability(
+    tmp_path, prepared_database_for_evidence_packets
+):
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=TEST_DSN,
+        blob_root=tmp_path / "blobs",
+    )
+    svc = build_evidence_service(config)
+    run_id = uuid4()
+    ensure_run_exists(TEST_DSN, run_id)
+    spec_id = uuid4()
 
-        exported2 = svc.export_packet(run_id, 2)
-        assert exported2["packet_revision"] == 2
-        assert exported2["coverage_revision"] == 2
-        assert len(exported2["payload"]["passages"]) == 2
+    caps = ResourceCaps.from_mapping(
+        {
+            **DEFAULT_POLICY.profiles["standard"].to_dict(),
+            "max_evidence_packet_tokens": 8000,
+        }
+    )
 
-        # Export latest (should be 2)
-        exported_latest = svc.export_packet(run_id)
-        assert exported_latest["packet_revision"] == 2
+    packet1 = svc.build_evidence_packet(
+        run_id=run_id,
+        research_spec_id=spec_id,
+        coverage_revision=1,
+        candidates=[_make_candidate()],
+        retrieval_events=[],
+        effective_caps=caps,
+    )
+
+    # Persist first packet
+    rev1 = svc.persist_packet(packet1)
+    assert rev1 == 1
+
+    # Persist second packet (simulate a new revision)
+    packet2 = svc.build_evidence_packet(
+        run_id=run_id,
+        research_spec_id=spec_id,
+        coverage_revision=2,
+        candidates=[_make_candidate(), _make_candidate()],
+        retrieval_events=[],
+        effective_caps=caps,
+    )
+    rev2 = svc.persist_packet(packet2)
+    assert rev2 == 2
+
+    # Export them back
+    exported1 = svc.export_packet(run_id, 1)
+    assert exported1["packet_revision"] == 1
+    assert exported1["coverage_revision"] == 1
+    assert len(exported1["payload"]["passages"]) == 1
+
+    exported2 = svc.export_packet(run_id, 2)
+    assert exported2["packet_revision"] == 2
+    assert exported2["coverage_revision"] == 2
+    assert len(exported2["payload"]["passages"]) == 2
+
+    # Export latest (should be 2)
+    exported_latest = svc.export_packet(run_id)
+    assert exported_latest["packet_revision"] == 2

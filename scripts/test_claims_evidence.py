@@ -24,11 +24,31 @@ sys.path.insert(0, str(SCRIPTS))
 from research_store.cli import parser as research_store_parser
 from research_store.domain import ClaimEvidenceLink, ClaimRecord
 from research_store.service import ClaimManifestService
+from research_domain.models import EvidenceGroup
 
 # ---------------------------------------------------------------------------
 # Domain model tests
 # ---------------------------------------------------------------------------
 
+
+def test_domain_model_evidence_group_empty_validation():
+    # Empty group, unevaluated -> succeeds
+    group = EvidenceGroup(
+        group_id=uuid4(),
+        passage_ids=(),
+        rationale="omitted_due_to_budget",
+        evaluated=False,
+    )
+    assert not group.evaluated
+
+    # Empty group, evaluated -> fails
+    with pytest.raises(ValueError, match="empty evidence group must remain unevaluated until assessed"):
+        EvidenceGroup(
+            group_id=uuid4(),
+            passage_ids=(),
+            rationale="omitted_due_to_budget",
+            evaluated=True,
+        )
 
 def test_claim_record_from_mapping_and_to_dict():
     now = "2025-01-01T00:00:00+00:00"

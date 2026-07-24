@@ -73,7 +73,7 @@ class EvidenceService:
         )
 
         passages = []
-        omitted_candidates = []
+        omitted_passages = []
         token_count = 0
         max_tokens = effective_caps.max_evidence_packet_tokens
 
@@ -85,9 +85,17 @@ class EvidenceService:
             text = cand.get("text", cand.get("excerpt", ""))
             cand_tokens = len(self.tokenizer.encode(text))
 
+            source_url = cand.get("source_url") or cand.get("url") or ""
+            passage = EvidencePassage(
+                passage_id=uuid4(),
+                candidate_id=UUID(str(cand["candidate_id"])),
+                snapshot_id=UUID(str(cand["snapshot_id"])),
+                chunk_id=UUID(str(cand["chunk_id"])),
+                text=text,
+                source_url=source_url,
+            )
+
             if token_count + cand_tokens <= max_tokens:
-                # Use source_url or fallback to url if provided
-                source_url = cand.get("source_url") or cand.get("url") or ""
                 if source_url:
                     source_domains.add(source_url)
 
@@ -105,19 +113,10 @@ class EvidenceService:
                     except ValueError:
                         pass
 
-                passages.append(
-                    EvidencePassage(
-                        passage_id=uuid4(),
-                        candidate_id=UUID(str(cand["candidate_id"])),
-                        snapshot_id=UUID(str(cand["snapshot_id"])),
-                        chunk_id=UUID(str(cand["chunk_id"])),
-                        text=text,
-                        source_url=source_url,
-                    )
-                )
+                passages.append(passage)
                 token_count += cand_tokens
             else:
-                omitted_candidates.append(cand)
+                omitted_passages.append(passage)
 
         # Source diversity and freshness summaries
         diversity_summary = {
@@ -133,11 +132,11 @@ class EvidenceService:
         # Duplicate candidates retained for later assessment
         # Represented as explicitly unevaluated semantic groups
         near_duplicate_groups = []
-        if omitted_candidates:
+        if omitted_passages:
             near_duplicate_groups.append(
                 EvidenceGroup(
                     group_id=uuid4(),
-                    passage_ids=(),  # passages aren't fully instantiated if omitted
+                    passage_ids=tuple(p.passage_id for p in omitted_passages),
                     rationale="omitted_due_to_budget",
                     evaluated=False,
                 )
@@ -150,6 +149,7 @@ class EvidenceService:
             coverage_revision=coverage_revision,
             claims=(),
             passages=tuple(passages),
+            omitted_passages=tuple(omitted_passages),
             claim_evidence_bindings=(),
             corroborating_groups=(),
             contradicting_groups=(),
