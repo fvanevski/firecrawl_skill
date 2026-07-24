@@ -290,12 +290,21 @@ class RetrievalDocuments:
 class RetrievalUow:
     def __init__(self, candidate_id):
         self.documents = RetrievalDocuments(candidate_id)
+        self.retrieval_events = self
+        self._execution_records = []
+        self._retrieval_events = []
 
     def __enter__(self):
         return self
 
     def __exit__(self, *_args):
         return False
+
+    def record_retrieval_execution(self, run_id, execution):
+        self._execution_records.append((run_id, execution))
+
+    def log_retrieval(self, run_id, event):
+        self._retrieval_events.append((run_id, event))
 
 
 class BrokenQdrant:

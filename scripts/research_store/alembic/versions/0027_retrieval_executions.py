@@ -47,15 +47,8 @@ def upgrade():
     # ----------------------------------------------------------------
     op.execute(
         """
-        DO $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM pg_indexes WHERE tablename = 'retrieval_executions' AND indexname = 'idx_retrieval_executions_run'
-          ) THEN
-            CREATE INDEX idx_retrieval_executions_run
-              ON retrieval_executions (run_id);
-          END IF;
-        END $$;
+        CREATE INDEX IF NOT EXISTS idx_retrieval_executions_run
+          ON retrieval_executions (run_id);
         """
     )
 

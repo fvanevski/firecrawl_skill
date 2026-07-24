@@ -399,6 +399,9 @@ def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
 
         def __init__(self):
             self.documents = self
+            self.retrieval_events = self
+            self._execution_records = []
+            self._retrieval_events = []
 
         def search_lexical(self, *_args):
             return [{"candidate_id": candidate_id, "lexical_score": 1.0}]
@@ -411,6 +414,12 @@ def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
 
         def __exit__(self, *_args):
             return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            self._execution_records.append((run_id, execution))
+
+        def log_retrieval(self, run_id, event):
+            self._retrieval_events.append((run_id, event))
 
     class WrongAliasIndex:
         def list_aliases(self):
@@ -446,6 +455,8 @@ def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
     from research_domain.models import MechanicalStatus
     assert execution.mechanical_status == MechanicalStatus.DEGRADED
     assert execution.index_fingerprint == "research_chunks_other_model"
+    assert len(execution.warnings) == 1
+    assert "expected" in execution.warnings[0]
 
 def test_search_assets_intentional_lexical_mode():
     candidate_id = uuid4()
@@ -453,6 +464,9 @@ def test_search_assets_intentional_lexical_mode():
     class Repository:
         def __init__(self):
             self.documents = self
+            self.retrieval_events = self
+            self._execution_records = []
+            self._retrieval_events = []
 
         def search_lexical(self, *_args):
             return [{"candidate_id": candidate_id, "lexical_score": 1.0}]
@@ -465,6 +479,12 @@ def test_search_assets_intentional_lexical_mode():
 
         def __exit__(self, *_args):
             return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            self._execution_records.append((run_id, execution))
+
+        def log_retrieval(self, run_id, event):
+            self._retrieval_events.append((run_id, event))
 
     config = SimpleNamespace(
         qdrant_alias="active",
@@ -514,6 +534,9 @@ def test_search_assets_intentional_semantic_mode():
     class Repository:
         def __init__(self):
             self.documents = self
+            self.retrieval_events = self
+            self._execution_records = []
+            self._retrieval_events = []
 
         def search_lexical(self, *_args):
             raise AssertionError("lexical search should not be called")
@@ -526,6 +549,12 @@ def test_search_assets_intentional_semantic_mode():
 
         def __exit__(self, *_args):
             return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            self._execution_records.append((run_id, execution))
+
+        def log_retrieval(self, run_id, event):
+            self._retrieval_events.append((run_id, event))
 
     config = SimpleNamespace(
         qdrant_alias="active",
@@ -562,4 +591,312 @@ def test_search_assets_intentional_semantic_mode():
     assert execution.index_fingerprint == "research_chunks_configured_model"
     from research_domain.models import MechanicalStatus
     assert execution.mechanical_status == MechanicalStatus.SUCCEEDED
+
+    # Semantic mode timing and skipped_stages
+    assert execution.timing["lexical"] == 0.0
+    assert "semantic" in execution.timing
+    assert "reranker" in execution.skipped_stages
+
+
+def test_semantic_mode_with_alias_mismatch_is_failed():
+    """Semantic mode with wrong alias should be FAILED, not DEGRADED."""
+    from uuid import uuid4
+    candidate_id = uuid4()
+
+    class Repository:
+        def __init__(self):
+            self.documents = self
+            self.retrieval_events = self
+
+        def search_lexical(self, *_args):
+            return [{"candidate_id": candidate_id, "lexical_score": 1.0}]
+
+        def fetch_passages(self, *_args):
+            return [{"chunk_id": candidate_id, "text": "semantic alias mismatch"}]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class WrongAliasIndex:
+        def list_aliases(self):
+            return {"active": "research_chunks_other_model"}
+
+        def search(self, *_args):
+            raise AssertionError("semantic search must not use a mismatched alias")
+
+    def forbidden_embedder(_query):
+        raise AssertionError("query must not be embedded for a mismatched alias")
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="research_chunks_configured_model",
+        reranker_candidate_limit=40,
+        parser_version="markdown-v1",
+        normalization_version="cleanup-v1",
+        chunker_version="structural-v1",
+        embedding_fingerprint="dummy_fingerprint",
+    )
+    service = CorpusService(
+        config,
+        Repository,
+        blob_store=None,
+        index=WrongAliasIndex(),
+        embedder=forbidden_embedder,
+    )
+
+    execution, results = service.search_assets(
+        "test", candidate_limit=5, requested_mode="semantic"
+    )
+    # Semantic mode skips lexical entirely, so a semantic failure produces zero results
+    assert len(results) == 0
+    assert execution.requested_mode == "semantic"
+    assert execution.executed_mode == "lexical"
+    from research_domain.models import MechanicalStatus
+    assert execution.mechanical_status == MechanicalStatus.FAILED
+    # Alias mismatch is a config issue, not a component failure
+    assert execution.component_health["qdrant"] == "healthy"
+    assert execution.component_health["embedding"] == "healthy"
+    assert execution.errors == ()
+    assert len(execution.warnings) == 1
+    assert "expected" in execution.warnings[0]
+    assert "embedding" in execution.skipped_stages
+    assert "qdrant" in execution.skipped_stages
+    assert execution.index_fingerprint == "research_chunks_other_model"
+
+
+def test_search_assets_with_run_id_persists_execution_and_events():
+    """Verify that when run_id is provided, execution record and retrieval events are persisted."""
+    from uuid import uuid4
+    candidate_id = uuid4()
+    run_id = uuid4()
+
+    _execution_records = []
+    _retrieval_events = []
+
+    class Repository:
+        documents = None
+
+        def __init__(self):
+            self.documents = self
+            self.retrieval_events = self
+
+        def search_lexical(self, *_args):
+            return [{"candidate_id": candidate_id, "lexical_score": 1.0}]
+
+        def fetch_passages(self, *_args):
+            return [{"chunk_id": candidate_id, "text": "persistence test"}]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            _execution_records.append((run_id, execution))
+
+        def log_retrieval(self, run_id, event):
+            _retrieval_events.append((run_id, event))
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="research_chunks_configured_model",
+        reranker_candidate_limit=40,
+        parser_version="markdown-v1",
+        normalization_version="cleanup-v1",
+        chunker_version="structural-v1",
+        embedding_fingerprint="dummy_fingerprint",
+    )
+
+    service = CorpusService(
+        config,
+        Repository,
+        blob_store=None,
+        index=None,
+        embedder=None,
+    )
+
+    execution, results = service.search_assets(
+        "persistence", candidate_limit=5, run_id=run_id, requested_mode="lexical"
+    )
+    assert len(results) == 1
+    assert results[0]["candidate_id"] == str(candidate_id)
+
+    # Verify execution record was persisted
+    assert len(_execution_records) == 1
+    persisted_run_id, persisted_exec = _execution_records[0]
+    assert persisted_run_id == run_id
+    assert persisted_exec.requested_mode == "lexical"
+    assert persisted_exec.executed_mode == "lexical"
+    from research_domain.models import MechanicalStatus
+    assert persisted_exec.mechanical_status == MechanicalStatus.SUCCEEDED
+    assert persisted_exec.index_fingerprint is None
+
+    # Verify retrieval event was logged
+    assert len(_retrieval_events) == 1
+    event_run_id, event = _retrieval_events[0]
+    assert event_run_id == run_id
+    assert event["candidate_id"] == str(candidate_id)
+    assert event["stage"] == "postgres_fts"
+    assert event["selected"] is True
+
+
+def test_search_assets_hybrid_mode_with_qdrant_failure():
+    """Hybrid mode (default) with Qdrant failure should degrade to lexical-only."""
+    from uuid import uuid4
+    candidate_id = uuid4()
+
+    class Repository:
+        def __init__(self):
+            self.documents = self
+            self.retrieval_events = self
+            self._execution_records = []
+            self._retrieval_events = []
+
+        def search_lexical(self, *_args):
+            return [{"candidate_id": candidate_id, "lexical_score": 1.0}]
+
+        def fetch_passages(self, *_args):
+            return [{"chunk_id": candidate_id, "text": "hybrid degradation"}]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            self._execution_records.append((run_id, execution))
+
+        def log_retrieval(self, run_id, event):
+            self._retrieval_events.append((run_id, event))
+
+    class BrokenQdrant:
+        def list_aliases(self):
+            return {"active": "configured"}
+
+        def search(self, *_args):
+            raise OSError("qdrant unavailable")
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="configured",
+        reranker_candidate_limit=40,
+        parser_version="markdown-v1",
+        normalization_version="cleanup-v1",
+        chunker_version="structural-v1",
+        embedding_fingerprint="dummy_fingerprint",
+    )
+
+    service = CorpusService(
+        config,
+        Repository,
+        blob_store=None,
+        index=BrokenQdrant(),
+        embedder=lambda _q: [0.1],
+    )
+
+    # Default mode is "hybrid" (requested_mode="hybrid" is not "semantic", so lexical runs)
+    execution, results = service.search_assets(
+        "hybrid", candidate_limit=5, requested_mode="hybrid"
+    )
+    assert len(results) == 1
+    assert results[0]["candidate_id"] == str(candidate_id)
+    assert execution.requested_mode == "hybrid"
+    assert execution.executed_mode == "lexical"
+    from research_domain.models import MechanicalStatus
+    assert execution.mechanical_status == MechanicalStatus.DEGRADED
+    assert execution.component_health["qdrant"] == "failed"
+    assert execution.component_health["embedding"] == "failed"
+    assert "embedding" in execution.skipped_stages
+    assert "qdrant" in execution.skipped_stages
+    assert execution.index_fingerprint == "configured"
+
+
+def test_search_assets_cli_output_format():
+    """Verify CLI output contains all expected execution fields."""
+    from uuid import uuid4
+    candidate_id = uuid4()
+
+    class Repository:
+        documents = None
+
+        def __init__(self):
+            self.documents = self
+            self.retrieval_events = self
+            self._execution_records = []
+            self._retrieval_events = []
+
+        def search_lexical(self, *_args):
+            return [{"candidate_id": candidate_id, "lexical_score": 1.0}]
+
+        def fetch_passages(self, *_args):
+            return [{"chunk_id": candidate_id, "text": "cli test"}]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            self._execution_records.append((run_id, execution))
+
+        def log_retrieval(self, run_id, event):
+            self._retrieval_events.append((run_id, event))
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="research_chunks_configured_model",
+        reranker_candidate_limit=40,
+        parser_version="markdown-v1",
+        normalization_version="cleanup-v1",
+        chunker_version="structural-v1",
+        embedding_fingerprint="abc123def456",
+    )
+
+    service = CorpusService(
+        config,
+        Repository,
+        blob_store=None,
+        index=None,
+        embedder=None,
+    )
+
+    execution, results = service.search_assets(
+        "cli", candidate_limit=5, requested_mode="lexical"
+    )
+
+    # Verify execution has all expected fields
+    assert hasattr(execution, "execution_id")
+    assert hasattr(execution, "run_id")
+    assert hasattr(execution, "requested_mode")
+    assert hasattr(execution, "executed_mode")
+    assert hasattr(execution, "mechanical_status")
+    assert hasattr(execution, "component_health")
+    assert hasattr(execution, "errors")
+    assert hasattr(execution, "warnings")
+    assert hasattr(execution, "stage_counts")
+    assert hasattr(execution, "index_fingerprint")
+    assert hasattr(execution, "filters")
+    assert hasattr(execution, "skipped_stages")
+    assert hasattr(execution, "timing")
+    assert hasattr(execution, "config_identity")
+
+    # Verify component_health has all expected keys
+    for component in ("lexical", "embedding", "qdrant", "reranker", "fusion"):
+        assert component in execution.component_health
+
+    # Verify timing has expected keys
+    assert "lexical" in execution.timing
+    assert "fusion" in execution.timing
+    assert "fetch_passages" in execution.timing
+
+    # Verify stage_counts
+    assert "lexical" in execution.stage_counts
+    assert "semantic" in execution.stage_counts
+    assert "fused" in execution.stage_counts
 

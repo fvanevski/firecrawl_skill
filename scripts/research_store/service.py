@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from hashlib import sha256
-from io import BytesIO
 import json
 import logging
-from typing import Any, Callable
-from uuid import UUID
+import time
+from collections.abc import Callable
+from hashlib import sha256
+from io import BytesIO
+from typing import Any
+from uuid import UUID, uuid4
+
+from research_domain.models import MechanicalStatus, RetrievalExecution
 
 from .config import StoreConfig
 from .domain import IngestRequest, IngestResult
@@ -15,8 +19,6 @@ from .parsing import structural_blocks
 from .parsing.interfaces import ParserSelectionError, UnsupportedFormatError
 from .retrieval import reciprocal_rank_fusion
 from .url import canonicalize_url
-from research_domain.models import RetrievalExecution, MechanicalStatus
-import time
 
 
 class CorpusService:
@@ -397,11 +399,17 @@ class CorpusService:
                         else:
                             skipped_stages.extend(["embedding", "qdrant"])
                             executed_mode = "lexical"
+                            warnings.append(
+                                f"qdrant alias points to {active!r}, "
+                                f"expected {self.config.physical_collection!r}"
+                            )
                     except Exception as e:
                         component_health["qdrant"] = "failed"
-                        errors.append(f"qdrant/embedding error: {str(e)}")
+                        component_health["embedding"] = "failed"
+                        errors.append(f"qdrant/embedding error: {e!s}")
                         executed_mode = "lexical"
                         semantic = []
+                        skipped_stages.extend(["embedding", "qdrant"])
                     timing["semantic"] = time.time() - t1
                 else:
                     skipped_stages.extend(["embedding", "qdrant"])
@@ -434,7 +442,7 @@ class CorpusService:
                     candidates = self.reranker(query, candidates)
                 except Exception as e:
                     component_health["reranker"] = "failed"
-                    errors.append(f"reranker error: {str(e)}")
+                    errors.append(f"reranker error: {e!s}")
                 timing["reranker"] = time.time() - t4
             elif requested_mode == "lexical":
                 pass
@@ -451,9 +459,7 @@ class CorpusService:
                     mechanical_status = MechanicalStatus.DEGRADED
             elif errors:
                 mechanical_status = MechanicalStatus.DEGRADED
-                
-            execution_id = __import__("uuid").uuid4()
-            
+
             stage_counts = {
                 "lexical": len(lexical),
                 "semantic": len(semantic),
@@ -461,8 +467,8 @@ class CorpusService:
             }
 
             execution = RetrievalExecution(
-                execution_id=execution_id,
-                run_id=run_id or __import__("uuid").UUID(int=0),
+                execution_id=uuid4(),
+                run_id=run_id or UUID(int=0),
                 requested_mode=requested_mode,
                 executed_mode=executed_mode,
                 mechanical_status=mechanical_status,
@@ -471,11 +477,12 @@ class CorpusService:
                 warnings=tuple(warnings),
                 stage_counts=stage_counts,
                 index_fingerprint=index_fingerprint,
-                derivation_fingerprint=None,
                 filters=filters,
                 skipped_stages=tuple(skipped_stages),
                 timing=timing,
-                config_identity=self.config.embedding_fingerprint[:12]
+                # Truncate to 12 hex chars (~1/16 trillion collision probability)
+                # for diagnostic purposes; full fingerprint stored in migration 0027.
+                config_identity=self.config.embedding_fingerprint[:12],
             )
 
             if run_id:
