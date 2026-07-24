@@ -54,7 +54,7 @@ class TestMigration0024:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        assert mod.revision == "0024_normalized_blocks_and_transformations"
+        assert mod.revision == "0024_norm_blocks_transform"
         assert mod.down_revision == "0023_parser_version"
         with pytest.raises(RuntimeError, match="forward-only"):
             mod.downgrade()
