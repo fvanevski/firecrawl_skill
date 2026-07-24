@@ -281,11 +281,7 @@ Run the full deterministic suite without network usage:
 
 ```bash
 rtk proxy env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
-  "<skill-root>/scripts/test_classifier.py" \
-  "<skill-root>/scripts/test_workflow.py" \
-  "<skill-root>/scripts/test_budget_policy.py" \
-  "<skill-root>/scripts/test_research_store.py" \
-  "<skill-root>/scripts/test_index_runtime.py"
+  "<skill-root>/scripts/"
 ```
 
 Run `test_research_store_integration.py` only against an explicit disposable PostgreSQL database whose name contains a standalone `test` segment, with `RESEARCH_STORE_TEST_ALLOW_RESET` set to that exact database name. It permanently covers non-empty multi-index v1-to-v5 migration, concurrent idempotent ingestion, derivation selection, atomic retry ledgers, run/lease immutability, final-attempt expiry, and manifest-definition binding. Separately record an acceptance campaign against disposable services that proves wrapper preflight/fail-closed behavior, Valkey loss tolerance, damaged-index rebuilding, active-alias cutover, and rollback before touching live state.
