@@ -16,9 +16,10 @@ This migration adds:
 """
 
 from alembic import op
+import sqlalchemy as sa
 
 revision = "0025_hierarchical_chunks"
-down_revision = "0024_normalized_blocks_and_transformations"
+down_revision = "0024_norm_blocks_transform"
 branch_labels = None
 depends_on = None
 
@@ -27,9 +28,9 @@ def upgrade():
     # 1. Add tokenizer_name column (nullable for existing chunks)
     op.add_column(
         "chunks",
-        op.Column(
+        sa.Column(
             "tokenizer_name",
-            op.Text(),
+            sa.Text(),
             nullable=True,
         ),
     )
@@ -37,9 +38,9 @@ def upgrade():
     # 2. Add parent_block_id column (nullable FK to document_blocks)
     op.add_column(
         "chunks",
-        op.Column(
+        sa.Column(
             "parent_block_id",
-            op.UUID(),
+            sa.UUID(),
             nullable=True,
         ),
     )

@@ -15,7 +15,7 @@ candidate are ordered by ``attempt_number``.
 * ``id`` — UUID PK, ``gen_random_uuid()``
 * ``candidate_id`` — FK to ``search_candidates(id)`` ON DELETE CASCADE
 * ``run_id`` — FK to ``research_runs(id)`` ON DELETE CASCADE
-* ``invocation_id`` — FK to ``research_invocation_events(id)`` ON DELETE SET NULL
+* ``invocation_id`` — FK to ``research_invocations(id)`` ON DELETE SET NULL
 * ``attempt_number`` — integer, >= 1, ordered per candidate
 * ``method`` — constrained to ``extraction_method`` enum
 * ``method_version`` — free-text implementation version
@@ -63,7 +63,7 @@ Indexes:
 
 1. ``candidate_id`` must reference an existing ``search_candidates`` row.
 2. ``run_id`` must reference an existing ``research_runs`` row.
-3. ``invocation_id`` must reference an existing ``research_invocation_events`` row (or be NULL).
+3. ``invocation_id`` must reference an existing ``research_invocations`` row (or be NULL).
 4. ``retry_parent_id`` must reference an existing ``extraction_attempts`` row (or be NULL).
 5. A corpus snapshot derived from extraction must reference the selected attempt.
 
@@ -208,7 +208,7 @@ def upgrade():
           id                          uuid NOT NULL DEFAULT gen_random_uuid(),
           candidate_id                uuid NOT NULL REFERENCES search_candidates(id) ON DELETE CASCADE,
           run_id                      uuid NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
-          invocation_id               uuid REFERENCES research_invocation_events(id) ON DELETE SET NULL,
+          invocation_id               uuid REFERENCES research_invocations(id) ON DELETE SET NULL,
           attempt_number              int NOT NULL DEFAULT 1,
           method                      extraction_method NOT NULL,
           method_version              text NOT NULL,

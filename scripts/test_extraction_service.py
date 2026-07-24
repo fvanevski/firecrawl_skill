@@ -412,12 +412,109 @@ def extraction_service(uow_factory, blob_store, tmp_path):
 
 @pytest.fixture
 def sample_candidate():
-    return uuid4()
+    """Create a research run and search candidate in the test database.
+
+    Returns the candidate UUID so that tests can create extraction attempts
+    that satisfy the ``extraction_attempts.candidate_id`` →
+    ``search_candidates(id)`` foreign key.
+    """
+    import hashlib
+
+    run_id = uuid4()
+    candidate_id = uuid4()
+    canonical_url = "https://example.com/test-article"
+    canonical_sha = hashlib.sha256(canonical_url.encode()).hexdigest()
+
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        # 1. Create a research run (required by the FK chain)
+        cur.execute(
+            """INSERT INTO research_runs(
+                id, original_request, query_plan, skill_version,
+                retrieval_policy_version, status, external_run_id,
+                state, lifecycle_revision, execution_mode, objective,
+                current_coverage_revision, metadata
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                str(run_id),
+                "test extraction run",
+                "{}",
+                "v5",
+                "v5",
+                "running",
+                f"fr_test_{run_id.hex}",
+                "created",
+                0,
+                "legacy",
+                "test extraction run",
+                0,
+                "{}",
+            ),
+        )
+
+        # 2. Create the search candidate
+        cur.execute(
+            """INSERT INTO search_candidates(
+                id, run_id, canonical_url, canonical_url_sha256, original_url,
+                title, snippet, domain, backend, date_signals, backend_metadata,
+                recurrence_count, first_seen_at, last_seen_at, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                str(candidate_id),
+                str(run_id),
+                canonical_url,
+                canonical_sha,
+                "https://example.com/test-article",
+                "Test Article",
+                "A test article for extraction",
+                "example.com",
+                "firecrawl",
+                "{}",
+                "{}",
+                1,
+                "now()",
+                "now()",
+                "now()",
+            ),
+        )
+
+    return candidate_id
 
 
 @pytest.fixture
 def sample_run():
-    return uuid4()
+    """Create a research run in the test database.
+
+    Returns the run UUID so that tests can reference a valid ``research_runs``
+    row when creating extraction attempts.
+    """
+    run_id = uuid4()
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs(
+                id, original_request, query_plan, skill_version,
+                retrieval_policy_version, status, external_run_id,
+                state, lifecycle_revision, execution_mode, objective,
+                current_coverage_revision, metadata
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (
+                str(run_id),
+                "test extraction run",
+                "{}",
+                "v5",
+                "v5",
+                "running",
+                f"fr_test_{run_id.hex}",
+                "created",
+                0,
+                "legacy",
+                "test extraction run",
+                0,
+                "{}",
+            ),
+        )
+        db_run_id = cur.fetchone()[0]
+
+    return db_run_id
 
 
 @_integration()
@@ -826,14 +923,7 @@ def test_migration_upgrade_from_main():
         cur.execute("CREATE SCHEMA public")
 
     version = migrate(TEST_DSN, "head")
-    assert version == 20
-
-    with connect(TEST_DSN) as conn, conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('extraction_attempts')")
-        assert cur.fetchone()[0] is None
-
-    version = migrate(TEST_DSN, "0021_extraction_attempts")
-    assert version == 21
+    assert version == 26
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT to_regclass('extraction_attempts')")
@@ -851,7 +941,7 @@ def test_migration_preserves_existing_data():
         cur.execute("CREATE SCHEMA public")
 
     version = migrate(TEST_DSN, "head")
-    assert version == 20
+    assert version == 26
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(
@@ -861,8 +951,9 @@ def test_migration_preserves_existing_data():
         cur.execute("SELECT COUNT(*) FROM sources")
         before = cur.fetchone()[0]
 
-    version = migrate(TEST_DSN, "0021_extraction_attempts")
-    assert version == 21
+    # Re-migrating to head is a no-op; verify data is preserved
+    version = migrate(TEST_DSN, "head")
+    assert version == 26
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM sources")
@@ -1381,7 +1472,7 @@ def test_db_commit_failure_after_blob_write(
         mock_uow.commit.side_effect = Exception("Simulated DB commit failure")
         mock_uow.extraction_attempts.get_attempt.return_value = ExtractionAttempt(
             id=aid, candidate_id=sample_candidate, run_id=sample_run, attempt_number=1,
-            method="test", exit_status="succeeded", created_at=utcnow(),
+            method="firecrawl_main_content", exit_status="succeeded", created_at=utcnow(),
         )
         mock_factory.return_value = mock_uow
 

@@ -154,12 +154,28 @@ class DerivationService:
             tokenizer_name,
         )
 
-        targets = self._resolve_targets(snapshot_id, document_id, configuration_sha)
+        targets, noops = self._resolve_targets(
+            snapshot_id, document_id, configuration_sha
+        )
 
         results = []
         total_rederived = 0
         total_noop = 0
         total_failed = 0
+
+        # Record noop results for targets that already have this configuration
+        for noop_target in noops:
+            noop_result = {
+                "target_type": noop_target["type"],
+                "target_id": str(noop_target["id"]),
+                "document_id": str(noop_target["document_id"]),
+                "snapshot_id": str(noop_target["snapshot_id"]),
+                "status": "noop",
+                "configuration_sha256": configuration_sha,
+                "reason": "existing derivation with same configuration",
+            }
+            results.append(noop_result)
+            total_noop += 1
 
         for target in targets:
             target_result = self._rederive_target(
@@ -195,7 +211,7 @@ class DerivationService:
             "tokenizer_name": tokenizer_name,
             "configuration_sha256": configuration_sha,
             "dry_run": dry_run,
-            "targets": len(targets),
+            "targets": len(targets) + len(noops),
             "total_rederived": total_rederived,
             "total_noop": total_noop,
             "total_failed": total_failed,
@@ -353,10 +369,14 @@ class DerivationService:
         snapshot_id: UUID | None,
         document_id: UUID | None,
         configuration_sha: str,
-    ) -> list[dict]:
+    ) -> tuple[list[dict], list[dict]]:
         """Resolve target snapshots/documents for rederive.
 
-        Returns a list of target dicts with keys:
+        Returns a tuple of (targets, noops):
+        - ``targets``: list of target dicts that need to be rederived
+        - ``noops``: list of target dicts that already have the same configuration
+
+        Each target dict has keys:
         - ``type``: ``"snapshot"`` or ``"document"``
         - ``id``: UUID
         - ``document_id``: UUID (for snapshot targets)
@@ -422,15 +442,17 @@ class DerivationService:
             # Filter out targets that already have this exact configuration
             # as an active or pending derivation (idempotency)
             filtered = []
+            noops = []
             for t in targets:
                 existing = uow.derivations.find_by_configuration(
                     t["document_id"], configuration_sha
                 )
                 if existing is None:
                     filtered.append(t)
-                # If existing exists, skip — idempotent noop
+                else:
+                    noops.append(t)
 
-            return filtered
+            return filtered, noops
 
     def _rederive_target(
         self,
@@ -532,8 +554,14 @@ class DerivationService:
             return result
 
         except Exception as exc:
+            import traceback
             result["status"] = "failed"
-            result["error"] = f"{type(exc).__name__}: {exc}"
+            result["error"] = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+            logger.error("Target %s %s failed:\n%s",
+                result.get("target_type"),
+                result.get("target_id"),
+                result["error"],
+            )
             return result
 
     def _read_snapshot_blob(self, snapshot_id: UUID) -> dict | None:

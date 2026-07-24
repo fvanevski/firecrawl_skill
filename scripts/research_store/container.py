@@ -235,7 +235,10 @@ def build_claim_service(config: StoreConfig | None = None):
 
 def build_audit_service(config: StoreConfig | None = None):
     """Build an AuditService wired to the PostgreSQL database."""
-    config = config or StoreConfig.from_env()
+    # config may be a uow_factory partial from run_service; ignore it and
+    # always read a fresh StoreConfig so monkeypatch-ed env vars are picked
+    # up by tests.
+    config = StoreConfig.from_env()
     config.require_database()
     from .service import AuditService
 

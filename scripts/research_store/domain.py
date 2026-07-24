@@ -661,25 +661,25 @@ class ExtractionAttempt:
     id: UUID
     candidate_id: UUID
     run_id: UUID
-    invocation_id: UUID | None
-    attempt_number: int
-    method: str
-    method_version: str
-    requested_format: str | None
-    start_time: datetime
-    end_time: datetime | None
-    exit_status: str  # 'succeeded' | 'partial' | 'failed' | 'cancelled'
-    http_status: int | None
-    backend_status: str | None
-    raw_blob: BlobReference | None
-    normalized_blob: BlobReference | None
-    parser_used: str | None
-    quality_metrics: ExtractionQualityMetrics | None
-    failure_class: str
-    retry_parent_id: UUID | None
-    disposition: str  # 'acceptable' | 'poor' | 'ambiguous' | 'unassessed'
-    error_message: str | None
-    selection_reason: str | None
+    invocation_id: UUID | None = None
+    attempt_number: int = 1
+    method: str = "firecrawl_main_content"
+    method_version: str = "markdown-v1"
+    requested_format: str | None = None
+    start_time: datetime = field(default_factory=utcnow)
+    end_time: datetime | None = None
+    exit_status: str = "succeeded"  # 'succeeded' | 'partial' | 'failed' | 'cancelled'
+    http_status: int | None = None
+    backend_status: str | None = None
+    raw_blob: BlobReference | None = None
+    normalized_blob: BlobReference | None = None
+    parser_used: str | None = None
+    quality_metrics: ExtractionQualityMetrics | None = None
+    failure_class: str = "none"
+    retry_parent_id: UUID | None = None
+    disposition: str = "unassessed"  # 'acceptable' | 'poor' | 'ambiguous' | 'unassessed'
+    error_message: str | None = None
+    selection_reason: str | None = None
     created_at: datetime = field(default_factory=utcnow)
 
     def __post_init__(self) -> None:

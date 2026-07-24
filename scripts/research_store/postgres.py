@@ -129,6 +129,7 @@ class PostgresUnitOfWork:
         ) = self.index_jobs = self.search_responses = self.candidates = (
             self.strategy_revisions
         ) = self.coverage = self.terminal_decisions = self.extraction_attempts = self
+        self.derivations = self
 
         return self
 
@@ -812,12 +813,18 @@ class PostgresUnitOfWork:
     ):
         """Atomically lock, validate, record, and apply one lifecycle command."""
         completion = completion or {}
+        # Build the command dict for storage, but exclude expected_revision
+        # from the idempotency comparison — it's a CAS field, not part of
+        # the idempotency key.
         command = {
             "expected_revision": expected_revision,
             "reason": reason,
             "outcome": outcome,
             "completion": completion,
             "reopen": reopen,
+        }
+        idempotent_command = {
+            k: v for k, v in command.items() if k != "expected_revision"
         }
         event_payload = {
             "next_state": next_state,
@@ -846,12 +853,23 @@ class PostgresUnitOfWork:
                     actor_identifier,
                     policy_version,
                     semantic_proposal_id,
-                    command,
+                    idempotent_command,  # validation_result stores idempotent command as JSONB dict
                     error,
                     event_type,
-                    event_payload | {"prior_state": existing[3]},
                 )
-                if existing[4:] != expected:
+                if existing[4:12] != expected:
+                    raise ValueError("idempotency key was used for another run command")
+                # Compare payload separately (existing[12])
+                # Exclude expected_revision from the payload comparison — it's
+                # a CAS field, not part of the idempotency key.
+                expected_payload = {
+                    k: v for k, v in (event_payload | {"prior_state": existing[3]}).items()
+                    if k != "expected_revision"
+                }
+                stored_payload = {
+                    k: v for k, v in existing[12].items() if k != "expected_revision"
+                }
+                if stored_payload != expected_payload:
                     raise ValueError("idempotency key was used for another run command")
                 return {
                     "transition_id": existing[0],
@@ -927,7 +945,7 @@ class PostgresUnitOfWork:
                     actor_identifier,
                     policy_version,
                     semantic_proposal_id,
-                    _canonical_json(command),
+                    _canonical_json(idempotent_command),
                     idempotency_key,
                     error,
                 ),
@@ -5685,6 +5703,17 @@ class PostgresUnitOfWork:
 
     # -- Extraction-attempt persistence (issue #40) ---------------------
 
+    @staticmethod
+    def _blob_fields(blob) -> tuple[str | None, str | None, int | None, str | None]:
+        """Unpack a ``BlobReference | None`` into four flat columns.
+
+        Returns ``(sha256, uri, byte_length, mime_type)`` or all-``None`` when
+        *blob* is ``None``.
+        """
+        if blob is None:
+            return None, None, None, None
+        return blob.sha256, blob.uri, blob.byte_length, blob.mime_type
+
     def create_attempt(
         self,
         candidate_id,
@@ -5699,14 +5728,8 @@ class PostgresUnitOfWork:
         exit_status,
         http_status,
         backend_status,
-        raw_blob_sha256,
-        raw_blob_uri,
-        raw_blob_byte_length,
-        raw_blob_mime_type,
-        normalized_blob_sha256,
-        normalized_blob_uri,
-        normalized_blob_byte_length,
-        normalized_blob_mime_type,
+        raw_blob,
+        normalized_blob,
         parser_used,
         quality_metrics,
         failure_class,
@@ -5715,7 +5738,14 @@ class PostgresUnitOfWork:
         error_message,
         selection_reason,
     ):
-        """Insert an extraction attempt and return its UUID."""
+        """Insert an extraction attempt and return its UUID.
+
+        Accepts ``BlobReference | None`` objects per the repository protocol.
+        Blob fields are unpacked into the eight flat columns that the schema
+        expects.
+        """
+        raw_sha, raw_uri, raw_len, raw_mime = self._blob_fields(raw_blob)
+        norm_sha, norm_uri, norm_len, norm_mime = self._blob_fields(normalized_blob)
         with self.connection.cursor() as cur:
             cur.execute(
                 """
@@ -5753,16 +5783,16 @@ class PostgresUnitOfWork:
                     exit_status,
                     http_status,
                     backend_status,
-                    raw_blob_sha256,
-                    raw_blob_uri,
-                    raw_blob_byte_length,
-                    raw_blob_mime_type,
-                    normalized_blob_sha256,
-                    normalized_blob_uri,
-                    normalized_blob_byte_length,
-                    normalized_blob_mime_type,
+                    raw_sha,
+                    raw_uri,
+                    raw_len,
+                    raw_mime,
+                    norm_sha,
+                    norm_uri,
+                    norm_len,
+                    norm_mime,
                     parser_used,
-                    json.dumps(quality_metrics) if quality_metrics else None,
+                    json.dumps(quality_metrics.to_dict()) if quality_metrics else None,
                     failure_class,
                     str(retry_parent_id) if retry_parent_id else None,
                     disposition,
@@ -5777,14 +5807,8 @@ class PostgresUnitOfWork:
         self,
         attempt_id,
         exit_status,
-        raw_blob_sha256,
-        raw_blob_uri,
-        raw_blob_byte_length,
-        raw_blob_mime_type,
-        normalized_blob_sha256,
-        normalized_blob_uri,
-        normalized_blob_byte_length,
-        normalized_blob_mime_type,
+        raw_blob,
+        normalized_blob,
         parser_used,
         quality_metrics,
         failure_class,
@@ -5793,7 +5817,14 @@ class PostgresUnitOfWork:
         end_time,
         error_message,
     ):
-        """Update an extraction attempt with actual results."""
+        """Update an extraction attempt with actual results.
+
+        Accepts ``BlobReference | None`` objects per the repository protocol.
+        Blob fields are unpacked into the eight flat columns that the schema
+        expects.
+        """
+        raw_sha, raw_uri, raw_len, raw_mime = self._blob_fields(raw_blob)
+        norm_sha, norm_uri, norm_len, norm_mime = self._blob_fields(normalized_blob)
         with self.connection.cursor() as cur:
             cur.execute(
                 """
@@ -5821,16 +5852,16 @@ class PostgresUnitOfWork:
                     end_time,
                     http_status,
                     backend_status,
-                    raw_blob_sha256,
-                    raw_blob_uri,
-                    raw_blob_byte_length,
-                    raw_blob_mime_type,
-                    normalized_blob_sha256,
-                    normalized_blob_uri,
-                    normalized_blob_byte_length,
-                    normalized_blob_mime_type,
+                    raw_sha,
+                    raw_uri,
+                    raw_len,
+                    raw_mime,
+                    norm_sha,
+                    norm_uri,
+                    norm_len,
+                    norm_mime,
                     parser_used,
-                    json.dumps(quality_metrics) if quality_metrics else None,
+                    json.dumps(quality_metrics.to_dict()) if quality_metrics else None,
                     failure_class,
                     error_message,
                     str(attempt_id),
@@ -5857,7 +5888,7 @@ class PostgresUnitOfWork:
                 WHERE id = %s
                 """,
                 (
-                    quality_metrics.to_dict() if quality_metrics else None,
+                    json.dumps(quality_metrics.to_dict()) if quality_metrics else None,
                     str(attempt_id),
                 ),
             )
@@ -6176,7 +6207,14 @@ class PostgresUnitOfWork:
                 "normalization_version",
                 "configuration_sha256",
             )
-            return [dict(zip(keys, row)) for row in cur.fetchall()]
+            result = []
+            for row in cur.fetchall():
+                d = dict(zip(keys, row))
+                # Convert UUIDs to strings for consistency with other methods
+                d["document_id"] = str(d["document_id"])
+                d["snapshot_id"] = str(d["snapshot_id"])
+                result.append(d)
+            return result
 
     def get_document_for_snapshot(self, snapshot_id: UUID) -> list[dict]:
         """Get document(s) linked to a snapshot.
@@ -6207,7 +6245,12 @@ class PostgresUnitOfWork:
                 "normalization_version",
                 "configuration_sha256",
             )
-            return [dict(zip(keys, row)) for row in cur.fetchall()]
+            result = []
+            for row in cur.fetchall():
+                d = dict(zip(keys, row))
+                d["document_id"] = str(d["document_id"])
+                result.append(d)
+            return result
 
     def get_snapshots_for_document(self, document_id: UUID) -> list[dict]:
         """Get all snapshots linked to a document.
@@ -6238,7 +6281,12 @@ class PostgresUnitOfWork:
                 "normalization_version",
                 "configuration_sha256",
             )
-            return [dict(zip(keys, row)) for row in cur.fetchall()]
+            result = []
+            for row in cur.fetchall():
+                d = dict(zip(keys, row))
+                d["snapshot_id"] = str(d["snapshot_id"])
+                result.append(d)
+            return result
 
     def get_snapshot_info(self, snapshot_id: UUID) -> dict | None:
         """Get snapshot info including raw blob reference.
@@ -6279,7 +6327,11 @@ class PostgresUnitOfWork:
                 "http_status",
                 "extraction_attempt_id",
             )
-            return dict(zip(keys, row))
+            d = dict(zip(keys, row))
+            # Convert UUID to string for consistency
+            if d.get("extraction_attempt_id") is not None:
+                d["extraction_attempt_id"] = str(d["extraction_attempt_id"])
+            return d
 
     def find_by_configuration(
         self,
@@ -6638,3 +6690,176 @@ class PostgresUnitOfWork:
                 (str(row[1]),),
             )
             return cur.fetchone()[0]
+
+    def list(
+        self,
+        document_id: UUID | None = None,
+        snapshot_id: UUID | None = None,
+        status: str | None = None,
+    ) -> list[dict]:
+        """List derivation attempts with optional filters.
+
+        Args:
+            document_id: Optional document filter.
+            snapshot_id: Optional snapshot filter.
+            status: Optional status filter.
+
+        Returns:
+            List of derivation attempt dicts.
+        """
+        conditions = []
+        params: list[Any] = []
+
+        if document_id is not None:
+            conditions.append("document_id = %s")
+            params.append(str(document_id))
+        if snapshot_id is not None:
+            conditions.append("snapshot_id = %s")
+            params.append(str(snapshot_id))
+        if status is not None:
+            conditions.append("status = %s")
+            params.append(status)
+
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        query = f"""
+            SELECT id, document_id, snapshot_id, status,
+                   parser_version, normalization_version,
+                   chunker_name, chunker_version, tokenizer_name,
+                   chunk_count, block_count, configuration_sha256,
+                   error_message, created_at
+            FROM document_derivations
+            {where}
+            ORDER BY created_at DESC
+        """
+
+        with self.connection.cursor() as cur:
+            cur.execute(query, params)
+            keys = [
+                "id", "document_id", "snapshot_id", "status",
+                "parser_version", "normalization_version",
+                "chunker_name", "chunker_version", "tokenizer_name",
+                "chunk_count", "block_count", "configuration_sha256",
+                "error_message", "created_at",
+            ]
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+    def get(self, derivation_id: UUID) -> dict | None:
+        """Get a single derivation attempt by ID.
+
+        Args:
+            derivation_id: Derivation UUID.
+
+        Returns:
+            A derivation attempt dict or ``None``.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, document_id, snapshot_id, status,
+                       parser_version, normalization_version,
+                       chunker_name, chunker_version, tokenizer_name,
+                       chunk_count, block_count, configuration_sha256,
+                       error_message, created_at
+                FROM document_derivations
+                WHERE id = %s
+                """,
+                (str(derivation_id),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            keys = [
+                "id", "document_id", "snapshot_id", "status",
+                "parser_version", "normalization_version",
+                "chunker_name", "chunker_version", "tokenizer_name",
+                "chunk_count", "block_count", "configuration_sha256",
+                "error_message", "created_at",
+            ]
+            return dict(zip(keys, row))
+
+    def create(
+        self,
+        document_id: UUID,
+        snapshot_id: UUID,
+        parser_version: str,
+        normalization_version: str,
+        chunker_name: str,
+        chunker_version: str,
+        tokenizer_name: str,
+        chunk_count: int | None = None,
+        block_count: int | None = None,
+        configuration_sha256: str | None = None,
+        status: str = "pending",
+        error_message: str | None = None,
+    ) -> "DerivationAttempt":
+        """Create a new derivation attempt.
+
+        Args:
+            document_id: Document UUID.
+            snapshot_id: Snapshot UUID.
+            parser_version: Parser version.
+            normalization_version: Normalization version.
+            chunker_name: Chunker name.
+            chunker_version: Chunker version.
+            tokenizer_name: Tokenizer name.
+            chunk_count: Number of chunks.
+            block_count: Number of blocks.
+            configuration_sha256: Configuration SHA-256.
+            status: Derivation status.
+            error_message: Optional error message.
+
+        Returns:
+            The created ``DerivationAttempt``.
+        """
+        from .domain import DerivationAttempt
+
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO document_derivations (
+                    document_id, snapshot_id, status,
+                    parser_version, normalization_version,
+                    chunker_name, chunker_version, tokenizer_name,
+                    chunk_count, block_count, configuration_sha256,
+                    error_message
+                ) VALUES (
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s
+                ) RETURNING id, document_id, snapshot_id, status,
+                            parser_version, normalization_version,
+                            chunker_name, chunker_version, tokenizer_name,
+                            chunk_count, block_count, configuration_sha256,
+                            error_message, created_at
+                """,
+                (
+                    str(document_id),
+                    str(snapshot_id),
+                    status,
+                    parser_version,
+                    normalization_version,
+                    chunker_name,
+                    chunker_version,
+                    tokenizer_name,
+                    chunk_count,
+                    block_count,
+                    configuration_sha256,
+                    error_message,
+                ),
+            )
+            row = cur.fetchone()
+            keys = [
+                "id", "document_id", "snapshot_id", "status",
+                "parser_version", "normalization_version",
+                "chunker_name", "chunker_version", "tokenizer_name",
+                "chunk_count", "block_count", "configuration_sha256",
+                "error_message", "created_at",
+            ]
+            d = dict(zip(keys, row))
+            # Convert UUIDs to strings for from_mapping()
+            d["id"] = str(d["id"])
+            d["document_id"] = str(d["document_id"])
+            d["snapshot_id"] = str(d["snapshot_id"])
+            return DerivationAttempt.from_mapping(d)

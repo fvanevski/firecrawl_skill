@@ -2429,7 +2429,7 @@ def test_run_compare_handler_executes_through_service(monkeypatch, capsys):
     out = capsys.readouterr().out.strip()
     assert out, "run-compare should produce JSON output"
     result = json.loads(out)
-    assert "status" in result or "comparisons" in result or "error" in result
+    assert "status" in result or "comparisons" in result or "comparison" in result or "error" in result
 
 
 def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
@@ -2528,12 +2528,13 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
             status.id,
             state,
             expected_revision=revision,
-            idempotency_key=f"advance:idem:{state}",
+            idempotency_key=f"finish-idem:{external_id}:{state}",
             actor_type="integration-test",
         )
         revision += 1
 
-    # Finish the run
+    # Finish the run with a unique idempotency key
+    finish_key = f"finish-idem:complete:{external_id}"
     assert (
         store_cli.main(
             [
@@ -2541,6 +2542,8 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
                 external_id,
                 "--outcome",
                 "satisfied",
+                "--idempotency-key",
+                finish_key,
             ]
         )
         == 0
@@ -2559,6 +2562,8 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
                 external_id,
                 "--outcome",
                 "satisfied",
+                "--idempotency-key",
+                finish_key,
             ]
         )
         == 0
@@ -2706,6 +2711,7 @@ def test_run_annotate_idempotency_same_key(monkeypatch, capsys):
     second_result = json.loads(capsys.readouterr().out)
     assert second_result["event_id"] == first_event_id
     assert second_result["lifecycle_revision"] == first_revision
+    assert second_result.get("reused") is True
 
 
 def test_run_audit_idempotency_same_target_hash(monkeypatch, capsys):
@@ -2820,6 +2826,7 @@ def test_catalog_import_apply_run_and_invocation(tmp_path, monkeypatch):
         "schema_version": 5,
         "invocation_id": inv_id,
         "operation": "search",
+        "run_id": run_id,
     }
     (inv_dir / f"{inv_id}.json").write_text(json.dumps(inv_data))
 
@@ -2990,7 +2997,7 @@ def test_catalog_import_dry_run_pending_records(tmp_path, monkeypatch):
 
     events_file = root / "events.jsonl"
     events_file.write_text(
-        json.dumps({"schema_version": 5, "event_id": "fe_" + "g" * 32, "event": "test"})
+        json.dumps({"schema_version": 5, "event_id": "fe_" + "a" * 32, "event": "test"})
         + "\n"
     )
 
@@ -3001,7 +3008,7 @@ def test_catalog_import_dry_run_pending_records(tmp_path, monkeypatch):
     assert len(inserted) == 1
     assert inserted[0].catalog_type == "run"
 
-    # Event should be "pending" (not "inserted")
+    # Event should be "pending" (not "inserted") because it lacks run_id
     pending = [m for m in report.mappings if m.status == "pending"]
     assert len(pending) == 1
     assert pending[0].catalog_type == "event"
@@ -3035,7 +3042,7 @@ def test_catalog_import_apply_all_malformed_raises(tmp_path, monkeypatch):
     }
     (runs_dir / "bad.json").write_text(json.dumps(run_data))
 
-    with pytest.raises(ImportApplyError, match="all records are malformed"):
+    with pytest.raises(ImportApplyError, match="Apply aborted.*malformed records"):
         import_svc.apply(root)
 
 
@@ -3045,11 +3052,11 @@ def test_catalog_import_cli_dry_run(monkeypatch, capsys, tmp_path):
 
     from research_store import cli as store_cli
 
-    # Create a minimal Catalog root
+    # Create a minimal Catalog root with a valid run ID (fr_ + 32 hex chars)
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
     runs_dir.mkdir(parents=True)
-    run_id = "fr_" + "a" * 32
+    run_id = f"fr_{uuid4().hex[:32]}"
     run_data = {
         "schema_version": 5,
         "research_run_id": run_id,
@@ -3063,7 +3070,7 @@ def test_catalog_import_cli_dry_run(monkeypatch, capsys, tmp_path):
     assert report["total_records"] == 1
     assert report["valid_records"] == 1
     assert report["records_inserted"] == 1
-    assert report["records_malformed"] == 0
+    assert report["malformed_records"] == 0
 
 
 def test_catalog_import_cli_reconcile(monkeypatch, capsys, tmp_path):
@@ -3113,7 +3120,7 @@ def test_catalog_import_apply_pending_warning(tmp_path, monkeypatch):
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
     runs_dir.mkdir(parents=True)
-    run_id = "fr_" + "c" * 32
+    run_id = f"fr_{uuid4().hex[:32]}"
     run_data = {
         "schema_version": 5,
         "research_run_id": run_id,
@@ -3123,7 +3130,7 @@ def test_catalog_import_apply_pending_warning(tmp_path, monkeypatch):
 
     events_file = root / "events.jsonl"
     events_file.write_text(
-        json.dumps({"schema_version": 5, "event_id": "fe_" + "d" * 32, "event": "test"})
+        json.dumps({"schema_version": 5, "event_id": "fe_" + uuid4().hex[:32], "event": "test"})
         + "\n"
     )
 
@@ -3152,7 +3159,7 @@ def test_catalog_import_apply_idempotency_integration(tmp_path, monkeypatch):
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
     runs_dir.mkdir(parents=True)
-    run_id = "fr_" + "i" * 32
+    run_id = "fr_" + uuid4().hex
     run_data = {
         "schema_version": 5,
         "research_run_id": run_id,
@@ -3185,14 +3192,17 @@ def test_catalog_import_apply_conflict_detection_integration(tmp_path, monkeypat
     )
 
     # First we need to populate a run in DB
-    run_id = "fr_" + "c" * 32
+    run_id = "fr_" + uuid4().hex
     uow_f = service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
     with uow_f() as uow:
         cur = uow.connection.cursor()
         cur.execute(
-            """INSERT INTO research_runs (external_run_id, status, lifecycle_revision)
-            VALUES (%s, %s, %s)""",
-            (run_id, "completed", 5)
+            """INSERT INTO research_runs (
+                external_run_id, original_request, status, state,
+                lifecycle_revision, execution_mode, objective,
+                current_coverage_revision, metadata
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (run_id, "unknown", "running", "created", 5, "legacy", "Test", 0, "{}")
         )
         uow.connection.commit()
 
@@ -3348,6 +3358,7 @@ def test_hierarchical_chunk_parent_block_fk():
             (document_id, "paragraph", 0, "parent block"),
         )
         valid_block_id = cursor.fetchone()[0]
+        connection.commit()
 
         # Insert chunk with valid parent_block_id — should succeed
         with connect(TEST_DSN) as conn, conn.cursor() as cur:

@@ -742,7 +742,7 @@ class TestMigration:
         spec.loader.exec_module(migration)
 
         assert migration.revision == "0025_hierarchical_chunks"
-        assert migration.down_revision == "0024_normalized_blocks_and_transformations"
+        assert migration.down_revision == "0024_norm_blocks_transform"
 
     def test_migration_adds_tokenizer_name_column(self):
         """Migration adds tokenizer_name column to chunks table."""
