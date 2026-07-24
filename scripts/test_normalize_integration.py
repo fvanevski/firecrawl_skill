@@ -12,6 +12,7 @@ from __future__ import annotations
 
 # ruff: noqa: E402 - load the sibling script package without installing it.
 
+import dataclasses
 import os
 import sys
 from pathlib import Path
@@ -63,7 +64,7 @@ class TestNormalizeCLI:
 
         from research_store.config import StoreConfig
 
-        config = StoreConfig.from_env().replace(database_url=TEST_DSN)
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         rc = _cmd_normalize(config, args)
         assert rc == 0
 

@@ -251,7 +251,8 @@ class ExtractionService:
                 error_message=error_message,
             )
             uow.commit()
-            return uow.extraction_attempts.get_attempt(attempt_id)
+            result = uow.extraction_attempts.get_attempt(attempt_id)
+            return ExtractionAttempt.from_mapping(result) if result else None
 
     def evaluate_and_set_disposition(
         self,
@@ -399,7 +400,10 @@ class ExtractionService:
             )
         from io import BytesIO
 
-        return self.blob_store.put(BytesIO(content), None)
+        try:
+            return self.blob_store.put(BytesIO(content), None)
+        except Exception as exc:
+            raise ExtractionError(f"blob write failed: {exc}") from exc
 
     def store_normalized_blob(self, content: bytes) -> BlobReference:
         """Write normalized extraction content to blob store and return reference.
@@ -420,7 +424,10 @@ class ExtractionService:
             )
         from io import BytesIO
 
-        return self.blob_store.put(BytesIO(content), None)
+        try:
+            return self.blob_store.put(BytesIO(content), None)
+        except Exception as exc:
+            raise ExtractionError(f"blob write failed: {exc}") from exc
 
     def create_retry(
         self,
