@@ -429,6 +429,7 @@ def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
         parser_version="markdown-v1",
         normalization_version="cleanup-v1",
         chunker_version="structural-v1",
+        embedding_fingerprint="dummy_fingerprint",
     )
     service = CorpusService(
         config,
@@ -438,6 +439,68 @@ def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
         embedder=forbidden_embedder,
     )
 
-    results = service.search_assets("fallback", candidate_limit=5)
+    execution, results = service.search_assets("fallback", candidate_limit=5)
     assert [result["candidate_id"] for result in results] == [str(candidate_id)]
     assert results[0]["excerpt"] == "lexical fallback"
+    assert execution.executed_mode == "lexical"
+
+def test_search_assets_intentional_lexical_mode():
+    candidate_id = uuid4()
+
+    class Repository:
+        def __init__(self):
+            self.documents = self
+
+        def search_lexical(self, *_args):
+            return [{"candidate_id": candidate_id, "lexical_score": 1.0}]
+
+        def fetch_passages(self, *_args):
+            return [{"chunk_id": candidate_id, "text": "lexical intentional"}]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="research_chunks_configured_model",
+        reranker_candidate_limit=40,
+        parser_version="markdown-v1",
+        normalization_version="cleanup-v1",
+        chunker_version="structural-v1",
+        embedding_fingerprint="dummy_fingerprint",
+    )
+
+    class BrokenIndex:
+        def list_aliases(self):
+            raise AssertionError("index should not be called")
+
+        def search(self, *_args):
+            raise AssertionError("index should not be called")
+
+    def forbidden_embedder(_query):
+        raise AssertionError("embedder should not be called")
+
+    def forbidden_reranker(_query, _candidates):
+        raise AssertionError("reranker should not be called")
+
+    service = CorpusService(
+        config,
+        Repository,
+        blob_store=None,
+        index=BrokenIndex(),
+        embedder=forbidden_embedder,
+        reranker=forbidden_reranker,
+    )
+
+    execution, results = service.search_assets("fallback", candidate_limit=5, requested_mode="lexical")
+    assert [result["candidate_id"] for result in results] == [str(candidate_id)]
+    assert results[0]["excerpt"] == "lexical intentional"
+    assert execution.executed_mode == "lexical"
+    assert "embedding" in execution.skipped_stages
+    assert "qdrant" in execution.skipped_stages
+    assert "reranker" in execution.skipped_stages
+    from research_domain.models import MechanicalStatus
+    assert execution.mechanical_status == MechanicalStatus.SUCCEEDED

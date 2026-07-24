@@ -306,10 +306,6 @@ class BrokenQdrant:
         raise OSError("fixture Qdrant outage")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy retrieval silently drops Qdrant failure instead of reporting degraded_components (PRD FR-013)",
-)
 def test_qdrant_retrieval_outage_is_explicitly_reported():
     candidate_id = uuid4()
     config = SimpleNamespace(
@@ -319,6 +315,7 @@ def test_qdrant_retrieval_outage_is_explicitly_reported():
         parser_version="markdown-v1",
         normalization_version="cleanup-v1",
         chunker_version="structural-v1",
+        embedding_fingerprint="dummy_fingerprint"
     )
     service = CorpusService(
         config,
@@ -327,8 +324,11 @@ def test_qdrant_retrieval_outage_is_explicitly_reported():
         index=BrokenQdrant(),
         embedder=lambda _query: [0.1],
     )
-    results = service.search_assets("fixture", candidate_limit=1)
-    assert results[0]["degraded_components"] == ["qdrant"]
+    execution, results = service.search_assets("fixture", candidate_limit=1)
+    from research_domain.models import MechanicalStatus
+    assert execution.mechanical_status == MechanicalStatus.DEGRADED
+    assert execution.component_health["qdrant"] == "failed"
+    assert execution.executed_mode == "lexical"
 
 
 class WorkerRepository:

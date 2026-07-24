@@ -15,6 +15,8 @@ from .parsing import structural_blocks
 from .parsing.interfaces import ParserSelectionError, UnsupportedFormatError
 from .retrieval import reciprocal_rank_fusion
 from .url import canonicalize_url
+from research_domain.models import RetrievalExecution, MechanicalStatus
+import time
 
 
 class CorpusService:
@@ -348,48 +350,130 @@ class CorpusService:
         filters: dict | None = None,
         candidate_limit: int = 20,
         run_id: UUID | None = None,
-    ) -> list[dict]:
+        requested_mode: str = "hybrid",
+    ) -> tuple[RetrievalExecution, list[dict]]:
         if not query.strip():
             raise ValueError("query is required")
         if not 1 <= candidate_limit <= 200:
             raise ValueError("candidate_limit must be 1..200")
         filters = filters or {}
+        timing = {}
+        t0 = time.time()
+        
         with self.uow_factory() as uow:
             lexical = uow.documents.search_lexical(query, candidate_limit * 2, filters)
             for item in lexical:
                 item["candidate_id"] = str(item["candidate_id"])
                 item["retriever"] = "postgres_fts"
+            timing["lexical"] = time.time() - t0
+
             semantic = []
-            if self.index and self.embedder:
-                try:
-                    active = self.index.list_aliases().get(self.config.qdrant_alias)
-                    if active == self.config.physical_collection:
-                        points = self.index.search(
-                            self.embedder(query),
-                            _qdrant_filter(filters, self.config),
-                            candidate_limit * 2,
-                        )
-                        semantic = [_semantic_candidate(point) for point in points]
-                except Exception:
-                    semantic = []
+            component_health = {"lexical": "healthy", "embedding": "healthy", "qdrant": "healthy", "reranker": "healthy", "fusion": "healthy"}
+            errors = []
+            warnings = []
+            skipped_stages = []
+            executed_mode = requested_mode
+            index_fingerprint = None
+
+            if requested_mode == "lexical":
+                skipped_stages.extend(["embedding", "qdrant", "reranker"])
+            else:
+                if self.index and self.embedder:
+                    t1 = time.time()
+                    try:
+                        active = self.index.list_aliases().get(self.config.qdrant_alias)
+                        index_fingerprint = active
+                        if active == self.config.physical_collection:
+                            points = self.index.search(
+                                self.embedder(query),
+                                _qdrant_filter(filters, self.config),
+                                candidate_limit * 2,
+                            )
+                            semantic = [_semantic_candidate(point) for point in points]
+                        else:
+                            skipped_stages.extend(["embedding", "qdrant"])
+                            executed_mode = "lexical"
+                    except Exception as e:
+                        component_health["qdrant"] = "failed"
+                        errors.append(f"qdrant/embedding error: {str(e)}")
+                        executed_mode = "lexical"
+                        semantic = []
+                    timing["semantic"] = time.time() - t1
+                else:
+                    skipped_stages.extend(["embedding", "qdrant"])
+                    executed_mode = "lexical"
+
+            t2 = time.time()
             candidates = reciprocal_rank_fusion([lexical, semantic])[
                 : self.config.reranker_candidate_limit
             ]
+            timing["fusion"] = time.time() - t2
+
+            t3 = time.time()
             passages = uow.documents.fetch_passages(
                 [UUID(str(item["candidate_id"])) for item in candidates],
                 50000,
                 len(candidates),
                 False,
             )
+            timing["fetch_passages"] = time.time() - t3
+
             excerpts = {str(item["chunk_id"]): item["text"][:400] for item in passages}
             for item in candidates:
                 item["excerpt"] = item.get("excerpt") or excerpts.get(
                     str(item["candidate_id"]), ""
                 )
-            if self.reranker:
-                candidates = self.reranker(query, candidates)
+
+            if requested_mode != "lexical" and self.reranker:
+                t4 = time.time()
+                try:
+                    candidates = self.reranker(query, candidates)
+                except Exception as e:
+                    component_health["reranker"] = "failed"
+                    errors.append(f"reranker error: {str(e)}")
+                timing["reranker"] = time.time() - t4
+            elif requested_mode == "lexical":
+                pass
+            else:
+                skipped_stages.append("reranker")
+
             candidates = candidates[:candidate_limit]
+
+            mechanical_status = MechanicalStatus.SUCCEEDED
+            if errors:
+                if requested_mode == "semantic" and executed_mode == "lexical":
+                    mechanical_status = MechanicalStatus.FAILED
+                else:
+                    mechanical_status = MechanicalStatus.DEGRADED
+                
+            execution_id = __import__("uuid").uuid4()
+            
+            stage_counts = {
+                "lexical": len(lexical),
+                "semantic": len(semantic),
+                "fused": len(candidates),
+            }
+
+            execution = RetrievalExecution(
+                execution_id=execution_id,
+                run_id=run_id or __import__("uuid").UUID(int=0),
+                requested_mode=requested_mode,
+                executed_mode=executed_mode,
+                mechanical_status=mechanical_status,
+                component_health=component_health,
+                errors=tuple(errors),
+                warnings=tuple(warnings),
+                stage_counts=stage_counts,
+                index_fingerprint=index_fingerprint,
+                derivation_fingerprint=None,
+                filters=filters,
+                skipped_stages=tuple(skipped_stages),
+                timing=timing,
+                config_identity=self.config.embedding_fingerprint[:12]
+            )
+
             if run_id:
+                uow.record_retrieval_execution(run_id, execution)
                 for rank, candidate in enumerate(candidates, 1):
                     reasons = candidate.get("match_reasons") or []
                     stage = (
@@ -416,7 +500,7 @@ class CorpusService:
                             "selected": True,
                         },
                     )
-            return candidates
+            return execution, candidates
 
     def inspect_asset(self, candidate_id: UUID) -> dict:
         with self.uow_factory() as uow:

@@ -3519,6 +3519,35 @@ class PostgresUnitOfWork:
             if cur.rowcount != 1:
                 raise KeyError(f"research run is absent or finished: {run_id}")
 
+    def record_retrieval_execution(self, run_id, execution):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO retrieval_executions(
+                run_id, requested_mode, executed_mode, mechanical_status,
+                component_health, errors, warnings, stage_counts,
+                index_fingerprint, derivation_fingerprint, filters,
+                skipped_stages, timing, config_identity
+                ) VALUES(
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )""",
+                (
+                    run_id,
+                    execution.requested_mode,
+                    execution.executed_mode,
+                    execution.mechanical_status.value if hasattr(execution.mechanical_status, "value") else execution.mechanical_status,
+                    json.dumps(execution.component_health),
+                    json.dumps(execution.errors),
+                    json.dumps(execution.warnings),
+                    json.dumps(execution.stage_counts),
+                    execution.index_fingerprint,
+                    execution.derivation_fingerprint,
+                    json.dumps(execution.filters),
+                    json.dumps(execution.skipped_stages),
+                    json.dumps(execution.timing),
+                    execution.config_identity,
+                ),
+            )
+
     def claim_jobs(
         self,
         limit,
