@@ -1428,16 +1428,17 @@ def test_finished_run_is_immutable_and_rejects_new_evidence(service):
         with pytest.raises(KeyError):
             uow.link_run_asset(external_id, asset.snapshot_id)
         with pytest.raises(KeyError):
-            uow.log_retrieval(
+            uow.log_retrieval_batch(
+                uuid4(),
                 run_id,
-                {
+                [{
                     "stage": "retriever",
                     "query": "late evidence",
                     "retriever": "lexical",
                     "candidate_type": "chunk",
                     "candidate_id": asset.chunk_ids[0],
                     "rank": 1,
-                },
+                }],
             )
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(

@@ -418,8 +418,8 @@ def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
         def record_retrieval_execution(self, run_id, execution):
             self._execution_records.append((run_id, execution))
 
-        def log_retrieval(self, run_id, event):
-            self._retrieval_events.append((run_id, event))
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            self._retrieval_events.extend([(run_id, e) for e in events])
 
     class WrongAliasIndex:
         def list_aliases(self):
@@ -483,8 +483,8 @@ def test_search_assets_intentional_lexical_mode():
         def record_retrieval_execution(self, run_id, execution):
             self._execution_records.append((run_id, execution))
 
-        def log_retrieval(self, run_id, event):
-            self._retrieval_events.append((run_id, event))
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            self._retrieval_events.extend([(run_id, e) for e in events])
 
     config = SimpleNamespace(
         qdrant_alias="active",
@@ -553,8 +553,8 @@ def test_search_assets_intentional_semantic_mode():
         def record_retrieval_execution(self, run_id, execution):
             self._execution_records.append((run_id, execution))
 
-        def log_retrieval(self, run_id, event):
-            self._retrieval_events.append((run_id, event))
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            self._retrieval_events.extend([(run_id, e) for e in events])
 
     config = SimpleNamespace(
         qdrant_alias="active",
@@ -698,8 +698,8 @@ def test_search_assets_with_run_id_persists_execution_and_events():
         def record_retrieval_execution(self, run_id, execution):
             _execution_records.append((run_id, execution))
 
-        def log_retrieval(self, run_id, event):
-            _retrieval_events.append((run_id, event))
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            _retrieval_events.extend([(run_id, e) for e in events])
 
     config = SimpleNamespace(
         qdrant_alias="active",
@@ -736,12 +736,19 @@ def test_search_assets_with_run_id_persists_execution_and_events():
     assert persisted_exec.index_fingerprint is None
 
     # Verify retrieval event was logged
-    assert len(_retrieval_events) == 1
-    event_run_id, event = _retrieval_events[0]
-    assert event_run_id == run_id
-    assert event["candidate_id"] == str(candidate_id)
-    assert event["stage"] == "postgres_fts"
-    assert event["selected"] is True
+    assert len(_retrieval_events) == 2
+
+    event1_run_id, stage1 = _retrieval_events[0]
+    assert event1_run_id == run_id
+    assert stage1["candidate_id"] == str(candidate_id)
+    assert stage1["stage"] == "lexical"
+    assert stage1["selected"] is False
+
+    event2_run_id, stage2 = _retrieval_events[1]
+    assert event2_run_id == run_id
+    assert stage2["candidate_id"] == str(candidate_id)
+    assert stage2["stage"] == "fused"
+    assert stage2["selected"] is True
 
 
 def test_search_assets_hybrid_mode_with_qdrant_failure():
@@ -771,8 +778,8 @@ def test_search_assets_hybrid_mode_with_qdrant_failure():
         def record_retrieval_execution(self, run_id, execution):
             self._execution_records.append((run_id, execution))
 
-        def log_retrieval(self, run_id, event):
-            self._retrieval_events.append((run_id, event))
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            self._retrieval_events.extend([(run_id, e) for e in events])
 
     class BrokenQdrant:
         def list_aliases(self):
@@ -845,8 +852,8 @@ def test_search_assets_cli_output_format():
         def record_retrieval_execution(self, run_id, execution):
             self._execution_records.append((run_id, execution))
 
-        def log_retrieval(self, run_id, event):
-            self._retrieval_events.append((run_id, event))
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            self._retrieval_events.extend([(run_id, e) for e in events])
 
     config = SimpleNamespace(
         qdrant_alias="active",
@@ -892,6 +899,74 @@ def test_search_assets_cli_output_format():
 
     # Verify timing has expected keys
     assert "lexical" in execution.timing
+
+
+def test_retrieval_stage_trace_logging():
+    """Verify that all ranking stages are logged and logging failure is non-fatal."""
+    from uuid import uuid4
+    candidate_id = uuid4()
+    run_id = uuid4()
+
+    _logged_events = []
+
+    class FailingRepo:
+        documents = None
+        retrieval_events = None
+
+        def __init__(self):
+            self.documents = self
+            self.retrieval_events = self
+
+        def search_lexical(self, *_args):
+            return [{"candidate_id": candidate_id, "lexical_score": 1.0}]
+
+        def fetch_passages(self, *_args):
+            return [{"chunk_id": candidate_id, "text": "trace test"}]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            pass
+
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            _logged_events.extend(events)
+            raise RuntimeError("Intentional logging failure")
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="test",
+        reranker_candidate_limit=40,
+        parser_version="v1",
+        normalization_version="v1",
+        chunker_version="v1",
+        embedding_fingerprint="abc",
+    )
+
+    service = CorpusService(
+        config,
+        FailingRepo,
+        blob_store=None,
+        index=None,
+        embedder=None,
+    )
+
+    # Should not crash despite log_retrieval_batch raising RuntimeError
+    execution, results = service.search_assets(
+        "trace", candidate_limit=5, run_id=run_id, requested_mode="lexical"
+    )
+
+    assert len(results) == 1
+    # Check that events were generated correctly before the simulated crash
+    assert len(_logged_events) == 2
+    assert _logged_events[0]["stage"] == "lexical"
+    assert _logged_events[0]["selected"] is False
+    assert _logged_events[1]["stage"] == "fused"
+    assert _logged_events[1]["selected"] is True
+
     assert "fusion" in execution.timing
     assert "fetch_passages" in execution.timing
 

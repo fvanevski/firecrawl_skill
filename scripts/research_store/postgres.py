@@ -3519,6 +3519,80 @@ class PostgresUnitOfWork:
             if cur.rowcount != 1:
                 raise KeyError(f"research run is absent or finished: {run_id}")
 
+    def log_retrieval_batch(self, execution_id, run_id, events):
+        if not events:
+            return
+        fields = (
+            "retrieval_execution_id",
+            "stage",
+            "query",
+            "filters",
+            "retriever",
+            "candidate_type",
+            "candidate_id",
+            "raw_score",
+            "normalized_score",
+            "rank",
+            "reranker_score",
+            "selected",
+            "rejection_reason",
+        )
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM research_runs WHERE id=%s AND status='running'",
+                (run_id,)
+            )
+            if not cur.fetchone():
+                raise KeyError(f"research run is absent or finished: {run_id}")
+
+            insert_query = f"""INSERT INTO retrieval_events(run_id, {",".join(fields)})
+                               VALUES (%s, {",".join(["%s"] * len(fields))})"""
+
+            data = []
+            for event in events:
+                data.append((
+                    run_id,
+                    execution_id,
+                    event.get("stage"),
+                    event.get("query"),
+                    json.dumps(event.get("filters")) if event.get("filters") is not None else None,
+                    event.get("retriever"),
+                    event.get("candidate_type"),
+                    event.get("candidate_id"),
+                    event.get("raw_score"),
+                    event.get("normalized_score"),
+                    event.get("rank"),
+                    event.get("reranker_score"),
+                    bool(event.get("selected")),
+                    event.get("rejection_reason"),
+                ))
+            cur.executemany(insert_query, data)
+
+    def get_trace(self, execution_id):
+        fields = (
+            "stage",
+            "query",
+            "filters",
+            "retriever",
+            "candidate_type",
+            "candidate_id",
+            "raw_score",
+            "normalized_score",
+            "rank",
+            "reranker_score",
+            "selected",
+            "rejection_reason",
+        )
+        with self.connection.cursor() as cur:
+            cur.execute(
+                f"""SELECT {','.join(fields)}
+                    FROM retrieval_events
+                    WHERE retrieval_execution_id=%s
+                    ORDER BY created_at, rank""",
+                (execution_id,)
+            )
+            return [dict(zip(fields, row)) for row in cur.fetchall()]
+
     def record_retrieval_execution(self, run_id, execution):
         with self.connection.cursor() as cur:
             cur.execute(
