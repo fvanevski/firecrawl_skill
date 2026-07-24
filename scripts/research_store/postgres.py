@@ -6989,3 +6989,70 @@ class PostgresUnitOfWork:
             d["document_id"] = str(d["document_id"])
             d["snapshot_id"] = str(d["snapshot_id"])
             return DerivationAttempt.from_mapping(d)
+
+    def persist_evidence_packet(
+        self,
+        run_id: UUID,
+        research_spec_id: UUID,
+        coverage_revision: int,
+        packet_revision: int,
+        payload: dict[str, Any],
+    ) -> UUID:
+        """Persist an evidence packet revision. Returns the row ID."""
+        import json
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO evidence_packets (
+                    run_id, research_spec_id, coverage_revision,
+                    packet_revision, payload
+                ) VALUES (%s, %s, %s, %s, %s)
+                RETURNING id""",
+                (
+                    run_id,
+                    research_spec_id,
+                    coverage_revision,
+                    packet_revision,
+                    json.dumps(payload),
+                )
+            )
+            return cur.fetchone()[0]
+
+    def get_evidence_packet(
+        self,
+        run_id: UUID,
+        packet_revision: int | None = None,
+    ):
+        """Get an evidence packet by revision, or the latest if revision is None."""
+        with self.connection.cursor() as cur:
+            if packet_revision is not None:
+                cur.execute(
+                    """SELECT id, run_id, research_spec_id, coverage_revision,
+                        packet_revision, payload, created_at
+                    FROM evidence_packets
+                    WHERE run_id=%s AND packet_revision=%s""",
+                    (run_id, packet_revision)
+                )
+            else:
+                cur.execute(
+                    """SELECT id, run_id, research_spec_id, coverage_revision,
+                        packet_revision, payload, created_at
+                    FROM evidence_packets
+                    WHERE run_id=%s
+                    ORDER BY packet_revision DESC LIMIT 1""",
+                    (run_id,)
+                )
+            row = cur.fetchone()
+            if not row:
+                return None
+            from .domain import EvidencePacketRecord
+            keys = [
+                "id", "run_id", "research_spec_id", "coverage_revision",
+                "packet_revision", "payload", "created_at"
+            ]
+            d = dict(zip(keys, row))
+            # Convert UUIDs to strings for from_mapping()
+            d["id"] = str(d["id"])
+            d["run_id"] = str(d["run_id"])
+            d["research_spec_id"] = str(d["research_spec_id"])
+            return EvidencePacketRecord.from_mapping(d)
+

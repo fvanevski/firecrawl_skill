@@ -224,6 +224,47 @@ class ClaimRecord:
 
 
 @dataclass(frozen=True)
+class EvidencePacketRecord:
+    id: UUID
+    run_id: UUID
+    research_spec_id: UUID
+    coverage_revision: int
+    packet_revision: int
+    payload: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_mapping(cls, value: dict[str, Any]) -> "EvidencePacketRecord":
+        def _uuid(v):
+            return UUID(v) if not isinstance(v, UUID) else v
+
+        return cls(
+            id=_uuid(value["id"]),
+            run_id=_uuid(value["run_id"]),
+            research_spec_id=_uuid(value["research_spec_id"]),
+            coverage_revision=value["coverage_revision"],
+            packet_revision=value["packet_revision"],
+            payload=value["payload"],
+            created_at=value["created_at"],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "run_id": str(self.run_id),
+            "research_spec_id": str(self.research_spec_id),
+            "coverage_revision": self.coverage_revision,
+            "packet_revision": self.packet_revision,
+            "payload": self.payload,
+            "created_at": (
+                self.created_at.isoformat()
+                if hasattr(self.created_at, "isoformat")
+                else str(self.created_at)
+            ),
+        }
+
+
+@dataclass(frozen=True)
 class ClaimEvidenceLink:
     """A persisted claim-to-passage evidence link.
 

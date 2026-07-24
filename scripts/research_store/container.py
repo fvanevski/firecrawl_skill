@@ -256,6 +256,29 @@ def build_audit_service(config: StoreConfig | None = None):
         )
     )
 
+def build_evidence_service(config: StoreConfig | None = None):
+    """Build an EvidenceService wired to the PostgreSQL database."""
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    from .evidence import EvidenceService
+    from budget_policy import DEFAULT_POLICY
+
+    return EvidenceService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        ),
+        budget_policy=DEFAULT_POLICY,
+        tokenizer_name=config.tokenizer_name,
+    )
+
 
 def build_catalog_export_service(config: StoreConfig | None = None):
     """Build a Catalog v5 compatibility exporter.
