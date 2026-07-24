@@ -8,7 +8,11 @@ from urllib.request import Request, urlopen
 
 
 class QdrantIndex:
-    """Rebuildable HTTP projection; it never owns canonical text."""
+    """Rebuildable HTTP dense-vector projection; it never owns canonical text.
+
+    PostgreSQL full-text search (FTS) acts as the lexical retriever.
+    Sparse vectors are explicitly excluded until measured evaluation justifies them.
+    """
 
     def __init__(
         self,
@@ -61,13 +65,18 @@ class QdrantIndex:
                     "collection": self.collection,
                     "exists": False,
                     "compatible": False,
-                    "expected": {"size": self.dimension, "distance": self.distance},
+                    "expected": {"size": self.dimension, "distance": self.distance, "sparse": False},
                 }
             raise
-        vectors = response["result"]["config"]["params"]["vectors"]
+        params = response["result"]["config"]["params"]
+        vectors = params.get("vectors", {})
         vector = vectors.get("dense", vectors)
-        actual = {"size": vector.get("size"), "distance": vector.get("distance")}
-        expected = {"size": self.dimension, "distance": self.distance}
+        actual = {
+            "size": vector.get("size"),
+            "distance": vector.get("distance"),
+            "sparse": bool(params.get("sparse_vectors")),
+        }
+        expected = {"size": self.dimension, "distance": self.distance, "sparse": False}
         return {
             "collection": self.collection,
             "exists": True,
@@ -86,7 +95,6 @@ class QdrantIndex:
                     "vectors": {
                         "dense": {"size": self.dimension, "distance": self.distance}
                     },
-                    "sparse_vectors": {"sparse": {}},
                 },
             )
             return {**status, "created": True, "compatible": True}

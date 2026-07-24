@@ -197,6 +197,17 @@ def test_qdrant_schema_inspection_is_read_only():
     assert qdrant.requests == [("GET", "/collections/physical", None)]
 
 
+def test_qdrant_schema_rejects_unexpected_sparse_vectors():
+    qdrant = FakeQdrant([{"result": {"config": {"params": {
+        "vectors": {"dense": {"size": 3, "distance": "Cosine"}},
+        "sparse_vectors": {"sparse": {}}
+    }}}}])
+    result = qdrant.inspect_schema()
+    assert result["compatible"] is False
+    assert result["actual"]["sparse"] is True
+    assert result["expected"]["sparse"] is False
+
+
 def test_qdrant_alias_switch_is_single_atomic_request():
     qdrant = FakeQdrant([
         {"result": {"aliases": [{"alias_name": "research_chunks_active", "collection_name": "old"}]}},
