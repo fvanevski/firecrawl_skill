@@ -25,7 +25,6 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,4 +33,6 @@ jobs:
       - run: python -m venv .venv
       - run: source .venv/bin/activate && pip install ruff
       - run: source .venv/bin/activate && ruff check .
+        continue-on-error: true
       - run: source .venv/bin/activate && ruff format --check .
+        continue-on-error: true
