@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
-from pathlib import Path
 import sys
+from pathlib import Path
 from threading import Event
 from uuid import uuid4
+
+import pytest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.indexing import IndexWorker, OpenAICompatibleEmbedder
 import research_store.indexing as indexing_module
+from research_store.indexing import IndexWorker, OpenAICompatibleEmbedder
 from research_store.qdrant import QdrantIndex
 from research_store.queue import ValkeyQueue
 
@@ -104,7 +104,7 @@ def test_worker_uses_exact_manifest_collection_and_token():
     assert state["chunk_lookup"][1] is not None
     assert job[1] == state["renewals"][0][1] and job[2] is None
     assert ("schema", "research_chunks_abc123", 3, "Cosine") in calls
-    assert [call for call in calls if call[0] == "upsert"][0][2][0]["id"] == str(state["records"][0]["chunk_id"])
+    assert next(call for call in calls if call[0] == "upsert")[2][0]["id"] == str(state["records"][0]["chunk_id"])
 
 
 def test_worker_claims_each_lease_only_when_processing_starts():
@@ -165,7 +165,6 @@ class FakeRedis:
 
     def blpop(self, *args, **kwargs):
         self.calls.append(("blpop", args, kwargs))
-        return None
 
 
 def test_valkey_wakeup_is_best_effort_and_finite():
@@ -206,6 +205,15 @@ def test_qdrant_schema_rejects_unexpected_sparse_vectors():
     assert result["compatible"] is False
     assert result["actual"]["sparse"] is True
     assert result["expected"]["sparse"] is False
+
+
+def test_qdrant_ensure_schema_raises_on_unexpected_sparse_vectors():
+    qdrant = FakeQdrant([{"result": {"config": {"params": {
+        "vectors": {"dense": {"size": 3, "distance": "Cosine"}},
+        "sparse_vectors": {"sparse": {}}
+    }}}}])
+    with pytest.raises(RuntimeError, match="incompatible"):
+        qdrant.ensure_schema()
 
 
 def test_qdrant_alias_switch_is_single_atomic_request():

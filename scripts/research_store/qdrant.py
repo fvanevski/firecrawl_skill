@@ -35,7 +35,7 @@ class QdrantIndex:
         collection: str,
         dimension: int | None = None,
         distance: str | None = None,
-    ) -> "QdrantIndex":
+    ) -> QdrantIndex:
         return type(self)(
             self.url,
             self.api_key,
