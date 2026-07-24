@@ -1009,3 +1009,206 @@ class TransformationRecord:
             after_text=after_text,
             confidence=confidence,
         )
+
+
+# ---------------------------------------------------------------------------
+# Derivation models (issue #47)
+# ---------------------------------------------------------------------------
+
+VALID_DERIVATION_STATUSES = frozenset({"pending", "active", "superseded", "failed"})
+
+
+@dataclass(frozen=True)
+class DerivationAttempt:
+    """Represents one document derivation attempt (rederive).
+
+    One row per rederive attempt per document.  Old derivations remain
+    queryable; new derivations are appended with ``pending`` status
+    until activation.
+
+    Attributes:
+        id: Derivation UUID.
+        document_id: FK to the ``documents`` row this derivation belongs to.
+        snapshot_id: FK to the ``asset_snapshots`` row (source snapshot).
+        status: Derivation status (pending, active, superseded, failed).
+        parser_version: Parser version used for this derivation.
+        normalization_version: Normalization version used.
+        chunker_name: Chunker name used.
+        chunker_version: Chunker version used.
+        tokenizer_name: Tokenizer name used.
+        chunk_count: Number of chunks produced (nullable).
+        block_count: Number of blocks produced (nullable).
+        error_message: Free-text error description (nullable).
+        configuration_sha256: SHA-256 of the configuration dict used.
+        created_at: When the derivation was created.
+    """
+
+    id: UUID
+    document_id: UUID
+    snapshot_id: UUID
+    status: str  # 'pending' | 'active' | 'superseded' | 'failed'
+    parser_version: str
+    normalization_version: str
+    chunker_name: str = "hierarchical"
+    chunker_version: str = ""
+    tokenizer_name: str = "cl100k_base"
+    chunk_count: int | None = None
+    block_count: int | None = None
+    error_message: str | None = None
+    configuration_sha256: str | None = None
+    created_at: datetime = field(default_factory=utcnow)
+
+    def __post_init__(self) -> None:
+        if self.status not in VALID_DERIVATION_STATUSES:
+            raise ValueError(
+                f"invalid status: {self.status}; "
+                f"expected one of {sorted(VALID_DERIVATION_STATUSES)}"
+            )
+        if self.chunk_count is not None and self.chunk_count < 0:
+            raise ValueError("chunk_count must be non-negative")
+        if self.block_count is not None and self.block_count < 0:
+            raise ValueError("block_count must be non-negative")
+        if self.configuration_sha256 is not None:
+            if len(self.configuration_sha256) != 64:
+                raise ValueError("configuration_sha256 must be 64-char hex")
+            try:
+                int(self.configuration_sha256, 16)
+            except ValueError:
+                raise ValueError("configuration_sha256 must be hex")
+
+    @classmethod
+    def from_mapping(cls, row: dict[str, Any]) -> "DerivationAttempt":
+        return cls(
+            id=UUID(row["id"]),
+            document_id=UUID(row["document_id"]),
+            snapshot_id=UUID(row["snapshot_id"]),
+            status=row["status"],
+            parser_version=row["parser_version"],
+            normalization_version=row["normalization_version"],
+            chunker_name=row.get("chunker_name", "hierarchical"),
+            chunker_version=row["chunker_version"],
+            tokenizer_name=row.get("tokenizer_name", "cl100k_base"),
+            chunk_count=row.get("chunk_count"),
+            block_count=row.get("block_count"),
+            error_message=row.get("error_message"),
+            configuration_sha256=row.get("configuration_sha256"),
+            created_at=_parse_timestamptz(row.get("created_at")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "document_id": str(self.document_id),
+            "snapshot_id": str(self.snapshot_id),
+            "status": self.status,
+            "parser_version": self.parser_version,
+            "normalization_version": self.normalization_version,
+            "chunker_name": self.chunker_name,
+            "chunker_version": self.chunker_version,
+            "tokenizer_name": self.tokenizer_name,
+            "chunk_count": self.chunk_count,
+            "block_count": self.block_count,
+            "error_message": self.error_message,
+            "configuration_sha256": self.configuration_sha256,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
+class DerivationComparisonReport:
+    """Comparison report between old and new derivations.
+
+    .. note::
+       This comparison is **count-based only** — it compares chunk and block
+       counts and version strings. It does **not** compare content hashes,
+       so ``has_changes`` can be ``False`` even when the actual content
+       differs (same number of chunks with different text). A full content
+       hash comparison would require iterating chunks.
+
+    Attributes:
+        old_parser_version: Parser version from the prior derivation.
+        new_parser_version: Parser version from the new derivation.
+        old_normalization_version: Normalization version from prior.
+        new_normalization_version: Normalization version from new.
+        old_chunker_version: Chunker version from prior.
+        new_chunker_version: Chunker version from new.
+        old_tokenizer_name: Tokenizer from prior.
+        new_tokenizer_name: Tokenizer from new.
+        old_chunk_count: Chunk count from prior derivation.
+        new_chunk_count: Chunk count from new derivation.
+        old_block_count: Block count from prior derivation.
+        new_block_count: Block count from new derivation.
+        chunks_added: Number of new chunks.
+        chunks_removed: Number of chunks removed.
+        chunks_unchanged: Number of unchanged chunks.
+        blocks_added: Number of new blocks.
+        blocks_removed: Number of blocks removed.
+        blocks_unchanged: Number of unchanged blocks.
+    """
+
+    old_parser_version: str | None = None
+    new_parser_version: str | None = None
+    old_normalization_version: str | None = None
+    new_normalization_version: str | None = None
+    old_chunker_version: str | None = None
+    new_chunker_version: str | None = None
+    old_tokenizer_name: str | None = None
+    new_tokenizer_name: str | None = None
+    old_chunk_count: int | None = None
+    new_chunk_count: int | None = None
+    old_block_count: int | None = None
+    new_block_count: int | None = None
+    chunks_added: int = 0
+    chunks_removed: int = 0
+    chunks_unchanged: int = 0
+    blocks_added: int = 0
+    blocks_removed: int = 0
+    blocks_unchanged: int = 0
+
+    @property
+    def has_changes(self) -> bool:
+        return (
+            self.old_parser_version != self.new_parser_version
+            or self.old_normalization_version != self.new_normalization_version
+            or self.old_chunker_version != self.new_chunker_version
+            or self.old_tokenizer_name != self.new_tokenizer_name
+            or self.chunks_added > 0
+            or self.chunks_removed > 0
+            or self.blocks_added > 0
+            or self.blocks_removed > 0
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "parser_version": {
+                "old": self.old_parser_version,
+                "new": self.new_parser_version,
+            },
+            "normalization_version": {
+                "old": self.old_normalization_version,
+                "new": self.new_normalization_version,
+            },
+            "chunker_version": {
+                "old": self.old_chunker_version,
+                "new": self.new_chunker_version,
+            },
+            "tokenizer_name": {
+                "old": self.old_tokenizer_name,
+                "new": self.new_tokenizer_name,
+            },
+            "chunks": {
+                "old_count": self.old_chunk_count,
+                "new_count": self.new_chunk_count,
+                "added": self.chunks_added,
+                "removed": self.chunks_removed,
+                "unchanged": self.chunks_unchanged,
+            },
+            "blocks": {
+                "old_count": self.old_block_count,
+                "new_count": self.new_block_count,
+                "added": self.blocks_added,
+                "removed": self.blocks_removed,
+                "unchanged": self.blocks_unchanged,
+            },
+            "has_changes": self.has_changes,
+        }

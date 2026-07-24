@@ -28,7 +28,7 @@ from .postgres import PostgresUnitOfWork, connect
 from .qdrant import QdrantIndex
 from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
-from .service import dumps
+from .service import dumps, json_default
 
 
 _KNOWN_PREFIXES = ("result_", "url_")
@@ -192,6 +192,85 @@ def parser():
     target = rederive.add_mutually_exclusive_group(required=True)
     target.add_argument("--all", action="store_true")
     target.add_argument("--snapshot")
+
+    # ------------------------------------------------------------------
+    # Redrive v2 (issue #47)
+    # ------------------------------------------------------------------
+    rederive_v2 = sub.add_parser(
+        "rederive-v2",
+        help=(
+            "Redrive document derivation with explicit version selection (issue #47)"
+        ),
+    )
+    target_v2 = rederive_v2.add_mutually_exclusive_group(required=True)
+    target_v2.add_argument("--all", action="store_true", help="Redrive all documents")
+    target_v2.add_argument("--snapshot", help="Snapshot UUID to rederive")
+    target_v2.add_argument("--document", help="Document UUID to rederive")
+    rederive_v2.add_argument(
+        "--parser-version",
+        help="Explicit parser version (overrides config default)",
+    )
+    rederive_v2.add_argument(
+        "--normalization-version",
+        help="Explicit normalization version (overrides config default)",
+    )
+    rederive_v2.add_argument(
+        "--chunker-version",
+        help="Explicit chunker version (overrides config default)",
+    )
+    rederive_v2.add_argument(
+        "--chunker-name",
+        help="Explicit chunker name (overrides config default)",
+    )
+    rederive_v2.add_argument(
+        "--tokenizer-name",
+        help="Explicit tokenizer name (overrides config default)",
+    )
+    rederive_v2.add_argument(
+        "--activate",
+        action="store_true",
+        help="Activate the new derivation after successful rederive",
+    )
+    rederive_v2.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Compute what would happen without writing",
+    )
+    rederive_v2.add_argument(
+        "--report",
+        help="Path to write the derivation report as JSON",
+    )
+
+    # ------------------------------------------------------------------
+    # Derivation management (issue #47)
+    # ------------------------------------------------------------------
+    deriv_list = sub.add_parser(
+        "derivation-list",
+        help="List document derivations",
+    )
+    deriv_list.add_argument("--document", help="Filter by document UUID")
+    deriv_list.add_argument("--snapshot", help="Filter by snapshot UUID")
+    deriv_list.add_argument("--status", help="Filter by status")
+
+    deriv_activate = sub.add_parser(
+        "derivation-activate",
+        help="Activate a pending derivation",
+    )
+    deriv_activate.add_argument("id", help="Derivation UUID to activate")
+    deriv_activate.add_argument(
+        "--document",
+        help="Document UUID to validate derivation ownership before activation",
+    )
+
+    deriv_compare = sub.add_parser(
+        "derivation-compare",
+        help="Compare two derivations",
+    )
+    deriv_compare.add_argument("old_id", help="Old derivation UUID")
+    deriv_compare.add_argument("new_id", help="New derivation UUID")
+    deriv_compare.add_argument(
+        "--output", default="-", help="Output file (default: stdout)"
+    )
 
     # ------------------------------------------------------------------
     # Normalization diagnostics (issue #45)
@@ -604,6 +683,171 @@ def _uow_factory(config):
         config.normalization_version,
         config.chunker_version,
     )
+
+
+def _cmd_rederive_v2(config, args) -> int:
+    """Redrive v2: explicit version selection, derivation tracking (issue #47)."""
+    from uuid import UUID as _UUID
+
+    from .derivation_service import DerivationService
+
+    config.require_database()
+    service = build_service(config)
+    derivation_service = DerivationService(
+        uow_factory=_uow_factory(config),
+        corpus_service=service,
+        blob_root=config.blob_root,
+    )
+
+    result = derivation_service.rederive(
+        snapshot_id=_UUID(args.snapshot) if args.snapshot else None,
+        document_id=_UUID(args.document) if args.document else None,
+        parser_version=args.parser_version,
+        normalization_version=args.normalization_version,
+        chunker_name=args.chunker_name,
+        chunker_version=args.chunker_version,
+        tokenizer_name=args.tokenizer_name,
+        dry_run=args.dry_run,
+    )
+
+    if args.activate and result.get("total_rederived", 0) > 0:
+        # Activate the specific derivation that was just created
+        # (not the first pending from the list, which may be from a
+        # prior rederive run).
+        last_result = result["results"][-1]
+        derivation_id = last_result.get("derivation_id")
+        if derivation_id:
+            try:
+                activated = derivation_service.activate_derivation(
+                    _UUID(derivation_id)
+                )
+                result["activated"] = str(activated.id)
+            except ValueError as exc:
+                result["activate_error"] = str(exc)
+        else:
+            result["activate_error"] = "no derivation_id in last rederive result"
+
+    if args.report:
+        _export_json(Path(args.report), result)
+    print(dumps(result))
+    return 0
+
+
+def _cmd_derivation_list(config, args) -> int:
+    """List document derivations."""
+    from uuid import UUID as _UUID
+
+    from .derivation_service import DerivationService
+
+    config.require_database()
+    service = build_service(config)
+    derivation_service = DerivationService(
+        uow_factory=_uow_factory(config),
+        corpus_service=service,
+        blob_root=config.blob_root,
+    )
+
+    document_id = _UUID(args.document) if args.document else None
+    snapshot_id = _UUID(args.snapshot) if args.snapshot else None
+
+    derivations = derivation_service.list_derivations(
+        document_id=document_id,
+        snapshot_id=snapshot_id,
+        status=args.status,
+    )
+    print(dumps({"derivations": len(derivations), "items": derivations}))
+    return 0
+
+
+def _cmd_derivation_activate(config, args) -> int:
+    """Activate a pending derivation."""
+    from uuid import UUID as _UUID
+
+    from .derivation_service import DerivationService
+
+    config.require_database()
+    service = build_service(config)
+    derivation_service = DerivationService(
+        uow_factory=_uow_factory(config),
+        corpus_service=service,
+        blob_root=config.blob_root,
+    )
+
+    try:
+        derivation = derivation_service.get_derivation(_UUID(args.id))
+        if derivation is None:
+            print(dumps({"error": f"derivation {args.id} not found"}))
+            return 1
+
+        # Print confirmation details before activation
+        print(
+            dumps(
+                {
+                    "confirming": {
+                        "derivation_id": str(derivation.id),
+                        "parser_version": derivation.parser_version,
+                        "normalization_version": derivation.normalization_version,
+                        "chunker_name": derivation.chunker_name,
+                        "chunker_version": derivation.chunker_version,
+                        "tokenizer_name": derivation.tokenizer_name,
+                        "status": derivation.status,
+                        "chunk_count": derivation.chunk_count,
+                        "block_count": derivation.block_count,
+                    }
+                }
+            )
+        )
+
+        if args.document:
+            # Validate document ownership
+            if str(derivation.document_id) != str(_UUID(args.document)):
+                print(
+                    dumps(
+                        {
+                            "error": (
+                                f"derivation {args.id} belongs to document "
+                                f"{derivation.document_id}, not {args.document}"
+                            )
+                        }
+                    )
+                )
+                return 1
+
+        activated = derivation_service.activate_derivation(_UUID(args.id))
+        print(dumps({"activated": activated.to_dict()}))
+        return 0
+    except ValueError as exc:
+        print(dumps({"error": str(exc)}))
+        return 1
+
+
+def _cmd_derivation_compare(config, args) -> int:
+    """Compare two derivations."""
+    from uuid import UUID as _UUID
+
+    from .derivation_service import DerivationService
+
+    config.require_database()
+    service = build_service(config)
+    derivation_service = DerivationService(
+        uow_factory=_uow_factory(config),
+        corpus_service=service,
+        blob_root=config.blob_root,
+    )
+
+    try:
+        report = derivation_service.compare_derivations(
+            _UUID(args.old_id),
+            _UUID(args.new_id),
+        )
+        output = report.to_dict()
+        if args.output != "-":
+            _export_json(Path(args.output), output)
+        print(dumps(output))
+        return 0
+    except ValueError as exc:
+        print(dumps({"error": str(exc)}))
+        return 1
 
 
 def _cmd_normalize(config, args) -> int:
@@ -1430,7 +1674,7 @@ def main(argv=None):
             conn.rollback()
         probe_path = renamed_path = None
         try:
-            with tempfile.NamedTemporaryFile(
+            with tempfile.NamedTemporaryFile(  # noqa: F823
                 dir=config.blob_root,
                 prefix=".firecrawl-ingest-ready-",
                 delete=False,
@@ -1638,6 +1882,14 @@ def main(argv=None):
             results.append(result.__dict__)
         print(dumps({"rederived": len(results), "assets": results}))
         return 0
+    if args.command == "rederive-v2":
+        return _cmd_rederive_v2(config, args)
+    if args.command == "derivation-list":
+        return _cmd_derivation_list(config, args)
+    if args.command == "derivation-activate":
+        return _cmd_derivation_activate(config, args)
+    if args.command == "derivation-compare":
+        return _cmd_derivation_compare(config, args)
     if args.command == "normalize":
         return _cmd_normalize(config, args)
     if args.command == "export-invocation":
