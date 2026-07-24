@@ -676,6 +676,29 @@ class EvidenceGroup:
 
 
 @dataclass(frozen=True)
+class RetrievalExecution:
+    execution_id: UUID
+    run_id: UUID
+    requested_mode: str
+    executed_mode: str
+    mechanical_status: MechanicalStatus
+    component_health: dict[str, str]
+    errors: tuple[str, ...]
+    warnings: tuple[str, ...]
+    stage_counts: dict[str, int]
+    index_fingerprint: str | None
+    filters: dict[str, Any]
+    skipped_stages: tuple[str, ...]
+    timing: dict[str, float]
+    config_identity: str
+
+    def __post_init__(self):
+        _text(self.requested_mode, "retrieval_execution.requested_mode")
+        _text(self.executed_mode, "retrieval_execution.executed_mode")
+        _text(self.config_identity, "retrieval_execution.config_identity")
+
+
+@dataclass(frozen=True)
 class RetrievalProvenance:
     retrieval_event_id: UUID
     requested_mode: str

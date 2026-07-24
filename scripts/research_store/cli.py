@@ -556,6 +556,7 @@ def parser():
     search = sub.add_parser("search-assets")
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=20)
+    search.add_argument("--mode", default="hybrid", choices=["hybrid", "lexical", "semantic"])
     search.add_argument("--domain")
     search.add_argument("--source-type")
     search.add_argument("--date-from")
@@ -2628,12 +2629,28 @@ def main(argv=None):
             }.items()
             if value
         }
-        result = service.search_assets(
+        execution, candidates = service.search_assets(
             args.query,
             filters=filters,
             candidate_limit=args.limit,
             run_id=_resolve_run_id(config, args.research_run_id),
+            requested_mode=getattr(args, "mode", "hybrid"),
         )
+        result = {
+            "execution": {
+                "requested_mode": execution.requested_mode,
+                "executed_mode": execution.executed_mode,
+                "mechanical_status": execution.mechanical_status.value if hasattr(execution.mechanical_status, "value") else execution.mechanical_status,
+                "component_health": execution.component_health,
+                "errors": execution.errors,
+                "warnings": execution.warnings,
+                "stage_counts": execution.stage_counts,
+                "index_fingerprint": execution.index_fingerprint,
+                "skipped_stages": execution.skipped_stages,
+                "timing": execution.timing,
+            },
+            "candidates": candidates
+        }
     elif args.command == "inspect-asset":
         result = service.inspect_asset(UUID(args.id))
     elif args.command == "fetch-passages":

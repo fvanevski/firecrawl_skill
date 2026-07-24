@@ -4,6 +4,8 @@ from contextlib import AbstractContextManager
 from typing import Any, BinaryIO, Protocol
 from uuid import UUID
 
+from research_domain.models import RetrievalExecution
+
 from .domain import (
     BlobReference,
     ExtractionQualityMetrics,
@@ -519,3 +521,5 @@ class UnitOfWork(AbstractContextManager, Protocol):
 
     def commit(self) -> None: ...
     def rollback(self) -> None: ...
+
+    def record_retrieval_execution(self, run_id: UUID, execution: RetrievalExecution) -> None: ...
