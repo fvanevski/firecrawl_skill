@@ -1118,6 +1118,13 @@ class DerivationAttempt:
 class DerivationComparisonReport:
     """Comparison report between old and new derivations.
 
+    .. note::
+       This comparison is **count-based only** — it compares chunk and block
+       counts and version strings. It does **not** compare content hashes,
+       so ``has_changes`` can be ``False`` even when the actual content
+       differs (same number of chunks with different text). A full content
+       hash comparison would require iterating chunks.
+
     Attributes:
         old_parser_version: Parser version from the prior derivation.
         new_parser_version: Parser version from the new derivation.

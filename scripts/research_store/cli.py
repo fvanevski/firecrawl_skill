@@ -696,6 +696,7 @@ def _cmd_rederive_v2(config, args) -> int:
     derivation_service = DerivationService(
         uow_factory=_uow_factory(config),
         corpus_service=service,
+        blob_root=config.blob_root,
     )
 
     result = derivation_service.rederive(
@@ -710,17 +711,21 @@ def _cmd_rederive_v2(config, args) -> int:
     )
 
     if args.activate and result.get("total_rederived", 0) > 0:
-        # Activate the most recent derivation
-        derivations = derivation_service.list_derivations(
-            status="pending",
-        )
-        if derivations:
-            latest = derivations[0]
+        # Activate the specific derivation that was just created
+        # (not the first pending from the list, which may be from a
+        # prior rederive run).
+        last_result = result["results"][-1]
+        derivation_id = last_result.get("derivation_id")
+        if derivation_id:
             try:
-                activated = derivation_service.activate_derivation(_UUID(latest["id"]))
+                activated = derivation_service.activate_derivation(
+                    _UUID(derivation_id)
+                )
                 result["activated"] = str(activated.id)
             except ValueError as exc:
                 result["activate_error"] = str(exc)
+        else:
+            result["activate_error"] = "no derivation_id in last rederive result"
 
     if args.report:
         _export_json(Path(args.report), result)
@@ -739,6 +744,7 @@ def _cmd_derivation_list(config, args) -> int:
     derivation_service = DerivationService(
         uow_factory=_uow_factory(config),
         corpus_service=service,
+        blob_root=config.blob_root,
     )
 
     document_id = _UUID(args.document) if args.document else None
@@ -764,6 +770,7 @@ def _cmd_derivation_activate(config, args) -> int:
     derivation_service = DerivationService(
         uow_factory=_uow_factory(config),
         corpus_service=service,
+        blob_root=config.blob_root,
     )
 
     try:
@@ -825,6 +832,7 @@ def _cmd_derivation_compare(config, args) -> int:
     derivation_service = DerivationService(
         uow_factory=_uow_factory(config),
         corpus_service=service,
+        blob_root=config.blob_root,
     )
 
     try:

@@ -450,6 +450,7 @@ class TestDerivationServiceIntegration:
         return DerivationService(
             uow_factory=uow_factory,
             corpus_service=service,
+            blob_root=tmp_path / "blobs",
         )
 
     def test_rederive_creates_new_derivation(
@@ -1093,6 +1094,7 @@ class TestMultiDerivationCoexistence:
         derivation_service = DerivationService(
             uow_factory=uow_factory,
             corpus_service=service,
+            blob_root=tmp_path / "blobs",
         )
 
         # Seed a document with default config
@@ -1149,6 +1151,7 @@ class TestMultiDerivationCoexistence:
         derivation_service = DerivationService(
             uow_factory=uow_factory,
             corpus_service=service,
+            blob_root=tmp_path / "blobs",
         )
 
         # Seed a document

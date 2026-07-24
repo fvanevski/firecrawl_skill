@@ -6486,13 +6486,20 @@ class PostgresUnitOfWork:
         Sets the derivation to ``active`` and marks any prior active
         derivation for the same document as ``superseded``.
 
+        Uses ``FOR UPDATE`` row-level locking to prevent concurrent
+        activations from both succeeding (which would leave two active
+        derivations for the same document).
+
         Raises:
             ValueError: When the derivation is not found or not pending.
         """
         from .domain import DerivationAttempt
 
         with self.connection.cursor() as cur:
-            # Get the derivation
+            # Acquire row-level lock before reading/modifying status.
+            # This prevents a concurrent activation from reading the same
+            # row as "pending" and both succeeding, which would leave two
+            # active derivations for the same document.
             cur.execute(
                 """
                 SELECT id, document_id, snapshot_id, status,
@@ -6502,6 +6509,7 @@ class PostgresUnitOfWork:
                   error_message, created_at
                 FROM document_derivations
                 WHERE id = %s
+                FOR UPDATE
                 """,
                 (str(derivation_id),),
             )
@@ -6532,7 +6540,8 @@ class PostgresUnitOfWork:
                     f"derivation {derivation_id} is not pending (status: {current['status']})"
                 )
 
-            # Mark prior active derivations as superseded
+            # Mark prior active derivations as superseded (still within
+            # the lock held by the SELECT above).
             cur.execute(
                 """
                 UPDATE document_derivations
@@ -6562,65 +6571,67 @@ class PostgresUnitOfWork:
             return DerivationAttempt.from_mapping(dict(zip(keys, row)))
 
     def count_chunks_for_derivation(self, derivation_id: UUID) -> int | None:
-        """Count chunks for a derivation via its document."""
+        """Count chunks for a derivation via its document.
+
+        The derivation row stores ``chunk_count`` when available; the
+        fallback counts chunks for the **document** created by this
+        derivation (joined through the derivation's snapshot_id).
+        """
         with self.connection.cursor() as cur:
             cur.execute(
                 """
-                SELECT chunk_count
+                SELECT chunk_count, snapshot_id
                 FROM document_derivations
-                WHERE id = %s AND chunk_count IS NOT NULL
-                """,
-                (str(derivation_id),),
-            )
-            row = cur.fetchone()
-            if row:
-                return row[0]
-            # Fallback: count actual chunks for the document
-            cur.execute(
-                """
-                SELECT dd.document_id
-                FROM document_derivations dd
-                WHERE dd.id = %s
+                WHERE id = %s
                 """,
                 (str(derivation_id),),
             )
             row = cur.fetchone()
             if row is None:
                 return None
+            if row[0] is not None:
+                return row[0]
+            # Fallback: count chunks for the document created by this
+            # derivation's snapshot, not for the entire document table.
             cur.execute(
-                "SELECT count(*) FROM chunks WHERE document_id = %s",
-                (str(row[0]),),
+                """
+                SELECT count(*) FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE d.snapshot_id = %s
+                """,
+                (str(row[1]),),
             )
             return cur.fetchone()[0]
 
     def count_blocks_for_derivation(self, derivation_id: UUID) -> int | None:
-        """Count blocks for a derivation via its document."""
+        """Count blocks for a derivation via its document.
+
+        The derivation row stores ``block_count`` when available; the
+        fallback counts blocks for the **document** created by this
+        derivation (joined through the derivation's snapshot_id).
+        """
         with self.connection.cursor() as cur:
             cur.execute(
                 """
-                SELECT block_count
+                SELECT block_count, snapshot_id
                 FROM document_derivations
-                WHERE id = %s AND block_count IS NOT NULL
-                """,
-                (str(derivation_id),),
-            )
-            row = cur.fetchone()
-            if row:
-                return row[0]
-            # Fallback: count actual blocks for the document
-            cur.execute(
-                """
-                SELECT dd.document_id
-                FROM document_derivations dd
-                WHERE dd.id = %s
+                WHERE id = %s
                 """,
                 (str(derivation_id),),
             )
             row = cur.fetchone()
             if row is None:
                 return None
+            if row[0] is not None:
+                return row[0]
+            # Fallback: count blocks for the document created by this
+            # derivation's snapshot, not for the entire document table.
             cur.execute(
-                "SELECT count(*) FROM document_blocks WHERE document_id = %s",
-                (str(row[0]),),
+                """
+                SELECT count(*) FROM document_blocks db
+                JOIN documents d ON d.id = db.document_id
+                WHERE d.snapshot_id = %s
+                """,
+                (str(row[1]),),
             )
             return cur.fetchone()[0]

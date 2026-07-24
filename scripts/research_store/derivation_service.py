@@ -31,10 +31,12 @@ This module provides the ``DerivationService`` which handles:
 
 from __future__ import annotations
 
-from hashlib import sha256
 import json
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from hashlib import sha256
+from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from .domain import (
@@ -72,15 +74,18 @@ class DerivationService:
     Args:
         uow_factory: Callable that returns a ``PostgresUnitOfWork``.
         corpus_service: ``CorpusService`` instance for ingestion.
+        blob_root: Path to the content-addressed blob store root.
     """
 
     def __init__(
         self,
         uow_factory: Callable,
         corpus_service,
+        blob_root: str | Path,
     ) -> None:
         self.uow_factory = uow_factory
         self.corpus_service = corpus_service
+        self.blob_root = Path(blob_root)
 
     # ------------------------------------------------------------------
     # Public API
@@ -473,7 +478,7 @@ class DerivationService:
 
             # Build IngestRequest with explicit version overrides
             request = IngestRequest(
-                requested_url="",  # Will be populated from snapshot
+                requested_url=blob_data.get("requested_url", ""),
                 content=blob_data["content"],
                 mime_type=blob_data.get("mime_type", "text/markdown"),
                 title=blob_data.get("title"),
@@ -533,15 +538,16 @@ class DerivationService:
     def _read_snapshot_blob(self, snapshot_id: UUID) -> dict | None:
         """Read the raw blob for a snapshot.
 
+        Uses the ``blob_root`` passed at construction time so that
+        callers (including tests) control which blob store is accessed.
+
         Returns:
             A dict with ``content``, ``mime_type``, ``title``, etc.
             or ``None`` when the blob is not found.
         """
         from .blob import ContentAddressedBlobStore
-        from .config import StoreConfig
 
-        config = StoreConfig.from_env()
-        store = ContentAddressedBlobStore(config.blob_root)
+        store = ContentAddressedBlobStore(self.blob_root)
 
         with self.uow_factory() as uow:
             row = uow.derivations.get_snapshot_info(snapshot_id)
