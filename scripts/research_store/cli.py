@@ -2646,7 +2646,6 @@ def main(argv=None):
                 "warnings": execution.warnings,
                 "stage_counts": execution.stage_counts,
                 "index_fingerprint": execution.index_fingerprint,
-                "derivation_fingerprint": execution.derivation_fingerprint,
                 "skipped_stages": execution.skipped_stages,
                 "timing": execution.timing,
             },

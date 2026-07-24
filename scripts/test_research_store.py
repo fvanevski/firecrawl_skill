@@ -443,6 +443,9 @@ def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
     assert [result["candidate_id"] for result in results] == [str(candidate_id)]
     assert results[0]["excerpt"] == "lexical fallback"
     assert execution.executed_mode == "lexical"
+    from research_domain.models import MechanicalStatus
+    assert execution.mechanical_status == MechanicalStatus.DEGRADED
+    assert execution.index_fingerprint == "research_chunks_other_model"
 
 def test_search_assets_intentional_lexical_mode():
     candidate_id = uuid4()
@@ -504,3 +507,59 @@ def test_search_assets_intentional_lexical_mode():
     assert "reranker" in execution.skipped_stages
     from research_domain.models import MechanicalStatus
     assert execution.mechanical_status == MechanicalStatus.SUCCEEDED
+
+def test_search_assets_intentional_semantic_mode():
+    candidate_id = uuid4()
+
+    class Repository:
+        def __init__(self):
+            self.documents = self
+
+        def search_lexical(self, *_args):
+            raise AssertionError("lexical search should not be called")
+
+        def fetch_passages(self, *_args):
+            return [{"chunk_id": candidate_id, "text": "semantic intentional"}]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="research_chunks_configured_model",
+        reranker_candidate_limit=40,
+        parser_version="markdown-v1",
+        normalization_version="cleanup-v1",
+        chunker_version="structural-v1",
+        embedding_fingerprint="dummy_fingerprint",
+    )
+
+    class WorkingIndex:
+        def list_aliases(self):
+            return {"active": "research_chunks_configured_model"}
+
+        def search(self, *_args):
+            return [{"id": str(uuid4()), "score": 0.9, "payload": {"chunk_id": str(candidate_id), "title": "Test"}}]
+
+    def dummy_embedder(_query):
+        return [0.1]
+
+    service = CorpusService(
+        config,
+        Repository,
+        blob_store=None,
+        index=WorkingIndex(),
+        embedder=dummy_embedder,
+    )
+
+    execution, results = service.search_assets("test", candidate_limit=5, requested_mode="semantic")
+    assert [result["candidate_id"] for result in results] == [str(candidate_id)]
+    assert results[0]["excerpt"] == "semantic intentional"
+    assert execution.executed_mode == "semantic"
+    assert execution.index_fingerprint == "research_chunks_configured_model"
+    from research_domain.models import MechanicalStatus
+    assert execution.mechanical_status == MechanicalStatus.SUCCEEDED
+

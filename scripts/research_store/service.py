@@ -361,11 +361,15 @@ class CorpusService:
         t0 = time.time()
         
         with self.uow_factory() as uow:
-            lexical = uow.documents.search_lexical(query, candidate_limit * 2, filters)
-            for item in lexical:
-                item["candidate_id"] = str(item["candidate_id"])
-                item["retriever"] = "postgres_fts"
-            timing["lexical"] = time.time() - t0
+            if requested_mode != "semantic":
+                lexical = uow.documents.search_lexical(query, candidate_limit * 2, filters)
+                for item in lexical:
+                    item["candidate_id"] = str(item["candidate_id"])
+                    item["retriever"] = "postgres_fts"
+                timing["lexical"] = time.time() - t0
+            else:
+                lexical = []
+                timing["lexical"] = 0.0
 
             semantic = []
             component_health = {"lexical": "healthy", "embedding": "healthy", "qdrant": "healthy", "reranker": "healthy", "fusion": "healthy"}
@@ -440,11 +444,13 @@ class CorpusService:
             candidates = candidates[:candidate_limit]
 
             mechanical_status = MechanicalStatus.SUCCEEDED
-            if errors:
-                if requested_mode == "semantic" and executed_mode == "lexical":
+            if requested_mode != executed_mode:
+                if requested_mode == "semantic":
                     mechanical_status = MechanicalStatus.FAILED
                 else:
                     mechanical_status = MechanicalStatus.DEGRADED
+            elif errors:
+                mechanical_status = MechanicalStatus.DEGRADED
                 
             execution_id = __import__("uuid").uuid4()
             

@@ -687,7 +687,6 @@ class RetrievalExecution:
     warnings: tuple[str, ...]
     stage_counts: dict[str, int]
     index_fingerprint: str | None
-    derivation_fingerprint: str | None
     filters: dict[str, Any]
     skipped_stages: tuple[str, ...]
     timing: dict[str, float]

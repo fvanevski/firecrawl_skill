@@ -31,7 +31,6 @@ def upgrade():
           warnings                    jsonb NOT NULL,
           stage_counts                jsonb NOT NULL,
           index_fingerprint           text,
-          derivation_fingerprint      text,
           filters                     jsonb NOT NULL,
           skipped_stages              jsonb NOT NULL,
           timing                      jsonb NOT NULL,

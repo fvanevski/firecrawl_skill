@@ -330,6 +330,42 @@ def test_qdrant_retrieval_outage_is_explicitly_reported():
     assert execution.component_health["qdrant"] == "failed"
     assert execution.executed_mode == "lexical"
 
+def test_reranker_outage_is_explicitly_reported():
+    candidate_id = uuid4()
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="configured",
+        reranker_candidate_limit=40,
+        parser_version="markdown-v1",
+        normalization_version="cleanup-v1",
+        chunker_version="structural-v1",
+        embedding_fingerprint="dummy_fingerprint"
+    )
+    
+    class BrokenReranker:
+        def __call__(self, *args, **kwargs):
+            raise OSError("fixture reranker outage")
+
+    class WorkingQdrant:
+        def list_aliases(self):
+            return {"active": "configured"}
+
+        def search(self, *_args):
+            return [{"id": str(uuid4()), "score": 0.9, "payload": {"chunk_id": str(candidate_id), "title": "Test"}}]
+            
+    service = CorpusService(
+        config,
+        lambda: RetrievalUow(candidate_id),
+        blob_store=None,
+        index=WorkingQdrant(),
+        embedder=lambda _query: [0.1],
+        reranker=BrokenReranker()
+    )
+    execution, results = service.search_assets("fixture", candidate_limit=1)
+    from research_domain.models import MechanicalStatus
+    assert execution.mechanical_status == MechanicalStatus.DEGRADED
+    assert execution.component_health["reranker"] == "failed"
+
 
 class WorkerRepository:
     def __init__(self, state):
