@@ -11,8 +11,6 @@ Covers:
 
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
 import os
 import sys
 from pathlib import Path
@@ -24,9 +22,8 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store.cli import parser as research_store_parser
-from research_store.domain import ClaimRecord, ClaimEvidenceLink
+from research_store.domain import ClaimEvidenceLink, ClaimRecord
 from research_store.service import ClaimManifestService
-
 
 # ---------------------------------------------------------------------------
 # Domain model tests
@@ -421,36 +418,74 @@ def test_domain_model_evidence_link_rejects_out_of_range_confidence():
 # Integration tests (require PostgreSQL)
 # ---------------------------------------------------------------------------
 
+
 def ensure_passage_and_snapshot_exist(dsn, passage_id, snapshot_id):
-    from research_store.postgres import connect
     import hashlib
+
+    from research_store.postgres import connect
+
     with connect(dsn) as conn, conn.cursor() as cur:
         # Create a document and snapshot first
         document_id = "11111111-1111-1111-1111-111111111111"
         cur.execute(
             """INSERT INTO documents (id, source_url, source_type, canonical_url, original_domain, first_observed_at)
             VALUES (%s, %s, %s, %s, %s, now()) ON CONFLICT DO NOTHING""",
-            (document_id, "https://example.com/doc", "web", "https://example.com/doc", "example.com")
+            (
+                document_id,
+                "https://example.com/doc",
+                "web",
+                "https://example.com/doc",
+                "example.com",
+            ),
         )
         cur.execute(
             """INSERT INTO asset_snapshots (id, document_id, invocation_id, content_hash, mime_type, bytes_length, retrieved_at)
             VALUES (%s, %s, %s, %s, %s, %s, now()) ON CONFLICT DO NOTHING""",
-            (str(snapshot_id), document_id, "11111111-1111-1111-1111-111111111111", hashlib.sha256(b"").hexdigest(), "text/plain", 0)
+            (
+                str(snapshot_id),
+                document_id,
+                "11111111-1111-1111-1111-111111111111",
+                hashlib.sha256(b"").hexdigest(),
+                "text/plain",
+                0,
+            ),
         )
         cur.execute(
             """INSERT INTO chunks (id, document_id, snapshot_id, ordinal, text, content_sha256, token_count)
             VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
-            (str(passage_id), document_id, str(snapshot_id), 0, "test text", hashlib.sha256(b"test text").hexdigest(), 2)
+            (
+                str(passage_id),
+                document_id,
+                str(snapshot_id),
+                0,
+                "test text",
+                hashlib.sha256(b"test text").hexdigest(),
+                2,
+            ),
         )
+
+
 def ensure_run_exists(dsn, run_id):
     from research_store.postgres import connect
+
     with connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO research_runs (id, original_request, query_plan, skill_version, llm_model, status, state, execution_mode, objective)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING""",
-            (str(run_id), "test request", "{}", "1.0", "test", "running", "created", "agent_led", "test request"),
+            (
+                str(run_id),
+                "test request",
+                "{}",
+                "1.0",
+                "test",
+                "running",
+                "created",
+                "agent_led",
+                "test request",
+            ),
         )
+
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 INTEGRATION_MARK = pytest.mark.skipif(
@@ -461,9 +496,10 @@ INTEGRATION_MARK = pytest.mark.skipif(
 @INTEGRATION_MARK
 def test_claims_survive_filesystem_deletion(tmp_path, prepared_database_for_claims):
     """Claims are stored in PostgreSQL — deleting scratch does not affect them."""
-    from research_store.container import build_claim_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -504,9 +540,10 @@ def test_unknown_claim_id_is_rejected_in_service(
     tmp_path, prepared_database_for_claims
 ):
     """Unknown claim IDs are rejected when creating evidence links."""
-    from research_store.container import build_claim_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -540,9 +577,10 @@ def test_unknown_claim_id_is_rejected_in_service(
 @INTEGRATION_MARK
 def test_round_trip_export_import(tmp_path, prepared_database_for_claims):
     """Export → import round-trip preserves claims and links."""
-    from research_store.container import build_claim_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -589,9 +627,10 @@ def test_round_trip_export_import(tmp_path, prepared_database_for_claims):
 @INTEGRATION_MARK
 def test_idempotent_claim_upsert(tmp_path, prepared_database_for_claims):
     """Same claim_id + run_id is idempotent — does not duplicate."""
-    from research_store.container import build_claim_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -614,9 +653,10 @@ def test_idempotent_claim_upsert(tmp_path, prepared_database_for_claims):
 @INTEGRATION_MARK
 def test_duplicate_evidence_link_rejected(tmp_path, prepared_database_for_claims):
     """Duplicate (claim_id, passage_id) pairs are rejected by the unique constraint."""
-    from research_store.container import build_claim_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -637,7 +677,7 @@ def test_duplicate_evidence_link_rejected(tmp_path, prepared_database_for_claims
     )
 
     # Duplicate link for same claim+passage should be rejected
-    with pytest.raises(Exception):  # PostgreSQL unique violation
+    with pytest.raises(Exception):  # noqa: B017, psycopg UniqueViolation
         svc.create_evidence_link(
             run_id, claim_id, passage_id, snapshot_id, relationship="supports"
         )
@@ -646,9 +686,10 @@ def test_duplicate_evidence_link_rejected(tmp_path, prepared_database_for_claims
 @INTEGRATION_MARK
 def test_confidence_edge_values_accepted(tmp_path, prepared_database_for_claims):
     """Confidence values 0.0 and 1.0 are accepted at the service layer."""
-    from research_store.container import build_claim_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),

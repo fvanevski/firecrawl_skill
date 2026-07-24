@@ -863,7 +863,8 @@ class PostgresUnitOfWork:
                 # Exclude expected_revision from the payload comparison — it's
                 # a CAS field, not part of the idempotency key.
                 expected_payload = {
-                    k: v for k, v in (event_payload | {"prior_state": existing[3]}).items()
+                    k: v
+                    for k, v in (event_payload | {"prior_state": existing[3]}).items()
                     if k != "expected_revision"
                 }
                 stored_payload = {
@@ -3600,7 +3601,7 @@ class PostgresUnitOfWork:
         )
         with self.connection.cursor() as cur:
             cur.execute(
-                f"""SELECT {','.join(fields)}
+                f"""SELECT {",".join(fields)}
                     FROM retrieval_events
                     WHERE retrieval_execution_id=%s
                     ORDER BY 
@@ -3613,7 +3614,7 @@ class PostgresUnitOfWork:
                             ELSE 5 
                         END, 
                         rank""",
-                (execution_id,)
+                (execution_id,),
             )
             return [dict(zip(fields, row)) for row in cur.fetchall()]
 
@@ -3632,7 +3633,9 @@ class PostgresUnitOfWork:
                     run_id,
                     execution.requested_mode,
                     execution.executed_mode,
-                    execution.mechanical_status.value if hasattr(execution.mechanical_status, "value") else execution.mechanical_status,
+                    execution.mechanical_status.value
+                    if hasattr(execution.mechanical_status, "value")
+                    else execution.mechanical_status,
                     json.dumps(execution.component_health),
                     json.dumps(execution.errors),
                     json.dumps(execution.warnings),
@@ -6861,11 +6864,20 @@ class PostgresUnitOfWork:
         with self.connection.cursor() as cur:
             cur.execute(query, params)
             keys = [
-                "id", "document_id", "snapshot_id", "status",
-                "parser_version", "normalization_version",
-                "chunker_name", "chunker_version", "tokenizer_name",
-                "chunk_count", "block_count", "configuration_sha256",
-                "error_message", "created_at",
+                "id",
+                "document_id",
+                "snapshot_id",
+                "status",
+                "parser_version",
+                "normalization_version",
+                "chunker_name",
+                "chunker_version",
+                "tokenizer_name",
+                "chunk_count",
+                "block_count",
+                "configuration_sha256",
+                "error_message",
+                "created_at",
             ]
             return [dict(zip(keys, row)) for row in cur.fetchall()]
 
@@ -6895,11 +6907,20 @@ class PostgresUnitOfWork:
             if row is None:
                 return None
             keys = [
-                "id", "document_id", "snapshot_id", "status",
-                "parser_version", "normalization_version",
-                "chunker_name", "chunker_version", "tokenizer_name",
-                "chunk_count", "block_count", "configuration_sha256",
-                "error_message", "created_at",
+                "id",
+                "document_id",
+                "snapshot_id",
+                "status",
+                "parser_version",
+                "normalization_version",
+                "chunker_name",
+                "chunker_version",
+                "tokenizer_name",
+                "chunk_count",
+                "block_count",
+                "configuration_sha256",
+                "error_message",
+                "created_at",
             ]
             return dict(zip(keys, row))
 
@@ -6977,11 +6998,20 @@ class PostgresUnitOfWork:
             )
             row = cur.fetchone()
             keys = [
-                "id", "document_id", "snapshot_id", "status",
-                "parser_version", "normalization_version",
-                "chunker_name", "chunker_version", "tokenizer_name",
-                "chunk_count", "block_count", "configuration_sha256",
-                "error_message", "created_at",
+                "id",
+                "document_id",
+                "snapshot_id",
+                "status",
+                "parser_version",
+                "normalization_version",
+                "chunker_name",
+                "chunker_version",
+                "tokenizer_name",
+                "chunk_count",
+                "block_count",
+                "configuration_sha256",
+                "error_message",
+                "created_at",
             ]
             d = dict(zip(keys, row))
             # Convert UUIDs to strings for from_mapping()
@@ -7000,6 +7030,7 @@ class PostgresUnitOfWork:
     ) -> UUID:
         """Persist an evidence packet revision. Returns the row ID."""
         import json
+
         with self.connection.cursor() as cur:
             cur.execute(
                 """INSERT INTO evidence_packets (
@@ -7013,7 +7044,7 @@ class PostgresUnitOfWork:
                     coverage_revision,
                     packet_revision,
                     json.dumps(payload),
-                )
+                ),
             )
             return cur.fetchone()[0]
 
@@ -7030,7 +7061,7 @@ class PostgresUnitOfWork:
                         packet_revision, payload, created_at
                     FROM evidence_packets
                     WHERE run_id=%s AND packet_revision=%s""",
-                    (run_id, packet_revision)
+                    (run_id, packet_revision),
                 )
             else:
                 cur.execute(
@@ -7039,15 +7070,21 @@ class PostgresUnitOfWork:
                     FROM evidence_packets
                     WHERE run_id=%s
                     ORDER BY packet_revision DESC LIMIT 1""",
-                    (run_id,)
+                    (run_id,),
                 )
             row = cur.fetchone()
             if not row:
                 return None
             from .domain import EvidencePacketRecord
+
             keys = [
-                "id", "run_id", "research_spec_id", "coverage_revision",
-                "packet_revision", "payload", "created_at"
+                "id",
+                "run_id",
+                "research_spec_id",
+                "coverage_revision",
+                "packet_revision",
+                "payload",
+                "created_at",
             ]
             d = dict(zip(keys, row))
             # Convert UUIDs to strings for from_mapping()
@@ -7055,4 +7092,3 @@ class PostgresUnitOfWork:
             d["run_id"] = str(d["run_id"])
             d["research_spec_id"] = str(d["research_spec_id"])
             return EvidencePacketRecord.from_mapping(d)
-

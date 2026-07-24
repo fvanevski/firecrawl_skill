@@ -21,7 +21,6 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from budget_policy import DEFAULT_POLICY, ResourceCaps
-from research_domain.models import EvidencePacket
 from research_store.evidence import EvidenceService
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
@@ -36,7 +35,7 @@ def _make_candidate(
     chunk_id=None,
     text="Some excerpt text",
     url="https://example.com/source1",
-    date="2025-01-01T12:00:00Z"
+    date="2025-01-01T12:00:00Z",
 ):
     return {
         "candidate_id": str(candidate_id or uuid4()),
@@ -50,13 +49,26 @@ def _make_candidate(
 
 def test_build_evidence_packet_deterministic_ordering_and_summaries():
     svc = EvidenceService(lambda: None, budget_policy=DEFAULT_POLICY)
-    
+
     # Intentionally out of order candidates
-    c1 = _make_candidate(snapshot_id="b0000000-0000-0000-0000-000000000000", url="https://a.com", date="2024-01-01T00:00:00Z")
-    c2 = _make_candidate(snapshot_id="a0000000-0000-0000-0000-000000000000", url="https://b.com", date="2025-01-01T00:00:00Z")
-    
+    c1 = _make_candidate(
+        snapshot_id="b0000000-0000-0000-0000-000000000000",
+        url="https://a.com",
+        date="2024-01-01T00:00:00Z",
+    )
+    c2 = _make_candidate(
+        snapshot_id="a0000000-0000-0000-0000-000000000000",
+        url="https://b.com",
+        date="2025-01-01T00:00:00Z",
+    )
+
     # Caps large enough to fit both
-    caps = ResourceCaps.from_mapping({**DEFAULT_POLICY.profiles["standard"].to_dict(), "max_evidence_packet_tokens": 8000})
+    caps = ResourceCaps.from_mapping(
+        {
+            **DEFAULT_POLICY.profiles["standard"].to_dict(),
+            "max_evidence_packet_tokens": 8000,
+        }
+    )
 
     packet = svc.build_evidence_packet(
         run_id=uuid4(),
@@ -66,39 +78,50 @@ def test_build_evidence_packet_deterministic_ordering_and_summaries():
         retrieval_events=[],
         effective_caps=caps,
     )
-    
+
     # Check ordering
     assert str(packet.passages[0].snapshot_id) == "a0000000-0000-0000-0000-000000000000"
     assert str(packet.passages[1].snapshot_id) == "b0000000-0000-0000-0000-000000000000"
 
     # Check summaries
     assert packet.source_diversity_summary["unique_sources"] == 2
-    assert packet.source_diversity_summary["sources"] == ["https://a.com", "https://b.com"]
+    assert packet.source_diversity_summary["sources"] == [
+        "https://a.com",
+        "https://b.com",
+    ]
     assert packet.freshness_summary["oldest"] == "2024-01-01T00:00:00+00:00"
     assert packet.freshness_summary["most_recent"] == "2025-01-01T00:00:00+00:00"
 
 
 def test_build_evidence_packet_token_limits_enforced():
     svc = EvidenceService(lambda: None, budget_policy=DEFAULT_POLICY)
-    
+
     c1 = _make_candidate(text="Word " * 10)
     c2 = _make_candidate(text="Word " * 100)
-    
+
     # c1 is ~10 tokens. c2 is ~100. Set cap to 50 to fit only c1.
-    caps = ResourceCaps.from_mapping({**DEFAULT_POLICY.profiles["standard"].to_dict(), "max_evidence_packet_tokens": 50})
+    caps = ResourceCaps.from_mapping(
+        {
+            **DEFAULT_POLICY.profiles["standard"].to_dict(),
+            "max_evidence_packet_tokens": 50,
+        }
+    )
 
     packet = svc.build_evidence_packet(
         run_id=uuid4(),
         research_spec_id=uuid4(),
         coverage_revision=1,
-        candidates=[c1, c2], # Note: sorted by snapshot_id inside, we can just check length
+        candidates=[
+            c1,
+            c2,
+        ],  # Note: sorted by snapshot_id inside, we can just check length
         retrieval_events=[],
         effective_caps=caps,
     )
-    
+
     # Only 1 passage should be included due to limits
     assert len(packet.passages) == 1
-    
+
     # Near duplicate group should have the omitted candidates
     assert len(packet.near_duplicate_groups) == 1
     group = packet.near_duplicate_groups[0]
@@ -108,21 +131,32 @@ def test_build_evidence_packet_token_limits_enforced():
 
 
 if TEST_DSN:
-    from conftest import prepared_database_for_claims
 
     def ensure_run_exists(dsn, run_id):
         from research_store.postgres import connect
+
         with connect(dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO research_runs (id, original_request, query_plan, skill_version, llm_model, status, state, execution_mode, objective)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO NOTHING""",
-                (str(run_id), "test request", "{}", "1.0", "test", "running", "created", "agent_led", "test request"),
+                (
+                    str(run_id),
+                    "test request",
+                    "{}",
+                    "1.0",
+                    "test",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "test request",
+                ),
             )
 
-    from research_store.container import build_evidence_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_evidence_service
 
     @pytest.fixture(scope="session")
     def prepared_database_for_evidence_packets(prepared_database_for_claims):
@@ -142,8 +176,13 @@ if TEST_DSN:
         run_id = uuid4()
         ensure_run_exists(TEST_DSN, run_id)
         spec_id = uuid4()
-        
-        caps = ResourceCaps.from_mapping({**DEFAULT_POLICY.profiles["standard"].to_dict(), "max_evidence_packet_tokens": 8000})
+
+        caps = ResourceCaps.from_mapping(
+            {
+                **DEFAULT_POLICY.profiles["standard"].to_dict(),
+                "max_evidence_packet_tokens": 8000,
+            }
+        )
 
         packet1 = svc.build_evidence_packet(
             run_id=run_id,
