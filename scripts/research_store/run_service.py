@@ -871,13 +871,26 @@ class ResearchRunService:
         if to_invocation:
             payload["to_invocation"] = to_invocation
         with self.uow_factory() as uow:
-            event_id = uow.runs.append_event(
+            result = uow.runs.append_event(
                 run_id,
                 "annotation",
                 actor_type,
                 key,
                 payload=payload,
             )
+            # When the idempotency key was already used, append_event returns
+            # {"event_id": ..., "reused": True} and the lifecycle revision was
+            # already bumped on the first call — do not bump again.
+            if isinstance(result, dict) and result.get("reused"):
+                return {
+                    "event_id": str(result["event_id"]),
+                    "run_id": str(run_id),
+                    "lifecycle_revision": expected_revision,
+                    "prior_revision": expected_revision,
+                    "event_type": event_type,
+                    "reused": True,
+                }
+            event_id = result
             # Bump lifecycle revision atomically within the same transaction
             new_revision = expected_revision + 1
             uow.runs._bump_lifecycle_revision(run_id, new_revision, expected_revision=expected_revision)
@@ -977,7 +990,7 @@ class ResearchRunService:
 
             return {
                 "target": str(run_id),
-                "verified_at": datetime.now(timezone).isoformat(),
+                "verified_at": datetime.now(timezone.utc).isoformat(),
                 "total": total,
                 "available": available,
                 "missing": missing,

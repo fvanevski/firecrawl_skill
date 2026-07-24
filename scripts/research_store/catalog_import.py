@@ -789,6 +789,7 @@ class CatalogImportService:
                 catalog_id=catalog_id,
                 postgresql_id=None,
                 status="inserted",
+                details={"data": record.data},
             )
 
         elif catalog_type == CATALOG_EVENT_TYPE:
@@ -1097,15 +1098,21 @@ class CatalogImportService:
             # other get the existing row back via RETURNING.
             cur.execute(
                 """INSERT INTO research_runs (
-                    external_run_id, status, lifecycle_revision
-                ) VALUES (%s, %s, %s)
+                    external_run_id, original_request, status, state,
+                    lifecycle_revision, execution_mode, objective,
+                    current_coverage_revision, metadata
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (external_run_id) DO NOTHING
                 RETURNING id""",
-                (catalog_id, "unknown", 1),
+                (
+                    catalog_id, "unknown", "running", "created",
+                    1, "legacy", "unknown", 0,
+                    "{}",
+                ),
             )
             row = cur.fetchone()
             if row:
-                return UUID(row[0])
+                return row[0]
 
             # Conflict occurred — run already exists, look it up
             cur.execute(
@@ -1115,7 +1122,7 @@ class CatalogImportService:
             )
             row = cur.fetchone()
             if row:
-                return UUID(row[0])
+                return row[0]
             raise ImportApplyError(
                 f"Run {catalog_id} disappeared after insert — "
                 "concurrent deletion? (should not happen)"
@@ -1124,17 +1131,32 @@ class CatalogImportService:
         elif catalog_type == CATALOG_INVOCATION_TYPE:
             # B2 fix: same ON CONFLICT pattern for invocations.
             # external_invocation_id has a UNIQUE constraint (migration 0006).
+            # Look up the run's surrogate key from the catalog's run_id.
+            run_pg_id = None
+            if mapping.details and mapping.details.get("data", {}).get("run_id"):
+                cur.execute(
+                    "SELECT id FROM research_runs WHERE external_run_id = %s",
+                    (mapping.details["data"]["run_id"],),
+                )
+                row = cur.fetchone()
+                if row:
+                    run_pg_id = row[0]
+
             cur.execute(
                 """INSERT INTO research_invocations (
-                    run_id, external_invocation_id, operation, status
-                ) VALUES (%s, %s, %s, %s)
+                    run_id, external_invocation_id, operation, status,
+                    lifecycle_revision, idempotency_key, input, metadata
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (external_invocation_id) DO NOTHING
                 RETURNING id""",
-                (uuid4(), catalog_id, "unknown", "unknown"),
+                (
+                    run_pg_id, catalog_id, "unknown", "pending",
+                    1, catalog_id, "{}", "{}",
+                ),
             )
             row = cur.fetchone()
             if row:
-                return UUID(row[0])
+                return row[0]
 
             # Conflict occurred — invocation already exists, look it up
             cur.execute(
@@ -1144,7 +1166,7 @@ class CatalogImportService:
             )
             row = cur.fetchone()
             if row:
-                return UUID(row[0])
+                return row[0]
             raise ImportApplyError(
                 f"Invocation {catalog_id} disappeared after insert — "
                 "concurrent deletion? (should not happen)"
@@ -1197,14 +1219,14 @@ class CatalogImportService:
             )
             row = cur.fetchone()
             if row:
-                return UUID(row[0])
+                return row[0]
             cur.execute(
                 "SELECT id FROM research_events WHERE run_id = %s AND idempotency_key = %s",
                 (run_pg_id, catalog_id),
             )
             row = cur.fetchone()
             if row:
-                return UUID(row[0])
+                return row[0]
             raise ImportApplyError(f"Event {catalog_id} failed to insert")
 
         elif catalog_type == CATALOG_CLAIM_TYPE:
@@ -1236,14 +1258,14 @@ class CatalogImportService:
             )
             row = cur.fetchone()
             if row:
-                return UUID(row[0])
+                return row[0]
             cur.execute(
                 "SELECT id FROM research_claims WHERE run_id = %s AND claim_id = %s",
                 (run_pg_id, catalog_id),
             )
             row = cur.fetchone()
             if row:
-                return UUID(row[0])
+                return row[0]
             raise ImportApplyError(f"Claim {catalog_id} failed to insert")
 
         elif catalog_type == CATALOG_ASSESSMENT_TYPE:
@@ -1281,7 +1303,7 @@ class CatalogImportService:
             )
             row = cur.fetchone()
             if row:
-                return UUID(row[0])
+                return row[0]
             cur.execute(
                 "SELECT id FROM audit_assessments WHERE run_id = %s AND target_type = %s AND target_id = %s AND target_hash = %s",
                 (
@@ -1293,7 +1315,7 @@ class CatalogImportService:
             )
             row = cur.fetchone()
             if row:
-                return UUID(row[0])
+                return row[0]
             raise ImportApplyError(f"Assessment {catalog_id} failed to insert")
 
         raise ImportApplyError(f"Unknown or unsupported catalog type: {catalog_type}")

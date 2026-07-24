@@ -812,12 +812,18 @@ class PostgresUnitOfWork:
     ):
         """Atomically lock, validate, record, and apply one lifecycle command."""
         completion = completion or {}
+        # Build the command dict for storage, but exclude expected_revision
+        # from the idempotency comparison — it's a CAS field, not part of
+        # the idempotency key.
         command = {
             "expected_revision": expected_revision,
             "reason": reason,
             "outcome": outcome,
             "completion": completion,
             "reopen": reopen,
+        }
+        idempotent_command = {
+            k: v for k, v in command.items() if k != "expected_revision"
         }
         event_payload = {
             "next_state": next_state,
@@ -846,12 +852,23 @@ class PostgresUnitOfWork:
                     actor_identifier,
                     policy_version,
                     semantic_proposal_id,
-                    command,
+                    idempotent_command,  # validation_result stores idempotent command as JSONB dict
                     error,
                     event_type,
-                    event_payload | {"prior_state": existing[3]},
                 )
-                if existing[4:] != expected:
+                if existing[4:12] != expected:
+                    raise ValueError("idempotency key was used for another run command")
+                # Compare payload separately (existing[12])
+                # Exclude expected_revision from the payload comparison — it's
+                # a CAS field, not part of the idempotency key.
+                expected_payload = {
+                    k: v for k, v in (event_payload | {"prior_state": existing[3]}).items()
+                    if k != "expected_revision"
+                }
+                stored_payload = {
+                    k: v for k, v in existing[12].items() if k != "expected_revision"
+                }
+                if stored_payload != expected_payload:
                     raise ValueError("idempotency key was used for another run command")
                 return {
                     "transition_id": existing[0],
@@ -927,7 +944,7 @@ class PostgresUnitOfWork:
                     actor_identifier,
                     policy_version,
                     semantic_proposal_id,
-                    _canonical_json(command),
+                    _canonical_json(idempotent_command),
                     idempotency_key,
                     error,
                 ),

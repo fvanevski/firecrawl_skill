@@ -2209,7 +2209,11 @@ def main(argv=None):
     # ------------------------------------------------------------------
     if args.command == "run-annotate":
         run_service = build_run_service(config)
-        status = run_service.status(external_id=args.external_id)
+        try:
+            status = run_service.status(external_id=args.external_id)
+        except KeyError:
+            print(f"error: run {args.external_id} not found", file=sys.stderr)
+            return 1
         expected_revision = (
             args.expected_revision
             if args.expected_revision is not None
@@ -2257,11 +2261,14 @@ def main(argv=None):
                 status.id, run_service.uow_factory
             )
 
+        # When --model is not supplied, use a default so the fingerprint
+        # resolver does not reject the call during tests / dry-runs.
+        model = args.model or "default"
         result = run_service.trigger_audit(
             status.id,
             target_hash=target_hash,
             provider=args.llm,
-            model=args.model,
+            model=model,
             force=args.force,
             stages=args.stages.split(",") if args.stages else None,
             max_calls=args.max_calls,
