@@ -902,9 +902,12 @@ def test_search_assets_cli_output_format():
 
 
 def test_retrieval_stage_trace_logging():
-    """Verify that all ranking stages are logged and logging failure is non-fatal."""
+    """Verify that all ranking stages are logged, logging failure is fatal, and rejection reasons are set."""
     from uuid import uuid4
+    import pytest
+    
     candidate_id = uuid4()
+    candidate_id_2 = uuid4()
     run_id = uuid4()
 
     _logged_events = []
@@ -918,7 +921,10 @@ def test_retrieval_stage_trace_logging():
             self.retrieval_events = self
 
         def search_lexical(self, *_args):
-            return [{"candidate_id": candidate_id, "lexical_score": 1.0}]
+            return [
+                {"candidate_id": candidate_id, "lexical_score": 1.0},
+                {"candidate_id": candidate_id_2, "lexical_score": 0.5},
+            ]
 
         def fetch_passages(self, *_args):
             return [{"chunk_id": candidate_id, "text": "trace test"}]
@@ -954,24 +960,28 @@ def test_retrieval_stage_trace_logging():
         embedder=None,
     )
 
-    # Should not crash despite log_retrieval_batch raising RuntimeError
-    execution, results = service.search_assets(
-        "trace", candidate_limit=5, run_id=run_id, requested_mode="lexical"
-    )
+    # Should crash because log_retrieval_batch raises RuntimeError
+    with pytest.raises(RuntimeError, match="Intentional logging failure"):
+        execution, results = service.search_assets(
+            "trace", candidate_limit=1, run_id=run_id, requested_mode="lexical"
+        )
 
-    assert len(results) == 1
     # Check that events were generated correctly before the simulated crash
-    assert len(_logged_events) == 2
+    assert len(_logged_events) == 4
     assert _logged_events[0]["stage"] == "lexical"
+    assert _logged_events[0]["candidate_id"] == str(candidate_id)
     assert _logged_events[0]["selected"] is False
-    assert _logged_events[1]["stage"] == "fused"
-    assert _logged_events[1]["selected"] is True
+    assert _logged_events[1]["stage"] == "lexical"
+    assert _logged_events[1]["candidate_id"] == str(candidate_id_2)
+    assert _logged_events[1]["selected"] is False
+    
+    assert _logged_events[2]["stage"] == "fused"
+    assert _logged_events[2]["candidate_id"] == str(candidate_id)
+    assert _logged_events[2]["selected"] is True
+    assert _logged_events[2]["rejection_reason"] is None
 
-    assert "fusion" in execution.timing
-    assert "fetch_passages" in execution.timing
-
-    # Verify stage_counts
-    assert "lexical" in execution.stage_counts
-    assert "semantic" in execution.stage_counts
-    assert "fused" in execution.stage_counts
+    assert _logged_events[3]["stage"] == "fused"
+    assert _logged_events[3]["candidate_id"] == str(candidate_id_2)
+    assert _logged_events[3]["selected"] is False
+    assert _logged_events[3]["rejection_reason"] == "below_candidate_limit"
 

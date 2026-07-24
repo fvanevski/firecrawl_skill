@@ -529,10 +529,7 @@ class CorpusService:
                 if reranked_candidates is not None:
                     _add_stage_events("reranked", reranked_candidates, limit=candidate_limit, final_stage=True)
 
-                try:
-                    uow.retrieval_events.log_retrieval_batch(execution.execution_id, run_id, events_to_log)
-                except Exception as e:
-                    logging.getLogger(__name__).error("Failed to log retrieval events: %s", e)
+                uow.retrieval_events.log_retrieval_batch(execution.execution_id, run_id, events_to_log)
 
             return execution, candidates
 

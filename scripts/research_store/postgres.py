@@ -3588,7 +3588,16 @@ class PostgresUnitOfWork:
                 f"""SELECT {','.join(fields)}
                     FROM retrieval_events
                     WHERE retrieval_execution_id=%s
-                    ORDER BY created_at, rank""",
+                    ORDER BY 
+                        created_at, 
+                        CASE stage 
+                            WHEN 'lexical' THEN 1 
+                            WHEN 'semantic' THEN 2 
+                            WHEN 'fused' THEN 3 
+                            WHEN 'reranked' THEN 4 
+                            ELSE 5 
+                        END, 
+                        rank""",
                 (execution_id,)
             )
             return [dict(zip(fields, row)) for row in cur.fetchall()]
