@@ -240,14 +240,30 @@ class TestExtractionProvenance:
         )
         assert ref.sha256 == blob_sha
 
-    def test_quality_metrics_versioned(self):
-        """Quality metrics carry the version from QualityConfig."""
+    def test_quality_metrics_versioned(self, fixture_mixed_structure):
+        """Quality metrics carry the version from QualityConfig and evaluate thresholds."""
         from research_store.quality_evaluator import evaluate_quality
         from research_store.quality_config import QualityConfig
+        from research_store.quality_service import QualityService
+        from unittest.mock import MagicMock
 
-        config = QualityConfig(quality_version="quality-v2")
-        metrics = evaluate_quality(b"# Title\n\nSome text here.", config=config)
+        # Standard config evaluates to acceptable for this valid fixture
+        config_standard = QualityConfig(quality_version="quality-v2")
+        metrics = evaluate_quality(fixture_mixed_structure, config=config_standard)
         assert metrics.quality_version == "quality-v2"
+
+        service_standard = QualityService(MagicMock(), config=config_standard)
+        disposition_standard = service_standard.map_disposition(metrics)
+        assert disposition_standard == "acceptable"
+
+        # Custom tight threshold makes the same content fail (too short for this absurd threshold)
+        config_strict = QualityConfig(quality_version="quality-v3", min_visible_text_length=100000)
+        metrics_strict = evaluate_quality(fixture_mixed_structure, config=config_strict)
+        assert metrics_strict.quality_version == "quality-v3"
+
+        service_strict = QualityService(MagicMock(), config=config_strict)
+        disposition_strict = service_strict.map_disposition(metrics_strict)
+        assert disposition_strict != "acceptable"
 
     def test_attempt_retry_lineage(self):
         """Retries preserve parent attempt link via retry_parent_id."""
@@ -1069,34 +1085,150 @@ class TestRedriveReindexFlow:
         assert data["error"] == "index_not_found"
         assert "index_not_found" in data.get("message", "")
 
-    def test_rederive_service_interface(self, e2e_extraction_service, tmp_path):
-        """Derivation service can be constructed and invoked in dry-run mode."""
+    def test_rederive_service_interface_idempotent(self, e2e_extraction_service, fixture_concise_notice, sample_candidate, sample_run, tmp_path):
+        """Rederive creates a new derivation and is idempotent on repeat calls."""
         from research_store.derivation_service import DerivationService
         from research_store.service import CorpusService
+        from research_store.quality_evaluator import evaluate_quality
 
+        # Setup: Ingest a document first to get a real snapshot_id/document_id
+        attempt_id = e2e_extraction_service.create_attempt(candidate_id=sample_candidate, run_id=sample_run)
+        raw_ref = e2e_extraction_service.store_raw_blob(fixture_concise_notice)
+        quality = evaluate_quality(fixture_concise_notice)
+        e2e_extraction_service.complete_attempt(
+            attempt_id=attempt_id, exit_status="succeeded", raw_blob=raw_ref, normalized_blob=raw_ref,
+            parser_used="markdown-v1", quality_metrics=quality, failure_class="none"
+        )
+        e2e_extraction_service.evaluate_and_set_disposition(attempt_id=attempt_id, quality_metrics=quality, disposition="acceptable")
+        e2e_extraction_service.select_final_attempt(candidate_id=sample_candidate, attempt_id=attempt_id, selection_reason="test")
+        
         config = _make_config(tmp_path)
+        corpus_service = CorpusService(config=config, uow_factory=lambda: e2e_extraction_service.uow_factory(), blob_store=e2e_extraction_service.blob_store)
+        
+        from research_store.domain import IngestRequest
+        request = IngestRequest(content=fixture_concise_notice, mime_type="text/markdown", extraction_attempt_id=attempt_id)
+        ingest_result = corpus_service.ingest(request)
+        document_id = ingest_result.document_id
+
         derivation_service = DerivationService(
             uow_factory=lambda: e2e_extraction_service.uow_factory(),
-            corpus_service=CorpusService(
-                config=config,
-                uow_factory=lambda: e2e_extraction_service.uow_factory(),
-                blob_store=e2e_extraction_service.blob_store,
-            ),
+            corpus_service=corpus_service,
             blob_root=tmp_path / "blobs",
         )
-        assert derivation_service is not None
-        # Verify the service interface is callable (dry-run does not mutate DB).
-        result = derivation_service.rederive(
-            snapshot_id=uuid4(),
-            document_id=uuid4(),
-            parser_version="markdown-v1",
-            normalization_version="normalization-v1",
+        
+        # First call: actually mutates database
+        result1 = derivation_service.rederive(
+            document_id=document_id,
+            parser_version="markdown-v2",
+            normalization_version="normalization-v2",
             chunker_name="hierarchical",
-            chunker_version="hierarchical-v1",
+            chunker_version="hierarchical-v2",
             tokenizer_name="cl100k_base",
-            dry_run=True,
+            dry_run=False,
         )
-        assert isinstance(result, dict)
+        assert result1["total_rederived"] == 1
+        assert result1["total_noop"] == 0
+
+        # Second call with identical config: idempotent (noop)
+        result2 = derivation_service.rederive(
+            document_id=document_id,
+            parser_version="markdown-v2",
+            normalization_version="normalization-v2",
+            chunker_name="hierarchical",
+            chunker_version="hierarchical-v2",
+            tokenizer_name="cl100k_base",
+            dry_run=False,
+        )
+        assert result2["total_rederived"] == 0
+        assert result2["total_noop"] == 1
+
+    def test_multi_derivation_coexistence(self, e2e_extraction_service, fixture_mixed_structure, sample_candidate, sample_run, tmp_path):
+        """Legacy chunks and new hierarchical chunks can coexist without overwriting each other."""
+        from research_store.derivation_service import DerivationService
+        from research_store.service import CorpusService
+        from research_store.quality_evaluator import evaluate_quality
+        from research_store.domain import IngestRequest
+
+        attempt_id = e2e_extraction_service.create_attempt(candidate_id=sample_candidate, run_id=sample_run)
+        raw_ref = e2e_extraction_service.store_raw_blob(fixture_mixed_structure)
+        quality = evaluate_quality(fixture_mixed_structure)
+        e2e_extraction_service.complete_attempt(
+            attempt_id=attempt_id, exit_status="succeeded", raw_blob=raw_ref, normalized_blob=raw_ref,
+            parser_used="markdown-v1", quality_metrics=quality, failure_class="none"
+        )
+        e2e_extraction_service.evaluate_and_set_disposition(attempt_id=attempt_id, quality_metrics=quality, disposition="acceptable")
+        e2e_extraction_service.select_final_attempt(candidate_id=sample_candidate, attempt_id=attempt_id, selection_reason="test")
+        
+        # Ingest with structural-v1 chunker
+        config = _make_config(tmp_path)
+        corpus_service = CorpusService(config=config, uow_factory=lambda: e2e_extraction_service.uow_factory(), blob_store=e2e_extraction_service.blob_store)
+        
+        request = IngestRequest(content=fixture_mixed_structure, mime_type="text/markdown", extraction_attempt_id=attempt_id)
+        # Manually force config for chunker
+        request.metadata = {"rederive": {"chunker_version": "structural-v1", "chunker_name": "hierarchical"}}
+        ingest_result1 = corpus_service.ingest(request)
+        document_id = ingest_result1.document_id
+
+        # Rederive with hierarchical-v2 chunker
+        derivation_service = DerivationService(
+            uow_factory=lambda: e2e_extraction_service.uow_factory(),
+            corpus_service=corpus_service,
+            blob_root=tmp_path / "blobs",
+        )
+        
+        result = derivation_service.rederive(
+            document_id=document_id,
+            chunker_name="hierarchical",
+            chunker_version="hierarchical-v2",
+            dry_run=False,
+        )
+        assert result["total_rederived"] == 1
+
+        # Verify coexistence
+        with e2e_extraction_service.uow_factory() as uow:
+            all_chunks = uow.chunks.list(document_id=document_id)
+            versions = {chunk.chunker_version for chunk in all_chunks}
+            assert "structural-v1" in versions
+            assert "hierarchical-v2" in versions
+
+    def test_actual_reindexing_flow(self, e2e_extraction_service, fixture_concise_notice, sample_candidate, sample_run, tmp_path):
+        """Verify the actual reindexing flow populates embedding_manifests and index_jobs."""
+        from research_store.service import CorpusService
+        from research_store.quality_evaluator import evaluate_quality
+        from research_store.domain import IngestRequest
+        from research_store.cli import _index_build
+
+        attempt_id = e2e_extraction_service.create_attempt(candidate_id=sample_candidate, run_id=sample_run)
+        raw_ref = e2e_extraction_service.store_raw_blob(fixture_concise_notice)
+        quality = evaluate_quality(fixture_concise_notice)
+        e2e_extraction_service.complete_attempt(
+            attempt_id=attempt_id, exit_status="succeeded", raw_blob=raw_ref, normalized_blob=raw_ref,
+            parser_used="markdown-v1", quality_metrics=quality, failure_class="none"
+        )
+        e2e_extraction_service.evaluate_and_set_disposition(attempt_id=attempt_id, quality_metrics=quality, disposition="acceptable")
+        e2e_extraction_service.select_final_attempt(candidate_id=sample_candidate, attempt_id=attempt_id, selection_reason="test")
+        
+        config = _make_config(tmp_path)
+        corpus_service = CorpusService(config=config, uow_factory=lambda: e2e_extraction_service.uow_factory(), blob_store=e2e_extraction_service.blob_store)
+        
+        request = IngestRequest(content=fixture_concise_notice, mime_type="text/markdown", extraction_attempt_id=attempt_id)
+        ingest_result = corpus_service.ingest(request)
+        
+        # Now trigger reindexing for this document via the CLI function
+        build_stats = _index_build(config, document_id=str(ingest_result.document_id))
+        
+        assert build_stats["status"] in ("enqueued", "completed")
+        
+        # Verify db rows
+        with e2e_extraction_service.uow_factory() as uow:
+            with uow.conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM embedding_manifests")
+                manifest_count = cur.fetchone()[0]
+                assert manifest_count > 0
+                
+                cur.execute("SELECT count(*) FROM index_jobs")
+                jobs_count = cur.fetchone()[0]
+                assert jobs_count > 0
 
 
 # ---------------------------------------------------------------------------
@@ -1265,7 +1397,7 @@ class TestChunkingProvenance:
             assert chunk.content_sha256 == expected
 
     def test_chunks_have_block_ordinals(self):
-        """Chunks record first and last block ordinals."""
+        """Chunks record first, last, and parent block ordinals."""
         from research_store.hierarchical_chunker import hierarchical_chunks
         from research_store.parsing import structural_blocks
 
@@ -1278,9 +1410,14 @@ class TestChunkingProvenance:
             chunker_version="hierarchical-v1",
             chunker_name="hierarchical",
         )
+        parent_ordinal_found = False
         for chunk in chunks:
             assert chunk.first_block_ordinal is not None
             assert chunk.last_block_ordinal is not None
+            assert hasattr(chunk, "parent_block_ordinal")
+            if chunk.parent_block_ordinal is not None:
+                parent_ordinal_found = True
+        assert parent_ordinal_found, "At least one chunk must have a parent block ordinal"
 
     def test_chunks_have_heading_path(self):
         """Chunks preserve heading path for section context."""
