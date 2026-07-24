@@ -482,6 +482,7 @@ class DerivationService:
                 content=blob_data["content"],
                 mime_type=blob_data.get("mime_type", "text/markdown"),
                 title=blob_data.get("title"),
+                extraction_attempt_id=blob_data.get("extraction_attempt_id"),
                 metadata={
                     "rederive": {
                         "parser_version": parser_version,
@@ -569,4 +570,5 @@ class DerivationService:
             "final_url": row.get("final_url"),
             "retrieved_at": row.get("retrieved_at"),
             "http_status": row.get("http_status"),
+            "extraction_attempt_id": row.get("extraction_attempt_id"),
         }

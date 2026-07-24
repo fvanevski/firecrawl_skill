@@ -6244,7 +6244,8 @@ class PostgresUnitOfWork:
         """Get snapshot info including raw blob reference.
 
         Returns a dict with keys: content_sha256, mime_type, title,
-        requested_url, final_url, retrieved_at, http_status.
+        requested_url, final_url, retrieved_at, http_status,
+        extraction_attempt_id.
         """
         with self.connection.cursor() as cur:
             cur.execute(
@@ -6255,7 +6256,8 @@ class PostgresUnitOfWork:
                        a.requested_url,
                        a.final_url,
                        a.retrieved_at,
-                       a.http_status
+                       a.http_status,
+                       a.extraction_attempt_id
                 FROM asset_snapshots a
                 JOIN documents d ON d.snapshot_id = a.id
                 WHERE a.id = %s
@@ -6275,6 +6277,7 @@ class PostgresUnitOfWork:
                 "final_url",
                 "retrieved_at",
                 "http_status",
+                "extraction_attempt_id",
             )
             return dict(zip(keys, row))
 

@@ -699,6 +699,114 @@ class TestDerivationServiceIntegration:
         # active derivation's chunks when activation occurs.
 
 
+
+    def test_reindex_integration(self, service, derivation_service, tmp_path):
+        """Active derivations correctly integrate with index selection."""
+        from research_store.cli import _active_chunk_ids
+        from research_store.config import Config
+
+        # Seed initial document
+        result = _seed_corpus(service)
+        document_id = result.document_id
+
+        # Rederive with new parser version
+        derivation_service.rederive(
+            document_id=document_id,
+            parser_version="html-normalized-v2",
+            normalization_version="cleanup-v1",
+            chunker_name="hierarchical",
+            chunker_version="hierarchical-v1",
+            tokenizer_name="cl100k_base",
+        )
+
+        # Activate the new derivation
+        pending = derivation_service.list_derivations(document_id=document_id, status="pending")
+        derivation_id = UUID(pending[0]["id"])
+        derivation_service.activate_derivation(derivation_id)
+
+        # Build config matching the active derivation
+        config = Config(
+            database_url=TEST_DSN,
+            physical_collection="test",
+            embedding_model="test-model",
+            embedding_revision="v1",
+            embedding_dimension=384,
+            parser_version="html-normalized-v2",
+            normalization_version="cleanup-v1",
+            chunker_version="hierarchical-v1",
+        )
+
+        # Verify CLI active chunk selector retrieves chunks for the active derivation
+        active_chunks = _active_chunk_ids(config, str(document_id))
+        assert len(active_chunks) > 0
+        
+        # Verify old config returns old chunks
+        old_config = Config(
+            database_url=TEST_DSN,
+            physical_collection="test",
+            embedding_model="test-model",
+            embedding_revision="v1",
+            embedding_dimension=384,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="hierarchical-v1",
+        )
+        old_chunks = _active_chunk_ids(old_config, str(document_id))
+        assert len(old_chunks) > 0
+        assert active_chunks != old_chunks
+
+    def test_rederive_blob_fault_injection(self, service, derivation_service, tmp_path):
+        """Rederive aborts transaction cleanly if blob write fails."""
+        import pytest
+        from unittest.mock import patch
+        
+        result = _seed_corpus(service)
+        document_id = result.document_id
+
+        with patch("research_store.service.CorpusService.ingest") as mock_ingest:
+            mock_ingest.side_effect = RuntimeError("Simulated blob write failure")
+            
+            with pytest.raises(RuntimeError, match="Simulated blob write failure"):
+                derivation_service.rederive(
+                    document_id=document_id,
+                    parser_version="html-normalized-v99",
+                    normalization_version="cleanup-v1",
+                    chunker_name="hierarchical",
+                    chunker_version="hierarchical-v1",
+                    tokenizer_name="cl100k_base",
+                )
+                
+        # Verify no orphaned derivations exist
+        derivs = derivation_service.list_derivations(document_id=document_id)
+        for d in derivs:
+            assert d["parser_version"] != "html-normalized-v99"
+
+    def test_rederive_db_commit_fault_injection(self, service, derivation_service, tmp_path):
+        """Rederive aborts cleanly if DB commit fails."""
+        import pytest
+        from unittest.mock import patch
+        
+        result = _seed_corpus(service)
+        document_id = result.document_id
+
+        with patch("research_store.postgres.PostgresUnitOfWork.commit") as mock_commit:
+            mock_commit.side_effect = RuntimeError("Simulated DB commit failure")
+            
+            with pytest.raises(RuntimeError, match="Simulated DB commit failure"):
+                derivation_service.rederive(
+                    document_id=document_id,
+                    parser_version="html-normalized-v99",
+                    normalization_version="cleanup-v1",
+                    chunker_name="hierarchical",
+                    chunker_version="hierarchical-v1",
+                    tokenizer_name="cl100k_base",
+                )
+                
+        # The derivation attempt should have been rolled back because the UoW didn't commit
+        derivs = derivation_service.list_derivations(document_id=document_id)
+        for d in derivs:
+            assert d["parser_version"] != "html-normalized-v99"
+
 # ---------------------------------------------------------------------------
 # Integration tests: UoW derivation methods
 # ---------------------------------------------------------------------------

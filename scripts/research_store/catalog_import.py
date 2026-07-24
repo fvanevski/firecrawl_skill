@@ -652,55 +652,27 @@ class CatalogImportService:
                 with self.uow_factory() as uow:
                     cur = uow.connection.cursor()
 
-                    run_ids = [
-                        r.catalog_id
-                        for r in valid_records
-                        if r.record_type == CATALOG_RUN_TYPE
-                    ]
+                    run_ids = [r.catalog_id for r in valid_records if r.record_type == CATALOG_RUN_TYPE]
                     if run_ids:
-                        cur.execute(
-                            "SELECT external_run_id FROM research_runs WHERE external_run_id = ANY(%s)",
-                            (run_ids,),
-                        )
+                        cur.execute("SELECT external_run_id FROM research_runs WHERE external_run_id = ANY(%s)", (run_ids,))
                         existing_runs.update(row[0] for row in cur.fetchall())
 
-                    inv_ids = [
-                        r.catalog_id
-                        for r in valid_records
-                        if r.record_type == CATALOG_INVOCATION_TYPE
-                    ]
+                    inv_ids = [r.catalog_id for r in valid_records if r.record_type == CATALOG_INVOCATION_TYPE]
                     if inv_ids:
-                        cur.execute(
-                            "SELECT external_invocation_id FROM research_invocations WHERE external_invocation_id = ANY(%s)",
-                            (inv_ids,),
-                        )
+                        cur.execute("SELECT external_invocation_id FROM research_invocations WHERE external_invocation_id = ANY(%s)", (inv_ids,))
                         existing_invocations.update(row[0] for row in cur.fetchall())
 
-                    event_ids = [
-                        r.catalog_id
-                        for r in valid_records
-                        if r.record_type == CATALOG_EVENT_TYPE
-                    ]
+                    event_ids = [r.catalog_id for r in valid_records if r.record_type == CATALOG_EVENT_TYPE]
                     if event_ids:
-                        cur.execute(
-                            "SELECT idempotency_key FROM research_events WHERE idempotency_key = ANY(%s)",
-                            (event_ids,),
-                        )
+                        cur.execute("SELECT idempotency_key FROM research_events WHERE idempotency_key = ANY(%s)", (event_ids,))
                         existing_events.update(row[0] for row in cur.fetchall())
 
-                    claim_ids = [
-                        r.catalog_id
-                        for r in valid_records
-                        if r.record_type == CATALOG_CLAIM_TYPE
-                    ]
+                    claim_ids = [r.catalog_id for r in valid_records if r.record_type == CATALOG_CLAIM_TYPE]
                     if claim_ids:
                         # Convert to UUID strings for match
                         try:
                             # Postgres claim_id is UUID
-                            cur.execute(
-                                "SELECT claim_id::text FROM research_claims WHERE claim_id::text = ANY(%s)",
-                                (claim_ids,),
-                            )
+                            cur.execute("SELECT claim_id::text FROM research_claims WHERE claim_id::text = ANY(%s)", (claim_ids,))
                             existing_claims.update(row[0] for row in cur.fetchall())
                         except Exception:
                             pass
