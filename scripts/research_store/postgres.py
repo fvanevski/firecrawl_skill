@@ -3491,6 +3491,12 @@ class PostgresUnitOfWork:
             ]
             return result
 
+    # ------------------------------------------------------------------
+    # DEPRECATED: use log_retrieval_batch() instead.
+    # This method is kept only for the CLI inspect-asset command (cli.py).
+    # It does not populate retrieval_execution_id, so events written via
+    # this path are not queryable via get_retrieval_trace().
+    # ------------------------------------------------------------------
     def log_retrieval(self, run_id, event):
         fields = (
             "stage",
@@ -3518,6 +3524,98 @@ class PostgresUnitOfWork:
             )
             if cur.rowcount != 1:
                 raise KeyError(f"research run is absent or finished: {run_id}")
+
+    def log_retrieval_batch(self, execution_id, run_id, events):
+        if not events:
+            return
+        fields = (
+            "retrieval_execution_id",
+            "stage",
+            "query",
+            "filters",
+            "retriever",
+            "candidate_type",
+            "candidate_id",
+            "raw_score",
+            "normalized_score",
+            "rank",
+            "reranker_score",
+            "selected",
+            "rejection_reason",
+        )
+        placeholders = ",".join(["%s"] * len(fields))
+        column_list = ",".join(fields)
+        with self.connection.cursor() as cur:
+            cur.executemany(
+                f"""INSERT INTO retrieval_events(run_id, {column_list})
+                    SELECT %s, {placeholders}
+                    FROM research_runs WHERE id=%s AND status='running'""",
+                [
+                    (
+                        execution_id,
+                        *row_values,
+                        run_id,
+                    )
+                    for row_values in [
+                        (
+                            event.get("stage"),
+                            event.get("query"),
+                            json.dumps(event.get("filters"))
+                            if event.get("filters") is not None
+                            else None,
+                            event.get("retriever"),
+                            event.get("candidate_type"),
+                            event.get("candidate_id"),
+                            event.get("raw_score"),
+                            event.get("normalized_score"),
+                            event.get("rank"),
+                            event.get("reranker_score"),
+                            bool(event.get("selected")),
+                            event.get("rejection_reason"),
+                        )
+                        for event in events
+                    ]
+                ],
+            )
+            if cur.rowcount != len(events):
+                raise KeyError(
+                    f"research run is absent or finished: {run_id} "
+                    f"(expected {len(events)} rows, got {cur.rowcount})"
+                )
+
+    def get_trace(self, execution_id):
+        fields = (
+            "stage",
+            "query",
+            "filters",
+            "retriever",
+            "candidate_type",
+            "candidate_id",
+            "raw_score",
+            "normalized_score",
+            "rank",
+            "reranker_score",
+            "selected",
+            "rejection_reason",
+        )
+        with self.connection.cursor() as cur:
+            cur.execute(
+                f"""SELECT {','.join(fields)}
+                    FROM retrieval_events
+                    WHERE retrieval_execution_id=%s
+                    ORDER BY 
+                        created_at, 
+                        CASE stage 
+                            WHEN 'lexical' THEN 1 
+                            WHEN 'semantic' THEN 2 
+                            WHEN 'fused' THEN 3 
+                            WHEN 'reranked' THEN 4 
+                            ELSE 5 
+                        END, 
+                        rank""",
+                (execution_id,)
+            )
+            return [dict(zip(fields, row)) for row in cur.fetchall()]
 
     def record_retrieval_execution(self, run_id, execution):
         with self.connection.cursor() as cur:

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: requirements-research-store.txt
+      - run: python -m venv .venv
+      - run: source .venv/bin/activate && pip install -r requirements-research-store.txt pytest
+      - run: source .venv/bin/activate && python -m pytest -q -p no:cacheprovider scripts/test_research_store.py scripts/test_classifier.py scripts/test_workflow.py scripts/test_budget_policy.py scripts/test_index_runtime.py
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m venv .venv
+      - run: source .venv/bin/activate && pip install ruff
+      - run: source .venv/bin/activate && ruff check .
+        continue-on-error: true
+      - run: source .venv/bin/activate && ruff format --check .
+        continue-on-error: true

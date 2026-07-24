@@ -361,7 +361,7 @@ class CorpusService:
         filters = filters or {}
         timing = {}
         t0 = time.time()
-        
+
         with self.uow_factory() as uow:
             if requested_mode != "semantic":
                 lexical = uow.documents.search_lexical(query, candidate_limit * 2, filters)
@@ -416,9 +416,8 @@ class CorpusService:
                     executed_mode = "lexical"
 
             t2 = time.time()
-            candidates = reciprocal_rank_fusion([lexical, semantic])[
-                : self.config.reranker_candidate_limit
-            ]
+            fused_candidates = reciprocal_rank_fusion([lexical, semantic])
+            candidates = fused_candidates[: self.config.reranker_candidate_limit]
             timing["fusion"] = time.time() - t2
 
             t3 = time.time()
@@ -436,10 +435,12 @@ class CorpusService:
                     str(item["candidate_id"]), ""
                 )
 
+            reranked_candidates = None
             if requested_mode != "lexical" and self.reranker:
                 t4 = time.time()
                 try:
                     candidates = self.reranker(query, candidates)
+                    reranked_candidates = candidates
                 except Exception as e:
                     component_health["reranker"] = "failed"
                     errors.append(f"reranker error: {e!s}")
@@ -449,7 +450,8 @@ class CorpusService:
             else:
                 skipped_stages.append("reranker")
 
-            candidates = candidates[:candidate_limit]
+            final_candidates = candidates[:candidate_limit]
+            candidates = final_candidates
 
             mechanical_status = MechanicalStatus.SUCCEEDED
             if requested_mode != executed_mode:
@@ -463,7 +465,7 @@ class CorpusService:
             stage_counts = {
                 "lexical": len(lexical),
                 "semantic": len(semantic),
-                "fused": len(candidates),
+                "fused": len(fused_candidates),
             }
 
             execution = RetrievalExecution(
@@ -480,40 +482,60 @@ class CorpusService:
                 filters=filters,
                 skipped_stages=tuple(skipped_stages),
                 timing=timing,
-                # Truncate to 12 hex chars (~1/16 trillion collision probability)
-                # for diagnostic purposes; full fingerprint stored in migration 0027.
                 config_identity=self.config.embedding_fingerprint[:12],
             )
 
             if run_id:
                 uow.record_retrieval_execution(run_id, execution)
-                for rank, candidate in enumerate(candidates, 1):
-                    reasons = candidate.get("match_reasons") or []
-                    stage = (
-                        "hybrid"
-                        if len(reasons) > 1
-                        else candidate.get("retriever", "retrieval")
-                    )
-                    raw_score = candidate.get("lexical_score")
-                    if raw_score is None:
-                        raw_score = candidate.get("semantic_score")
-                    uow.retrieval_events.log_retrieval(
-                        run_id,
-                        {
-                            "stage": stage,
+                events_to_log = []
+
+                def _add_stage_events(stage_name, source_list, limit=None, final_stage=False):
+                    for rank, item in enumerate(source_list, 1):
+                        selected = final_stage and limit is not None and rank <= limit
+                        rejection_reason = None
+                        if not selected and limit is not None and rank > limit:
+                            rejection_reason = "below_candidate_limit" if final_stage else "below_reranker_limit"
+
+                        raw_score = item.get("lexical_score")
+                        if raw_score is None:
+                            raw_score = item.get("semantic_score")
+
+                        events_to_log.append({
+                            "stage": stage_name,
                             "query": query,
                             "filters": filters,
-                            "retriever": candidate.get("retriever", "hybrid_rrf"),
+                            "retriever": item.get("retriever", "hybrid_rrf"),
                             "candidate_type": "chunk",
-                            "candidate_id": candidate["candidate_id"],
+                            "candidate_id": item["candidate_id"],
                             "raw_score": raw_score,
-                            "normalized_score": candidate.get("fused_score"),
-                            "reranker_score": candidate.get("reranker_score"),
+                            "normalized_score": item.get("fused_score"),
+                            "reranker_score": item.get("reranker_score"),
                             "rank": rank,
-                            "selected": True,
-                        },
-                    )
+                            "selected": selected,
+                            "rejection_reason": rejection_reason,
+                        })
+
+                if lexical:
+                    _add_stage_events("lexical", lexical)
+                if semantic:
+                    _add_stage_events("semantic", semantic)
+
+                # Fused is final if reranker is not run or fails
+                fused_is_final = (reranked_candidates is None)
+                _add_stage_events("fused", fused_candidates,
+                                  limit=candidate_limit if fused_is_final else self.config.reranker_candidate_limit,
+                                  final_stage=fused_is_final)
+
+                if reranked_candidates is not None:
+                    _add_stage_events("reranked", reranked_candidates, limit=candidate_limit, final_stage=True)
+
+                uow.retrieval_events.log_retrieval_batch(execution.execution_id, run_id, events_to_log)
+
             return execution, candidates
+
+    def get_retrieval_trace(self, execution_id: UUID) -> list[dict[str, Any]]:
+        with self.uow_factory() as uow:
+            return uow.retrieval_events.get_trace(execution_id)
 
     def inspect_asset(self, candidate_id: UUID) -> dict:
         with self.uow_factory() as uow:
