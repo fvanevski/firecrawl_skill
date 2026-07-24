@@ -3537,36 +3537,45 @@ class PostgresUnitOfWork:
             "selected",
             "rejection_reason",
         )
+        placeholders = ",".join(["%s"] * len(fields))
+        column_list = ",".join(fields)
         with self.connection.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM research_runs WHERE id=%s AND status='running'",
-                (run_id,)
+            cur.executemany(
+                f"""INSERT INTO retrieval_events(run_id, {column_list})
+                    SELECT %s, {placeholders}
+                    FROM research_runs WHERE id=%s AND status='running'""",
+                [
+                    (
+                        execution_id,
+                        *row_values,
+                        run_id,
+                    )
+                    for row_values in [
+                        (
+                            event.get("stage"),
+                            event.get("query"),
+                            json.dumps(event.get("filters"))
+                            if event.get("filters") is not None
+                            else None,
+                            event.get("retriever"),
+                            event.get("candidate_type"),
+                            event.get("candidate_id"),
+                            event.get("raw_score"),
+                            event.get("normalized_score"),
+                            event.get("rank"),
+                            event.get("reranker_score"),
+                            bool(event.get("selected")),
+                            event.get("rejection_reason"),
+                        )
+                        for event in events
+                    ]
+                ],
             )
-            if not cur.fetchone():
-                raise KeyError(f"research run is absent or finished: {run_id}")
-
-            insert_query = f"""INSERT INTO retrieval_events(run_id, {",".join(fields)})
-                               VALUES (%s, {",".join(["%s"] * len(fields))})"""
-
-            data = []
-            for event in events:
-                data.append((
-                    run_id,
-                    execution_id,
-                    event.get("stage"),
-                    event.get("query"),
-                    json.dumps(event.get("filters")) if event.get("filters") is not None else None,
-                    event.get("retriever"),
-                    event.get("candidate_type"),
-                    event.get("candidate_id"),
-                    event.get("raw_score"),
-                    event.get("normalized_score"),
-                    event.get("rank"),
-                    event.get("reranker_score"),
-                    bool(event.get("selected")),
-                    event.get("rejection_reason"),
-                ))
-            cur.executemany(insert_query, data)
+            if cur.rowcount != len(events):
+                raise KeyError(
+                    f"research run is absent or finished: {run_id} "
+                    f"(expected {len(events)} rows, got {cur.rowcount})"
+                )
 
     def get_trace(self, execution_id):
         fields = (

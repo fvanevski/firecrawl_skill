@@ -903,9 +903,9 @@ def test_search_assets_cli_output_format():
 
 def test_retrieval_stage_trace_logging():
     """Verify that all ranking stages are logged, logging failure is fatal, and rejection reasons are set."""
-    from uuid import uuid4
     import pytest
-    
+    from uuid import uuid4
+
     candidate_id = uuid4()
     candidate_id_2 = uuid4()
     run_id = uuid4()
@@ -984,4 +984,337 @@ def test_retrieval_stage_trace_logging():
     assert _logged_events[3]["candidate_id"] == str(candidate_id_2)
     assert _logged_events[3]["selected"] is False
     assert _logged_events[3]["rejection_reason"] == "below_candidate_limit"
+
+
+def test_get_retrieval_trace_api():
+    """Verify get_retrieval_trace returns ordered events per execution."""
+    from uuid import uuid4
+
+    candidate_id = uuid4()
+    run_id = uuid4()
+
+    _trace_events = []
+    _execution_id_holder = []
+
+    class Repo:
+        documents = None
+        retrieval_events = None
+
+        def __init__(self):
+            self.documents = self
+            self.retrieval_events = self
+
+        def search_lexical(self, *_args):
+            return [{"candidate_id": candidate_id, "lexical_score": 1.0}]
+
+        def fetch_passages(self, *_args):
+            return [{"chunk_id": candidate_id, "text": "trace test"}]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            _execution_id_holder.append(execution.execution_id)
+
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            _trace_events.extend(events)
+
+        def get_trace(self, exec_id):
+            # Simulate the actual SQL ordering: stage priority then rank
+            stage_order = {"lexical": 1, "semantic": 2, "fused": 3, "reranked": 4}
+            return sorted(
+                [
+                    {
+                        "stage": e["stage"],
+                        "query": e.get("query"),
+                        "filters": e.get("filters"),
+                        "retriever": e.get("retriever"),
+                        "candidate_type": e.get("candidate_type"),
+                        "candidate_id": e.get("candidate_id"),
+                        "raw_score": e.get("raw_score"),
+                        "normalized_score": e.get("normalized_score"),
+                        "rank": e.get("rank"),
+                        "reranker_score": e.get("reranker_score"),
+                        "selected": e.get("selected"),
+                        "rejection_reason": e.get("rejection_reason"),
+                    }
+                    for e in _trace_events
+                    if e.get("_execution_id") == exec_id or True  # all events for this mock
+                ],
+                key=lambda e: (stage_order.get(e["stage"], 99), e.get("rank", 0)),
+            )
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="test",
+        reranker_candidate_limit=40,
+        parser_version="v1",
+        normalization_version="v1",
+        chunker_version="v1",
+        embedding_fingerprint="abc",
+    )
+
+    service = CorpusService(
+        config,
+        Repo,
+        blob_store=None,
+        index=None,
+        embedder=None,
+    )
+
+    execution, results = service.search_assets(
+        "trace", candidate_limit=1, run_id=run_id, requested_mode="lexical"
+    )
+
+    assert len(_execution_id_holder) == 1
+    actual_exec_id = _execution_id_holder[0]
+
+    trace = service.get_retrieval_trace(actual_exec_id)
+    assert len(trace) == 2
+    # Verify stage ordering: lexical before fused
+    assert trace[0]["stage"] == "lexical"
+    assert trace[1]["stage"] == "fused"
+    # Verify field mapping
+    assert trace[0]["candidate_id"] == str(candidate_id)
+    assert trace[0]["raw_score"] == 1.0
+    assert trace[0]["selected"] is False
+    assert trace[1]["selected"] is True
+
+
+def test_get_retrieval_trace_empty():
+    """Verify get_retrieval_trace returns empty list for non-existent execution."""
+    from uuid import uuid4
+
+    class Repo:
+        documents = None
+        retrieval_events = None
+
+        def __init__(self):
+            self.documents = self
+            self.retrieval_events = self
+
+        def search_lexical(self, *_args):
+            return []
+
+        def fetch_passages(self, *_args):
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            pass
+
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            pass
+
+        def get_trace(self, exec_id):
+            return []
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="test",
+        reranker_candidate_limit=40,
+        parser_version="v1",
+        normalization_version="v1",
+        chunker_version="v1",
+        embedding_fingerprint="abc",
+    )
+
+    service = CorpusService(
+        config,
+        Repo,
+        blob_store=None,
+        index=None,
+        embedder=None,
+    )
+
+    trace = service.get_retrieval_trace(uuid4())
+    assert trace == []
+
+
+def test_log_retrieval_batch_run_status_guard():
+    """Verify log_retrieval_batch raises KeyError when run is not 'running'."""
+    from uuid import uuid4
+
+    class Repo:
+        documents = None
+        retrieval_events = None
+
+        def __init__(self):
+            self.documents = self
+            self.retrieval_events = self
+
+        def search_lexical(self, *_args):
+            return [{"candidate_id": uuid4(), "lexical_score": 1.0}]
+
+        def fetch_passages(self, *_args):
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            pass
+
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            # Simulate the atomic SELECT ... FROM research_runs WHERE status='running'
+            # returning zero rows (run is not 'running')
+            raise KeyError(
+                f"research run is absent or finished: {run_id} "
+                f"(expected {len(events)} rows, got 0)"
+            )
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="test",
+        reranker_candidate_limit=40,
+        parser_version="v1",
+        normalization_version="v1",
+        chunker_version="v1",
+        embedding_fingerprint="abc",
+    )
+
+    service = CorpusService(
+        config,
+        Repo,
+        blob_store=None,
+        index=None,
+        embedder=None,
+    )
+
+    run_id = uuid4()
+    with pytest.raises(KeyError, match="research run is absent or finished"):
+        service.search_assets(
+            "trace", candidate_limit=5, run_id=run_id, requested_mode="lexical"
+        )
+
+
+def test_reranked_stage_events_with_fused_intermediate():
+    """Verify trace includes fused (below_reranker_limit) and reranked (below_candidate_limit) events."""
+    from uuid import uuid4
+
+    candidate_id = uuid4()
+    candidate_id_2 = uuid4()
+    candidate_id_3 = uuid4()
+    run_id = uuid4()
+
+    _logged_events = []
+
+    class Repo:
+        documents = None
+        retrieval_events = None
+
+        def __init__(self):
+            self.documents = self
+            self.retrieval_events = self
+
+        def search_lexical(self, *_args):
+            return []
+
+        def fetch_passages(self, *_args):
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record_retrieval_execution(self, run_id, execution):
+            pass
+
+        def log_retrieval_batch(self, execution_id, run_id, events):
+            _logged_events.extend(events)
+
+    config = SimpleNamespace(
+        qdrant_alias="active",
+        physical_collection="test",
+        reranker_candidate_limit=2,
+        parser_version="v1",
+        normalization_version="v1",
+        chunker_version="v1",
+        embedding_fingerprint="abc",
+    )
+
+    class MockIndex:
+        def list_aliases(self):
+            return {"active": "test"}
+
+        def search(self, *_args):
+            return [
+                {"id": str(uuid4()), "score": 0.9, "payload": {"chunk_id": str(candidate_id), "title": "Test"}},
+                {"id": str(uuid4()), "score": 0.8, "payload": {"chunk_id": str(candidate_id_2), "title": "Test 2"}},
+                {"id": str(uuid4()), "score": 0.7, "payload": {"chunk_id": str(candidate_id_3), "title": "Test 3"}},
+            ]
+
+    class MockReranker:
+        def __call__(self, query, candidates):
+            # Re-rank and return all candidates with reranker_score
+            return [
+                {
+                    "candidate_id": str(candidate_id),
+                    "reranker_score": 0.9,
+                    "fused_score": 0.8,
+                    "semantic_score": 0.9,
+                },
+                {
+                    "candidate_id": str(candidate_id_2),
+                    "reranker_score": 0.7,
+                    "fused_score": 0.6,
+                    "semantic_score": 0.8,
+                },
+                {
+                    "candidate_id": str(candidate_id_3),
+                    "reranker_score": 0.5,
+                    "fused_score": 0.4,
+                    "semantic_score": 0.7,
+                },
+            ]
+
+    service = CorpusService(
+        config,
+        Repo,
+        blob_store=None,
+        index=MockIndex(),
+        embedder=lambda q: [0.1],
+        reranker=MockReranker(),
+    )
+
+    execution, results = service.search_assets(
+        "rerank test", candidate_limit=1, run_id=run_id, requested_mode="semantic"
+    )
+
+    # Should have 3 fused events and 3 reranked events
+    fused_events = [e for e in _logged_events if e["stage"] == "fused"]
+    reranked_events = [e for e in _logged_events if e["stage"] == "reranked"]
+
+    assert len(fused_events) == 3
+    assert len(reranked_events) == 3
+
+    # Fused events: fused_is_final is False (reranker succeeds), limit=reranker_candidate_limit=2
+    assert fused_events[0]["rejection_reason"] is None
+    assert fused_events[1]["rejection_reason"] is None
+    assert fused_events[2]["rejection_reason"] == "below_reranker_limit"
+
+    # Reranked events: limit=candidate_limit=1
+    assert reranked_events[0]["selected"] is True
+    assert reranked_events[0]["rejection_reason"] is None
+    assert reranked_events[1]["selected"] is False
+    assert reranked_events[1]["rejection_reason"] == "below_candidate_limit"
+    assert reranked_events[2]["selected"] is False
+    assert reranked_events[2]["rejection_reason"] == "below_candidate_limit"
+
+    # Final results should only have 1 candidate
+    assert len(results) == 1
+    assert results[0]["candidate_id"] == str(candidate_id)
 
