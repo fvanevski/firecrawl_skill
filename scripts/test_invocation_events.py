@@ -48,6 +48,7 @@ from research_store.postgres import PostgresUnitOfWork
 # Fixtures
 # ------------------------------------------------------------------
 
+
 def _database_url():
     url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
     if not url:
@@ -63,21 +64,35 @@ def database_url():
 @pytest.fixture()
 def uow_factory(database_url):
     """Return a PostgresUnitOfWork factory for tests."""
+
     def factory():
         return PostgresUnitOfWork(
-            database_url, "test_invocation_events",
-            "test", "1", 3, "markdown-v1",
-            "cleanup-v1", "structural-v1",
+            database_url,
+            "test_invocation_events",
+            "test",
+            "1",
+            3,
+            "markdown-v1",
+            "cleanup-v1",
+            "structural-v1",
         )
+
     return factory
 
 
 @pytest.fixture()
 def run_id(database_url):
     """Create a test research run in PostgreSQL."""
-    with PostgresUnitOfWork(database_url, "test_invocation_events",
-                            "test", "1", 3, "markdown-v1",
-                            "cleanup-v1", "structural-v1") as uow:
+    with PostgresUnitOfWork(
+        database_url,
+        "test_invocation_events",
+        "test",
+        "1",
+        3,
+        "markdown-v1",
+        "cleanup-v1",
+        "structural-v1",
+    ) as uow:
         run_id = uow.runs.start_run(
             "test invocation events objective",
             {"skill_version": "test", "llm_model": "test"},
@@ -99,6 +114,7 @@ def catalog_service(uow_factory):
 # ------------------------------------------------------------------
 # Event parity tests
 # ------------------------------------------------------------------
+
 
 class TestEventParity:
     """Every new invocation event is authoritative in PostgreSQL."""
@@ -135,7 +151,10 @@ class TestEventParity:
         event_types = ["pivot", "retry", "decision", "recovery", "annotation"]
         for idx, etype in enumerate(event_types):
             event_service.append(
-                run_id, etype, "system", f"test:type:{idx}",
+                run_id,
+                etype,
+                "system",
+                f"test:type:{idx}",
                 payload={"detail": etype},
             )
         for etype in event_types:
@@ -147,9 +166,7 @@ class TestEventParity:
         inv = catalog_service.begin(
             run_id, f"fc_{uuid4().hex[:32]}", "search", {"query": "test"}
         )
-        catalog_service.add_event(
-            run_id, inv.id, "pivot", {"query": "pivot query"}
-        )
+        catalog_service.add_event(run_id, inv.id, "pivot", {"query": "pivot query"})
         events = catalog_service.list_events(run_id, invocation_id=inv.id)
         # begin() creates invocation_started event, add_event creates pivot event
         assert len(events) == 2
@@ -158,11 +175,22 @@ class TestEventParity:
 
     def test_all_event_types_are_valid(self):
         from research_store.invocation_events import EVENT_TYPES
-        assert EVENT_TYPES == frozenset({
-            "run_started", "run_finished", "run_reopened",
-            "invocation_started", "invocation_finished", "invocation_event",
-            "pivot", "retry", "decision", "recovery", "annotation",
-        })
+
+        assert EVENT_TYPES == frozenset(
+            {
+                "run_started",
+                "run_finished",
+                "run_reopened",
+                "invocation_started",
+                "invocation_finished",
+                "invocation_event",
+                "pivot",
+                "retry",
+                "decision",
+                "recovery",
+                "annotation",
+            }
+        )
 
     def test_invalid_event_type_rejected(self):
         with pytest.raises(InvalidEventType):
@@ -172,7 +200,10 @@ class TestEventParity:
         seqs = []
         for idx in range(5):
             result = event_service.append(
-                run_id, "annotation", "system", f"test:seq:{idx}",
+                run_id,
+                "annotation",
+                "system",
+                f"test:seq:{idx}",
                 payload={"index": idx},
             )
             seqs.append(result.sequence_number)
@@ -182,7 +213,10 @@ class TestEventParity:
     def test_event_ordering_is_stable_and_queryable(self, run_id, event_service):
         for idx in range(10):
             event_service.append(
-                run_id, "annotation", "system", f"test:order:{idx}",
+                run_id,
+                "annotation",
+                "system",
+                f"test:order:{idx}",
                 payload={"index": idx},
             )
         events = event_service.list_events(run_id, limit=10)
@@ -193,6 +227,7 @@ class TestEventParity:
 # ------------------------------------------------------------------
 # Concurrent append tests
 # ------------------------------------------------------------------
+
 
 class TestConcurrentAppend:
     """Event ordering remains stable under concurrent writes."""
@@ -242,6 +277,7 @@ class TestConcurrentAppend:
 # ------------------------------------------------------------------
 # Sanitization tests
 # ------------------------------------------------------------------
+
 
 class TestSanitization:
     """Secrets are redacted before storage."""
@@ -302,17 +338,24 @@ class TestSanitization:
 # Idempotency tests
 # ------------------------------------------------------------------
 
+
 class TestIdempotency:
     """Duplicate or retried commands are idempotent."""
 
     def test_duplicate_idempotency_key_returns_existing(self, run_id, event_service):
         key = f"test:idempotent:{uuid4()}"
         result1 = event_service.append(
-            run_id, "pivot", "system", key,
+            run_id,
+            "pivot",
+            "system",
+            key,
             payload={"query": "original"},
         )
         result2 = event_service.append(
-            run_id, "pivot", "system", key,
+            run_id,
+            "pivot",
+            "system",
+            key,
             payload={"query": "original"},
         )
         assert result1.event_id == result2.event_id
@@ -321,14 +364,18 @@ class TestIdempotency:
     def test_different_payload_with_same_key_rejected(self, run_id, event_service):
         key = f"test:conflict:{uuid4()}"
         event_service.append(
-            run_id, "pivot", "system", key,
+            run_id,
+            "pivot",
+            "system",
+            key,
             payload={"query": "original"},
         )
-        with pytest.raises(
-            DuplicateEventKey, match="idempotency key"
-        ):
+        with pytest.raises(DuplicateEventKey, match="idempotency key"):
             event_service.append(
-                run_id, "pivot", "system", key,
+                run_id,
+                "pivot",
+                "system",
+                key,
                 payload={"query": "different"},
             )
 
@@ -336,6 +383,7 @@ class TestIdempotency:
 # ------------------------------------------------------------------
 # Filesystem derivation tests
 # ------------------------------------------------------------------
+
 
 class TestFilesystemDerivation:
     """Filesystem records are derived after database commit."""
@@ -358,17 +406,13 @@ class TestFilesystemDerivation:
         inv = catalog_service.begin(
             run_id, f"fc_{uuid4().hex[:32]}", "search", {"query": "test"}
         )
-        catalog_service.add_event(
-            run_id, inv.id, "pivot", {"query": "pivot query"}
-        )
+        catalog_service.add_event(run_id, inv.id, "pivot", {"query": "pivot query"})
 
         # Export to filesystem
         catalog_path = tmp_path / "catalog" / "invocations"
         catalog_path.mkdir(parents=True)
 
-        catalog_record = catalog_service.export_to_catalog_format(
-            run_id, inv.id
-        )
+        catalog_record = catalog_service.export_to_catalog_format(run_id, inv.id)
         assert catalog_record["schema_version"] == 5
         assert catalog_record["operation"] == "search"
         # begin() creates invocation_started, add_event creates pivot
@@ -407,6 +451,7 @@ class TestFilesystemDerivation:
 # Invalid and unknown ID tests
 # ------------------------------------------------------------------
 
+
 class TestInvalidIds:
     """Invalid and unknown IDs are rejected."""
 
@@ -414,7 +459,10 @@ class TestInvalidIds:
         fake_run_id = uuid4()
         with pytest.raises(KeyError, match="not found"):
             event_service.append(
-                fake_run_id, "pivot", "system", f"test:unknown:{uuid4()}",
+                fake_run_id,
+                "pivot",
+                "system",
+                f"test:unknown:{uuid4()}",
                 payload={"query": "test"},
             )
 
@@ -426,14 +474,20 @@ class TestInvalidIds:
     def test_empty_actor_type_rejected(self, run_id, event_service):
         with pytest.raises(ValueError, match="actor_type"):
             event_service.append(
-                run_id, "pivot", "", f"test:empty:{uuid4()}",
+                run_id,
+                "pivot",
+                "",
+                f"test:empty:{uuid4()}",
                 payload={},
             )
 
     def test_empty_idempotency_key_rejected(self, run_id, event_service):
         with pytest.raises(ValueError, match="idempotency_key"):
             event_service.append(
-                run_id, "pivot", "system", "",
+                run_id,
+                "pivot",
+                "system",
+                "",
                 payload={},
             )
 
@@ -441,6 +495,7 @@ class TestInvalidIds:
 # ------------------------------------------------------------------
 # Invocation catalog tests
 # ------------------------------------------------------------------
+
 
 class TestInvocationCatalog:
     """PostgreSQL-backed invocation catalog API."""
@@ -463,7 +518,9 @@ class TestInvocationCatalog:
         ext_id = f"fc_{uuid4().hex[:32]}"
         record = catalog_service.begin(run_id, ext_id, "search", {"query": "test"})
         completed = catalog_service.complete(
-            run_id, record.id, "succeeded",
+            run_id,
+            record.id,
+            "succeeded",
             output={"results": [{"url": "https://example.com"}]},
         )
         assert completed.status == "complete"
@@ -481,7 +538,9 @@ class TestInvocationCatalog:
         ext_id = f"fc_{uuid4().hex[:32]}"
         catalog_service.begin(run_id, ext_id, "search", {"query": "test"})
         with pytest.raises(InvocationAlreadyRunning):
-            catalog_service.begin(run_id, ext_id, "scrape", {"url": "https://example.com"})
+            catalog_service.begin(
+                run_id, ext_id, "scrape", {"url": "https://example.com"}
+            )
 
     def test_list_invocations(self, run_id, catalog_service):
         for idx in range(3):
@@ -503,6 +562,7 @@ class TestInvocationCatalog:
 # ------------------------------------------------------------------
 # Batch append tests
 # ------------------------------------------------------------------
+
 
 class TestBatchAppend:
     """Multiple events can be appended atomically."""
@@ -565,6 +625,7 @@ class TestBatchAppend:
 # Export failure isolation tests
 # ------------------------------------------------------------------
 
+
 class TestExportFailureIsolation:
     """Export failure does not roll back database commit."""
 
@@ -598,6 +659,7 @@ class TestExportFailureIsolation:
 # next_event_sequence tests
 # ------------------------------------------------------------------
 
+
 class TestNextEventSequence:
     """The next_event_sequence method returns the correct next number."""
 
@@ -605,8 +667,14 @@ class TestNextEventSequence:
         from research_store.postgres import PostgresUnitOfWork
 
         with PostgresUnitOfWork(
-            database_url, "test_invocation_events", "test", "1", 3,
-            "markdown-v1", "cleanup-v1", "structural-v1"
+            database_url,
+            "test_invocation_events",
+            "test",
+            "1",
+            3,
+            "markdown-v1",
+            "cleanup-v1",
+            "structural-v1",
         ) as uow:
             next_seq = uow.runs.next_event_sequence(run_id)
             assert next_seq == 1  # No events, so next is 1
@@ -618,8 +686,14 @@ class TestNextEventSequence:
         event_service.append(run_id, "annotation", "system", "test:seq:2", payload={})
 
         with PostgresUnitOfWork(
-            database_url, "test_invocation_events", "test", "1", 3,
-            "markdown-v1", "cleanup-v1", "structural-v1"
+            database_url,
+            "test_invocation_events",
+            "test",
+            "1",
+            3,
+            "markdown-v1",
+            "cleanup-v1",
+            "structural-v1",
         ) as uow:
             next_seq = uow.runs.next_event_sequence(run_id)
             assert next_seq == 3  # Two events exist, so next is 3
@@ -628,6 +702,7 @@ class TestNextEventSequence:
 # ------------------------------------------------------------------
 # export_to_catalog_format tests
 # ------------------------------------------------------------------
+
 
 class TestExportCatalogFormat:
     """Export produces correct Catalog v5-compatible format."""
@@ -649,9 +724,7 @@ class TestExportCatalogFormat:
         inv = catalog_service.begin(
             run_id, f"fc_{uuid4().hex[:32]}", "search", {"query": "test"}
         )
-        catalog_service.add_event(
-            run_id, inv.id, "pivot", {"query": "pivot query"}
-        )
+        catalog_service.add_event(run_id, inv.id, "pivot", {"query": "pivot query"})
         catalog_service.complete(run_id, inv.id, "succeeded", output={"results": []})
 
         export = catalog_service.export_to_catalog_format(run_id, inv.id)

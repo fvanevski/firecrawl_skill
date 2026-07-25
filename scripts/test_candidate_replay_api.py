@@ -35,6 +35,7 @@ def prepared_database():
 
 # --- Unit Tests ---
 
+
 def test_list_candidates_paginated_invalid_parameters():
     class DummyUOW:
         def __enter__(self):
@@ -48,17 +49,21 @@ def test_list_candidates_paginated_invalid_parameters():
     # Verify limit validation in helper logic
     with pytest.raises(ValueError):
         from research_store.postgres import PostgresUnitOfWork
+
         # Calling with invalid limit raises error
         uow = PostgresUnitOfWork.__new__(PostgresUnitOfWork)
+
         # Mock connection cursor
         class MockConn:
             def cursor(self):
                 pass
+
         uow.connection = MockConn()
         uow.list_candidates_paginated(uuid4(), limit=0)
 
 
 # --- Integration Tests (requires PostgreSQL) ---
+
 
 @pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
@@ -76,26 +81,50 @@ def test_candidate_replay_and_pagination_flow(tmp_path, prepared_database):
     run_id = status.id
 
     # Record 3 search responses with multiple overlapping candidates to test recurrence & filtering
-    resp1_data = json.dumps({
-        "success": True,
-        "data": [
-            {"url": "https://alpha.com/p1", "title": "Alpha One", "snippet": "A" * 600},
-            {"url": "https://beta.org/p1", "title": "Beta One", "snippet": "B" * 200},
-            {"url": "https://gamma.net/p1", "title": "Gamma One", "snippet": "G" * 100},
-        ],
-    })
+    resp1_data = json.dumps(
+        {
+            "success": True,
+            "data": [
+                {
+                    "url": "https://alpha.com/p1",
+                    "title": "Alpha One",
+                    "snippet": "A" * 600,
+                },
+                {
+                    "url": "https://beta.org/p1",
+                    "title": "Beta One",
+                    "snippet": "B" * 200,
+                },
+                {
+                    "url": "https://gamma.net/p1",
+                    "title": "Gamma One",
+                    "snippet": "G" * 100,
+                },
+            ],
+        }
+    )
     resp1 = run_svc.record_search_response(
         run_id, "query one", "firecrawl", resp1_data, f"key1-{uuid4()}"
     )
     run_svc.record_response_candidates(run_id, resp1["id"])
 
-    resp2_data = json.dumps({
-        "success": True,
-        "data": [
-            {"url": "https://alpha.com/p1", "title": "Alpha One Updated", "snippet": "A" * 600},
-            {"url": "https://delta.gov/p1", "title": "Delta One", "snippet": "D" * 150},
-        ],
-    })
+    resp2_data = json.dumps(
+        {
+            "success": True,
+            "data": [
+                {
+                    "url": "https://alpha.com/p1",
+                    "title": "Alpha One Updated",
+                    "snippet": "A" * 600,
+                },
+                {
+                    "url": "https://delta.gov/p1",
+                    "title": "Delta One",
+                    "snippet": "D" * 150,
+                },
+            ],
+        }
+    )
     resp2 = run_svc.record_search_response(
         run_id, "query two", "firecrawl", resp2_data, f"key2-{uuid4()}"
     )
@@ -117,7 +146,9 @@ def test_candidate_replay_and_pagination_flow(tmp_path, prepared_database):
 
     # 3. Test Stable Ordering: page1 items + page2 items == all items
     all_page = run_svc.list_candidates_paginated(run_id, limit=10, offset=0)
-    combined_ids = [item["id"] for item in page1["items"]] + [item["id"] for item in page2["items"]]
+    combined_ids = [item["id"] for item in page1["items"]] + [
+        item["id"] for item in page2["items"]
+    ]
     all_ids = [item["id"] for item in all_page["items"]]
     assert combined_ids == all_ids
 

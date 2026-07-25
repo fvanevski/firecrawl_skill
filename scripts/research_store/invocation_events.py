@@ -217,8 +217,7 @@ def _validate_event_type(event_type: str) -> None:
     """Raise ``InvalidEventType`` if ``event_type`` is not in the allowed set."""
     if event_type not in EVENT_TYPES:
         raise InvalidEventType(
-            f"invalid event type {event_type!r}; "
-            f"allowed: {sorted(EVENT_TYPES)}"
+            f"invalid event type {event_type!r}; allowed: {sorted(EVENT_TYPES)}"
         )
 
 
@@ -312,7 +311,8 @@ class EventService:
             # Validate that the run exists before attempting to append
             cur = uow.connection.cursor()
             cur.execute(
-                "SELECT id FROM research_runs WHERE id = %s", (run_id,),
+                "SELECT id FROM research_runs WHERE id = %s",
+                (run_id,),
             )
             if cur.fetchone() is None:
                 raise KeyError(f"run {run_id} not found")
@@ -381,9 +381,7 @@ class EventService:
             )
             return [InvocationEvent.from_mapping(row) for row in rows]
 
-    def get_event(
-        self, run_id: UUID, event_id: UUID
-    ) -> InvocationEvent:
+    def get_event(self, run_id: UUID, event_id: UUID) -> InvocationEvent:
         """Retrieve a single event by ID.
 
         Args:

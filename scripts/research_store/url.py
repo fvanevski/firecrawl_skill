@@ -53,7 +53,9 @@ def redact_sensitive_url(value: str) -> str:
 
     query_str = urlencode(redacted_query, safe="[]")
 
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, query_str, parts.fragment))
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, query_str, parts.fragment)
+    )
 
 
 def canonicalize_url(value: str) -> str:

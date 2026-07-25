@@ -696,8 +696,6 @@ class TestDerivationServiceIntegration:
         # A future enhancement should enqueue an index job for the new
         # active derivation's chunks when activation occurs.
 
-
-
     def test_reindex_integration(self, service, derivation_service, tmp_path):
         """Active derivations correctly integrate with index selection."""
         from research_store.cli import _active_chunk_ids
@@ -718,7 +716,9 @@ class TestDerivationServiceIntegration:
         )
 
         # Activate the new derivation
-        pending = derivation_service.list_derivations(document_id=document_id, status="pending")
+        pending = derivation_service.list_derivations(
+            document_id=document_id, status="pending"
+        )
         derivation_id = UUID(pending[0]["id"])
         derivation_service.activate_derivation(derivation_id)
 
@@ -737,7 +737,7 @@ class TestDerivationServiceIntegration:
         # Verify CLI active chunk selector retrieves chunks for the active derivation
         active_chunks = _active_chunk_ids(config, str(document_id))
         assert len(active_chunks) > 0
-        
+
         # Verify old config returns old chunks
         old_config = Config(
             database_url=TEST_DSN,
@@ -758,13 +758,13 @@ class TestDerivationServiceIntegration:
         from unittest.mock import patch
 
         import pytest
-        
+
         result = _seed_corpus(service)
         document_id = result.document_id
 
         with patch("research_store.service.CorpusService.ingest") as mock_ingest:
             mock_ingest.side_effect = RuntimeError("Simulated blob write failure")
-            
+
             with pytest.raises(RuntimeError, match="Simulated blob write failure"):
                 derivation_service.rederive(
                     document_id=document_id,
@@ -774,24 +774,26 @@ class TestDerivationServiceIntegration:
                     chunker_version="hierarchical-v1",
                     tokenizer_name="cl100k_base",
                 )
-                
+
         # Verify no orphaned derivations exist
         derivs = derivation_service.list_derivations(document_id=document_id)
         for d in derivs:
             assert d["parser_version"] != "html-normalized-v99"
 
-    def test_rederive_db_commit_fault_injection(self, service, derivation_service, tmp_path):
+    def test_rederive_db_commit_fault_injection(
+        self, service, derivation_service, tmp_path
+    ):
         """Rederive aborts cleanly if DB commit fails."""
         from unittest.mock import patch
 
         import pytest
-        
+
         result = _seed_corpus(service)
         document_id = result.document_id
 
         with patch("research_store.postgres.PostgresUnitOfWork.commit") as mock_commit:
             mock_commit.side_effect = RuntimeError("Simulated DB commit failure")
-            
+
             with pytest.raises(RuntimeError, match="Simulated DB commit failure"):
                 derivation_service.rederive(
                     document_id=document_id,
@@ -801,11 +803,12 @@ class TestDerivationServiceIntegration:
                     chunker_version="hierarchical-v1",
                     tokenizer_name="cl100k_base",
                 )
-                
+
         # The derivation attempt should have been rolled back because the UoW didn't commit
         derivs = derivation_service.list_derivations(document_id=document_id)
         for d in derivs:
             assert d["parser_version"] != "html-normalized-v99"
+
 
 # ---------------------------------------------------------------------------
 # Integration tests: UoW derivation methods

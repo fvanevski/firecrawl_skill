@@ -422,7 +422,10 @@ def test_evidence_packet_referential_integrity():
         contradicting_groups=(),
         qualifying_groups=(),
         near_duplicate_groups=(),
-        source_diversity_summary={"unique_sources": 1, "sources": ["https://example.com"]},
+        source_diversity_summary={
+            "unique_sources": 1,
+            "sources": ["https://example.com"],
+        },
         freshness_summary={"most_recent": None, "oldest": None},
         limitations=(),
         unresolved_items=(),
@@ -465,7 +468,10 @@ def test_evidence_packet_referential_integrity():
             contradicting_groups=(),
             qualifying_groups=(),
             near_duplicate_groups=(),
-            source_diversity_summary={"unique_sources": 1, "sources": ["https://example.com"]},
+            source_diversity_summary={
+                "unique_sources": 1,
+                "sources": ["https://example.com"],
+            },
             freshness_summary={"most_recent": None, "oldest": None},
             limitations=(),
             unresolved_items=(),

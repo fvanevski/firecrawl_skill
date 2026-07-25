@@ -71,7 +71,9 @@ class ExecutionModePolicy:
         if authority == SemanticAuthority.LOCAL_MODEL and (
             host_artifact_supplied or deterministic_fixture_supplied
         ):
-            supplied = "host-agent" if host_artifact_supplied else "deterministic-fixture"
+            supplied = (
+                "host-agent" if host_artifact_supplied else "deterministic-fixture"
+            )
             raise ExecutionModeError(
                 f"autonomous_local semantic decisions cannot use {supplied} authority"
             )

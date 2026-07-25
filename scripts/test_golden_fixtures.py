@@ -137,7 +137,9 @@ def test_recorded_scrape_matches_legacy_scratch_manifest(tmp_path):
         "statuses": [item["status"] for item in meta["results"]],
         "urls": [item["url"] for item in meta["results"]],
     } == {"operation": "scrape", "statuses": ["ok"], "urls": [url]}
-    assert (output / "url_000.md").read_text() == fixture["scrapes"][0]["content"].strip()
+    assert (output / "url_000.md").read_text() == fixture["scrapes"][0][
+        "content"
+    ].strip()
 
 
 def test_smart_search_replays_without_live_search_or_model(tmp_path):
@@ -321,7 +323,7 @@ def test_qdrant_retrieval_outage_is_explicitly_reported():
         parser_version="markdown-v1",
         normalization_version="cleanup-v1",
         chunker_version="structural-v1",
-        embedding_fingerprint="dummy_fingerprint"
+        embedding_fingerprint="dummy_fingerprint",
     )
     service = CorpusService(
         config,
@@ -332,9 +334,11 @@ def test_qdrant_retrieval_outage_is_explicitly_reported():
     )
     execution, _results = service.search_assets("fixture", candidate_limit=1)
     from research_domain.models import MechanicalStatus
+
     assert execution.mechanical_status == MechanicalStatus.DEGRADED
     assert execution.component_health["qdrant"] == "failed"
     assert execution.executed_mode == "lexical"
+
 
 def test_reranker_outage_is_explicitly_reported():
     candidate_id = uuid4()
@@ -345,9 +349,9 @@ def test_reranker_outage_is_explicitly_reported():
         parser_version="markdown-v1",
         normalization_version="cleanup-v1",
         chunker_version="structural-v1",
-        embedding_fingerprint="dummy_fingerprint"
+        embedding_fingerprint="dummy_fingerprint",
     )
-    
+
     class BrokenReranker:
         def __call__(self, *args, **kwargs):
             raise OSError("fixture reranker outage")
@@ -357,18 +361,25 @@ def test_reranker_outage_is_explicitly_reported():
             return {"active": "configured"}
 
         def search(self, *_args):
-            return [{"id": str(uuid4()), "score": 0.9, "payload": {"chunk_id": str(candidate_id), "title": "Test"}}]
-            
+            return [
+                {
+                    "id": str(uuid4()),
+                    "score": 0.9,
+                    "payload": {"chunk_id": str(candidate_id), "title": "Test"},
+                }
+            ]
+
     service = CorpusService(
         config,
         lambda: RetrievalUow(candidate_id),
         blob_store=None,
         index=WorkingQdrant(),
         embedder=lambda _query: [0.1],
-        reranker=BrokenReranker()
+        reranker=BrokenReranker(),
     )
     execution, _results = service.search_assets("fixture", candidate_limit=1)
     from research_domain.models import MechanicalStatus
+
     assert execution.mechanical_status == MechanicalStatus.DEGRADED
     assert execution.component_health["reranker"] == "failed"
 
@@ -378,7 +389,9 @@ class WorkerRepository:
         self.state = state
 
     def claim_jobs(self, *_args, **_kwargs):
-        return [self.state["job"]] if not self.state.setdefault("claimed", False) else []
+        return (
+            [self.state["job"]] if not self.state.setdefault("claimed", False) else []
+        )
 
     def renew_job(self, *_args):
         self.state["claimed"] = True
@@ -389,7 +402,13 @@ class WorkerRepository:
         return True
 
     def chunks_for_index(self, *_args, **_kwargs):
-        return [{"chunk_id": self.state["job"]["entity_id"], "text": "fixture", "source_id": uuid4()}]
+        return [
+            {
+                "chunk_id": self.state["job"]["entity_id"],
+                "text": "fixture",
+                "source_id": uuid4(),
+            }
+        ]
 
     def heartbeat_worker(self, *_args):
         return None
@@ -431,7 +450,10 @@ def test_index_worker_records_qdrant_failure_against_exact_manifest_and_lease():
     }
     state = {"job": job}
     result = IndexWorker(
-        lambda: WorkerUow(state), BrokenWorkerIndex(), lambda _text: [1.0], worker_id="fixture-worker"
+        lambda: WorkerUow(state),
+        BrokenWorkerIndex(),
+        lambda _text: [1.0],
+        worker_id="fixture-worker",
     ).run_batch(1)
     assert result["claimed"] == 1 and result["failed"] == 1 and result["complete"] == 0
     assert state["finish_error"] == "OSError: fixture Qdrant worker outage"

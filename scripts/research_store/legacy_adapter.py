@@ -204,7 +204,9 @@ class LegacyEntryPointAdapter:
         except LegacyAdapterError:
             raise
         except Exception as exc:
-            raise LegacyAdapterError(f"legacy adapter persistence failed: {exc}") from exc
+            raise LegacyAdapterError(
+                f"legacy adapter persistence failed: {exc}"
+            ) from exc
         return AdapterResult(
             mode=self.mode.value,
             entry_point=entry_point,

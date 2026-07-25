@@ -1429,14 +1429,16 @@ def test_finished_run_is_immutable_and_rejects_new_evidence(service):
             uow.log_retrieval_batch(
                 uuid4(),
                 run_id,
-                [{
-                    "stage": "retriever",
-                    "query": "late evidence",
-                    "retriever": "lexical",
-                    "candidate_type": "chunk",
-                    "candidate_id": asset.chunk_ids[0],
-                    "rank": 1,
-                }],
+                [
+                    {
+                        "stage": "retriever",
+                        "query": "late evidence",
+                        "retriever": "lexical",
+                        "candidate_type": "chunk",
+                        "candidate_id": asset.chunk_ids[0],
+                        "rank": 1,
+                    }
+                ],
             )
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -2427,7 +2429,12 @@ def test_run_compare_handler_executes_through_service(monkeypatch, capsys):
     out = capsys.readouterr().out.strip()
     assert out, "run-compare should produce JSON output"
     result = json.loads(out)
-    assert "status" in result or "comparisons" in result or "comparison" in result or "error" in result
+    assert (
+        "status" in result
+        or "comparisons" in result
+        or "comparison" in result
+        or "error" in result
+    )
 
 
 def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
@@ -2459,7 +2466,13 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
     svc = build_run_service()
     status = svc.status(external_id=external_id)
     revision = status.lifecycle_revision
-    for state in ("planning", "corpus_review", "retrieving", "synthesizing", "validating"):
+    for state in (
+        "planning",
+        "corpus_review",
+        "retrieving",
+        "synthesizing",
+        "validating",
+    ):
         svc.transition(
             status.id,
             state,
@@ -2521,7 +2534,13 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
     svc = build_run_service()
     status = svc.status(external_id=external_id)
     revision = status.lifecycle_revision
-    for state in ("planning", "corpus_review", "retrieving", "synthesizing", "validating"):
+    for state in (
+        "planning",
+        "corpus_review",
+        "retrieving",
+        "synthesizing",
+        "validating",
+    ):
         svc.transition(
             status.id,
             state,
@@ -2599,7 +2618,13 @@ def test_run_reopen_after_finish_idempotency(monkeypatch, capsys):
     svc = build_run_service()
     status = svc.status(external_id=external_id)
     revision = status.lifecycle_revision
-    for state in ("planning", "corpus_review", "retrieving", "synthesizing", "validating"):
+    for state in (
+        "planning",
+        "corpus_review",
+        "retrieving",
+        "synthesizing",
+        "validating",
+    ):
         svc.transition(
             status.id,
             state,
@@ -3128,7 +3153,9 @@ def test_catalog_import_apply_pending_warning(tmp_path, monkeypatch):
 
     events_file = root / "events.jsonl"
     events_file.write_text(
-        json.dumps({"schema_version": 5, "event_id": "fe_" + uuid4().hex[:32], "event": "test"})
+        json.dumps(
+            {"schema_version": 5, "event_id": "fe_" + uuid4().hex[:32], "event": "test"}
+        )
         + "\n"
     )
 
@@ -3140,6 +3167,7 @@ def test_catalog_import_apply_pending_warning(tmp_path, monkeypatch):
     assert report.records_omitted >= 1
     # Report should include a warning about pending records
     assert any("additional context" in err for err in report.errors)
+
 
 def test_catalog_import_apply_idempotency_integration(tmp_path, monkeypatch):
     """Verify apply() idempotency on a second run correctly skips records."""
@@ -3176,6 +3204,7 @@ def test_catalog_import_apply_idempotency_integration(tmp_path, monkeypatch):
     assert report2.records_inserted == 0
     assert report2.records_skipped == 1
 
+
 def test_catalog_import_apply_conflict_detection_integration(tmp_path, monkeypatch):
     """Verify apply() correctly detects and reports conflicts."""
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
@@ -3192,7 +3221,9 @@ def test_catalog_import_apply_conflict_detection_integration(tmp_path, monkeypat
 
     # First we need to populate a run in DB
     run_id = "fr_" + uuid4().hex
-    uow_f = service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
+    uow_f = (
+        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
+    )
     with uow_f() as uow:
         cur = uow.connection.cursor()
         cur.execute(
@@ -3201,16 +3232,16 @@ def test_catalog_import_apply_conflict_detection_integration(tmp_path, monkeypat
                 lifecycle_revision, execution_mode, objective,
                 current_coverage_revision, metadata
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (run_id, "unknown", "running", "created", 5, "legacy", "Test", 0, "{}")
+            (run_id, "unknown", "running", "created", 5, "legacy", "Test", 0, "{}"),
         )
         uow.connection.commit()
 
     root = tmp_path / "catalog"
     runs_dir = root / "runs"
     runs_dir.mkdir(parents=True)
-    
+
     # Run in catalog has older revision/different data, representing a conflict (or just existing)
-    # Actually, the logic in _dry_run_map_record says "skipped" if it exists. 
+    # Actually, the logic in _dry_run_map_record says "skipped" if it exists.
     # But wait, earlier we said if it exists it returns skipped with conflict_detail="PostgreSQL run already exists; Catalog is older".
     run_data = {
         "schema_version": 5,
@@ -3526,16 +3557,34 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     from types import SimpleNamespace
 
     from scripts.research_store.service import CorpusService
-    
+
     with service.uow_factory() as uow:
         run_id = uow.start_run("trace persistence test", {})
-        
+
         # Create a document and blocks/chunks so we can retrieve something
         doc_id = uow.documents.create_document("trace_test.md")
         block_id = uow.documents.create_block(doc_id, None, 0, "root", "h1")
-        chunk_id = uow.documents.create_chunk(doc_id, block_id, block_id, 0, "test chunk", "hash", "structural", "structural-v1")
-        chunk_id_2 = uow.documents.create_chunk(doc_id, block_id, block_id, 1, "test chunk 2", "hash2", "structural", "structural-v1")
-        
+        chunk_id = uow.documents.create_chunk(
+            doc_id,
+            block_id,
+            block_id,
+            0,
+            "test chunk",
+            "hash",
+            "structural",
+            "structural-v1",
+        )
+        chunk_id_2 = uow.documents.create_chunk(
+            doc_id,
+            block_id,
+            block_id,
+            1,
+            "test chunk 2",
+            "hash2",
+            "structural",
+            "structural-v1",
+        )
+
     class IntegrationTestIndex:
         def list_aliases(self):
             return {"active": "test_collection"}
@@ -3543,10 +3592,18 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
         def search(self, *_args):
             # Return both chunks from semantic
             return [
-                {"id": str(uuid4()), "score": 0.9, "payload": {"chunk_id": str(chunk_id), "title": "Test"}},
-                {"id": str(uuid4()), "score": 0.8, "payload": {"chunk_id": str(chunk_id_2), "title": "Test 2"}}
+                {
+                    "id": str(uuid4()),
+                    "score": 0.9,
+                    "payload": {"chunk_id": str(chunk_id), "title": "Test"},
+                },
+                {
+                    "id": str(uuid4()),
+                    "score": 0.8,
+                    "payload": {"chunk_id": str(chunk_id_2), "title": "Test 2"},
+                },
             ]
-            
+
     config = SimpleNamespace(
         qdrant_alias="active",
         physical_collection="test_collection",
@@ -3556,7 +3613,7 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
         chunker_version="structural-v1",
         embedding_fingerprint="abc",
     )
-    
+
     corpus_service = CorpusService(
         config,
         service.uow_factory,
@@ -3564,25 +3621,28 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
         index=IntegrationTestIndex(),
         embedder=lambda _q: [0.1],
     )
-    
+
     # Run a search with a candidate limit of 1
     # Both chunks are returned by semantic. Lexical doesn't run because requested_mode="semantic"
     execution, _results = corpus_service.search_assets(
-        "test trace ordering", candidate_limit=1, run_id=run_id, requested_mode="semantic"
+        "test trace ordering",
+        candidate_limit=1,
+        run_id=run_id,
+        requested_mode="semantic",
     )
-    
+
     # Verify trace order and rejection reasons
     trace = corpus_service.get_retrieval_trace(execution.execution_id)
-    
+
     # We should have 2 semantic and 2 fused events (since limit is 1, 1 fused selected, 1 fused rejected)
     assert len(trace) == 4
-    
+
     # Verify ordering: semantic should come before fused
     assert trace[0]["stage"] == "semantic"
     assert trace[1]["stage"] == "semantic"
     assert trace[2]["stage"] == "fused"
     assert trace[3]["stage"] == "fused"
-    
+
     # Verify rejection reason on the second fused event
     assert trace[2]["selected"] is True
     assert trace[2]["rejection_reason"] is None

@@ -8,6 +8,7 @@ def calculate_total(items):
         total += item.price * item.quantity
     return total
 
+
 class Item:
     def __init__(self, price, quantity):
         self.price = price

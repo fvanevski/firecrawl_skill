@@ -256,7 +256,9 @@ class TestExtractionProvenance:
         assert disposition_standard == "acceptable"
 
         # Custom tight threshold makes the same content fail (too short for this absurd threshold)
-        config_strict = QualityConfig(quality_version="quality-v3", min_visible_text_length=100000)
+        config_strict = QualityConfig(
+            quality_version="quality-v3", min_visible_text_length=100000
+        )
         metrics_strict = evaluate_quality(fixture_mixed_structure, config=config_strict)
         assert metrics_strict.quality_version == "quality-v3"
 
@@ -808,6 +810,7 @@ class TestE2EExtractionPipeline:
 
         assert quality.required_structured_fields >= 2
 
+
 # ---------------------------------------------------------------------------
 # Unit tests: chunking invariants (no database required)
 # ---------------------------------------------------------------------------
@@ -872,12 +875,13 @@ class TestFaultInjection:
         )
 
         # Mock the blob store to raise on write
-        with patch.object(
-            e2e_extraction_service.blob_store,
-            "put",
-            side_effect=OSError("disk full"),
-        ), pytest.raises(
-            ExtractionError, match="blob_store is required|disk full"
+        with (
+            patch.object(
+                e2e_extraction_service.blob_store,
+                "put",
+                side_effect=OSError("disk full"),
+            ),
+            pytest.raises(ExtractionError, match="blob_store is required|disk full"),
         ):
             e2e_extraction_service.store_raw_blob(b"content")
 
@@ -1128,7 +1132,9 @@ class TestFaultInjection:
         )
         # Use minimal valid content — no selected attempt means we cannot use
         # the attempt's normalized blob, so we supply content directly.
-        content = b"# Unlinked Document\n\nThis document has no extraction attempt linkage.\n"
+        content = (
+            b"# Unlinked Document\n\nThis document has no extraction attempt linkage.\n"
+        )
         request = IngestRequest(
             requested_url="https://test.example.com/unlinked",
             content=content,
@@ -1232,27 +1238,52 @@ class TestRedriveReindexFlow:
         assert data["error"] == "index_not_found"
         assert "not found" in data.get("message", "").lower()
 
-    def test_rederive_service_interface_idempotent(self, e2e_extraction_service, fixture_concise_notice, sample_candidate, sample_run, tmp_path):
+    def test_rederive_service_interface_idempotent(
+        self,
+        e2e_extraction_service,
+        fixture_concise_notice,
+        sample_candidate,
+        sample_run,
+        tmp_path,
+    ):
         """Rederive creates a new derivation and is idempotent on repeat calls."""
         from research_store.derivation_service import DerivationService
         from research_store.quality_evaluator import evaluate_quality
         from research_store.service import CorpusService
 
         # Setup: Ingest a document first to get a real snapshot_id/document_id
-        attempt_id = e2e_extraction_service.create_attempt(candidate_id=sample_candidate, run_id=sample_run)
+        attempt_id = e2e_extraction_service.create_attempt(
+            candidate_id=sample_candidate, run_id=sample_run
+        )
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_concise_notice)
         quality = evaluate_quality(fixture_concise_notice)
         e2e_extraction_service.complete_attempt(
-            attempt_id=attempt_id, exit_status="succeeded", raw_blob=raw_ref, normalized_blob=raw_ref,
-            parser_used="markdown-v1", quality_metrics=quality, failure_class="none"
+            attempt_id=attempt_id,
+            exit_status="succeeded",
+            raw_blob=raw_ref,
+            normalized_blob=raw_ref,
+            parser_used="markdown-v1",
+            quality_metrics=quality,
+            failure_class="none",
         )
-        e2e_extraction_service.evaluate_and_set_disposition(attempt_id=attempt_id, quality_metrics=quality, disposition="acceptable")
-        e2e_extraction_service.select_final_attempt(candidate_id=sample_candidate, attempt_id=attempt_id, selection_reason="test")
-        
+        e2e_extraction_service.evaluate_and_set_disposition(
+            attempt_id=attempt_id, quality_metrics=quality, disposition="acceptable"
+        )
+        e2e_extraction_service.select_final_attempt(
+            candidate_id=sample_candidate,
+            attempt_id=attempt_id,
+            selection_reason="test",
+        )
+
         config = _make_config(tmp_path)
-        corpus_service = CorpusService(config=config, uow_factory=lambda: e2e_extraction_service.uow_factory(), blob_store=e2e_extraction_service.blob_store)
-        
+        corpus_service = CorpusService(
+            config=config,
+            uow_factory=lambda: e2e_extraction_service.uow_factory(),
+            blob_store=e2e_extraction_service.blob_store,
+        )
+
         from research_store.domain import IngestRequest
+
         request = IngestRequest(
             requested_url="https://example.com/test",
             content=fixture_concise_notice,
@@ -1267,7 +1298,7 @@ class TestRedriveReindexFlow:
             corpus_service=corpus_service,
             blob_root=tmp_path / "blobs",
         )
-        
+
         # First call: actually mutates database
         result1 = derivation_service.rederive(
             document_id=document_id,
@@ -1294,33 +1325,62 @@ class TestRedriveReindexFlow:
         assert result2["total_rederived"] == 0
         assert result2["total_noop"] == 1
 
-    def test_multi_derivation_coexistence(self, e2e_extraction_service, fixture_mixed_structure, sample_candidate, sample_run, tmp_path):
+    def test_multi_derivation_coexistence(
+        self,
+        e2e_extraction_service,
+        fixture_mixed_structure,
+        sample_candidate,
+        sample_run,
+        tmp_path,
+    ):
         """Legacy chunks and new hierarchical chunks can coexist without overwriting each other."""
         from research_store.derivation_service import DerivationService
         from research_store.domain import IngestRequest
         from research_store.quality_evaluator import evaluate_quality
         from research_store.service import CorpusService
 
-        attempt_id = e2e_extraction_service.create_attempt(candidate_id=sample_candidate, run_id=sample_run)
+        attempt_id = e2e_extraction_service.create_attempt(
+            candidate_id=sample_candidate, run_id=sample_run
+        )
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_mixed_structure)
         quality = evaluate_quality(fixture_mixed_structure)
         e2e_extraction_service.complete_attempt(
-            attempt_id=attempt_id, exit_status="succeeded", raw_blob=raw_ref, normalized_blob=raw_ref,
-            parser_used="markdown-v1", quality_metrics=quality, failure_class="none"
+            attempt_id=attempt_id,
+            exit_status="succeeded",
+            raw_blob=raw_ref,
+            normalized_blob=raw_ref,
+            parser_used="markdown-v1",
+            quality_metrics=quality,
+            failure_class="none",
         )
-        e2e_extraction_service.evaluate_and_set_disposition(attempt_id=attempt_id, quality_metrics=quality, disposition="acceptable")
-        e2e_extraction_service.select_final_attempt(candidate_id=sample_candidate, attempt_id=attempt_id, selection_reason="test")
-        
+        e2e_extraction_service.evaluate_and_set_disposition(
+            attempt_id=attempt_id, quality_metrics=quality, disposition="acceptable"
+        )
+        e2e_extraction_service.select_final_attempt(
+            candidate_id=sample_candidate,
+            attempt_id=attempt_id,
+            selection_reason="test",
+        )
+
         # Ingest with structural-v1 chunker
         config = _make_config(tmp_path)
-        corpus_service = CorpusService(config=config, uow_factory=lambda: e2e_extraction_service.uow_factory(), blob_store=e2e_extraction_service.blob_store)
-        
+        corpus_service = CorpusService(
+            config=config,
+            uow_factory=lambda: e2e_extraction_service.uow_factory(),
+            blob_store=e2e_extraction_service.blob_store,
+        )
+
         request = IngestRequest(
             requested_url="https://example.com/test",
             content=fixture_mixed_structure,
             mime_type="text/markdown",
             extraction_attempt_id=attempt_id,
-            metadata={"rederive": {"chunker_version": "structural-v1", "chunker_name": "structural"}},
+            metadata={
+                "rederive": {
+                    "chunker_version": "structural-v1",
+                    "chunker_name": "structural",
+                }
+            },
         )
         ingest_result1 = corpus_service.ingest(request)
         document_id = ingest_result1.document_id
@@ -1331,7 +1391,7 @@ class TestRedriveReindexFlow:
             corpus_service=corpus_service,
             blob_root=tmp_path / "blobs",
         )
-        
+
         result = derivation_service.rederive(
             document_id=document_id,
             chunker_name="hierarchical",
@@ -1427,9 +1487,7 @@ class TestRedriveReindexFlow:
             tokenizer_name="cl100k_base",
             dry_run=False,
         )
-        assert result["total_rederived"] == 1, (
-            f"Expected 1 rederivation, got {result}"
-        )
+        assert result["total_rederived"] == 1, f"Expected 1 rederivation, got {result}"
 
         # ---- CRITICAL assertions: source snapshot and original document survive ----
         with e2e_extraction_service.uow_factory() as uow:  # noqa: SIM117
@@ -1642,7 +1700,9 @@ class TestChunkingProvenance:
             assert hasattr(chunk, "parent_block_ordinal")
             if chunk.parent_block_ordinal is not None:
                 parent_ordinal_found = True
-        assert parent_ordinal_found, "At least one chunk must have a parent block ordinal"
+        assert parent_ordinal_found, (
+            "At least one chunk must have a parent block ordinal"
+        )
 
     def test_chunks_have_heading_path(self):
         """Chunks preserve heading path for section context."""
@@ -1991,5 +2051,3 @@ def sample_run():
         db_run_id = cur.fetchone()[0]
 
     return db_run_id
-
-

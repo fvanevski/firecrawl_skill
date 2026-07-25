@@ -28,7 +28,11 @@ class FirecrawlSearchAdapter:
                 capture_output=True,
                 timeout=timeout,
             )
-            return proc.returncode, proc.stdout, proc.stderr.decode("utf-8", errors="replace")
+            return (
+                proc.returncode,
+                proc.stdout,
+                proc.stderr.decode("utf-8", errors="replace"),
+            )
         except subprocess.TimeoutExpired:
             return -1, b"", "ETIMEDOUT: Firecrawl search process timed out"
         except Exception as exc:  # noqa: BLE001
@@ -108,7 +112,9 @@ class FirecrawlSearchAdapter:
                 if last_stderr.strip():
                     transport_err = f"Firecrawl search failed (exit {last_code}): {last_stderr.strip()[:300]}"
                 else:
-                    transport_err = f"Firecrawl search failed with exit code {last_code}"
+                    transport_err = (
+                        f"Firecrawl search failed with exit code {last_code}"
+                    )
 
         payload = (
             stdout_data

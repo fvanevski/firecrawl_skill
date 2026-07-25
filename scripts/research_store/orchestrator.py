@@ -569,6 +569,7 @@ class ExtractionStage:
             attempt_map = {}
             if self.extraction_service:
                 from dataclasses import replace
+
                 for idx, req in enumerate(raw_requests):
                     if isinstance(req, dict):
                         meta = req.get("metadata", {})
@@ -576,11 +577,12 @@ class ExtractionStage:
                     else:
                         meta = getattr(req, "metadata", {})
                         url = getattr(req, "requested_url", None)
-                    
+
                     candidate_id = meta.get("candidate_id")
                     if candidate_id:
                         try:
                             from uuid import UUID
+
                             cid = UUID(str(candidate_id))
                             aid = self.extraction_service.create_attempt(
                                 candidate_id=cid, run_id=run_id
@@ -588,10 +590,16 @@ class ExtractionStage:
                             if isinstance(req, dict):
                                 req["extraction_attempt_id"] = aid
                             else:
-                                raw_requests[idx] = replace(req, extraction_attempt_id=aid)
+                                raw_requests[idx] = replace(
+                                    req, extraction_attempt_id=aid
+                                )
                             attempt_map[url] = aid
                         except Exception as exc:  # noqa: BLE001
-                            logger.warning("Failed to create extraction attempt for %s: %s", url, exc)
+                            logger.warning(
+                                "Failed to create extraction attempt for %s: %s",
+                                url,
+                                exc,
+                            )
 
             try:
                 invocation_id = f"extract:{run_id}:{uuid4()}"
@@ -601,20 +609,32 @@ class ExtractionStage:
                     requests=raw_requests,
                     research_run_external_id=str(run_id),
                 )
-                
+
                 if self.extraction_service:
                     for asset in manifest.get("assets", []):
                         url = asset.get("requested_url")
                         aid = attempt_map.get(url)
                         if aid:
-                            status = "succeeded" if asset.get("status") == "complete" else "failed"
+                            status = (
+                                "succeeded"
+                                if asset.get("status") == "complete"
+                                else "failed"
+                            )
                             try:
-                                self.extraction_service.complete_attempt(attempt_id=aid, exit_status=status)
+                                self.extraction_service.complete_attempt(
+                                    attempt_id=aid, exit_status=status
+                                )
                                 if status == "succeeded":
-                                    self.extraction_service.select_final_attempt(attempt_id=aid)
+                                    self.extraction_service.select_final_attempt(
+                                        attempt_id=aid
+                                    )
                             except Exception as exc:  # noqa: BLE001
-                                logger.warning("Failed to complete extraction attempt %s: %s", aid, exc)
-                                
+                                logger.warning(
+                                    "Failed to complete extraction attempt %s: %s",
+                                    aid,
+                                    exc,
+                                )
+
                 completed_assets = [
                     asset
                     for asset in manifest.get("assets", [])
@@ -886,7 +906,9 @@ class CoverageReviewStage:
                 TerminalDecisionOutcome.BLOCKED.value,
             ):
                 decision_type = STRATEGY_DECISION_PARTIAL
-                reason = context.get("_terminal_reason", "partial coverage or blocked requirement")
+                reason = context.get(
+                    "_terminal_reason", "partial coverage or blocked requirement"
+                )
 
         # Map decision type to run state name for transitions
         state_name = decision_to_state(decision_type)
@@ -1443,7 +1465,11 @@ class ResearchOrchestrator:
             run_service, acquisition_service, coverage_service, strategy_service, config
         )
         self._extraction = ExtractionStage(
-            run_service, coverage_service, config, corpus_service=corpus_service, extraction_service=extraction_service
+            run_service,
+            coverage_service,
+            config,
+            corpus_service=corpus_service,
+            extraction_service=extraction_service,
         )
         self._indexing = IndexingStage(
             run_service, config, corpus_service=corpus_service
@@ -1513,6 +1539,7 @@ class ResearchOrchestrator:
         extraction_service = None
         try:
             from .container import build_extraction_service
+
             extraction_service = build_extraction_service(config)
         except Exception as exc:  # noqa: BLE001
             logger.debug("extraction_service auto-build deferred: %s", exc)
@@ -1707,14 +1734,18 @@ class ResearchOrchestrator:
                     current_state = run_status.state
 
                     # Track new assets from indexing stage (successful URLs)
-                    if result.details and result.details.get(ContextKeys.SUCCESSFUL_URLS):
+                    if result.details and result.details.get(
+                        ContextKeys.SUCCESSFUL_URLS
+                    ):
                         ctx["_new_asset_count"] = result.details.get(
                             ContextKeys.SUCCESSFUL_URLS, 0
                         )
 
                     # Accumulate extraction failure and retrieval counts from indexing
                     if result.details:
-                        attempts = result.details.get(ContextKeys.EXTRACTION_ATTEMPTS, 0)
+                        attempts = result.details.get(
+                            ContextKeys.EXTRACTION_ATTEMPTS, 0
+                        )
                         success = result.details.get(
                             ContextKeys.EXTRACTION_SUCCESS_COUNT, 0
                         )

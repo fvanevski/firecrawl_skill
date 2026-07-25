@@ -185,4 +185,3 @@ def downgrade():
         "Research workflow migrations are forward-only; restore PostgreSQL "
         "from the pre-v19 recovery boundary or apply a forward repair migration."
     )
-

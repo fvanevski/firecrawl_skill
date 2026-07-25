@@ -39,10 +39,18 @@ def _spec_ids(spec: ResearchSpec):
     return {
         CoverageItemType.QUESTION: {item.question_id for item in spec.questions},
         CoverageItemType.CLAIM: {item.claim_id for item in spec.claims_to_validate},
-        CoverageItemType.SOURCE_REQUIREMENT: {item.requirement_id for item in spec.required_source_classes},
-        CoverageItemType.FRESHNESS_REQUIREMENT: {item.requirement_id for item in spec.freshness_requirements},
-        CoverageItemType.CORROBORATION_REQUIREMENT: {item.requirement_id for item in spec.corroboration_requirements},
-        CoverageItemType.CONTRADICTION_REQUIREMENT: {item.requirement_id for item in spec.contradiction_requirements},
+        CoverageItemType.SOURCE_REQUIREMENT: {
+            item.requirement_id for item in spec.required_source_classes
+        },
+        CoverageItemType.FRESHNESS_REQUIREMENT: {
+            item.requirement_id for item in spec.freshness_requirements
+        },
+        CoverageItemType.CORROBORATION_REQUIREMENT: {
+            item.requirement_id for item in spec.corroboration_requirements
+        },
+        CoverageItemType.CONTRADICTION_REQUIREMENT: {
+            item.requirement_id for item in spec.contradiction_requirements
+        },
     }
 
 
@@ -64,24 +72,38 @@ def validate_references(model, context: ValidationContext):
         _validate_search_targets(model.queries, spec)
     elif isinstance(model, CandidateAssessment):
         if context.candidate_ids:
-            _reject_unknown([model.candidate_id], context.candidate_ids, "candidate IDs")
+            _reject_unknown(
+                [model.candidate_id], context.candidate_ids, "candidate IDs"
+            )
         if spec is None:
-            raise DomainValidationError("CandidateAssessment validation requires ResearchSpec")
+            raise DomainValidationError(
+                "CandidateAssessment validation requires ResearchSpec"
+            )
         _validate_search_targets([model], spec)
     elif isinstance(model, CoverageLedger):
         if context.run_id and model.run_id != context.run_id:
             raise DomainValidationError("CoverageLedger references another run")
         if spec is None:
-            raise DomainValidationError("CoverageLedger validation requires ResearchSpec")
+            raise DomainValidationError(
+                "CoverageLedger validation requires ResearchSpec"
+            )
         known_subjects = _spec_ids(spec)
         for item in model.items:
             try:
                 subject = UUID(item.subject_id)
             except ValueError as exc:
-                raise DomainValidationError(f"invalid coverage subject ID: {item.subject_id}") from exc
-            _reject_unknown([subject], known_subjects[item.item_type], f"{item.item_type.value} subject IDs")
+                raise DomainValidationError(
+                    f"invalid coverage subject ID: {item.subject_id}"
+                ) from exc
+            _reject_unknown(
+                [subject],
+                known_subjects[item.item_type],
+                f"{item.item_type.value} subject IDs",
+            )
             if context.candidate_ids:
-                _reject_unknown(item.candidate_ids, context.candidate_ids, "candidate IDs")
+                _reject_unknown(
+                    item.candidate_ids, context.candidate_ids, "candidate IDs"
+                )
             if context.snapshot_ids:
                 _reject_unknown(item.snapshot_ids, context.snapshot_ids, "snapshot IDs")
             if context.passage_ids:
@@ -89,8 +111,13 @@ def validate_references(model, context: ValidationContext):
     elif isinstance(model, StrategyRevisionProposal):
         ledger = context.coverage_ledger
         if ledger is None:
-            raise DomainValidationError("StrategyRevisionProposal validation requires CoverageLedger")
-        if context.current_run_revision is not None and model.run_revision != context.current_run_revision:
+            raise DomainValidationError(
+                "StrategyRevisionProposal validation requires CoverageLedger"
+            )
+        if (
+            context.current_run_revision is not None
+            and model.run_revision != context.current_run_revision
+        ):
             raise DomainValidationError("stale run revision")
         if model.coverage_revision != ledger.revision:
             raise DomainValidationError("stale coverage revision")
@@ -100,14 +127,18 @@ def validate_references(model, context: ValidationContext):
             "coverage item IDs",
         )
         if context.candidate_ids:
-            _reject_unknown(model.proposed_candidate_ids, context.candidate_ids, "candidate IDs")
+            _reject_unknown(
+                model.proposed_candidate_ids, context.candidate_ids, "candidate IDs"
+            )
         if spec and model.proposed_queries:
             _validate_search_targets(model.proposed_queries, spec)
     elif isinstance(model, EvidencePacket):
         if context.run_id and model.run_id != context.run_id:
             raise DomainValidationError("EvidencePacket references another run")
         if spec and model.research_spec_id != spec.research_spec_id:
-            raise DomainValidationError("EvidencePacket references another ResearchSpec")
+            raise DomainValidationError(
+                "EvidencePacket references another ResearchSpec"
+            )
         if spec:
             _reject_unknown(
                 [item.claim_id for item in model.claims],
@@ -117,7 +148,10 @@ def validate_references(model, context: ValidationContext):
         expected_revision = context.current_coverage_revision
         if expected_revision is None and context.coverage_ledger:
             expected_revision = context.coverage_ledger.revision
-        if expected_revision is not None and model.coverage_revision != expected_revision:
+        if (
+            expected_revision is not None
+            and model.coverage_revision != expected_revision
+        ):
             raise DomainValidationError("stale coverage revision")
         if context.candidate_ids:
             _reject_unknown(

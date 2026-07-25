@@ -826,7 +826,9 @@ class TestRederiveIdempotency:
 
     def test_chunker_idempotent_across_calls(self):
         """Calling hierarchical_chunks twice with same input produces identical output."""
-        source = "# Title\n\nParagraph one.\n\n- item A\n- item B\n\n```py\nprint(1)\n```\n"
+        source = (
+            "# Title\n\nParagraph one.\n\n- item A\n- item B\n\n```py\nprint(1)\n```\n"
+        )
         blocks = structural_blocks(source)
 
         first = hierarchical_chunks(

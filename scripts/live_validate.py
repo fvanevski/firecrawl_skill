@@ -76,7 +76,9 @@ class Campaign:
     def __init__(self, args):
         self.args = args
         self.run_id = args.run_id or now_stamp()
-        root = Path(args.artifact_root or Path(tempfile.gettempdir()) / "firecrawl_validation")
+        root = Path(
+            args.artifact_root or Path(tempfile.gettempdir()) / "firecrawl_validation"
+        )
         self.root = root / self.run_id
         self.logs = self.root / "logs"
         self.scratch = self.root / "scratch"
@@ -88,7 +90,10 @@ class Campaign:
         if not self.real_cli:
             raise RuntimeError("firecrawl executable not found")
         self.counter = self.root / "operations.json"
-        self.counter.write_text(json.dumps({"count": 0, "max": args.max_operations, "calls": []}), encoding="utf-8")
+        self.counter.write_text(
+            json.dumps({"count": 0, "max": args.max_operations, "calls": []}),
+            encoding="utf-8",
+        )
         self.cases = []
         self.started = time.time()
         self._write_proxy()
@@ -157,9 +162,13 @@ class Campaign:
                 env[key] = str(value)
         started = time.time()
         try:
-            result = subprocess.run(command, text=True, capture_output=True, env=env, timeout=timeout)  # noqa: PLW1510
+            result = subprocess.run(
+                command, text=True, capture_output=True, env=env, timeout=timeout
+            )  # noqa: PLW1510
             status = "pass" if result.returncode == 0 else "fail"
-            output = result.stdout + ("\n--- stderr ---\n" + result.stderr if result.stderr else "")
+            output = result.stdout + (
+                "\n--- stderr ---\n" + result.stderr if result.stderr else ""
+            )
             returncode = result.returncode
         except subprocess.TimeoutExpired as exc:
             status, returncode = "fail", 124
@@ -175,15 +184,23 @@ class Campaign:
             "log": str(log_path),
         }
         self.cases.append(case)
-        print(f"[{status.upper()}] {name} ({case['seconds']}s, operations={case['operations_after']})")
+        print(
+            f"[{status.upper()}] {name} ({case['seconds']}s, operations={case['operations_after']})"
+        )
         return case
 
     def preflight(self):
-        case = {"name": "api_root", "required": True, "operations_after": self.operation_count()}
+        case = {
+            "name": "api_root",
+            "required": True,
+            "operations_after": self.operation_count(),
+        }
         try:
             with urlopen(self.args.api_url.rstrip("/") + "/", timeout=10) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-            case["status"] = "pass" if payload.get("message") == "Firecrawl API" else "fail"
+            case["status"] = (
+                "pass" if payload.get("message") == "Firecrawl API" else "fail"
+            )
             case["payload"] = payload
         except Exception as exc:  # noqa: BLE001
             case.update(status="fail", error=f"{type(exc).__name__}: {exc}")
@@ -196,18 +213,121 @@ class Campaign:
         if not self.preflight():
             return 2
 
-        self.run("smart_dry_run_heuristic", [str(SCRIPT_DIR / "fsearch_smart"), BENCHMARKS["academic"]["topic"], "--complexity", "moderate", "--planner", "heuristic", "--dry-run"], timeout=60)
+        self.run(
+            "smart_dry_run_heuristic",
+            [
+                str(SCRIPT_DIR / "fsearch_smart"),
+                BENCHMARKS["academic"]["topic"],
+                "--complexity",
+                "moderate",
+                "--planner",
+                "heuristic",
+                "--dry-run",
+            ],
+            timeout=60,
+        )
         if self.args.planner in ("local", "both"):
-            self.run("smart_dry_run_local", [str(SCRIPT_DIR / "fsearch_smart"), BENCHMARKS["academic"]["topic"], "--complexity", "moderate", "--planner", "auto", "--llm", "local", "--dry-run"], timeout=180, required=False)
+            self.run(
+                "smart_dry_run_local",
+                [
+                    str(SCRIPT_DIR / "fsearch_smart"),
+                    BENCHMARKS["academic"]["topic"],
+                    "--complexity",
+                    "moderate",
+                    "--planner",
+                    "auto",
+                    "--llm",
+                    "local",
+                    "--dry-run",
+                ],
+                timeout=180,
+                required=False,
+            )
 
         if self.args.profile != "focused":
-            self.run("scrape_markdown_batch", [str(SCRIPT_DIR / "fscrape"), "https://docs.firecrawl.dev/introduction", "https://example.com", "--output-dir", str(self.scratch / "feature_markdown")])
-            self.run("scrape_links", [str(SCRIPT_DIR / "fscrape"), "https://docs.firecrawl.dev/introduction", "--format", "links", "--output-dir", str(self.scratch / "feature_links")])
-            self.run("scrape_summary", [str(SCRIPT_DIR / "fscrape"), "https://docs.firecrawl.dev/introduction", "--summary", "--output-dir", str(self.scratch / "feature_summary")])
-            schema = json.dumps({"type": "object", "properties": {"product_name": {"type": ["string", "null"]}, "price": {"type": ["string", "null"]}}, "required": ["product_name"]})
-            self.run("scrape_schema", [str(SCRIPT_DIR / "fscrape"), "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html", "--schema", schema, "--output-dir", str(self.scratch / "feature_schema")])
-            self.run("search_web", [str(SCRIPT_DIR / "fsearch"), "Firecrawl CLI installation official documentation", "--limit", "5", "--scrape-limit", "2", "--dir", str(self.scratch / "search_web")])
-            self.run("search_news", [str(SCRIPT_DIR / "fsearch"), "small modular reactor grid policy 2026", "--limit", "5", "--scrape-limit", "2", "--sources", "news", "--tbs", "qdr:m", "--dir", str(self.scratch / "search_news")], required=False)
+            self.run(
+                "scrape_markdown_batch",
+                [
+                    str(SCRIPT_DIR / "fscrape"),
+                    "https://docs.firecrawl.dev/introduction",
+                    "https://example.com",
+                    "--output-dir",
+                    str(self.scratch / "feature_markdown"),
+                ],
+            )
+            self.run(
+                "scrape_links",
+                [
+                    str(SCRIPT_DIR / "fscrape"),
+                    "https://docs.firecrawl.dev/introduction",
+                    "--format",
+                    "links",
+                    "--output-dir",
+                    str(self.scratch / "feature_links"),
+                ],
+            )
+            self.run(
+                "scrape_summary",
+                [
+                    str(SCRIPT_DIR / "fscrape"),
+                    "https://docs.firecrawl.dev/introduction",
+                    "--summary",
+                    "--output-dir",
+                    str(self.scratch / "feature_summary"),
+                ],
+            )
+            schema = json.dumps(
+                {
+                    "type": "object",
+                    "properties": {
+                        "product_name": {"type": ["string", "null"]},
+                        "price": {"type": ["string", "null"]},
+                    },
+                    "required": ["product_name"],
+                }
+            )
+            self.run(
+                "scrape_schema",
+                [
+                    str(SCRIPT_DIR / "fscrape"),
+                    "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+                    "--schema",
+                    schema,
+                    "--output-dir",
+                    str(self.scratch / "feature_schema"),
+                ],
+            )
+            self.run(
+                "search_web",
+                [
+                    str(SCRIPT_DIR / "fsearch"),
+                    "Firecrawl CLI installation official documentation",
+                    "--limit",
+                    "5",
+                    "--scrape-limit",
+                    "2",
+                    "--dir",
+                    str(self.scratch / "search_web"),
+                ],
+            )
+            self.run(
+                "search_news",
+                [
+                    str(SCRIPT_DIR / "fsearch"),
+                    "small modular reactor grid policy 2026",
+                    "--limit",
+                    "5",
+                    "--scrape-limit",
+                    "2",
+                    "--sources",
+                    "news",
+                    "--tbs",
+                    "qdr:m",
+                    "--dir",
+                    str(self.scratch / "search_news"),
+                ],
+                required=False,
+            )
 
         if self.args.profile == "termux":
             selected = ["simple"]
@@ -217,14 +337,38 @@ class Campaign:
             selected = ["simple", "academic", "termux"]
         for key in selected:
             benchmark = BENCHMARKS[key]
-            planner = "heuristic" if self.args.profile == "termux" else ("auto" if self.args.planner in ("local", "both") else "heuristic")
+            planner = (
+                "heuristic"
+                if self.args.profile == "termux"
+                else ("auto" if self.args.planner in ("local", "both") else "heuristic")
+            )
             self.run(
                 f"smart_{key}_{planner}",
-                [str(SCRIPT_DIR / "fsearch_smart"), benchmark["topic"], "--complexity", benchmark["complexity"], "--planner", planner, *(["--llm", "local"] if planner == "auto" else [])],
+                [
+                    str(SCRIPT_DIR / "fsearch_smart"),
+                    benchmark["topic"],
+                    "--complexity",
+                    benchmark["complexity"],
+                    "--planner",
+                    planner,
+                    *(["--llm", "local"] if planner == "auto" else []),
+                ],
                 timeout=1800,
             )
         if self.args.profile == "full":
-            self.run("literal_baseline", [str(SCRIPT_DIR / "fsearch"), BENCHMARKS["termux"]["topic"], "--limit", "10", "--scrape-limit", "3", "--dir", str(self.scratch / "literal_baseline")])
+            self.run(
+                "literal_baseline",
+                [
+                    str(SCRIPT_DIR / "fsearch"),
+                    BENCHMARKS["termux"]["topic"],
+                    "--limit",
+                    "10",
+                    "--scrape-limit",
+                    "3",
+                    "--dir",
+                    str(self.scratch / "literal_baseline"),
+                ],
+            )
 
         return self.finish()
 
@@ -242,19 +386,39 @@ class Campaign:
         for root, data in smart_roots:
             queries = [entry["query"] for entry in data.get("query_plan", [])]
             candidates = data.get("candidates", [])
-            domains = {urlsplit(item.get("url", "")).netloc for item in candidates if item.get("url")}
-            pairwise = [jaccard(queries[i], queries[j]) for i in range(len(queries)) for j in range(i + 1, len(queries))]
-            benchmark = next((value for value in BENCHMARKS.values() if value["topic"] == data.get("topic")), None)
+            domains = {
+                urlsplit(item.get("url", "")).netloc
+                for item in candidates
+                if item.get("url")
+            }
+            pairwise = [
+                jaccard(queries[i], queries[j])
+                for i in range(len(queries))
+                for j in range(i + 1, len(queries))
+            ]
+            benchmark = next(
+                (
+                    value
+                    for value in BENCHMARKS.values()
+                    if value["topic"] == data.get("topic")
+                ),
+                None,
+            )
             text = " ".join(json.dumps(item).lower() for item in candidates)
             facet_coverage = 0.0
             min_domains = 1
             if benchmark:
-                facet_coverage = sum(facet.lower() in text for facet in benchmark["facets"]) / len(benchmark["facets"])
+                facet_coverage = sum(
+                    facet.lower() in text for facet in benchmark["facets"]
+                ) / len(benchmark["facets"])
                 min_domains = benchmark["min_domains"]
             total_words = max(1, data.get("total_estimated_words", 0))
             screening_ratio = words(root / "_index.md") / total_words
             checks = {
-                "unique_queries": len(queries) == len({re.sub(r"\W+", " ", query.lower()).strip() for query in queries}),
+                "unique_queries": len(queries)
+                == len(
+                    {re.sub(r"\W+", " ", query.lower()).strip() for query in queries}
+                ),
                 "broad_first": bool(queries) and "site:" not in queries[0].lower(),
                 "max_query_similarity": max(pairwise, default=0) <= 0.80,
                 "domain_diversity": len(domains) >= min_domains,
@@ -281,13 +445,21 @@ class Campaign:
         metrics = self.metrics()
         operations = json.loads(self.counter.read_text(encoding="utf-8"))
         catalog_records = []
-        for path in (self.catalog / "invocations").glob("fc_*.json") if (self.catalog / "invocations").is_dir() else []:
+        for path in (
+            (self.catalog / "invocations").glob("fc_*.json")
+            if (self.catalog / "invocations").is_dir()
+            else []
+        ):
             try:
                 catalog_records.append(json.loads(path.read_text(encoding="utf-8")))
             except (OSError, ValueError):
                 continue
-        catalog_pass = bool(catalog_records) and all(catalog_record_valid(record) for record in catalog_records)
-        required_cases_pass = all(case["status"] == "pass" for case in self.cases if case.get("required"))
+        catalog_pass = bool(catalog_records) and all(
+            catalog_record_valid(record) for record in catalog_records
+        )
+        required_cases_pass = all(
+            case["status"] == "pass" for case in self.cases if case.get("required")
+        )
         quality_pass = bool(metrics) and all(item["pass"] for item in metrics)
         manifest = {
             "run_id": self.run_id,
@@ -301,11 +473,17 @@ class Campaign:
             "operations": operations,
             "cases": self.cases,
             "quality_metrics": metrics,
-            "catalog": {"path": str(self.catalog), "record_count": len(catalog_records), "pass": catalog_pass},
+            "catalog": {
+                "path": str(self.catalog),
+                "record_count": len(catalog_records),
+                "pass": catalog_pass,
+            },
             "required_cases_pass": required_cases_pass,
             "quality_pass": quality_pass,
         }
-        (self.root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        (self.root / "manifest.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
+        )
         lines = [
             f"# Firecrawl Live Validation: {self.run_id}",
             "",
@@ -321,8 +499,19 @@ class Campaign:
             "| Case | Status | Seconds | Operations after |",
             "|---|---:|---:|---:|",
         ]
-        lines.extend(f"| {case['name']} | {case['status']} | {case.get('seconds', 0)} | {case.get('operations_after', 0)} |" for case in self.cases)
-        lines.extend(["", "## Quality metrics", "", "| Topic | Queries | Candidates | Domains | Facet coverage | Screening ratio | Status |", "|---|---:|---:|---:|---:|---:|---:|"])
+        lines.extend(
+            f"| {case['name']} | {case['status']} | {case.get('seconds', 0)} | {case.get('operations_after', 0)} |"
+            for case in self.cases
+        )
+        lines.extend(
+            [
+                "",
+                "## Quality metrics",
+                "",
+                "| Topic | Queries | Candidates | Domains | Facet coverage | Screening ratio | Status |",
+                "|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
         lines.extend(
             f"| {item['topic']} | {item['query_count']} | {item['candidate_count']} | {item['domain_count']} | {item['facet_coverage']:.0%} | {item['screening_ratio']:.1%} | {'PASS' if item['pass'] else 'FAIL'} |"
             for item in metrics
@@ -334,12 +523,19 @@ class Campaign:
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--api-url", default=os.environ.get("FIRECRAWL_API_URL", "http://garion.us:3002"))
+    parser.add_argument(
+        "--api-url",
+        default=os.environ.get("FIRECRAWL_API_URL", "http://garion.us:3002"),
+    )
     parser.add_argument("--max-operations", type=int, default=125)
     parser.add_argument("--artifact-root")
     parser.add_argument("--run-id")
-    parser.add_argument("--planner", choices=["heuristic", "local", "both"], default="both")
-    parser.add_argument("--profile", choices=["full", "focused", "termux"], default="full")
+    parser.add_argument(
+        "--planner", choices=["heuristic", "local", "both"], default="both"
+    )
+    parser.add_argument(
+        "--profile", choices=["full", "focused", "termux"], default="full"
+    )
     args = parser.parse_args()
     if not 1 <= args.max_operations <= 125:
         parser.error("--max-operations must be between 1 and 125")

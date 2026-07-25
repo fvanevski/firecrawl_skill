@@ -486,12 +486,15 @@ class TestFallbackPolicy:
         # but we patch it to raise so the fallback path is exercised.
         raw = b"<main><h1>Title</h1><p>Body</p></main>"
 
-        with patch(
-            "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
-            side_effect=ValueError("simulated failure"),
-        ), patch(
-            "research_store.service.CorpusService._try_normalized_html",
-            return_value=[{"type": "paragraph", "text": "mocked"}],
+        with (
+            patch(
+                "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
+                side_effect=ValueError("simulated failure"),
+            ),
+            patch(
+                "research_store.service.CorpusService._try_normalized_html",
+                return_value=[{"type": "paragraph", "text": "mocked"}],
+            ),
         ):
             blocks = service._parse_content(raw, "text/html")
             # Should fall through to normalized fallback, which succeeds
@@ -524,13 +527,17 @@ class TestFallbackPolicy:
 
         raw = b"<main><h1>Title</h1><p>Body</p></main>"
 
-        with patch(
-            "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
-            side_effect=ValueError("simulated failure"),
-        ), patch(
-            "research_store.service.CorpusService._try_normalized_html",
-            return_value=None,
-        ), pytest.raises(ValueError, match="HTML parsing failed"):
+        with (
+            patch(
+                "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
+                side_effect=ValueError("simulated failure"),
+            ),
+            patch(
+                "research_store.service.CorpusService._try_normalized_html",
+                return_value=None,
+            ),
+            pytest.raises(ValueError, match="HTML parsing failed"),
+        ):
             service._parse_content(raw, "text/html")
 
     def test_is_html_content(self):
@@ -996,23 +1003,26 @@ class TestRepresentativeFixtures:
         source = b"<main>\n  <h1>Title</h1>\n  <p>Some paragraph text.</p>\n</main>"
         result = parser.parse(source)
         text = source.decode("utf-8")
-        
+
         blocks = result.blocks
         assert len(blocks) == 2
-        
+
         assert blocks[0].block_type == "heading"
-        assert text[blocks[0].char_start:blocks[0].char_end] == "Title"
-        
+        assert text[blocks[0].char_start : blocks[0].char_end] == "Title"
+
         assert blocks[1].block_type == "paragraph"
-        assert text[blocks[1].char_start:blocks[1].char_end] == "Some paragraph text."
+        assert text[blocks[1].char_start : blocks[1].char_end] == "Some paragraph text."
 
     def test_boilerplate_gating(self):
         """Test that boilerplate can be extracted if strip_boilerplate=False."""
         from research_store.parsing.html_main_content import HtmlMainContentParser
+
         parser = HtmlMainContentParser(strip_boilerplate=False)
-        source = b"<nav>Navigation Link</nav><main>Main content</main><aside>Sidebar</aside>"
+        source = (
+            b"<nav>Navigation Link</nav><main>Main content</main><aside>Sidebar</aside>"
+        )
         result = parser.parse(source)
-        
+
         all_text = " ".join(b.text for b in result.blocks)
         assert "Navigation Link" in all_text
         assert "Main content" in all_text

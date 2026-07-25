@@ -255,12 +255,9 @@ class MemoryCoverageRepository:
                 if key in items:
                     authority_class = (evt.payload or {}).get("authority_class")
                     if authority_class and (
-                        authority_class
-                        not in items[key]["authority_classes_present"]
+                        authority_class not in items[key]["authority_classes_present"]
                     ):
-                        items[key]["authority_classes_present"].append(
-                            authority_class
-                        )
+                        items[key]["authority_classes_present"].append(authority_class)
 
             elif evt.item_id and evt.event_type == "freshness_observed":
                 key = str(evt.item_id)
@@ -356,8 +353,12 @@ class MemoryCoverageRepository:
         events.sort(key=lambda e: (e["coverage_revision"], str(e["id"])))
         return events[offset : offset + limit]
 
-    def list_coverage_events(self, run_id, item_id=None, event_type=None, limit=100, offset=0):
-        return self.list_events(run_id, item_id=item_id, event_type=event_type, limit=limit, offset=offset)
+    def list_coverage_events(
+        self, run_id, item_id=None, event_type=None, limit=100, offset=0
+    ):
+        return self.list_events(
+            run_id, item_id=item_id, event_type=event_type, limit=limit, offset=offset
+        )
 
     def get_event(self, run_id, event_id):
         for e in self.events.values():

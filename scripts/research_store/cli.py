@@ -555,7 +555,9 @@ def parser():
     search = sub.add_parser("search-assets")
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=20)
-    search.add_argument("--mode", default="hybrid", choices=["hybrid", "lexical", "semantic"])
+    search.add_argument(
+        "--mode", default="hybrid", choices=["hybrid", "lexical", "semantic"]
+    )
     search.add_argument("--domain")
     search.add_argument("--source-type")
     search.add_argument("--date-from")
@@ -718,9 +720,7 @@ def _cmd_rederive_v2(config, args) -> int:
         derivation_id = last_result.get("derivation_id")
         if derivation_id:
             try:
-                activated = derivation_service.activate_derivation(
-                    _UUID(derivation_id)
-                )
+                activated = derivation_service.activate_derivation(_UUID(derivation_id))
                 result["activated"] = str(activated.id)
             except ValueError as exc:
                 result["activate_error"] = str(exc)
@@ -2638,7 +2638,9 @@ def main(argv=None):
             "execution": {
                 "requested_mode": execution.requested_mode,
                 "executed_mode": execution.executed_mode,
-                "mechanical_status": execution.mechanical_status.value if hasattr(execution.mechanical_status, "value") else execution.mechanical_status,
+                "mechanical_status": execution.mechanical_status.value
+                if hasattr(execution.mechanical_status, "value")
+                else execution.mechanical_status,
                 "component_health": execution.component_health,
                 "errors": execution.errors,
                 "warnings": execution.warnings,
@@ -2647,7 +2649,7 @@ def main(argv=None):
                 "skipped_stages": execution.skipped_stages,
                 "timing": execution.timing,
             },
-            "candidates": candidates
+            "candidates": candidates,
         }
     elif args.command == "inspect-asset":
         result = service.inspect_asset(UUID(args.id))
@@ -2897,7 +2899,11 @@ def main(argv=None):
         # escalate to exit code 2.
         if report.records_conflicting > 0 or report.records_omitted > 0:
             raise SystemExit(1)
-        elif report.errors or report.records_malformed > 0 and report.records_inserted == 0:
+        elif (
+            report.errors
+            or report.records_malformed > 0
+            and report.records_inserted == 0
+        ):
             raise SystemExit(2)
         return 0
 

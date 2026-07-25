@@ -73,7 +73,9 @@ class SearchCompatibilityExporter:
             candidates = uow.runs.list_candidates(run_id)
 
             for cand in candidates:
-                cand_occs = uow.runs.list_candidate_occurrences(cand["id"], run_id=run_id)
+                cand_occs = uow.runs.list_candidate_occurrences(
+                    cand["id"], run_id=run_id
+                )
                 for occ in cand_occs:
                     if str(occ["search_response_id"]) == str(search_response_id):
                         occurrences.append(
@@ -110,9 +112,8 @@ class SearchCompatibilityExporter:
                 }
             )
 
-        source_state_str = (
-            raw_bytes.decode("utf-8", errors="replace")
-            + json.dumps(candidate_items, sort_keys=True)
+        source_state_str = raw_bytes.decode("utf-8", errors="replace") + json.dumps(
+            candidate_items, sort_keys=True
         )
         source_state_sha256 = hashlib.sha256(
             source_state_str.encode("utf-8")

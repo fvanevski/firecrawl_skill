@@ -185,7 +185,8 @@ class CorpusService:
                     if normalized_result is not None:
                         return normalized_result
                 logging.getLogger(__name__).exception(
-                    "Unexpected parser error, falling back to legacy: %s", exc  # noqa: TRY401
+                    "Unexpected parser error, falling back to legacy: %s",
+                    exc,  # noqa: TRY401
                 )
 
         if self._is_html_content(mime_type, raw):
@@ -364,7 +365,9 @@ class CorpusService:
 
         with self.uow_factory() as uow:
             if requested_mode != "semantic":
-                lexical = uow.documents.search_lexical(query, candidate_limit * 2, filters)
+                lexical = uow.documents.search_lexical(
+                    query, candidate_limit * 2, filters
+                )
                 for item in lexical:
                     item["candidate_id"] = str(item["candidate_id"])
                     item["retriever"] = "postgres_fts"
@@ -374,7 +377,13 @@ class CorpusService:
                 timing["lexical"] = 0.0
 
             semantic = []
-            component_health = {"lexical": "healthy", "embedding": "healthy", "qdrant": "healthy", "reranker": "healthy", "fusion": "healthy"}
+            component_health = {
+                "lexical": "healthy",
+                "embedding": "healthy",
+                "qdrant": "healthy",
+                "reranker": "healthy",
+                "fusion": "healthy",
+            }
             errors = []
             warnings = []
             skipped_stages = []
@@ -489,31 +498,39 @@ class CorpusService:
                 uow.record_retrieval_execution(run_id, execution)
                 events_to_log = []
 
-                def _add_stage_events(stage_name, source_list, limit=None, final_stage=False):
+                def _add_stage_events(
+                    stage_name, source_list, limit=None, final_stage=False
+                ):
                     for rank, item in enumerate(source_list, 1):
                         selected = final_stage and limit is not None and rank <= limit
                         rejection_reason = None
                         if not selected and limit is not None and rank > limit:
-                            rejection_reason = "below_candidate_limit" if final_stage else "below_reranker_limit"
+                            rejection_reason = (
+                                "below_candidate_limit"
+                                if final_stage
+                                else "below_reranker_limit"
+                            )
 
                         raw_score = item.get("lexical_score")
                         if raw_score is None:
                             raw_score = item.get("semantic_score")
 
-                        events_to_log.append({
-                            "stage": stage_name,
-                            "query": query,
-                            "filters": filters,
-                            "retriever": item.get("retriever", "hybrid_rrf"),
-                            "candidate_type": "chunk",
-                            "candidate_id": item["candidate_id"],
-                            "raw_score": raw_score,
-                            "normalized_score": item.get("fused_score"),
-                            "reranker_score": item.get("reranker_score"),
-                            "rank": rank,
-                            "selected": selected,
-                            "rejection_reason": rejection_reason,
-                        })
+                        events_to_log.append(
+                            {
+                                "stage": stage_name,
+                                "query": query,
+                                "filters": filters,
+                                "retriever": item.get("retriever", "hybrid_rrf"),
+                                "candidate_type": "chunk",
+                                "candidate_id": item["candidate_id"],
+                                "raw_score": raw_score,
+                                "normalized_score": item.get("fused_score"),
+                                "reranker_score": item.get("reranker_score"),
+                                "rank": rank,
+                                "selected": selected,
+                                "rejection_reason": rejection_reason,
+                            }
+                        )
 
                 if lexical:
                     _add_stage_events("lexical", lexical)
@@ -521,15 +538,27 @@ class CorpusService:
                     _add_stage_events("semantic", semantic)
 
                 # Fused is final if reranker is not run or fails
-                fused_is_final = (reranked_candidates is None)
-                _add_stage_events("fused", fused_candidates,
-                                  limit=candidate_limit if fused_is_final else self.config.reranker_candidate_limit,
-                                  final_stage=fused_is_final)
+                fused_is_final = reranked_candidates is None
+                _add_stage_events(
+                    "fused",
+                    fused_candidates,
+                    limit=candidate_limit
+                    if fused_is_final
+                    else self.config.reranker_candidate_limit,
+                    final_stage=fused_is_final,
+                )
 
                 if reranked_candidates is not None:
-                    _add_stage_events("reranked", reranked_candidates, limit=candidate_limit, final_stage=True)
+                    _add_stage_events(
+                        "reranked",
+                        reranked_candidates,
+                        limit=candidate_limit,
+                        final_stage=True,
+                    )
 
-                uow.retrieval_events.log_retrieval_batch(execution.execution_id, run_id, events_to_log)
+                uow.retrieval_events.log_retrieval_batch(
+                    execution.execution_id, run_id, events_to_log
+                )
 
             return execution, candidates
 

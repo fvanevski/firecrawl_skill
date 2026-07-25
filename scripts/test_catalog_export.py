@@ -59,9 +59,7 @@ TEST_DSN = "postgresql://postgres:postgres@localhost:5432/firecrawl_test"
 @pytest.fixture(scope="session")
 def prepared_database():
     """Ensure database schema is up-to-date for integration tests."""
-    require_disposable_database_reset(
-        TEST_DSN, "firecrawl_test"
-    )
+    require_disposable_database_reset(TEST_DSN, "firecrawl_test")
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
@@ -111,7 +109,7 @@ def _create_run_with_data(run_service, query="export test query"):
         actor_type="system",
     )
     planning_status = run_service.status(run_id=run_id)
-    
+
     run_service.transition(
         run_id,
         "corpus_review",
@@ -127,9 +125,7 @@ def _link_snapshot(config, run_id, url, payload, *, persist_blob=True):
     digest = sha256(payload).hexdigest()
     blob_uri = f"blob://sha256/{digest}"
     if persist_blob:
-        ContentAddressedBlobStore(config.blob_root).put(
-            BytesIO(payload), "text/plain"
-        )
+        ContentAddressedBlobStore(config.blob_root).put(BytesIO(payload), "text/plain")
     with connect(config.database_url) as connection, connection.cursor() as cursor:
         cursor.execute(
             """INSERT INTO sources(canonical_url,registered_domain)
@@ -212,9 +208,7 @@ def test_export_invocation_success(config, run_service, tmp_path):
         config.chunker_version,
     )
     event_svc = EventService(uow_factory)
-    catalog_svc = InvocationCatalogService(
-        uow_factory, event_service=event_svc
-    )
+    catalog_svc = InvocationCatalogService(uow_factory, event_service=event_svc)
 
     inv_record = catalog_svc.begin(
         run_id,
@@ -420,9 +414,7 @@ def test_legacy_invocation_reader_compatibility(config, run_service, tmp_path):
         config.chunker_version,
     )
     event_svc = EventService(uow_factory)
-    catalog_svc = InvocationCatalogService(
-        uow_factory, event_service=event_svc
-    )
+    catalog_svc = InvocationCatalogService(uow_factory, event_service=event_svc)
 
     inv_record = catalog_svc.begin(
         run_id,
@@ -580,9 +572,7 @@ def test_export_no_secret_leakage(config, run_service, tmp_path):
         config.chunker_version,
     )
     event_svc = EventService(uow_factory)
-    catalog_svc = InvocationCatalogService(
-        uow_factory, event_service=event_svc
-    )
+    catalog_svc = InvocationCatalogService(uow_factory, event_service=event_svc)
 
     # Create an invocation with input that contains a secret-like value.
     # The catalog service sanitizes it before storing in PG.
@@ -609,8 +599,12 @@ def test_export_no_secret_leakage(config, run_service, tmp_path):
 
     # Verify the input was sanitized — raw secrets must not appear
     input_data = inv_data.get("input", {})
-    assert "api_key" not in input_data or "sk-secret-key-12345" not in str(input_data.get("api_key", ""))
-    assert "authorization" not in input_data or "Bearer token-abc-def" not in str(input_data.get("authorization", ""))
+    assert "api_key" not in input_data or "sk-secret-key-12345" not in str(
+        input_data.get("api_key", "")
+    )
+    assert "authorization" not in input_data or "Bearer token-abc-def" not in str(
+        input_data.get("authorization", "")
+    )
     # The sanitized value should be present but redacted
     assert input_data.get("api_key") == "[REDACTED]"
     assert input_data.get("authorization") == "[REDACTED]"
@@ -790,7 +784,8 @@ def test_export_with_failed_assessment_stages(config, run_service, tmp_path):
                       %s,'complete',%s,%s,%s)
                RETURNING id""",
             (
-                str(run_id), sha256(b"semantic input").hexdigest(),
+                str(run_id),
+                sha256(b"semantic input").hexdigest(),
                 f"catalog-export-call:{run_id}",
                 json.dumps({"authorization": "Bearer secret-value"}),
                 json.dumps({"usage": {"total_tokens": 10}}),
@@ -865,7 +860,9 @@ def test_events_follow_authoritative_sequence(config, run_service, tmp_path):
     assert result.status == "complete"
     events = [
         json.loads(line)
-        for line in (tmp_path / "events-sequence" / "events.jsonl").read_text().splitlines()
+        for line in (tmp_path / "events-sequence" / "events.jsonl")
+        .read_text()
+        .splitlines()
     ]
     assert [item["sequence_number"] for item in events] == sorted(
         item["sequence_number"] for item in events
@@ -940,13 +937,10 @@ def test_snapshots_are_run_scoped_and_blob_backed(config, run_service, tmp_path)
         first_run, tmp_path / "scoped"
     )
     assert result.status == "complete"
-    index = json.loads(
-        (tmp_path / "scoped" / "snapshots" / "index.json").read_text()
-    )
+    index = json.loads((tmp_path / "scoped" / "snapshots" / "index.json").read_text())
     assert [item["snapshot_id"] for item in index] == [first_snapshot]
     assert (
-        tmp_path / "scoped" / "blobs" / "sha256" /
-        first_digest[:2] / first_digest
+        tmp_path / "scoped" / "blobs" / "sha256" / first_digest[:2] / first_digest
     ).read_bytes() == b"first run"
 
 
@@ -993,31 +987,39 @@ def test_manifest_uses_authoritative_claim_evidence_provenance(
     )
     assert result.status == "complete"
     manifest = json.loads((tmp_path / "provenance" / "manifest.json").read_text())
-    assert manifest["sources"] == [{
-        "candidate_id": None,
-        "canonical_url": "https://evidence.example.test/source",
-        "claim_ids": [str(claim_id)],
-        "fidelity": "authoritative_passage",
-        "passage_ids": [str(passage_id)],
-        "relationships": [{
-            "claim_id": str(claim_id),
-            "confidence": 0.9,
-            "passage_id": str(passage_id),
-            "passage_sha256": digest,
-            "relationship": "supports",
+    assert manifest["sources"] == [
+        {
+            "candidate_id": None,
+            "canonical_url": "https://evidence.example.test/source",
+            "claim_ids": [str(claim_id)],
+            "fidelity": "authoritative_passage",
+            "passage_ids": [str(passage_id)],
+            "relationships": [
+                {
+                    "claim_id": str(claim_id),
+                    "confidence": 0.9,
+                    "passage_id": str(passage_id),
+                    "passage_sha256": digest,
+                    "relationship": "supports",
+                    "snapshot_id": snapshot_id,
+                }
+            ],
+            "resolution": "matched",
+            "roles": ["supports"],
             "snapshot_id": snapshot_id,
-        }],
-        "resolution": "matched",
-        "roles": ["supports"],
-        "snapshot_id": snapshot_id,
-        "url": "https://evidence.example.test/source",
-    }]
+            "url": "https://evidence.example.test/source",
+        }
+    ]
 
 
 def test_missing_blob_fails_without_replacing_catalog(config, run_service, tmp_path):
     run_id = _create_run_with_data(run_service)
     _link_snapshot(
-        config, run_id, "https://missing.example.test/source", b"missing", persist_blob=False
+        config,
+        run_id,
+        "https://missing.example.test/source",
+        b"missing",
+        persist_blob=False,
     )
     target = tmp_path / "missing-blob"
     target.mkdir()
@@ -1034,12 +1036,17 @@ def test_catalog_export_cli_parity(config, run_service, tmp_path, monkeypatch, c
 
     run_id = _create_run_with_data(run_service)
     with connect(config.database_url) as connection, connection.cursor() as cursor:
-        cursor.execute("SELECT external_run_id FROM research_runs WHERE id=%s", (str(run_id),))
+        cursor.execute(
+            "SELECT external_run_id FROM research_runs WHERE id=%s", (str(run_id),)
+        )
         external_run_id = cursor.fetchone()[0]
     monkeypatch.setenv("DATABASE_URL", config.database_url)
     monkeypatch.setenv("BLOB_ROOT", str(config.blob_root))
     target = tmp_path / "cli"
-    assert main(["catalog-export", "run", external_run_id, "--target-dir", str(target)]) == 0
+    assert (
+        main(["catalog-export", "run", external_run_id, "--target-dir", str(target)])
+        == 0
+    )
     output = json.loads(capsys.readouterr().out)
     assert output["status"] == "complete"
     assert (target / "runs" / f"fr_{run_id.hex}.json").is_file()

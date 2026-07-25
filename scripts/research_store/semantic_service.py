@@ -27,7 +27,9 @@ def redact_sensitive(value: Any) -> Any:
     """Return a JSON-compatible value with credential material removed."""
     if isinstance(value, Mapping):
         return {
-            str(key): "[REDACTED]" if _SENSITIVE_KEY.search(str(key)) else redact_sensitive(item)
+            str(key): "[REDACTED]"
+            if _SENSITIVE_KEY.search(str(key))
+            else redact_sensitive(item)
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
@@ -50,18 +52,34 @@ def _redact_schema(value: Any) -> Any:
     return redact_sensitive(value)
 
 
-def validate_structured_payload(value: Any, schema: Mapping[str, Any], path: str = "$") -> list[str]:
+def validate_structured_payload(
+    value: Any, schema: Mapping[str, Any], path: str = "$"
+) -> list[str]:
     """Validate the JSON-Schema subset used by current semantic contracts."""
     errors: list[str] = []
     expected = schema.get("type")
-    types = tuple(expected) if isinstance(expected, list) else (expected,) if expected else ()
+    types = (
+        tuple(expected)
+        if isinstance(expected, list)
+        else (expected,)
+        if expected
+        else ()
+    )
     matches = (
         ("object" in types and isinstance(value, dict))
         or ("array" in types and isinstance(value, list))
         or ("string" in types and isinstance(value, str))
         or ("boolean" in types and isinstance(value, bool))
-        or ("integer" in types and isinstance(value, int) and not isinstance(value, bool))
-        or ("number" in types and isinstance(value, (int, float)) and not isinstance(value, bool))
+        or (
+            "integer" in types
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        )
+        or (
+            "number" in types
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        )
         or ("null" in types and value is None)
     )
     if types and not matches:
@@ -78,10 +96,14 @@ def validate_structured_payload(value: Any, schema: Mapping[str, Any], path: str
                 errors.append(f"{path}: unexpected field {key}")
         for key, item in value.items():
             if key in properties:
-                errors.extend(validate_structured_payload(item, properties[key], f"{path}.{key}"))
+                errors.extend(
+                    validate_structured_payload(item, properties[key], f"{path}.{key}")
+                )
     if isinstance(value, list) and schema.get("items"):
         for index, item in enumerate(value):
-            errors.extend(validate_structured_payload(item, schema["items"], f"{path}[{index}]"))
+            errors.extend(
+                validate_structured_payload(item, schema["items"], f"{path}[{index}]")
+            )
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:
             errors.append(f"{path}: below minimum")
@@ -123,8 +145,16 @@ class SemanticCallService:
         return run_id, status
 
     @staticmethod
-    def _required_context(context: Mapping[str, Any]) -> tuple[UUID, str, str, int, str]:
-        required = ("run_id", "stage", "schema_name", "schema_version", "idempotency_key")
+    def _required_context(
+        context: Mapping[str, Any],
+    ) -> tuple[UUID, str, str, int, str]:
+        required = (
+            "run_id",
+            "stage",
+            "schema_name",
+            "schema_version",
+            "idempotency_key",
+        )
         missing = [name for name in required if context.get(name) in (None, "")]
         if missing:
             raise ValueError(f"semantic call context is missing: {', '.join(missing)}")
@@ -152,7 +182,9 @@ class SemanticCallService:
         schema: Mapping[str, Any],
         input_token_estimate: int,
     ) -> UUID:
-        run_id, stage, schema_name, schema_version, idempotency_key = self._required_context(context)
+        run_id, stage, schema_name, schema_version, idempotency_key = (
+            self._required_context(context)
+        )
         _run_id, status = self._authorize(context, SemanticAuthority.LOCAL_MODEL)
         request = redact_sensitive(
             {
@@ -161,7 +193,9 @@ class SemanticCallService:
                 "prompt_hash": prompt_hash,
                 "schema_name": schema_name,
                 "schema_version": schema_version,
-                "input_artifact_ids": [str(item) for item in context.get("input_artifact_ids", ())],
+                "input_artifact_ids": [
+                    str(item) for item in context.get("input_artifact_ids", ())
+                ],
                 "input_token_estimate": input_token_estimate,
                 "policy_version": context.get("policy_version"),
                 "fallback_from_call_id": context.get("fallback_from_call_id"),
@@ -195,7 +229,9 @@ class SemanticCallService:
         artifacts: list[Mapping[str, Any]],
         error: str = "",
     ) -> tuple[UUID, ...]:
-        run_id, _stage, schema_name, schema_version, idempotency_key = self._required_context(context)
+        run_id, _stage, schema_name, schema_version, idempotency_key = (
+            self._required_context(context)
+        )
         response_metadata = redact_sensitive(
             {
                 "provenance": provenance,
@@ -224,8 +260,12 @@ class SemanticCallService:
                         schema_version,
                         redact_sensitive(artifact["payload"]),
                         f"{idempotency_key}:artifact:{attempt_number}",
-                        validation_status="valid" if not artifact.get("validation_errors") else "invalid",
-                        validation_errors=redact_sensitive(artifact.get("validation_errors", [])),
+                        validation_status="valid"
+                        if not artifact.get("validation_errors")
+                        else "invalid",
+                        validation_errors=redact_sensitive(
+                            artifact.get("validation_errors", [])
+                        ),
                     )
                 )
         return tuple(artifact_ids)
@@ -237,7 +277,13 @@ class SemanticCallService:
             uow.runs.annotate_semantic_call(
                 run_id,
                 call_id,
-                {"fallback": {"used": True, "provider": provider, "requested_model": model}},
+                {
+                    "fallback": {
+                        "used": True,
+                        "provider": provider,
+                        "requested_model": model,
+                    }
+                },
             )
 
     def ingest_host_artifact(
@@ -283,7 +329,9 @@ class SemanticCallService:
         authority: SemanticAuthority,
         actor_identifier: str | None,
     ) -> HostArtifactResult:
-        run_id, stage, schema_name, schema_version, idempotency_key = self._required_context(context)
+        run_id, stage, schema_name, schema_version, idempotency_key = (
+            self._required_context(context)
+        )
         sanitized_payload = redact_sensitive(payload)
         validation_errors = validate_structured_payload(sanitized_payload, schema)
         request = redact_sensitive(
@@ -291,7 +339,9 @@ class SemanticCallService:
                 "authority": authority.value,
                 "schema_name": schema_name,
                 "schema_version": schema_version,
-                "input_artifact_ids": [str(item) for item in context.get("input_artifact_ids", ())],
+                "input_artifact_ids": [
+                    str(item) for item in context.get("input_artifact_ids", ())
+                ],
                 "actor_identifier": actor_identifier,
                 "policy_version": context.get("policy_version"),
             }
@@ -387,7 +437,9 @@ class SemanticCallService:
                 actor_identifier=actor_identifier,
             )
         if local_decision is None:
-            raise ValueError("autonomous_local semantic decisions require a local model stage")
+            raise ValueError(
+                "autonomous_local semantic decisions require a local model stage"
+            )
         return local_decision(
             semantic_persistence=self,
             semantic_context=dict(context),

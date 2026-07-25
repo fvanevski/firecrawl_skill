@@ -38,12 +38,13 @@ def prepared_database():
     assert migrate(TEST_DSN) >= 10
 
 
-
-
 # --- Unit Tests ---
 
+
 def test_parse_raw_search_response_succeeded():
-    raw = json.dumps({"success": True, "data": [{"url": "https://example.com", "title": "Example"}]})
+    raw = json.dumps(
+        {"success": True, "data": [{"url": "https://example.com", "title": "Example"}]}
+    )
     status, count, summary, err = parse_raw_search_response(raw)
     assert status == "succeeded"
     assert count == 1
@@ -129,6 +130,7 @@ def test_replay_reader_integrity_and_missing_blob(tmp_path):
 
 
 # --- Integration Tests (requires PostgreSQL) ---
+
 
 @pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
@@ -228,7 +230,9 @@ def test_idempotent_duplicate_search_response_integration(tmp_path, prepared_dat
     assert rec1["id"] == rec2["id"]
 
     # Submitting different payload with same idempotency key raises ValueError
-    different_payload = json.dumps({"success": True, "data": [{"url": "https://different.org"}]})
+    different_payload = json.dumps(
+        {"success": True, "data": [{"url": "https://different.org"}]}
+    )
     with pytest.raises(ValueError, match="idempotency_key conflict"):
         run_svc.record_search_response(
             run_id,
@@ -274,7 +278,6 @@ def test_blob_orphan_on_transaction_rollback_integration(tmp_path, prepared_data
                 raise ValueError("simulated transaction failure")
         except ValueError:
             pass
-
 
     # DB should have 0 responses for run_id
     assert len(run_svc.list_search_responses(run_id)) == 0

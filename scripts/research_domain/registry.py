@@ -18,7 +18,9 @@ from .models import CANONICAL_MODELS
 from .validation import ValidationContext, validate_references
 
 MODEL_BY_VERSION = {model.SCHEMA_VERSION: model for model in CANONICAL_MODELS}
-CURRENT_VERSION_BY_MODEL = {model.__name__: model.SCHEMA_VERSION for model in CANONICAL_MODELS}
+CURRENT_VERSION_BY_MODEL = {
+    model.__name__: model.SCHEMA_VERSION for model in CANONICAL_MODELS
+}
 COMPATIBILITY_POLICY = {
     version: {
         "current": True,
@@ -43,13 +45,18 @@ def load_model(payload: dict, context: ValidationContext | None = None):
 
 def serialize_model(model) -> dict:
     version = getattr(model, "schema_version", None)
-    if version not in MODEL_BY_VERSION or not isinstance(model, MODEL_BY_VERSION[version]):
+    if version not in MODEL_BY_VERSION or not isinstance(
+        model, MODEL_BY_VERSION[version]
+    ):
         raise DomainValidationError("model is not registered for its schema_version")
     return to_dict(model)
 
 
 def schema_registry() -> dict:
-    return {version: schema_for(model) for version, model in sorted(MODEL_BY_VERSION.items())}
+    return {
+        version: schema_for(model)
+        for version, model in sorted(MODEL_BY_VERSION.items())
+    }
 
 
 def write_schemas(output_dir: Path) -> None:
@@ -65,7 +72,14 @@ def main(argv=None) -> int:
     if args.write:
         write_schemas(args.write)
     if args.print_registry:
-        print(json.dumps({key: dict(value) for key, value in COMPATIBILITY_POLICY.items()}, indent=2, default=list, sort_keys=True))
+        print(
+            json.dumps(
+                {key: dict(value) for key, value in COMPATIBILITY_POLICY.items()},
+                indent=2,
+                default=list,
+                sort_keys=True,
+            )
+        )
     if not args.write and not args.print_registry:
         parser.error("one of --write or --print-registry is required")
     return 0

@@ -135,7 +135,9 @@ _IGNORE_TAGS = frozenset(("script", "style", "noscript", "head"))
 class _MainContentCollector(HTMLParser):
     """HTML parser that extracts main content with semantic awareness."""
 
-    def __init__(self, strip_boilerplate: bool = True, line_offsets: list[int] | None = None) -> None:
+    def __init__(
+        self, strip_boilerplate: bool = True, line_offsets: list[int] | None = None
+    ) -> None:
         super().__init__()
         self.blocks: list[TypedBlock] = []
         self._headings: list[str] = []
@@ -155,7 +157,7 @@ class _MainContentCollector(HTMLParser):
         self._in_title = False
         self._title_pending = False
         self._pending_heading_title: str = ""  # Temp storage for current heading text
-        
+
         self.strip_boilerplate = strip_boilerplate
         self.line_offsets = line_offsets or []
         self._current_char_start: int | None = None
@@ -305,10 +307,10 @@ class _MainContentCollector(HTMLParser):
         elif tag == "img":
             alt = attr_dict.get("alt", "")
             self._flush_text()
-            
+
             char_start = self._current_absolute_offset()
             text_repr = f"[{alt}]"
-            
+
             self.blocks.append(
                 TypedBlock(
                     ordinal=len(self.blocks),
@@ -317,7 +319,7 @@ class _MainContentCollector(HTMLParser):
                     heading_path=tuple(self._headings),
                     parser_version="html-main-content-v1",
                     char_start=char_start,
-                    char_end=char_start + len(text_repr)
+                    char_end=char_start + len(text_repr),
                 )
             )
         elif tag == "figcaption":
@@ -342,7 +344,12 @@ class _MainContentCollector(HTMLParser):
         if tag in _IGNORE_TAGS or (self.strip_boilerplate and tag in _SKIP_TAGS):
             if self._skip_depth > 0:
                 self._skip_depth -= 1
-                if self.strip_boilerplate and self._skip_depth == 0 and tag in _SKIP_TAGS and self._in_skip:
+                if (
+                    self.strip_boilerplate
+                    and self._skip_depth == 0
+                    and tag in _SKIP_TAGS
+                    and self._in_skip
+                ):
                     self._in_skip = False
                     self._flush_text()
             return
@@ -602,8 +609,7 @@ class HtmlMainContentParser(Parser):
             offset += len(line)
 
         collector = _MainContentCollector(
-            strip_boilerplate=self.strip_boilerplate,
-            line_offsets=line_offsets
+            strip_boilerplate=self.strip_boilerplate, line_offsets=line_offsets
         )
         try:
             collector.feed(text)

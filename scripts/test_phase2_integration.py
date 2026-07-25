@@ -25,6 +25,7 @@ Exit criteria verified:
   8. No candidate exists only in scratch state — scratch generation is always
      performed after the DB commit; if scratch fails, DB state is authoritative.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -58,6 +59,7 @@ TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 # Session-scoped DB fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def prepared_database():
     """Migrate a disposable test database to HEAD before the session runs."""
@@ -77,12 +79,18 @@ def prepared_database():
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_success_payload(*urls: str) -> bytes:
     """Build a minimal Firecrawl-shaped success response with the given URLs."""
-    return json.dumps({
-        "success": True,
-        "data": [{"url": u, "title": f"Title for {u}", "snippet": "snippet"} for u in urls],
-    }).encode("utf-8")
+    return json.dumps(
+        {
+            "success": True,
+            "data": [
+                {"url": u, "title": f"Title for {u}", "snippet": "snippet"}
+                for u in urls
+            ],
+        }
+    ).encode("utf-8")
 
 
 def _make_error_payload(message: str = "Rate limit exceeded") -> bytes:
@@ -114,11 +122,14 @@ class StubSearchAdapter:
 # UNIT TESTS (no database required)
 # ===========================================================================
 
+
 class TestParseRawSearchResponse:
     """Unit tests for the raw-response parser covering all status classes."""
 
     def test_succeeded_single_item(self):
-        raw = json.dumps({"success": True, "data": [{"url": "https://a.com", "title": "A"}]})
+        raw = json.dumps(
+            {"success": True, "data": [{"url": "https://a.com", "title": "A"}]}
+        )
         status, count, summary, err = parse_raw_search_response(raw)
         assert status == "succeeded"
         assert count == 1
@@ -126,11 +137,16 @@ class TestParseRawSearchResponse:
         assert summary["sample_candidates"][0]["url"] == "https://a.com"
 
     def test_succeeded_multiple_items(self):
-        raw = json.dumps({"success": True, "data": [
-            {"url": "https://a.com"},
-            {"url": "https://b.com"},
-            {"url": "https://c.com"},
-        ]})
+        raw = json.dumps(
+            {
+                "success": True,
+                "data": [
+                    {"url": "https://a.com"},
+                    {"url": "https://b.com"},
+                    {"url": "https://c.com"},
+                ],
+            }
+        )
         status, count, _, err = parse_raw_search_response(raw)
         assert status == "succeeded"
         assert count == 3
@@ -185,11 +201,16 @@ class TestParseRawSearchResponse:
     def test_partial_items_url_missing_skipped_unit(self):
         """Items without a URL field are counted by the parser but skipped during
         candidate extraction. The parser itself counts all items in the array."""
-        raw = json.dumps({"success": True, "data": [
-            {"url": "https://valid.com", "title": "Valid"},
-            {"title": "No URL here"},         # no url → skipped later
-            {"url": "", "title": "Empty URL"}, # empty url → skipped later
-        ]})
+        raw = json.dumps(
+            {
+                "success": True,
+                "data": [
+                    {"url": "https://valid.com", "title": "Valid"},
+                    {"title": "No URL here"},  # no url → skipped later
+                    {"url": "", "title": "Empty URL"},  # empty url → skipped later
+                ],
+            }
+        )
         # Parser returns count of all items in the array (3)
         status, count, _summary, err = parse_raw_search_response(raw)
         assert status == "succeeded"
@@ -230,6 +251,7 @@ class TestBlobStoreIsolation:
 # INTEGRATION TESTS (require PostgreSQL + blob store)
 # ===========================================================================
 
+
 @pytest.mark.skipif(not TEST_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
 class TestScratchDeletionSurvival:
     """
@@ -243,7 +265,9 @@ class TestScratchDeletionSurvival:
         """Deleting the scratch directory after a successful acquisition does not
         remove search responses or candidates from PostgreSQL."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-scratch-del-{uuid4()}"
@@ -251,11 +275,16 @@ class TestScratchDeletionSurvival:
         run_id = run_svc.status(external_id=ext_id).id
 
         scratch_dir = tmp_path / "scratch_del"
-        adapter = StubSearchAdapter(_make_success_payload("https://survivor.example.com/doc"))
+        adapter = StubSearchAdapter(
+            _make_success_payload("https://survivor.example.com/doc")
+        )
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
 
         res = acq_svc.execute_search(
-            run_id, "scratch deletion test", scratch_dir=scratch_dir, export_scratch=True
+            run_id,
+            "scratch deletion test",
+            scratch_dir=scratch_dir,
+            export_scratch=True,
         )
         assert res.postgres_committed is True
         assert res.scratch_exported is True
@@ -276,11 +305,15 @@ class TestScratchDeletionSurvival:
         assert stored_resp["status"] == "succeeded"
         assert stored_resp["result_count"] == 1
 
-    def test_scratch_write_failure_does_not_invalidate_postgres(self, tmp_path, prepared_database):
+    def test_scratch_write_failure_does_not_invalidate_postgres(
+        self, tmp_path, prepared_database
+    ):
         """When the scratch export fails (e.g. path is a regular file), the
         PostgreSQL acquisition must still be committed and candidates intact."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-scratch-fail-p2-{uuid4()}"
@@ -291,7 +324,9 @@ class TestScratchDeletionSurvival:
         blocker = tmp_path / "scratch_blocked"
         blocker.write_text("I am a file, not a directory")
 
-        adapter = StubSearchAdapter(_make_success_payload("https://resilient.example.com/page"))
+        adapter = StubSearchAdapter(
+            _make_success_payload("https://resilient.example.com/page")
+        )
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
 
         res = acq_svc.execute_search(
@@ -304,14 +339,18 @@ class TestScratchDeletionSurvival:
         assert res.scratch_error is not None
 
         cands = run_svc.list_candidates(run_id)
-        assert len(cands) == 1, "candidate must exist in DB regardless of scratch failure"
+        assert len(cands) == 1, (
+            "candidate must exist in DB regardless of scratch failure"
+        )
         assert cands[0]["canonical_url"] == "https://resilient.example.com/page"
 
     def test_no_candidate_only_in_scratch_state(self, tmp_path, prepared_database):
         """Scratch generation always follows the DB commit. Candidates retrieved from
         scratch must also exist in PostgreSQL — never exclusively in scratch."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-no-scratch-only-{uuid4()}"
@@ -319,9 +358,9 @@ class TestScratchDeletionSurvival:
         run_id = run_svc.status(external_id=ext_id).id
 
         scratch_dir = tmp_path / "scratch_check"
-        adapter = StubSearchAdapter(_make_success_payload(
-            "https://check-a.com", "https://check-b.com"
-        ))
+        adapter = StubSearchAdapter(
+            _make_success_payload("https://check-a.com", "https://check-b.com")
+        )
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
 
         res = acq_svc.execute_search(
@@ -348,11 +387,15 @@ class TestRepeatedOccurrencesRetained:
       - Repeated occurrences (same canonical URL across branches) are retained.
     """
 
-    def test_multi_branch_recurrence_increments_count(self, tmp_path, prepared_database):
+    def test_multi_branch_recurrence_increments_count(
+        self, tmp_path, prepared_database
+    ):
         """The same canonical URL appearing in two queries (branches) yields
         recurrence_count == 2 and two occurrence rows."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-recurrence-p2-{uuid4()}"
@@ -362,16 +405,27 @@ class TestRepeatedOccurrencesRetained:
         shared_url = "https://shared.example.org/resource"
 
         resp1 = run_svc.record_search_response(
-            run_id, "branch alpha query", "firecrawl",
-            json.dumps({"success": True, "data": [{"url": shared_url, "title": "Alpha"}]}),
+            run_id,
+            "branch alpha query",
+            "firecrawl",
+            json.dumps(
+                {"success": True, "data": [{"url": shared_url, "title": "Alpha"}]}
+            ),
             f"branch-alpha-{uuid4()}",
         )
         resp2 = run_svc.record_search_response(
-            run_id, "branch beta query", "firecrawl",
-            json.dumps({"success": True, "data": [
-                {"url": shared_url, "title": "Beta (same URL)"},
-                {"url": "https://unique.example.org/other", "title": "Unique"},
-            ]}),
+            run_id,
+            "branch beta query",
+            "firecrawl",
+            json.dumps(
+                {
+                    "success": True,
+                    "data": [
+                        {"url": shared_url, "title": "Beta (same URL)"},
+                        {"url": "https://unique.example.org/other", "title": "Unique"},
+                    ],
+                }
+            ),
             f"branch-beta-{uuid4()}",
         )
 
@@ -394,7 +448,9 @@ class TestRepeatedOccurrencesRetained:
         """A URL appearing across four distinct search branches gets recurrence_count == 4
         and four occurrence rows."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-4branch-{uuid4()}"
@@ -406,8 +462,15 @@ class TestRepeatedOccurrencesRetained:
 
         for i in range(n_branches):
             resp = run_svc.record_search_response(
-                run_id, f"query-branch-{i}", "firecrawl",
-                json.dumps({"success": True, "data": [{"url": recurring_url, "title": f"Branch {i}"}]}),
+                run_id,
+                f"query-branch-{i}",
+                "firecrawl",
+                json.dumps(
+                    {
+                        "success": True,
+                        "data": [{"url": recurring_url, "title": f"Branch {i}"}],
+                    }
+                ),
                 f"four-branch-key-{i}-{uuid4()}",
             )
             run_svc.record_response_candidates(run_id, resp["id"])
@@ -427,11 +490,15 @@ class TestTriageReplayDeterminism:
       - Triage replay produces the same candidate IDs and cards.
     """
 
-    def test_triage_replay_identical_ids_after_scratch_purge(self, tmp_path, prepared_database):
+    def test_triage_replay_identical_ids_after_scratch_purge(
+        self, tmp_path, prepared_database
+    ):
         """build_triage_input and replay_candidates return the same candidate IDs
         before and after the scratch directory is completely deleted."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-triage-replay-{uuid4()}"
@@ -440,11 +507,13 @@ class TestTriageReplayDeterminism:
 
         scratch_dir = tmp_path / "triage_scratch"
 
-        adapter = StubSearchAdapter(_make_success_payload(
-            "https://triage-a.com/doc1",
-            "https://triage-b.org/doc2",
-            "https://triage-c.net/doc3",
-        ))
+        adapter = StubSearchAdapter(
+            _make_success_payload(
+                "https://triage-a.com/doc1",
+                "https://triage-b.org/doc2",
+                "https://triage-c.net/doc3",
+            )
+        )
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
         acq_svc.execute_search(
             run_id, "triage replay query", scratch_dir=scratch_dir, export_scratch=True
@@ -478,17 +547,32 @@ class TestTriageReplayDeterminism:
     def test_triage_card_content_deterministic(self, tmp_path, prepared_database):
         """Calling build_triage_input twice returns identical canonical_url values."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-card-det-{uuid4()}"
         run_svc.create(objective="card content determinism", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
 
-        payload = json.dumps({"success": True, "data": [
-            {"url": "https://determ.example.com/p1", "title": "Determ 1", "snippet": "x" * 300},
-            {"url": "https://determ.example.com/p2", "title": "Determ 2", "snippet": "y" * 300},
-        ]})
+        payload = json.dumps(
+            {
+                "success": True,
+                "data": [
+                    {
+                        "url": "https://determ.example.com/p1",
+                        "title": "Determ 1",
+                        "snippet": "x" * 300,
+                    },
+                    {
+                        "url": "https://determ.example.com/p2",
+                        "title": "Determ 2",
+                        "snippet": "y" * 300,
+                    },
+                ],
+            }
+        )
         resp = run_svc.record_search_response(
             run_id, "determinism query", "firecrawl", payload, f"det-key-{uuid4()}"
         )
@@ -522,16 +606,23 @@ class TestDuplicateIngestionIdempotency:
         but that is out of scope for issue #19.
         """
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-idemp-p2-{uuid4()}"
         run_svc.create(objective="idempotency test", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
 
-        payload = json.dumps({"success": True, "data": [
-            {"url": "https://idemp.example.com/page", "title": "Idempotent"},
-        ]})
+        payload = json.dumps(
+            {
+                "success": True,
+                "data": [
+                    {"url": "https://idemp.example.com/page", "title": "Idempotent"},
+                ],
+            }
+        )
         resp = run_svc.record_search_response(
             run_id, "idempotent query", "firecrawl", payload, f"idemp-key-{uuid4()}"
         )
@@ -556,7 +647,9 @@ class TestDuplicateIngestionIdempotency:
         """AcquisitionService.execute_search with the same idempotency_key must
         return the existing search response without duplicating it."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-acq-idemp-p2-{uuid4()}"
@@ -567,8 +660,12 @@ class TestDuplicateIngestionIdempotency:
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
         key = f"fixed-key-{uuid4()}"
 
-        res1 = acq_svc.execute_search(run_id, "idempotent acq query", idempotency_key=key)
-        res2 = acq_svc.execute_search(run_id, "idempotent acq query", idempotency_key=key)
+        res1 = acq_svc.execute_search(
+            run_id, "idempotent acq query", idempotency_key=key
+        )
+        res2 = acq_svc.execute_search(
+            run_id, "idempotent acq query", idempotency_key=key
+        )
 
         assert res1.search_response_id == res2.search_response_id
         assert res1.postgres_committed and res2.postgres_committed
@@ -592,7 +689,9 @@ class TestCrashReconciliation:
         remains on disk as an orphan but no DB row is created. A subsequent
         successful commit references the pre-existing blob file."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
         blob_store = ContentAddressedBlobStore(tmp_path / "blobs")
 
@@ -600,7 +699,9 @@ class TestCrashReconciliation:
         run_svc.create(objective="crash blob boundary", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
 
-        payload = json.dumps({"success": True, "data": [{"url": "https://crash.example.com"}]})
+        payload = json.dumps(
+            {"success": True, "data": [{"url": "https://crash.example.com"}]}
+        )
         payload_sha = hashlib.sha256(payload.encode()).hexdigest()
 
         # Simulate crash: blob written inside a savepoint that is rolled back
@@ -608,8 +709,12 @@ class TestCrashReconciliation:
             try:
                 with uow.savepoint():
                     uow.runs.record_search_response(
-                        run_id, "crash query", "firecrawl", payload,
-                        f"crash-key-{uuid4()}", blob_store=blob_store,
+                        run_id,
+                        "crash query",
+                        "firecrawl",
+                        payload,
+                        f"crash-key-{uuid4()}",
+                        blob_store=blob_store,
                     )
                     raise ValueError("simulated crash inside transaction")
             except ValueError:
@@ -622,17 +727,25 @@ class TestCrashReconciliation:
 
         # Recovery: commit a new transaction that references the existing blob
         rec = run_svc.record_search_response(
-            run_id, "crash query retry", "firecrawl", payload,
-            f"crash-key-retry-{uuid4()}", blob_store=blob_store,
+            run_id,
+            "crash query retry",
+            "firecrawl",
+            payload,
+            f"crash-key-retry-{uuid4()}",
+            blob_store=blob_store,
         )
         assert rec["raw_blob_sha256"] == payload_sha
         assert len(run_svc.list_search_responses(run_id)) == 1
 
-    def test_reconcile_pending_searches_extracts_candidates(self, tmp_path, prepared_database):
+    def test_reconcile_pending_searches_extracts_candidates(
+        self, tmp_path, prepared_database
+    ):
         """reconcile_pending_searches must re-extract candidates for any response
         that was committed but whose candidate extraction was interrupted."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
         acq_svc = build_acquisition_service(config)
 
@@ -641,10 +754,21 @@ class TestCrashReconciliation:
         run_id = run_svc.status(external_id=ext_id).id
 
         # Insert a response without extracting candidates (mimics crash after response commit)
-        payload = json.dumps({"success": True, "data": [
-            {"url": "https://reconcile-p2.example.com/a", "title": "Reconcile A"},
-            {"url": "https://reconcile-p2.example.com/b", "title": "Reconcile B"},
-        ]})
+        payload = json.dumps(
+            {
+                "success": True,
+                "data": [
+                    {
+                        "url": "https://reconcile-p2.example.com/a",
+                        "title": "Reconcile A",
+                    },
+                    {
+                        "url": "https://reconcile-p2.example.com/b",
+                        "title": "Reconcile B",
+                    },
+                ],
+            }
+        )
         resp = run_svc.record_search_response(
             run_id, "reconcile crash query", "firecrawl", payload, f"recon-p2-{uuid4()}"
         )
@@ -673,7 +797,9 @@ class TestCrashReconciliation:
         occurrence rows are inserted for the same (search_response_id, rank) pair.
         """
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
         acq_svc = build_acquisition_service(config)
 
@@ -681,22 +807,35 @@ class TestCrashReconciliation:
         run_svc.create(objective="reconcile idempotency", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
 
-        payload = json.dumps({"success": True, "data": [
-            {"url": "https://recon-idemp.example.com/x"},
-        ]})
+        payload = json.dumps(
+            {
+                "success": True,
+                "data": [
+                    {"url": "https://recon-idemp.example.com/x"},
+                ],
+            }
+        )
         _ = run_svc.record_search_response(
-            run_id, "reconcile idemp query", "firecrawl", payload, f"recon-idemp-{uuid4()}"
+            run_id,
+            "reconcile idemp query",
+            "firecrawl",
+            payload,
+            f"recon-idemp-{uuid4()}",
         )
 
         acq_svc.reconcile_pending_searches(run_id)
-        acq_svc.reconcile_pending_searches(run_id)  # second call is safe but may re-increment count
+        acq_svc.reconcile_pending_searches(
+            run_id
+        )  # second call is safe but may re-increment count
 
         cands = run_svc.list_candidates(run_id)
         # Critical: exactly one candidate row — no duplicates
         assert len(cands) == 1
         # Occurrence rows are idempotent (ON CONFLICT DO UPDATE)
         occs = run_svc.list_candidate_occurrences(cands[0]["id"])
-        assert len(occs) == 1, "only one occurrence row may exist for the same (response_id, rank)"
+        assert len(occs) == 1, (
+            "only one occurrence row may exist for the same (response_id, rank)"
+        )
 
 
 @pytest.mark.skipif(not TEST_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
@@ -710,7 +849,9 @@ class TestMalformedAndPartialResponses:
         """An HTML error page persisted as a search response must have status='parse_error'
         and candidate_count=0; no candidate rows must be created."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-parse-err-{uuid4()}"
@@ -728,11 +869,15 @@ class TestMalformedAndPartialResponses:
         cands = run_svc.list_candidates(run_id)
         assert len(cands) == 0
 
-    def test_provider_error_response_stored_correctly(self, tmp_path, prepared_database):
+    def test_provider_error_response_stored_correctly(
+        self, tmp_path, prepared_database
+    ):
         """A provider error payload (success=False) must yield status='provider_error'
         and zero candidates."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-prov-err-{uuid4()}"
@@ -741,8 +886,12 @@ class TestMalformedAndPartialResponses:
 
         error_payload = json.dumps({"success": False, "error": "rate limit exceeded"})
         resp = run_svc.record_search_response(
-            run_id, "provider error query", "firecrawl", error_payload,
-            f"prov-err-{uuid4()}", http_status=429
+            run_id,
+            "provider error query",
+            "firecrawl",
+            error_payload,
+            f"prov-err-{uuid4()}",
+            http_status=429,
         )
 
         assert resp["status"] == "provider_error"
@@ -758,21 +907,38 @@ class TestMalformedAndPartialResponses:
         root paths).  Tests use the canonical form in assertions.
         """
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-mixed-{uuid4()}"
         run_svc.create(objective="mixed partial response", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
 
-        mixed_payload = json.dumps({"success": True, "data": [
-            {"url": "https://valid-one.example.com", "title": "Valid"},  # extracted
-            {"title": "Missing URL", "snippet": "no url here"},           # skipped
-            {"url": "", "title": "Empty URL"},                             # skipped
-            {"url": "https://valid-two.example.com", "title": "Valid 2"}, # extracted
-        ]})
+        mixed_payload = json.dumps(
+            {
+                "success": True,
+                "data": [
+                    {
+                        "url": "https://valid-one.example.com",
+                        "title": "Valid",
+                    },  # extracted
+                    {"title": "Missing URL", "snippet": "no url here"},  # skipped
+                    {"url": "", "title": "Empty URL"},  # skipped
+                    {
+                        "url": "https://valid-two.example.com",
+                        "title": "Valid 2",
+                    },  # extracted
+                ],
+            }
+        )
         resp = run_svc.record_search_response(
-            run_id, "mixed partial query", "firecrawl", mixed_payload, f"mixed-{uuid4()}"
+            run_id,
+            "mixed partial query",
+            "firecrawl",
+            mixed_payload,
+            f"mixed-{uuid4()}",
         )
         # Parser sees 4 items in the array → status=succeeded, result_count=4
         assert resp["status"] == "succeeded"
@@ -796,7 +962,9 @@ class TestMalformedAndPartialResponses:
     def test_empty_data_array_persisted(self, tmp_path, prepared_database):
         """An empty data array must yield status='empty' with zero candidates."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-empty-{uuid4()}"
@@ -815,7 +983,9 @@ class TestMalformedAndPartialResponses:
         """AcquisitionService must persist a parse_error response and still commit
         to PostgreSQL; candidate_count must be 0."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-acq-parse-err-{uuid4()}"
@@ -845,19 +1015,25 @@ class TestExportFailureIsolation:
         """A CompatibilityExporter write error (target path is a file) must not
         remove or corrupt committed search_response or search_candidate rows."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-exp-fail-p2-{uuid4()}"
         run_svc.create(objective="export failure isolation p2", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
 
-        adapter = StubSearchAdapter(_make_success_payload(
-            "https://export-fail.example.com/doc1",
-            "https://export-fail.example.com/doc2",
-        ))
+        adapter = StubSearchAdapter(
+            _make_success_payload(
+                "https://export-fail.example.com/doc1",
+                "https://export-fail.example.com/doc2",
+            )
+        )
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
-        acq_res = acq_svc.execute_search(run_id, "export fail query", export_scratch=False)
+        acq_res = acq_svc.execute_search(
+            run_id, "export fail query", export_scratch=False
+        )
         assert acq_res.postgres_committed is True
 
         exporter = build_compatibility_export_service(config)
@@ -875,25 +1051,35 @@ class TestExportFailureIsolation:
         cands = run_svc.list_candidates(run_id)
         assert len(cands) == 2
 
-    def test_compat_export_success_does_not_change_db(self, tmp_path, prepared_database):
+    def test_compat_export_success_does_not_change_db(
+        self, tmp_path, prepared_database
+    ):
         """After a successful compat export, the search response and candidates in
         PostgreSQL must not change (export is purely additive)."""
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
 
         ext_id = f"run-exp-ok-{uuid4()}"
         run_svc.create(objective="export success no db change", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
 
-        adapter = StubSearchAdapter(_make_success_payload("https://export-ok.example.com"))
+        adapter = StubSearchAdapter(
+            _make_success_payload("https://export-ok.example.com")
+        )
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
-        acq_res = acq_svc.execute_search(run_id, "export ok query", export_scratch=False)
+        acq_res = acq_svc.execute_search(
+            run_id, "export ok query", export_scratch=False
+        )
 
         cands_before = run_svc.list_candidates(run_id)
 
         exporter = build_compatibility_export_service(config)
-        exp_res = exporter.export_search(run_id, acq_res.search_response_id, tmp_path / "exp_ok_out")
+        exp_res = exporter.export_search(
+            run_id, acq_res.search_response_id, tmp_path / "exp_ok_out"
+        )
         assert exp_res.status == "complete"
 
         cands_after = run_svc.list_candidates(run_id)
@@ -909,23 +1095,27 @@ class TestPhase2EndToEnd:
 
     def test_full_phase2_scenario(self, tmp_path, prepared_database):
         """Complete Phase 2 lifecycle:
-          a) Execute search → PostgreSQL committed.
-          b) Same URL across two branches → recurrence_count == 2.
-          c) Delete scratch → candidates still in DB.
-          d) Build triage input → IDs match.
-          e) Export search compat → both files and DB record created.
-          f) Export failure variant → DB unaffected.
-          g) Reconcile after crash simulation → missing candidates recovered.
+        a) Execute search → PostgreSQL committed.
+        b) Same URL across two branches → recurrence_count == 2.
+        c) Delete scratch → candidates still in DB.
+        d) Build triage input → IDs match.
+        e) Export search compat → both files and DB record created.
+        f) Export failure variant → DB unaffected.
+        g) Reconcile after crash simulation → missing candidates recovered.
         """
         migrate(TEST_DSN)
-        config = replace(StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs")
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+        )
         run_svc = build_run_service(config)
         acq_svc = build_acquisition_service(
             config,
-            search_adapter=StubSearchAdapter(_make_success_payload(
-                "https://e2e.example.com/shared",
-                "https://e2e.example.com/unique-a",
-            )),
+            search_adapter=StubSearchAdapter(
+                _make_success_payload(
+                    "https://e2e.example.com/shared",
+                    "https://e2e.example.com/unique-a",
+                )
+            ),
         )
         exporter = build_compatibility_export_service(config)
 
@@ -942,10 +1132,12 @@ class TestPhase2EndToEnd:
         assert res1.candidate_count == 2
 
         # --- (b) Second branch with shared URL ---
-        adapter2 = StubSearchAdapter(_make_success_payload(
-            "https://e2e.example.com/shared",     # recurring
-            "https://e2e.example.com/unique-b",   # new
-        ))
+        adapter2 = StubSearchAdapter(
+            _make_success_payload(
+                "https://e2e.example.com/shared",  # recurring
+                "https://e2e.example.com/unique-b",  # new
+            )
+        )
         acq_svc2 = build_acquisition_service(config, search_adapter=adapter2)
         res2 = acq_svc2.execute_search(run_id, "e2e query beta")
         assert res2.postgres_committed is True
@@ -972,7 +1164,9 @@ class TestPhase2EndToEnd:
         assert replay_ids == triage_ids
 
         # --- (e) Compat export succeeds ---
-        exp_res = exporter.export_search(run_id, res1.search_response_id, tmp_path / "e2e_exp")
+        exp_res = exporter.export_search(
+            run_id, res1.search_response_id, tmp_path / "e2e_exp"
+        )
         assert exp_res.status == "complete"
         assert (tmp_path / "e2e_exp" / "_search.json").is_file()
         assert (tmp_path / "e2e_exp" / "_candidates.json").is_file()
@@ -988,12 +1182,18 @@ class TestPhase2EndToEnd:
         crash_ext_id = f"run-crash-e2e-{uuid4()}"
         run_svc.create(objective="crash reconcile e2e", external_id=crash_ext_id)
         crash_run_id = run_svc.status(external_id=crash_ext_id).id
-        crash_payload = json.dumps({"success": True, "data": [
-            {"url": "https://crash-e2e.example.com/recovered"}
-        ]})
+        crash_payload = json.dumps(
+            {
+                "success": True,
+                "data": [{"url": "https://crash-e2e.example.com/recovered"}],
+            }
+        )
         crash_resp = run_svc.record_search_response(
-            crash_run_id, "crash e2e query", "firecrawl",
-            crash_payload, f"crash-e2e-{uuid4()}"
+            crash_run_id,
+            "crash e2e query",
+            "firecrawl",
+            crash_payload,
+            f"crash-e2e-{uuid4()}",
         )
         _ = crash_resp  # stored; verified via list_candidates below
         assert len(run_svc.list_candidates(crash_run_id)) == 0

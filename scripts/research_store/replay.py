@@ -93,4 +93,6 @@ class SearchResponseReplayReader:
         records = self.repository.list_search_responses(
             run_id, plan_query_id=plan_query_id
         )
-        return [self.replay_search_response(rec["id"], run_id=run_id) for rec in records]
+        return [
+            self.replay_search_response(rec["id"], run_id=run_id) for rec in records
+        ]

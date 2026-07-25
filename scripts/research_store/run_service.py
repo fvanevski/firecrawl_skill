@@ -896,7 +896,9 @@ class ResearchRunService:
             event_id = result
             # Bump lifecycle revision atomically within the same transaction
             new_revision = expected_revision + 1
-            uow.runs._bump_lifecycle_revision(run_id, new_revision, expected_revision=expected_revision)
+            uow.runs._bump_lifecycle_revision(
+                run_id, new_revision, expected_revision=expected_revision
+            )
         return {
             "event_id": str(event_id),
             "run_id": str(run_id),

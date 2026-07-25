@@ -847,11 +847,15 @@ def _legacy_clean_markdown(content: str) -> str:
         # Match simple boilerplate patterns for short lines
         line_len = len(stripped)
         if line_len < 150:  # noqa: SIM102
-            if any(pat.search(stripped) for pat in cookie_patterns) or any(pat.search(stripped) for pat in social_patterns):
+            if any(pat.search(stripped) for pat in cookie_patterns) or any(
+                pat.search(stripped) for pat in social_patterns
+            ):
                 is_boilerplate = True
 
         if line_len < 100:  # noqa: SIM102
-            if any(pat.search(stripped) for pat in navigation_patterns) or any(pat.search(stripped) for pat in misc_boilerplate):
+            if any(pat.search(stripped) for pat in navigation_patterns) or any(
+                pat.search(stripped) for pat in misc_boilerplate
+            ):
                 is_boilerplate = True
 
         # Check for lines containing mostly links

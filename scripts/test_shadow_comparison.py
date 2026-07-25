@@ -256,7 +256,9 @@ class TestShadowComparisonEngine(unittest.TestCase):
         results_a = engine.compare(objectives, dry_run=True)
         results_b = engine.compare(objectives, dry_run=True)
         self.assertEqual(results_a[0].legacy.run_id, results_b[0].legacy.run_id)
-        self.assertEqual(results_a[0].coverage_led.run_id, results_b[0].coverage_led.run_id)
+        self.assertEqual(
+            results_a[0].coverage_led.run_id, results_b[0].coverage_led.run_id
+        )
 
     def test_non_dry_run_with_default_policy_adapters(self):
         """Test non-dry-run comparison using default live policy adapters."""
@@ -330,7 +332,9 @@ class TestPolicyAdapters(unittest.TestCase):
 
     def test_fsearch_smart_legacy_policy_adapter(self):
         """Test fsearch_smart legacy policy adapter produces valid LegacyResult."""
-        obj = _make_objective(objective_id="adapter-leg", expected_complexity="moderate")
+        obj = _make_objective(
+            objective_id="adapter-leg", expected_complexity="moderate"
+        )
         result = fsearch_smart_legacy_policy(obj)
         self.assertIsInstance(result, LegacyResult)
         self.assertEqual(result.final_state, "completed")
@@ -391,7 +395,9 @@ class TestComparisonResults(unittest.TestCase):
         divergences = engine._compare_results(_make_objective(), legacy, coverage)
 
         candidate_divs = [d for d in divergences if d.dimension == "candidate_set"]
-        extraction_divs = [d for d in divergences if d.dimension == "extraction_choices"]
+        extraction_divs = [
+            d for d in divergences if d.dimension == "extraction_choices"
+        ]
 
         self.assertEqual(len(candidate_divs), 1)
         self.assertEqual(candidate_divs[0].severity, "P2")

@@ -363,7 +363,9 @@ class TestCatalogExportIntegration:
 class TestConcurrency:
     """Test concurrency protections for compatibility commands."""
 
-    @pytest.mark.skipif(not TEST_DSN or not psycopg, reason="Requires PostgreSQL and psycopg")
+    @pytest.mark.skipif(
+        not TEST_DSN or not psycopg, reason="Requires PostgreSQL and psycopg"
+    )
     def test_concurrent_annotate(self, monkeypatch):
         """Concurrent annotations must not lose lifecycle_revision updates."""
         from research_store.config import StoreConfig
@@ -381,7 +383,7 @@ class TestConcurrency:
             objective="Concurrency test objective",
             profile="autonomous_local",
             run_id=run_id,
-            idempotency_key=f"idem:start:{run_id}"
+            idempotency_key=f"idem:start:{run_id}",
         )
 
         # Blast annotations
@@ -396,7 +398,7 @@ class TestConcurrency:
                     event_type="pivot",
                     reason=f"Concurrent annotation {i}",
                     actor_type="test",
-                    idempotency_key=f"idem:test:{i}"
+                    idempotency_key=f"idem:test:{i}",
                 )
                 return True
             except RunStateError:

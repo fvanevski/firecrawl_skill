@@ -35,6 +35,7 @@ from research_store.service import AuditService
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_audit_uow(
     assessments: dict | None = None,
     stages: dict | None = None,
@@ -101,8 +102,7 @@ def _make_audit_uow(
                 assessment_id = kw.get("assessment_id")
             aid_str = str(assessment_id)
             return [
-                s for s in stages.values()
-                if str(s.get("assessment_id")) == aid_str
+                s for s in stages.values() if str(s.get("assessment_id")) == aid_str
             ]
 
         def validate_assessment_exists(self, assessment_id):
@@ -286,7 +286,7 @@ def test_create_assessment_returns_uuid():
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
         status="partial",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
     assert isinstance(aid, UUID)
 
@@ -318,7 +318,7 @@ def test_add_stage_output_succeeds_for_known_assessment():
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
         status="partial",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
     sid = svc.add_stage_output(
         assessment_id=aid,
@@ -346,7 +346,7 @@ def test_add_stage_output_rejects_invalid_evidence_references():
         policy_version="audit-policy-v1",
         stage_set=["evidence"],
         status="partial",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
     # Valid evidence ref succeeds
     svc.add_stage_output(
@@ -383,8 +383,11 @@ def test_audit_sanitizes_secrets():
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
         status="completed",
-        audit_packet_manifest={"api_key": "secret-12345", "header": "Bearer secret_token_xyz"},
-                model_fingerprint="fp-test",
+        audit_packet_manifest={
+            "api_key": "secret-12345",
+            "header": "Bearer secret_token_xyz",
+        },
+        model_fingerprint="fp-test",
     )
     saved_assessment = uow.get_audit_assessment(aid)
     assert saved_assessment["audit_packet_manifest"]["api_key"] == "[REDACTED]"
@@ -418,7 +421,7 @@ def test_partial_audit_preserves_successful_stages():
         policy_version="audit-policy-v1",
         stage_set=["rubric", "acquisition"],
         status="partial",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
     # Rubric succeeds
     svc.add_stage_output(
@@ -446,7 +449,12 @@ def test_partial_audit_preserves_successful_stages():
 def test_staleness_detection():
     """Target hash changes make prior audits stale."""
     stale_data = [
-        {"id": str(uuid4()), "target_hash": "old_hash", "status": "completed", "created_at": "2025-01-01"},
+        {
+            "id": str(uuid4()),
+            "target_hash": "old_hash",
+            "status": "completed",
+            "created_at": "2025-01-01",
+        },
     ]
     uow = _make_audit_uow(stale=stale_data)
     svc = AuditService(lambda: uow)
@@ -478,7 +486,7 @@ def test_export_assessment_includes_stages():
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
         status="partial",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
     svc.add_stage_output(
         assessment_id=aid,
@@ -525,11 +533,16 @@ def test_assess_run_convenience_method():
 
 
 def test_audit_parser():
-    args = research_store_parser().parse_args([
-        "audit", "fr_test",
-        "--target-hash", "abc123",
-        "--model-fingerprint", "model-r1",
-    ])
+    args = research_store_parser().parse_args(
+        [
+            "audit",
+            "fr_test",
+            "--target-hash",
+            "abc123",
+            "--model-fingerprint",
+            "model-r1",
+        ]
+    )
     assert args.command == "audit"
     assert args.external_id == "fr_test"
     assert args.target_hash == "abc123"
@@ -537,34 +550,47 @@ def test_audit_parser():
 
 
 def test_audit_status_parser():
-    args = research_store_parser().parse_args([
-        "audit-status", "fr_test",
-    ])
+    args = research_store_parser().parse_args(
+        [
+            "audit-status",
+            "fr_test",
+        ]
+    )
     assert args.command == "audit-status"
     assert args.external_id == "fr_test"
 
 
 def test_audit_query_parser():
-    args = research_store_parser().parse_args([
-        "audit-query", "fr_test",
-    ])
+    args = research_store_parser().parse_args(
+        [
+            "audit-query",
+            "fr_test",
+        ]
+    )
     assert args.command == "audit-query"
     assert args.external_id == "fr_test"
 
 
 def test_audit_export_parser():
-    args = research_store_parser().parse_args([
-        "audit-export", "fa_test123",
-    ])
+    args = research_store_parser().parse_args(
+        [
+            "audit-export",
+            "fa_test123",
+        ]
+    )
     assert args.command == "audit-export"
     assert args.assessment_id == "fa_test123"
 
 
 def test_audit_staleness_parser():
-    args = research_store_parser().parse_args([
-        "audit-staleness", "fr_test",
-        "--target-hash", "new_hash",
-    ])
+    args = research_store_parser().parse_args(
+        [
+            "audit-staleness",
+            "fr_test",
+            "--target-hash",
+            "new_hash",
+        ]
+    )
     assert args.command == "audit-staleness"
     assert args.target_hash == "new_hash"
 
@@ -581,12 +607,23 @@ INTEGRATION_MARK = pytest.mark.skipif(
 
 def _ensure_run_exists(config, run_id):
     from research_store.postgres import connect
+
     with connect(config.database_url) as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO research_runs (id, original_request, query_plan, skill_version, llm_model, status, state, execution_mode, objective)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING""",
-            (str(run_id), "test request", "{}", "1.0", "test", "running", "created", "agent_led", "test request"),
+            (
+                str(run_id),
+                "test request",
+                "{}",
+                "1.0",
+                "test",
+                "running",
+                "created",
+                "agent_led",
+                "test request",
+            ),
         )
 
 
@@ -622,7 +659,7 @@ def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
         provider="local",
         model="local-model",
         elapsed_ms=5000,
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
     assert isinstance(aid, UUID)
 
@@ -671,7 +708,9 @@ def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
 
 
 @INTEGRATION_MARK
-def test_stale_assessment_retained_on_new_assessment(tmp_path, prepared_database_for_audit):
+def test_stale_assessment_retained_on_new_assessment(
+    tmp_path, prepared_database_for_audit
+):
     """New assessment with different target_hash does not overwrite stale one."""
     from dataclasses import replace
 
@@ -698,7 +737,7 @@ def test_stale_assessment_retained_on_new_assessment(tmp_path, prepared_database
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
         status="completed",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
 
     # Second assessment with hash2 (different target hash)
@@ -712,7 +751,7 @@ def test_stale_assessment_retained_on_new_assessment(tmp_path, prepared_database
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
         status="completed",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
 
     # Both should be queryable
@@ -759,7 +798,7 @@ def test_audit_status_filter(tmp_path, prepared_database_for_audit):
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
         status="completed",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
     svc.create_assessment(
         run_id=run_id,
@@ -771,7 +810,7 @@ def test_audit_status_filter(tmp_path, prepared_database_for_audit):
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
         status="partial",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
 
     completed = svc.list_assessments(run_id=run_id, status="completed")
@@ -807,7 +846,7 @@ def test_audit_stage_filter_by_status(tmp_path, prepared_database_for_audit):
         policy_version="audit-policy-v1",
         stage_set=["rubric", "acquisition"],
         status="partial",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
     svc.add_stage_output(
         assessment_id=aid,
@@ -857,7 +896,7 @@ def test_audit_stage_filter_by_stage_name(tmp_path, prepared_database_for_audit)
         policy_version="audit-policy-v1",
         stage_set=["rubric", "acquisition"],
         status="partial",
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
     svc.add_stage_output(
         assessment_id=aid,
@@ -907,7 +946,7 @@ def test_audit_export_round_trip(tmp_path, prepared_database_for_audit):
         provider="local",
         model="local-model",
         elapsed_ms=1000,
-                model_fingerprint="fp-test",
+        model_fingerprint="fp-test",
     )
     svc.add_stage_output(
         assessment_id=aid,
@@ -978,8 +1017,15 @@ if TEST_DSN:
                     status, state, execution_mode, objective
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
-                    str(legacy_run_id), "legacy", "{}", "1.0", "legacy",
-                    "running", "created", "agent_led", "legacy",
+                    str(legacy_run_id),
+                    "legacy",
+                    "{}",
+                    "1.0",
+                    "legacy",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "legacy",
                 ),
             )
             cur.execute(
@@ -1133,7 +1179,9 @@ if TEST_DSN:
             assert row[0] == "CASCADE"
 
     @INTEGRATION_MARK
-    def test_detect_stale_assessments_integration(tmp_path, prepared_database_for_audit):
+    def test_detect_stale_assessments_integration(
+        tmp_path, prepared_database_for_audit
+    ):
         """detect_stale_assessments works against real PostgreSQL."""
         from dataclasses import replace
 
@@ -1248,7 +1296,6 @@ if TEST_DSN:
         assert duplicate == first
         assert changed_model != first
         assert changed_evaluator != first
-
 
 
 # ---------------------------------------------------------------------------
@@ -1402,7 +1449,11 @@ class TestIdempotentScheduling:
         changed_stages = svc.schedule_assessment(
             **self._identity(run_id, stage_set=["rubric"])
         )
-        assert {changed_target["action"], changed_model["action"], changed_stages["action"]} == {"create"}
+        assert {
+            changed_target["action"],
+            changed_model["action"],
+            changed_stages["action"],
+        } == {"create"}
 
     def test_partial_attempt_is_not_reused_and_completed_retry_wins(
         self, tmp_path, prepared_database_for_audit
@@ -1411,9 +1462,7 @@ class TestIdempotentScheduling:
         run_id = uuid4()
         _ensure_run_exists(config, run_id)
 
-        partial = svc.schedule_assessment(
-            **self._identity(run_id, status="partial")
-        )
+        partial = svc.schedule_assessment(**self._identity(run_id, status="partial"))
         completed = svc.schedule_assessment(**self._identity(run_id))
         reused = svc.schedule_assessment(**self._identity(run_id))
 
@@ -1436,9 +1485,7 @@ class TestIdempotentScheduling:
             svc.schedule_assessment(**self._identity(uuid4()))
 
         with pytest.raises(ValueError, match="not found or not owned"):
-            svc.schedule_assessment(
-                **self._identity(run_id, target_id=other_run_id)
-            )
+            svc.schedule_assessment(**self._identity(run_id, target_id=other_run_id))
 
         with pytest.raises(ValueError, match="not found or not owned"):
             svc.schedule_assessment(

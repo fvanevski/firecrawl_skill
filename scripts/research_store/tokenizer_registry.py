@@ -128,11 +128,15 @@ class _BpeTokenizer:
             for pair in self._merge_rules:
                 merged = pair
                 target_a = pair[0]
-                target_b = pair[1:] # if length is 2, pair[1]
+                target_b = pair[1:]  # if length is 2, pair[1]
                 i = 0
                 new_tokens: list[str] = []
                 while i < len(tokens):
-                    if i < len(tokens) - 1 and tokens[i] == target_a and tokens[i+1] == target_b:
+                    if (
+                        i < len(tokens) - 1
+                        and tokens[i] == target_a
+                        and tokens[i + 1] == target_b
+                    ):
                         new_tokens.append(merged)
                         i += 2
                         changed = True
