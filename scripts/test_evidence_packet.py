@@ -389,6 +389,9 @@ def test_evidence_packet_referential_integrity():
         relationship=EvidenceRelationship.SUPPORTS,
         confidence=0.9,
         uncertainty="low",
+        model="test-model",
+        prompt_version="v1",
+        input_packet_revision=1,
     )
 
     # Valid group referencing the passage
@@ -442,6 +445,9 @@ def test_evidence_packet_referential_integrity():
         relationship=EvidenceRelationship.SUPPORTS,
         confidence=0.9,
         uncertainty="low",
+        model="test-model",
+        prompt_version="v1",
+        input_packet_revision=1,
     )
 
     # __post_init__ should reject the unknown passage ID.

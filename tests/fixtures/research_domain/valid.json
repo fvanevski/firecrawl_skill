@@ -251,6 +251,7 @@
         "uncertainty": "Only one source has been acquired."
       }
     ],
+    "omitted_passages": [],
     "passages": [
       {
         "passage_id": "00000000-0000-0000-0000-000000000601",
@@ -270,7 +271,10 @@
         ],
         "relationship": "qualifies",
         "confidence": 0.7,
-        "uncertainty": "Independent replication is missing."
+        "uncertainty": "Independent replication is missing.",
+        "model": "gpt-4",
+        "prompt_version": "v1",
+        "input_packet_revision": 1
       }
     ],
     "corroborating_groups": [
@@ -288,7 +292,7 @@
         "group_id": "00000000-0000-0000-0000-000000000606",
         "passage_ids": [],
         "rationale": "No contradiction was found in the evaluated evidence.",
-        "evaluated": true
+        "evaluated": false
       }
     ],
     "qualifying_groups": [
@@ -306,7 +310,7 @@
         "group_id": "00000000-0000-0000-0000-000000000608",
         "passage_ids": [],
         "rationale": "No near duplicates were found in the evaluated evidence.",
-        "evaluated": true
+        "evaluated": false
       }
     ],
     "source_diversity_summary": {

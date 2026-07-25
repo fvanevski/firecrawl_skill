@@ -653,12 +653,21 @@ class ClaimEvidenceBinding:
     relationship: EvidenceRelationship
     confidence: float
     uncertainty: str
+    model: str
+    prompt_version: str
+    input_packet_revision: int
 
     def __post_init__(self):
         if not self.passage_ids:
             raise ValueError("claim evidence binding requires passage IDs")
         _unique(self.passage_ids, "binding passage IDs")
         _confidence(self.confidence)
+        if not self.model:
+            raise ValueError("model is required")
+        if not self.prompt_version:
+            raise ValueError("prompt_version is required")
+        if self.input_packet_revision < 1:
+            raise ValueError("input_packet_revision must be >= 1")
 
 
 @dataclass(frozen=True)
