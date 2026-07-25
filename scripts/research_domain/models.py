@@ -655,6 +655,7 @@ class ClaimEvidenceBinding:
     uncertainty: str
     model: str
     prompt_version: str
+    schema_version: int
     input_packet_revision: int
 
     def __post_init__(self):
@@ -666,6 +667,8 @@ class ClaimEvidenceBinding:
             raise ValueError("model is required")
         if not self.prompt_version:
             raise ValueError("prompt_version is required")
+        if self.schema_version < 1:
+            raise ValueError("schema_version must be >= 1")
         if self.input_packet_revision < 1:
             raise ValueError("input_packet_revision must be >= 1")
 
@@ -742,7 +745,6 @@ class EvidencePacket:
     coverage_revision: int
     claims: tuple[EvidenceClaim, ...]
     passages: tuple[EvidencePassage, ...]
-    omitted_passages: tuple[EvidencePassage, ...]
     claim_evidence_bindings: tuple[ClaimEvidenceBinding, ...]
     corroborating_groups: tuple[EvidenceGroup, ...]
     contradicting_groups: tuple[EvidenceGroup, ...]
@@ -761,8 +763,7 @@ class EvidencePacket:
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
         _positive(self.coverage_revision, "coverage_revision")
         _unique([item.claim_id for item in self.claims], "evidence claim IDs")
-        all_passages = self.passages + self.omitted_passages
-        _unique([item.passage_id for item in all_passages], "passage IDs")
+        _unique([item.passage_id for item in self.passages], "passage IDs")
         _unique(
             [item.binding_id for item in self.claim_evidence_bindings], "binding IDs"
         )
@@ -774,7 +775,7 @@ class EvidencePacket:
         )
         _unique([item.group_id for item in groups], "evidence group IDs")
         claim_ids = {item.claim_id for item in self.claims}
-        passage_ids = {item.passage_id for item in all_passages}
+        passage_ids = {item.passage_id for item in self.passages}
         unknown_claims = {
             item.claim_id for item in self.claim_evidence_bindings
         } - claim_ids

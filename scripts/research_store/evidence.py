@@ -140,15 +140,6 @@ class EvidenceService:
         # Duplicate candidates retained for later assessment
         # Represented as explicitly unevaluated semantic groups
         near_duplicate_groups = []
-        if omitted_passages:
-            near_duplicate_groups.append(
-                EvidenceGroup(
-                    group_id=uuid4(),
-                    passage_ids=tuple(p.passage_id for p in omitted_passages),
-                    rationale="omitted_due_to_budget",
-                    evaluated=False,
-                )
-            )
 
         return EvidencePacket(
             schema_version=EvidencePacket.SCHEMA_VERSION,
@@ -157,7 +148,6 @@ class EvidenceService:
             coverage_revision=coverage_revision,
             claims=(),
             passages=tuple(passages),
-            omitted_passages=tuple(omitted_passages),
             claim_evidence_bindings=(),
             corroborating_groups=(),
             contradicting_groups=(),

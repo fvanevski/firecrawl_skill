@@ -90,10 +90,17 @@ class ClaimBindingService:
             status = uow.runs.get_run_status(run_id)
             context["run_revision"] = status["lifecycle_revision"]
 
+        from copy import deepcopy
+        schema = deepcopy(self.schema)
+        valid_claim_ids = [c["claim_id"] for c in claims]
+        valid_passage_ids = [p["passage_id"] for p in passages]
+        schema["properties"]["evaluations"]["items"]["properties"]["claim_id"]["enum"] = valid_claim_ids
+        schema["properties"]["evaluations"]["items"]["properties"]["bindings"]["items"]["properties"]["passage_ids"]["items"]["enum"] = valid_passage_ids
+
         result = call_structured(
             provider=provider,
             model=model_name,
-            schema=self.schema,
+            schema=schema,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             prompt_version=prompt_version,
@@ -109,6 +116,7 @@ class ClaimBindingService:
             evaluations=result.value.get("evaluations", []),
             model_name=model_name,
             prompt_version=prompt_version,
+            schema_version=context["schema_version"],
             packet_revision=packet_revision,
         )
 
@@ -118,6 +126,7 @@ class ClaimBindingService:
         evaluations: list[dict],
         model_name: str,
         prompt_version: str,
+        schema_version: int,
         packet_revision: int,
     ) -> int:
         valid_claim_ids = {c["claim_id"] for c in packet_dict.get("claims", [])}
@@ -154,6 +163,7 @@ class ClaimBindingService:
                         "uncertainty": b.get("uncertainty", ""),
                         "model": model_name,
                         "prompt_version": prompt_version,
+                        "schema_version": schema_version,
                         "input_packet_revision": packet_revision,
                     }
                 )

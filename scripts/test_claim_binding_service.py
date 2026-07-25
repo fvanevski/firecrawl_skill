@@ -41,6 +41,15 @@ class MockSemanticCallService:
 
         return MockUOW()
 
+    def start_model_call(self, *args, **kwargs):
+        return "mock-call-id"
+
+    def record_model_call(self, call_id, *args, **kwargs):
+        pass
+
+    def finish_model_call(self, call_id, *args, **kwargs):
+        return []
+
 
 @pytest.fixture
 def mock_packet():
@@ -105,6 +114,7 @@ def test_evaluate_claims_success(service, mock_packet, monkeypatch):
     assert binding.confidence == 0.95
     assert binding.model == "test-model"
     assert binding.prompt_version == "v1"
+    assert binding.schema_version == 1
     assert binding.input_packet_revision == mock_packet["coverage_revision"]
 
     assert persisted.claims[0].semantic_status == "supported"
@@ -212,3 +222,54 @@ def test_unsupported_claim_has_no_bindings(service, mock_packet, monkeypatch):
     persisted = service.evidence.persisted[0]
     assert len(persisted.claim_evidence_bindings) == 0
     assert persisted.claims[0].semantic_status == "unsupported"
+
+
+import os
+
+INTEGRATION_MARK = pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY") and not os.environ.get("FIRECRAWL_LLM_LOCAL_BASE_URL"),
+    reason="requires LLM endpoint",
+)
+
+
+@INTEGRATION_MARK
+def test_evaluate_claims_integration(service, mock_packet):
+    # Setup some specific real claims and passages
+    claim_id = mock_packet["claims"][0]["claim_id"]
+    passage_id = mock_packet["passages"][0]["passage_id"]
+
+    mock_packet["claims"] = [
+        {
+            "claim_id": claim_id,
+            "statement": "The Eiffel Tower is located in Paris.",
+            "semantic_status": "unassessed",
+            "uncertainty": "none"
+        }
+    ]
+    mock_packet["passages"] = [
+        {
+            "passage_id": passage_id,
+            "candidate_id": "00000000-0000-0000-0000-000000000301",
+            "snapshot_id": "00000000-0000-0000-0000-000000000602",
+            "chunk_id": "00000000-0000-0000-0000-000000000603",
+            "text": "Paris is home to many famous landmarks, including the iconic Eiffel Tower, which was built in 1889.",
+            "source_url": "https://example.com/paris"
+        }
+    ]
+
+    new_rev = service.evaluate_claims(
+        run_id=UUID(mock_packet["run_id"]),
+        packet_revision=mock_packet["coverage_revision"],
+        prompt_version="v1",
+        endpoint_alias="local",
+        model_name="chat",
+    )
+
+    persisted = service.evidence.persisted[0]
+    assert len(persisted.claim_evidence_bindings) > 0
+    binding = persisted.claim_evidence_bindings[0]
+    assert str(binding.claim_id) == claim_id
+    assert str(binding.passage_ids[0]) == passage_id
+    assert binding.relationship == "supports"
+    assert persisted.claims[0].semantic_status == "supported"
+

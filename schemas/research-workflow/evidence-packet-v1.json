@@ -33,6 +33,9 @@
         "prompt_version": {
           "type": "string"
         },
+        "schema_version": {
+          "type": "integer"
+        },
         "relationship": {
           "enum": [
             "supports",
@@ -55,6 +58,7 @@
         "uncertainty",
         "model",
         "prompt_version",
+        "schema_version",
         "input_packet_revision"
       ],
       "type": "object"
@@ -289,12 +293,6 @@
       },
       "type": "array"
     },
-    "omitted_passages": {
-      "items": {
-        "$ref": "#/$defs/EvidencePassage"
-      },
-      "type": "array"
-    },
     "passages": {
       "items": {
         "$ref": "#/$defs/EvidencePassage"
@@ -344,7 +342,6 @@
     "coverage_revision",
     "claims",
     "passages",
-    "omitted_passages",
     "claim_evidence_bindings",
     "corroborating_groups",
     "contradicting_groups",
