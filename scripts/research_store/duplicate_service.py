@@ -1,34 +1,64 @@
+"""Deterministic near-duplicate and source-independence grouping.
+
+This module provides :class:`DuplicateGroupService`, which evaluates search
+candidates to detect exact duplicates (by content hash or canonical URL) and
+likely syndicated copies (by normalized title similarity).  It returns
+structured assessments that feed into the ``EvidencePacket`` so that
+corroboration counts cannot be inflated by repeated sources.
+
+Grouping priority
+-----------------
+1. **Exact content hash** — candidates with identical ``backend_metadata.content_hash``
+2. **Canonical URL** — candidates sharing the same ``canonical_url``
+3. **Normalized title** — candidates with matching titles after stripping
+   non-alphanumeric characters (syndication / wire-report detection)
+
+Independence statuses
+---------------------
+- ``DEPENDENT`` — exact hash or canonical URL match
+- ``UNCERTAIN`` — likely syndicated title match (primary candidate)
+- ``UNASSESSED`` — no grouping signal found (candidates that fall through
+  all criteria are returned in the ``unassessed`` key of the result dict)
+"""
+
+from __future__ import annotations
+
 import re
 from collections import defaultdict
 from uuid import uuid4
 
 from research_domain.models import IndependenceStatus
 
+# Minimum length of a normalized title to trigger syndication detection.
+# Short titles (e.g. "Short title" → ~10 chars) produce too many false
+# positives; the threshold is deliberately conservative.
+_SYNDICATION_TITLE_MIN_LENGTH = 12
+
 
 class DuplicateGroupService:
-    """Service to evaluate near-duplicates and source independence deterministically."""
+    """Evaluate near-duplicates and source independence deterministically."""
 
-    def __init__(self):
-        pass
-
-    def evaluate_candidates(self, candidates, run_id=None):
+    def evaluate_candidates(self, candidates):
         """Evaluate candidates to find duplicate groups and assess independence.
 
         Args:
             candidates: list of candidate dicts
-            run_id: current run_id
 
         Returns:
-            list of groups, where each group is a dict:
-            {
-                "group_id": UUID,
-                "candidate_ids": list of UUID,
-                "rationale": str,
-                "assessments": dict mapping candidate_id -> dict(status, rationale)
-            }
+            A dict with two keys:
+
+            ``groups`` — list of group dicts, each containing:
+
+                * ``group_id`` (UUID)
+                * ``candidate_ids`` (list of UUID)
+                * ``rationale`` (str)
+                * ``assessments`` (dict mapping candidate_id → {status, rationale})
+
+            ``unassessed`` — list of candidate IDs that fell through all
+            grouping criteria (no duplicate or syndication signal).
         """
         if not candidates:
-            return []
+            return {"groups": [], "unassessed": []}
 
         # Grouping keys
         by_hash = defaultdict(list)
@@ -50,7 +80,7 @@ class DuplicateGroupService:
             # 3. Normalized Title (for syndication/wire reports)
             title = c.get("title") or ""
             norm_title = re.sub(r"[^a-z0-9\s]", "", title.lower())
-            if norm_title and len(norm_title) > 11:
+            if norm_title and len(norm_title) >= _SYNDICATION_TITLE_MIN_LENGTH:
                 by_title_normalized[norm_title].append(c)
 
         assigned = set()
@@ -115,8 +145,11 @@ class DuplicateGroupService:
                 cands, "likely_syndicated_title_match", IndependenceStatus.UNCERTAIN
             )
 
-        # Remaining candidates are UNASSESSED or UNCERTAIN independent
-        # We don't group them, but we might want to return their assessments?
-        # The requirement asks to persist duplicate groups and independence assessments.
+        # Track candidates that were not assigned to any group
+        unassessed = [
+            c.get("id", c.get("candidate_id"))
+            for c in candidates
+            if c.get("id", c.get("candidate_id")) not in assigned
+        ]
 
-        return groups
+        return {"groups": groups, "unassessed": unassessed}

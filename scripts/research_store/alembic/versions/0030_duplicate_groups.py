@@ -26,7 +26,8 @@ depends_on = None
 
 
 def upgrade():
-    # 1. Create duplicate_groups table
+    # 1. Create duplicate_groups table with (id, run_id) unique constraint
+    #    so that the FK from search_candidates can be composite.
     op.execute(
         """
         CREATE TABLE IF NOT EXISTS duplicate_groups (
@@ -35,12 +36,13 @@ def upgrade():
           rationale                   text NOT NULL,
           created_at                  timestamptz NOT NULL DEFAULT now(),
 
-          PRIMARY KEY (id)
+          PRIMARY KEY (id),
+          CONSTRAINT uk_duplicate_groups_run UNIQUE (id, run_id)
         );
         """
     )
 
-    # 2. Add foreign key constraint to search_candidates
+    # 2. Add foreign key constraint to search_candidates (composite FK)
     op.execute(
         """
         DO $$
@@ -50,8 +52,8 @@ def upgrade():
           ) THEN
             ALTER TABLE search_candidates
               ADD CONSTRAINT fk_search_candidates_duplicate_group
-              FOREIGN KEY (duplicate_group_id)
-              REFERENCES duplicate_groups(id) ON DELETE SET NULL;
+              FOREIGN KEY (duplicate_group_id, run_id)
+              REFERENCES duplicate_groups(id, run_id) ON DELETE SET NULL;
           END IF;
         END $$;
         """

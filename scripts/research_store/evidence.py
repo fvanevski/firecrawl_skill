@@ -11,6 +11,7 @@ from research_domain.models import (
     EvidencePacket,
     EvidencePassage,
     IndependenceAssessment,
+    IndependenceStatus,
     RetrievalProvenance,
 )
 
@@ -154,7 +155,10 @@ class EvidenceService:
             )
 
         # Apply deterministic near-duplicate and source-independence grouping
-        dup_groups = self.duplicate_service.evaluate_candidates(candidates, run_id)
+        result = self.duplicate_service.evaluate_candidates(candidates)
+        dup_groups = result["groups"]
+        unassessed_ids = result.get("unassessed", [])
+
         cand_to_passage = {
             p.candidate_id: p.passage_id for p in passages + omitted_passages
         }
@@ -186,6 +190,16 @@ class EvidenceService:
                         rationale=ass["rationale"],
                     )
                 )
+
+        # Record UNASSESSED candidates that fell through all grouping criteria
+        for cid in unassessed_ids:
+            independence_assessments.append(
+                IndependenceAssessment(
+                    candidate_id=UUID(str(cid)),
+                    status=IndependenceStatus.UNASSESSED,
+                    rationale="no duplicate or syndication signal found",
+                )
+            )
 
         return EvidencePacket(
             schema_version=EvidencePacket.SCHEMA_VERSION,
