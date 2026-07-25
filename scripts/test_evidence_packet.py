@@ -556,17 +556,20 @@ def test_evidence_packet_duplicate_assessments(
     assert hash_group.evaluated is True
     assert len(hash_group.passage_ids) == 2
 
-    # Should have independence_assessments for all candidates
-    assert len(packet.independence_assessments) >= 3
-    assessment_ids = {a.candidate_id for a in packet.independence_assessments}
-    # Both duplicate candidates should be DEPENDENT or UNCERTAIN
+    # Each candidate must have exactly one assessment (no duplicates, no gaps).
+    from collections import Counter
+
+    counts = Counter(a.candidate_id for a in packet.independence_assessments)
+    assert all(c == 1 for c in counts.values()), (
+        "Each candidate should have exactly one independence assessment"
+    )
+    # Both duplicate candidates should be DEPENDENT or UNCERTAIN.
     for a in packet.independence_assessments:
-        if a.candidate_id in assessment_ids:
-            assert a.status in (
-                IndependenceStatus.DEPENDENT,
-                IndependenceStatus.UNCERTAIN,
-                IndependenceStatus.UNASSESSED,
-            )
+        assert a.status in (
+            IndependenceStatus.DEPENDENT,
+            IndependenceStatus.UNCERTAIN,
+            IndependenceStatus.UNASSESSED,
+        )
 
     # c3 should be UNASSESSED
     unassessed = [

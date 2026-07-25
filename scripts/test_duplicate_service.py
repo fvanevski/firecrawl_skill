@@ -162,3 +162,32 @@ class TestDuplicateGroupService:
         assert len(result["groups"]) == 1
         assert len(result["unassessed"]) == 1
         assert c3["id"] in result["unassessed"]
+
+    def test_false_positive_long_titles_no_group(self):
+        """Two candidates with long but unrelated titles must NOT be grouped.
+
+        This validates the false-positive rejection path for issue #57:
+        candidates that coincidentally share a long normalized title substring
+        but have different content_hash and different canonical_url should
+        remain ungrouped.
+        """
+        svc = DuplicateGroupService()
+        c1 = {
+            "id": uuid.uuid4(),
+            "canonical_url": "https://docs.example.com/api/v2",
+            "title": "API Reference Guide for Version 2.0 Release",
+            "backend_metadata": {"content_hash": "hash_unique_a"},
+        }
+        c2 = {
+            "id": uuid.uuid4(),
+            "canonical_url": "https://blog.example.com/changelog",
+            "title": "Changelog Notes for Version 2.0 API Release",
+            "backend_metadata": {"content_hash": "hash_unique_b"},
+        }
+
+        result = svc.evaluate_candidates([c1, c2])
+        assert len(result["groups"]) == 0, (
+            "Unrelated candidates with different content_hash and canonical_url "
+            "must not be grouped even if titles share long substrings"
+        )
+        assert len(result["unassessed"]) == 2

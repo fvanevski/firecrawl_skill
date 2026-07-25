@@ -36,7 +36,29 @@ _SYNDICATION_TITLE_MIN_LENGTH = 12
 
 
 class DuplicateGroupService:
-    """Evaluate near-duplicates and source independence deterministically."""
+    """Evaluate near-duplicates and source independence deterministically.
+
+    This class is **pure-functional** and **in-memory only**.  It never
+    touches the database.  The ``evaluate_candidates`` method returns a
+    dict with ``groups`` and ``unassessed`` that the caller uses to
+    populate the ``EvidencePacket`` (via ``EvidenceService``) and, when
+    desired, to persist duplicate-group rows via
+    ``PostgresUnitOfWork.assign_duplicate_group`` or
+    ``PostgresUnitOfWork.persist_duplicate_group``.
+
+    Database persistence is handled separately:
+    - ``assign_duplicate_group(candidate_ids, group_id, run_id)`` creates
+      a ``duplicate_groups`` row and links candidates.
+    - ``persist_duplicate_group(group_id, run_id, rationale)`` upserts
+      a ``duplicate_groups`` row.
+    - ``update_candidate_independence(candidate_id, assessment_dict)``
+      writes the ``independence_assessment`` JSONB column on
+      ``search_candidates``.
+
+    The evidence service path (``EvidenceService.build_evidence_packet``)
+    calls ``evaluate_candidates`` **only** to populate the in-memory
+    packet fields; it does not create ``duplicate_groups`` rows.
+    """
 
     def evaluate_candidates(self, candidates):
         """Evaluate candidates to find duplicate groups and assess independence.
