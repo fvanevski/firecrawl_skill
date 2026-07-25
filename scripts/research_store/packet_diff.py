@@ -116,13 +116,9 @@ class PacketDiff:
         if self.modified_passages:
             parts.append(f"~{len(self.modified_passages)} passages modified")
         if self.added_omitted_passages:
-            parts.append(
-                f"+{len(self.added_omitted_passages)} omitted passages"
-            )
+            parts.append(f"+{len(self.added_omitted_passages)} omitted passages")
         if self.removed_omitted_passages:
-            parts.append(
-                f"-{len(self.removed_omitted_passages)} omitted passages"
-            )
+            parts.append(f"-{len(self.removed_omitted_passages)} omitted passages")
         if self.modified_omitted_passages:
             parts.append(
                 f"~{len(self.modified_omitted_passages)} omitted passages modified"
