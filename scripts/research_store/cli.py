@@ -580,6 +580,37 @@ def parser():
     packet.add_argument("--max-tokens", type=int, default=3000)
 
     # ------------------------------------------------------------------
+    # Evidence packet commands (issue #58)
+    # ------------------------------------------------------------------
+    packet_validate = sub.add_parser("packet-validate")
+    packet_validate.add_argument("run_id")
+    packet_validate.add_argument("--revision", type=int, default=None)
+    packet_validate.add_argument("--output", default="-")
+    packet_validate.add_argument("--include-warnings", action="store_true")
+
+    packet_inspect = sub.add_parser("packet-inspect")
+    packet_inspect.add_argument("run_id")
+    packet_inspect.add_argument("--revision", type=int, default=None)
+    packet_inspect.add_argument("--output", default="-")
+    packet_inspect.add_argument("--bounded", action="store_true")
+    packet_inspect.add_argument("--max-passages", type=int, default=20)
+    packet_inspect.add_argument("--max-claims", type=int, default=10)
+
+    packet_diff = sub.add_parser("packet-diff")
+    packet_diff.add_argument("run_id")
+    packet_diff.add_argument("--old-revision", type=int, required=True)
+    packet_diff.add_argument("--new-revision", type=int, required=True)
+    packet_diff.add_argument("--output", default="-")
+
+    packet_export = sub.add_parser("packet-export")
+    packet_export.add_argument("run_id")
+    packet_export.add_argument("--revision", type=int, default=None)
+    packet_export.add_argument("--output", required=True)
+    packet_export.add_argument("--bounded", action="store_true")
+    packet_export.add_argument("--max-passages", type=int, default=20)
+    packet_export.add_argument("--max-claims", type=int, default=10)
+
+    # ------------------------------------------------------------------
     # Claim manifest commands (issue #32)
     # ------------------------------------------------------------------
     claim = sub.add_parser("claim-manifest")
@@ -2684,6 +2715,186 @@ def main(argv=None):
         result = service.build_evidence_packet(
             [UUID(value) for value in args.ids], max_tokens=args.max_tokens
         )
+
+    # ------------------------------------------------------------------
+    # Evidence packet commands (issue #58)
+    # ------------------------------------------------------------------
+    elif args.command == "packet-validate":
+        from .container import build_evidence_service
+        from .packet_validator import EvidencePacketValidator
+
+        evidence_svc = build_evidence_service(config)
+        run_id = UUID(args.run_id)
+        packet_rec = evidence_svc.export_packet(run_id, args.revision)
+        if packet_rec is None:
+            raise SystemExit(
+                f"evidence packet not found for run {args.run_id}"
+                + (f" r{args.revision}" if args.revision else "")
+            )
+        from ..research_domain.registry import load_model
+
+        packet = load_model(packet_rec)
+        validator = EvidencePacketValidator()
+        vr = validator.validate(packet)
+        output = args.output
+        if output == "-":
+            if vr.is_valid and vr.is_complete:
+                print(vr.to_json(indent=2))
+                return 0
+            print(vr.to_json(indent=2), file=sys.stderr)
+            if vr.errors:
+                return 1
+            if not args.include_warnings and vr.warnings:
+                return 1
+            return 0
+        else:
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(vr.to_json(indent=2))
+                os.replace(tmp_path, str(output_path))
+            except BaseException:
+                os.unlink(tmp_path)
+                raise
+            result = {
+                "output": output,
+                "is_valid": vr.is_valid,
+                "is_complete": vr.is_complete,
+            }
+
+    elif args.command == "packet-inspect":
+        from .container import build_evidence_service
+        from .packet_validator import (
+            EvidencePacketValidator,
+            bounded_citation_ready_output,
+        )
+
+        evidence_svc = build_evidence_service(config)
+        run_id = UUID(args.run_id)
+        packet_rec = evidence_svc.export_packet(run_id, args.revision)
+        if packet_rec is None:
+            raise SystemExit(
+                f"evidence packet not found for run {args.run_id}"
+                + (f" r{args.revision}" if args.revision else "")
+            )
+        from ..research_domain.registry import load_model
+
+        packet = load_model(packet_rec)
+        validator = EvidencePacketValidator()
+        vr = validator.validate(packet)
+
+        if args.bounded:
+            output_dict = bounded_citation_ready_output(
+                packet,
+                max_passages=args.max_passages,
+                max_claims=args.max_claims,
+            )
+        else:
+            output_dict = packet_rec.to_dict()
+            # Add validation result.
+            output_dict["validation"] = vr.to_dict()
+
+        output = args.output
+        if output == "-":
+            print(json.dumps(output_dict, indent=2, default=str))
+            return 0
+        else:
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(json.dumps(output_dict, indent=2, default=str))
+                os.replace(tmp_path, str(output_path))
+            except BaseException:
+                os.unlink(tmp_path)
+                raise
+            result = {"output": str(output_path)}
+
+    elif args.command == "packet-diff":
+        from .container import build_evidence_service
+        from .packet_diff import diff_packets
+
+        evidence_svc = build_evidence_service(config)
+        run_id = UUID(args.run_id)
+
+        old_rec = evidence_svc.export_packet(run_id, args.old_revision)
+        if old_rec is None:
+            raise SystemExit(
+                f"evidence packet not found for run {args.run_id} r{args.old_revision}"
+            )
+        new_rec = evidence_svc.export_packet(run_id, args.new_revision)
+        if new_rec is None:
+            raise SystemExit(
+                f"evidence packet not found for run {args.run_id} r{args.new_revision}"
+            )
+
+        from ..research_domain.registry import load_model
+
+        old_packet = load_model(old_rec)
+        new_packet = load_model(new_rec)
+        diff = diff_packets(
+            old_packet,
+            new_packet,
+            old_revision=args.old_revision,
+            new_revision=args.new_revision,
+        )
+
+        output = args.output
+        if output == "-":
+            print(diff.to_json(indent=2))
+            return 0
+        else:
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(diff.to_json(indent=2))
+                os.replace(tmp_path, str(output_path))
+            except BaseException:
+                os.unlink(tmp_path)
+                raise
+            result = {"output": str(output_path), "summary": diff.summary}
+
+    elif args.command == "packet-export":
+        from .container import build_evidence_service
+        from .packet_validator import bounded_citation_ready_output
+
+        evidence_svc = build_evidence_service(config)
+        run_id = UUID(args.run_id)
+        packet_rec = evidence_svc.export_packet(run_id, args.revision)
+        if packet_rec is None:
+            raise SystemExit(
+                f"evidence packet not found for run {args.run_id}"
+                + (f" r{args.revision}" if args.revision else "")
+            )
+
+        if args.bounded:
+            from ..research_domain.registry import load_model
+
+            packet = load_model(packet_rec)
+            output_dict = bounded_citation_ready_output(
+                packet,
+                max_passages=args.max_passages,
+                max_claims=args.max_claims,
+            )
+        else:
+            output_dict = packet_rec.to_dict()
+
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(output_dict, indent=2, default=str))
+            os.replace(tmp_path, str(output_path))
+        except BaseException:
+            os.unlink(tmp_path)
+            raise
+        result = {"exported_to": str(output_path)}
 
     # ------------------------------------------------------------------
     # Claim manifest commands (issue #32)
