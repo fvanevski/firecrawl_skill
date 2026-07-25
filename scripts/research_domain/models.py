@@ -387,6 +387,7 @@ class FreshnessAssessment:
 
 @dataclass(frozen=True)
 class IndependenceAssessment:
+    candidate_id: UUID
     status: IndependenceStatus
     rationale: str
 
@@ -755,6 +756,7 @@ class EvidencePacket:
     freshness_summary: dict[str, Any]
     limitations: tuple[str, ...]
     unresolved_items: tuple[UUID, ...]
+    independence_assessments: tuple[IndependenceAssessment, ...]
     retrieval_provenance: tuple[RetrievalProvenance, ...]
 
     SCHEMA_VERSION = "evidence-packet-v1"
@@ -776,6 +778,7 @@ class EvidencePacket:
             + self.near_duplicate_groups
         )
         _unique([item.group_id for item in groups], "evidence group IDs")
+        _unique([item.candidate_id for item in self.independence_assessments], "assessment candidate IDs")
         claim_ids = {item.claim_id for item in self.claims}
         passage_ids = {item.passage_id for item in all_passages}
         unknown_claims = {

@@ -1,102 +1,30 @@
 {
-  "$defs": {
-    "FreshnessAssessment": {
-      "additionalProperties": false,
-      "properties": {
-        "rationale": {
-          "type": "string"
-        },
-        "status": {
-          "enum": [
-            "satisfied",
-            "unsatisfied",
-            "uncertain",
-            "not_applicable"
-          ],
-          "type": "string"
-        }
-      },
-      "required": [
-        "status",
-        "rationale"
-      ],
-      "type": "object"
-    },
-    "IndependenceAssessment": {
-      "additionalProperties": false,
-      "properties": {
-        "rationale": {
-          "type": "string"
-        },
-        "status": {
-          "enum": [
-            "independent",
-            "dependent",
-            "uncertain",
-            "unassessed"
-          ],
-          "type": "string"
-        }
-      },
-      "required": [
-        "status",
-        "rationale"
-      ],
-      "type": "object"
-    }
-  },
-  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/candidate-assessment-v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/candidate-assessment-v1.json",
+  "title": "CandidateAssessment",
+  "type": "object",
   "additionalProperties": false,
   "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "candidate-assessment-v1"
+    },
     "candidate_id": {
-      "format": "uuid",
-      "type": "string"
-    },
-    "confidence": {
-      "maximum": 1,
-      "minimum": 0,
-      "type": "number"
-    },
-    "extraction_recommendation": {
-      "enum": [
-        "scrape",
-        "metadata_only",
-        "defer",
-        "reject"
-      ],
-      "type": "string"
-    },
-    "freshness_assessment": {
-      "$ref": "#/$defs/FreshnessAssessment"
-    },
-    "independence_assessment": {
-      "$ref": "#/$defs/IndependenceAssessment"
-    },
-    "priority": {
-      "maximum": 100,
-      "minimum": 0,
-      "type": "integer"
-    },
-    "rationale": {
-      "minLength": 1,
-      "type": "string"
+      "type": "string",
+      "format": "uuid"
     },
     "relevance": {
+      "type": "string",
       "enum": [
         "high",
         "medium",
         "low",
         "unrelated",
         "uncertain"
-      ],
-      "type": "string"
-    },
-    "schema_version": {
-      "const": "candidate-assessment-v1",
-      "type": "string"
+      ]
     },
     "source_role": {
+      "type": "string",
       "enum": [
         "primary",
         "controlling",
@@ -105,22 +33,50 @@
         "context_only",
         "unsuitable",
         "uncertain"
-      ],
-      "type": "string"
-    },
-    "target_claim_ids": {
-      "items": {
-        "format": "uuid",
-        "type": "string"
-      },
-      "type": "array"
+      ]
     },
     "target_question_ids": {
+      "type": "array",
       "items": {
-        "format": "uuid",
-        "type": "string"
-      },
-      "type": "array"
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "target_claim_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "freshness_assessment": {
+      "$ref": "#/$defs/FreshnessAssessment"
+    },
+    "independence_assessment": {
+      "$ref": "#/$defs/IndependenceAssessment"
+    },
+    "extraction_recommendation": {
+      "type": "string",
+      "enum": [
+        "scrape",
+        "metadata_only",
+        "defer",
+        "reject"
+      ]
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
     },
     "uncertainty": {
       "type": "string"
@@ -141,6 +97,55 @@
     "confidence",
     "uncertainty"
   ],
-  "title": "CandidateAssessment",
-  "type": "object"
+  "$defs": {
+    "FreshnessAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "satisfied",
+            "unsatisfied",
+            "uncertain",
+            "not_applicable"
+          ]
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "rationale"
+      ]
+    },
+    "IndependenceAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "independent",
+            "dependent",
+            "uncertain",
+            "unassessed"
+          ]
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "status",
+        "rationale"
+      ]
+    }
+  }
 }

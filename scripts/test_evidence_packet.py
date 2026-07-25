@@ -429,9 +429,10 @@ def test_evidence_packet_referential_integrity():
             "unique_sources": 1,
             "sources": ["https://example.com"],
         },
-        freshness_summary={"most_recent": None, "oldest": None},
+        freshness_summary={},
         limitations=(),
         unresolved_items=(),
+        independence_assessments=(),
         retrieval_provenance=(),
     )
     assert valid_packet is not None
@@ -479,8 +480,9 @@ def test_evidence_packet_referential_integrity():
                 "unique_sources": 1,
                 "sources": ["https://example.com"],
             },
-            freshness_summary={"most_recent": None, "oldest": None},
+            freshness_summary={},
             limitations=(),
             unresolved_items=(),
+            independence_assessments=(),
             retrieval_provenance=(),
         )

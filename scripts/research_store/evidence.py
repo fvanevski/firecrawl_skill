@@ -10,6 +10,7 @@ from research_domain.models import (
     EvidenceGroup,
     EvidencePacket,
     EvidencePassage,
+    IndependenceAssessment,
     RetrievalProvenance,
 )
 
@@ -53,7 +54,7 @@ class EvidenceService:
         self.uow_factory = uow_factory
         self.budget_policy = budget_policy
         self.tokenizer = get_tokenizer(tokenizer_name)
-        self.duplicate_service = DuplicateGroupService(uow_factory)
+        self.duplicate_service = DuplicateGroupService()
 
     def build_evidence_packet(
         self,
@@ -158,6 +159,8 @@ class EvidenceService:
             p.candidate_id: p.passage_id for p in passages + omitted_passages
         }
 
+        independence_assessments = []
+
         for g in dup_groups:
             group_passage_ids = []
             for cid in g["candidate_ids"]:
@@ -172,6 +175,15 @@ class EvidenceService:
                         passage_ids=tuple(group_passage_ids),
                         rationale=g["rationale"],
                         evaluated=True,
+                    )
+                )
+
+            for cid, ass in g.get("assessments", {}).items():
+                independence_assessments.append(
+                    IndependenceAssessment(
+                        candidate_id=cid,
+                        status=ass["status"],
+                        rationale=ass["rationale"],
                     )
                 )
 
@@ -192,6 +204,7 @@ class EvidenceService:
             freshness_summary=freshness_summary,
             limitations=(),
             unresolved_items=(),
+            independence_assessments=tuple(independence_assessments),
             retrieval_provenance=tuple(retrieval_events),
         )
 

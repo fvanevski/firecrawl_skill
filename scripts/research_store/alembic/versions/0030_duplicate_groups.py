@@ -31,7 +31,7 @@ def upgrade():
         """
         CREATE TABLE IF NOT EXISTS duplicate_groups (
           id                          uuid NOT NULL DEFAULT gen_random_uuid(),
-          run_id                      uuid NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+          run_id                      uuid REFERENCES research_runs(id) ON DELETE CASCADE,
           rationale                   text NOT NULL,
           created_at                  timestamptz NOT NULL DEFAULT now(),
 

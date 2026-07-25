@@ -8,8 +8,8 @@ from research_domain.models import IndependenceStatus
 class DuplicateGroupService:
     """Service to evaluate near-duplicates and source independence deterministically."""
 
-    def __init__(self, uow_factory=None):
-        self.uow_factory = uow_factory
+    def __init__(self):
+        pass
 
     def evaluate_candidates(self, candidates, run_id=None):
         """Evaluate candidates to find duplicate groups and assess independence.
@@ -51,15 +51,15 @@ class DuplicateGroupService:
 
             # 3. Normalized Title (for syndication/wire reports)
             title = c.get("title") or ""
-            norm_title = re.sub(r"[^a-z0-9]", "", title.lower())
-            if norm_title and len(norm_title) > 10:
+            norm_title = re.sub(r"[^a-z0-9\s]", "", title.lower())
+            if norm_title and len(norm_title) > 11:
                 by_title_normalized[norm_title].append(c)
 
         assigned = set()
         groups = []
 
         def create_group(cands, rationale, status_override=None):
-            group_cands = [c for c in cands if c["id"] not in assigned]
+            group_cands = [c for c in cands if c.get("id", c.get("candidate_id")) not in assigned]
             if len(group_cands) < 2:
                 return
 
@@ -68,7 +68,7 @@ class DuplicateGroupService:
             assessments = {}
 
             for i, c in enumerate(group_cands):
-                cid = c["id"]
+                cid = c.get("id", c.get("candidate_id"))
                 c_ids.append(cid)
                 assigned.add(cid)
 
@@ -118,20 +118,5 @@ class DuplicateGroupService:
         # Remaining candidates are UNASSESSED or UNCERTAIN independent
         # We don't group them, but we might want to return their assessments?
         # The requirement asks to persist duplicate groups and independence assessments.
-
-        # Optional: Save to DB if uow_factory is provided
-        if self.uow_factory and run_id:
-            uow = self.uow_factory()
-            if uow is not None:
-                with uow:
-                    for group in groups:
-                        uow.runs.persist_duplicate_group(
-                            group["group_id"], run_id, group["rationale"]
-                        )
-                        uow.runs.assign_duplicate_group(
-                            group["candidate_ids"], group["group_id"], run_id
-                        )
-                        for cid, ass in group["assessments"].items():
-                            uow.runs.update_candidate_independence(cid, ass)
 
         return groups

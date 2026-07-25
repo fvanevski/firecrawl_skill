@@ -142,6 +142,7 @@
       "rationale": "The page is current."
     },
     "independence_assessment": {
+      "candidate_id": "00000000-0000-0000-0000-000000000301",
       "status": "independent",
       "rationale": "The publisher owns the specification."
     },
@@ -326,6 +327,7 @@
     "unresolved_items": [
       "00000000-0000-0000-0000-000000000402"
     ],
+    "independence_assessments": [],
     "retrieval_provenance": [
       {
         "retrieval_event_id": "00000000-0000-0000-0000-000000000609",
