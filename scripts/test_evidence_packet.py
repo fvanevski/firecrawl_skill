@@ -132,6 +132,67 @@ def test_build_evidence_packet_token_limits_enforced():
     assert group.passage_ids[0] == packet.omitted_passages[0].passage_id
 
 
+def test_build_evidence_packet_empty_candidates():
+    """Empty candidate list produces a valid empty packet with zero summaries."""
+    svc = EvidenceService(lambda: None, budget_policy=DEFAULT_POLICY)
+
+    caps = ResourceCaps.from_mapping(
+        {
+            **DEFAULT_POLICY.profiles["standard"].to_dict(),
+            "max_evidence_packet_tokens": 8000,
+        }
+    )
+
+    packet = svc.build_evidence_packet(
+        run_id=uuid4(),
+        research_spec_id=uuid4(),
+        coverage_revision=1,
+        candidates=[],
+        retrieval_events=[],
+        effective_caps=caps,
+    )
+
+    assert len(packet.passages) == 0
+    assert len(packet.omitted_passages) == 0
+    assert packet.source_diversity_summary["unique_sources"] == 0
+    assert packet.source_diversity_summary["sources"] == []
+    assert packet.freshness_summary["most_recent"] is None
+    assert packet.freshness_summary["oldest"] is None
+    assert len(packet.near_duplicate_groups) == 0
+
+
+def test_build_evidence_packet_zero_budget_all_omitted():
+    """Zero budget cap puts every candidate in omitted_passages."""
+    svc = EvidenceService(lambda: None, budget_policy=DEFAULT_POLICY)
+
+    c1 = _make_candidate(text="Word " * 10)
+    c2 = _make_candidate(text="Word " * 20)
+
+    caps = ResourceCaps.from_mapping(
+        {
+            **DEFAULT_POLICY.profiles["standard"].to_dict(),
+            "max_evidence_packet_tokens": 0,
+        }
+    )
+
+    packet = svc.build_evidence_packet(
+        run_id=uuid4(),
+        research_spec_id=uuid4(),
+        coverage_revision=1,
+        candidates=[c1, c2],
+        retrieval_events=[],
+        effective_caps=caps,
+    )
+
+    assert len(packet.passages) == 0
+    assert len(packet.omitted_passages) == 2
+    assert len(packet.near_duplicate_groups) == 1
+    group = packet.near_duplicate_groups[0]
+    assert group.rationale == "omitted_due_to_budget"
+    assert not group.evaluated
+    assert len(group.passage_ids) == 2
+
+
 def ensure_run_exists(dsn, run_id):
     from research_store.postgres import connect
 
@@ -153,6 +214,7 @@ def ensure_run_exists(dsn, run_id):
             ),
         )
 
+
 from dataclasses import replace
 
 from research_store.config import StoreConfig
@@ -163,6 +225,7 @@ from research_store.container import build_evidence_service
 def prepared_database_for_evidence_packets(prepared_database_for_claims):
     # prepared_database_for_claims already upgrades to head which now includes 0029
     pass
+
 
 @INTEGRATION_MARK
 def test_evidence_packet_persistence_and_immutability(

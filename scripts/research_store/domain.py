@@ -718,7 +718,9 @@ class ExtractionAttempt:
     quality_metrics: ExtractionQualityMetrics | None = None
     failure_class: str = "none"
     retry_parent_id: UUID | None = None
-    disposition: str = "unassessed"  # 'acceptable' | 'poor' | 'ambiguous' | 'unassessed'
+    disposition: str = (
+        "unassessed"  # 'acceptable' | 'poor' | 'ambiguous' | 'unassessed'
+    )
     error_message: str | None = None
     selection_reason: str | None = None
     created_at: datetime = field(default_factory=utcnow)

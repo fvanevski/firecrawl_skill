@@ -27,6 +27,7 @@ down_revision = "0028_retrieval_trace"
 branch_labels = None
 depends_on = None
 
+
 def upgrade():
     op.execute(
         """
@@ -63,6 +64,7 @@ def upgrade():
     op.execute(
         "INSERT INTO schema_migrations(version) VALUES (29) ON CONFLICT DO NOTHING"
     )
+
 
 def downgrade():
     raise RuntimeError(

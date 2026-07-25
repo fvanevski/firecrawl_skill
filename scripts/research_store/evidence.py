@@ -1,6 +1,7 @@
 import dataclasses
 import datetime
 import logging
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -37,10 +38,17 @@ class EvidenceService:
 
     def __init__(
         self,
-        uow_factory,
+        uow_factory: Callable[[], Any],
         budget_policy: BudgetPolicy,
         tokenizer_name: str = "cl100k_base",
     ):
+        """Build an EvidenceService.
+
+        Args:
+            uow_factory: Callable that returns a PostgresUnitOfWork instance.
+            budget_policy: Deterministic budget policy for resource caps.
+            tokenizer_name: Tokenizer identifier for token counting.
+        """
         self.uow_factory = uow_factory
         self.budget_policy = budget_policy
         self.tokenizer = get_tokenizer(tokenizer_name)
@@ -166,7 +174,12 @@ class EvidenceService:
         self,
         packet: EvidencePacket,
     ) -> int:
-        """Persist the packet. Revision number is deterministic and monotonically increasing.
+        """Persist the packet to PostgreSQL.
+
+        Reads the latest revision for the run, increments it, and writes
+        the new row inside a single unit-of-work transaction.  On commit
+        the revision is guaranteed to be unique per ``(run_id,
+        packet_revision)``.
 
         Returns:
             The revision number of the persisted packet.

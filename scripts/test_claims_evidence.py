@@ -42,13 +42,16 @@ def test_domain_model_evidence_group_empty_validation():
     assert not group.evaluated
 
     # Empty group, evaluated -> fails
-    with pytest.raises(ValueError, match="empty evidence group must remain unevaluated until assessed"):
+    with pytest.raises(
+        ValueError, match="empty evidence group must remain unevaluated until assessed"
+    ):
         EvidenceGroup(
             group_id=uuid4(),
             passage_ids=(),
             rationale="omitted_due_to_budget",
             evaluated=True,
         )
+
 
 def test_claim_record_from_mapping_and_to_dict():
     now = "2025-01-01T00:00:00+00:00"

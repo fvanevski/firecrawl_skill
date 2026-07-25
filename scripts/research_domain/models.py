@@ -672,7 +672,9 @@ class EvidenceGroup:
         _unique(self.passage_ids, "group passage IDs")
         _text(self.rationale, "evidence_group.rationale")
         if not self.passage_ids and self.evaluated:
-            raise ValueError("empty evidence group must remain unevaluated until assessed")
+            raise ValueError(
+                "empty evidence group must remain unevaluated until assessed"
+            )
 
 
 @dataclass(frozen=True)
