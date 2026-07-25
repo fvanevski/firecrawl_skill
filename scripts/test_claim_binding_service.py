@@ -470,7 +470,9 @@ def test_invalid_semantic_status_raises_value_error(service, mock_packet, monkey
         )
 
 
-def test_partial_evaluation_failure_no_partial_bindings(service, mock_packet, monkeypatch):
+def test_partial_evaluation_failure_no_partial_bindings(
+    service, mock_packet, monkeypatch
+):
     """When an invalid claim ID appears later, no bindings are created."""
     claim_id = mock_packet["claims"][0]["claim_id"]
     passage_id = mock_packet["passages"][0]["passage_id"]
