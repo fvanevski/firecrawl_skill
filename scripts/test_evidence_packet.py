@@ -121,9 +121,15 @@ def test_build_evidence_packet_token_limits_enforced():
 
     # Only 1 passage should be included due to limits
     assert len(packet.passages) == 1
+    assert len(packet.omitted_passages) == 1
 
     # Near duplicate group should have the omitted candidates
-    assert len(packet.near_duplicate_groups) == 0
+    assert len(packet.near_duplicate_groups) == 1
+    group = packet.near_duplicate_groups[0]
+    assert group.rationale == "omitted_due_to_budget"
+    assert not group.evaluated
+    assert len(group.passage_ids) == 1
+    assert group.passage_ids[0] == packet.omitted_passages[0].passage_id
 
 
 def test_build_evidence_packet_empty_candidates():
@@ -178,7 +184,12 @@ def test_build_evidence_packet_zero_budget_all_omitted():
     )
 
     assert len(packet.passages) == 0
-    assert len(packet.near_duplicate_groups) == 0
+    assert len(packet.omitted_passages) == 2
+    assert len(packet.near_duplicate_groups) == 1
+    group = packet.near_duplicate_groups[0]
+    assert group.rationale == "omitted_due_to_budget"
+    assert not group.evaluated
+    assert len(group.passage_ids) == 2
 
 
 def ensure_run_exists(dsn, run_id):
@@ -413,6 +424,7 @@ def test_evidence_packet_referential_integrity():
         contradicting_groups=(),
         qualifying_groups=(),
         near_duplicate_groups=(),
+        omitted_passages=(),
         source_diversity_summary={
             "unique_sources": 1,
             "sources": ["https://example.com"],
@@ -462,6 +474,7 @@ def test_evidence_packet_referential_integrity():
             contradicting_groups=(),
             qualifying_groups=(),
             near_duplicate_groups=(),
+            omitted_passages=(),
             source_diversity_summary={
                 "unique_sources": 1,
                 "sources": ["https://example.com"],

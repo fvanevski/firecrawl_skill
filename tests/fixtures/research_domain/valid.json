@@ -261,6 +261,7 @@
         "source_url": "https://fixture.invalid/docs"
       }
     ],
+    "omitted_passages": [],
     "claim_evidence_bindings": [
       {
         "binding_id": "00000000-0000-0000-0000-000000000604",

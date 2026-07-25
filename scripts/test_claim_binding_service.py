@@ -438,6 +438,86 @@ INTEGRATION_MARK = pytest.mark.skipif(
 )
 
 
+def test_invalid_semantic_status_raises_value_error(service, mock_packet, monkeypatch):
+    """Invalid semantic_status values are rejected before any bindings are created."""
+    claim_id = mock_packet["claims"][0]["claim_id"]
+
+    def mock_prompt(*args, **kwargs):
+        return HostArtifactResult(
+            value={
+                "evaluations": [
+                    {
+                        "claim_id": claim_id,
+                        "semantic_status": "supportive",  # invalid value
+                        "bindings": [],
+                    }
+                ]
+            },
+            provenance={},
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+
+    with pytest.raises(ValueError, match="invalid semantic_status"):
+        service.evaluate_claims(
+            run_id=UUID(mock_packet["run_id"]),
+            packet_revision=mock_packet["coverage_revision"],
+            prompt_version="v1",
+            model_name="test-model",
+        )
+
+
+def test_partial_evaluation_failure_no_partial_bindings(service, mock_packet, monkeypatch):
+    """When an invalid claim ID appears later, no bindings are created."""
+    claim_id = mock_packet["claims"][0]["claim_id"]
+    passage_id = mock_packet["passages"][0]["passage_id"]
+
+    def mock_prompt(*args, **kwargs):
+        return HostArtifactResult(
+            value={
+                "evaluations": [
+                    {
+                        "claim_id": claim_id,
+                        "semantic_status": "supported",
+                        "bindings": [
+                            {
+                                "passage_ids": [passage_id],
+                                "relationship": "supports",
+                                "confidence": 0.95,
+                                "uncertainty": "none",
+                            }
+                        ],
+                    },
+                    {
+                        "claim_id": "00000000-0000-0000-0000-000000009999",  # invalid
+                        "semantic_status": "supported",
+                        "bindings": [],
+                    },
+                ]
+            },
+            provenance={},
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+
+    with pytest.raises(ValueError, match="unknown claim IDs"):
+        service.evaluate_claims(
+            run_id=UUID(mock_packet["run_id"]),
+            packet_revision=mock_packet["coverage_revision"],
+            prompt_version="v1",
+            model_name="test-model",
+        )
+
+    # No bindings should have been persisted
+    assert len(service.evidence.persisted) == 0
+
+
 @INTEGRATION_MARK
 def test_evaluate_claims_integration(service, mock_packet):
     # Setup some specific real claims and passages

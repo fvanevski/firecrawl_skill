@@ -745,6 +745,7 @@ class EvidencePacket:
     coverage_revision: int
     claims: tuple[EvidenceClaim, ...]
     passages: tuple[EvidencePassage, ...]
+    omitted_passages: tuple[EvidencePassage, ...]
     claim_evidence_bindings: tuple[ClaimEvidenceBinding, ...]
     corroborating_groups: tuple[EvidenceGroup, ...]
     contradicting_groups: tuple[EvidenceGroup, ...]
@@ -763,7 +764,8 @@ class EvidencePacket:
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
         _positive(self.coverage_revision, "coverage_revision")
         _unique([item.claim_id for item in self.claims], "evidence claim IDs")
-        _unique([item.passage_id for item in self.passages], "passage IDs")
+        all_passages = self.passages + self.omitted_passages
+        _unique([item.passage_id for item in all_passages], "passage IDs")
         _unique(
             [item.binding_id for item in self.claim_evidence_bindings], "binding IDs"
         )
@@ -775,7 +777,7 @@ class EvidencePacket:
         )
         _unique([item.group_id for item in groups], "evidence group IDs")
         claim_ids = {item.claim_id for item in self.claims}
-        passage_ids = {item.passage_id for item in self.passages}
+        passage_ids = {item.passage_id for item in all_passages}
         unknown_claims = {
             item.claim_id for item in self.claim_evidence_bindings
         } - claim_ids

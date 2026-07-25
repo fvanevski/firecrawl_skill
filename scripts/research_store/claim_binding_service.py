@@ -46,6 +46,9 @@ class ClaimBindingService:
     ) -> int:
         """Evaluate claims against an EvidencePacket using a semantic model.
 
+        Calling this method replaces all prior claim-evidence bindings for the
+        packet. Each evaluation produces a new packet revision.
+
         Returns:
             The revision of the newly persisted EvidencePacket.
         """
@@ -132,19 +135,26 @@ class ClaimBindingService:
         schema_version: int,
         packet_revision: int,
     ) -> int:
+        from research_domain.models import SemanticStatus
+
         valid_claim_ids = {c["claim_id"] for c in packet_dict.get("claims", [])}
         valid_passage_ids = {p["passage_id"] for p in packet_dict.get("passages", [])}
+        valid_semantic_statuses = {s.value for s in SemanticStatus}
 
-        new_bindings = []
-        updated_claims_map = {}
-
+        # Phase 1: Validate all evaluations before mutating state.
+        # This prevents partial evaluation failures where some bindings are
+        # lost because an invalid claim ID appears later in the list.
         for eval_item in evaluations:
             claim_id_str = eval_item.get("claim_id")
             if claim_id_str not in valid_claim_ids:
                 raise ValueError(f"unknown claim IDs: ['{claim_id_str}']")
 
             semantic_status = eval_item.get("semantic_status")
-            updated_claims_map[claim_id_str] = semantic_status
+            if semantic_status not in valid_semantic_statuses:
+                raise ValueError(
+                    f"invalid semantic_status '{semantic_status}' for claim "
+                    f"{claim_id_str}; expected one of {sorted(valid_semantic_statuses)}"
+                )
 
             bindings = eval_item.get("bindings", [])
             for b in bindings:
@@ -152,6 +162,19 @@ class ClaimBindingService:
                 for pid in passage_ids_str:
                     if pid not in valid_passage_ids:
                         raise ValueError(f"unknown passage IDs: ['{pid}']")
+
+        # Phase 2: Build bindings and claim updates (safe now that validation passed).
+        new_bindings = []
+        updated_claims_map = {}
+
+        for eval_item in evaluations:
+            claim_id_str = eval_item.get("claim_id")
+            semantic_status = eval_item.get("semantic_status")
+            updated_claims_map[claim_id_str] = semantic_status
+
+            bindings = eval_item.get("bindings", [])
+            for b in bindings:
+                passage_ids_str = b.get("passage_ids", [])
 
                 if not passage_ids_str:
                     continue
