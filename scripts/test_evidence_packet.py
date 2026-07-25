@@ -153,7 +153,6 @@ def test_build_evidence_packet_empty_candidates():
     )
 
     assert len(packet.passages) == 0
-    assert len(packet.omitted_passages) == 0
     assert packet.source_diversity_summary["unique_sources"] == 0
     assert packet.source_diversity_summary["sources"] == []
     assert packet.freshness_summary["most_recent"] is None
@@ -389,6 +388,10 @@ def test_evidence_packet_referential_integrity():
         relationship=EvidenceRelationship.SUPPORTS,
         confidence=0.9,
         uncertainty="low",
+        model="test-model",
+        prompt_version="v1",
+        schema_version=1,
+        input_packet_revision=1,
     )
 
     # Valid group referencing the passage
@@ -416,12 +419,12 @@ def test_evidence_packet_referential_integrity():
                 source_url="https://example.com",
             ),
         ),
-        omitted_passages=(),
         claim_evidence_bindings=(binding,),
         corroborating_groups=(group,),
         contradicting_groups=(),
         qualifying_groups=(),
         near_duplicate_groups=(),
+        omitted_passages=(),
         source_diversity_summary={
             "unique_sources": 1,
             "sources": ["https://example.com"],
@@ -442,6 +445,10 @@ def test_evidence_packet_referential_integrity():
         relationship=EvidenceRelationship.SUPPORTS,
         confidence=0.9,
         uncertainty="low",
+        model="test-model",
+        prompt_version="v1",
+        schema_version=1,
+        input_packet_revision=1,
     )
 
     # __post_init__ should reject the unknown passage ID.
@@ -462,12 +469,12 @@ def test_evidence_packet_referential_integrity():
                     source_url="https://example.com",
                 ),
             ),
-            omitted_passages=(),
             claim_evidence_bindings=(invalid_binding,),
             corroborating_groups=(),
             contradicting_groups=(),
             qualifying_groups=(),
             near_duplicate_groups=(),
+            omitted_passages=(),
             source_diversity_summary={
                 "unique_sources": 1,
                 "sources": ["https://example.com"],

@@ -261,6 +261,7 @@
         "source_url": "https://fixture.invalid/docs"
       }
     ],
+    "omitted_passages": [],
     "claim_evidence_bindings": [
       {
         "binding_id": "00000000-0000-0000-0000-000000000604",
@@ -270,7 +271,11 @@
         ],
         "relationship": "qualifies",
         "confidence": 0.7,
-        "uncertainty": "Independent replication is missing."
+        "uncertainty": "Independent replication is missing.",
+        "model": "gpt-4",
+        "prompt_version": "v1",
+        "schema_version": 1,
+        "input_packet_revision": 1
       }
     ],
     "corroborating_groups": [
@@ -288,7 +293,7 @@
         "group_id": "00000000-0000-0000-0000-000000000606",
         "passage_ids": [],
         "rationale": "No contradiction was found in the evaluated evidence.",
-        "evaluated": true
+        "evaluated": false
       }
     ],
     "qualifying_groups": [
@@ -306,7 +311,7 @@
         "group_id": "00000000-0000-0000-0000-000000000608",
         "passage_ids": [],
         "rationale": "No near duplicates were found in the evaluated evidence.",
-        "evaluated": true
+        "evaluated": false
       }
     ],
     "source_diversity_summary": {

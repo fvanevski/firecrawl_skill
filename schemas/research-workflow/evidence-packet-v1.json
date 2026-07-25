@@ -16,6 +16,12 @@
           "minimum": 0,
           "type": "number"
         },
+        "input_packet_revision": {
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
         "passage_ids": {
           "items": {
             "format": "uuid",
@@ -23,6 +29,9 @@
           },
           "minItems": 1,
           "type": "array"
+        },
+        "prompt_version": {
+          "type": "string"
         },
         "relationship": {
           "enum": [
@@ -32,6 +41,9 @@
             "context"
           ],
           "type": "string"
+        },
+        "schema_version": {
+          "type": "integer"
         },
         "uncertainty": {
           "type": "string"
@@ -43,7 +55,11 @@
         "passage_ids",
         "relationship",
         "confidence",
-        "uncertainty"
+        "uncertainty",
+        "model",
+        "prompt_version",
+        "schema_version",
+        "input_packet_revision"
       ],
       "type": "object"
     },
@@ -277,6 +293,12 @@
       },
       "type": "array"
     },
+    "omitted_passages": {
+      "items": {
+        "$ref": "#/$defs/EvidencePassage"
+      },
+      "type": "array"
+    },
     "passages": {
       "items": {
         "$ref": "#/$defs/EvidencePassage"
@@ -326,6 +348,7 @@
     "coverage_revision",
     "claims",
     "passages",
+    "omitted_passages",
     "claim_evidence_bindings",
     "corroborating_groups",
     "contradicting_groups",
