@@ -99,7 +99,6 @@ def test_evaluate_claims_success(service, mock_packet, monkeypatch):
         run_id=UUID(mock_packet["run_id"]),
         packet_revision=mock_packet["coverage_revision"],
         prompt_version="v1",
-        endpoint_alias="local",
         model_name="test-model",
     )
 
@@ -145,7 +144,6 @@ def test_evaluate_claims_rejects_invented_claim_id(service, mock_packet, monkeyp
             run_id=UUID(mock_packet["run_id"]),
             packet_revision=mock_packet["coverage_revision"],
             prompt_version="v1",
-            endpoint_alias="local",
             model_name="test-model",
         )
 
@@ -184,7 +182,6 @@ def test_evaluate_claims_rejects_invented_passage_id(service, mock_packet, monke
             run_id=UUID(mock_packet["run_id"]),
             packet_revision=mock_packet["coverage_revision"],
             prompt_version="v1",
-            endpoint_alias="local",
             model_name="test-model",
         )
 
@@ -215,13 +212,221 @@ def test_unsupported_claim_has_no_bindings(service, mock_packet, monkeypatch):
         run_id=UUID(mock_packet["run_id"]),
         packet_revision=mock_packet["coverage_revision"],
         prompt_version="v1",
-        endpoint_alias="local",
         model_name="test-model",
     )
 
     persisted = service.evidence.persisted[0]
     assert len(persisted.claim_evidence_bindings) == 0
     assert persisted.claims[0].semantic_status == "unsupported"
+
+
+def test_no_claims_returns_same_revision(service, mock_packet, monkeypatch):
+    """When the packet has no claims, evaluate_claims returns immediately."""
+    mock_packet["claims"] = []
+
+    new_rev = service.evaluate_claims(
+        run_id=UUID(mock_packet["run_id"]),
+        packet_revision=mock_packet["coverage_revision"],
+        prompt_version="v1",
+        model_name="test-model",
+    )
+
+    assert new_rev == mock_packet["coverage_revision"]
+
+
+def test_call_structured_error_raises_runtime_error(service, mock_packet, monkeypatch):
+    """When the LLM call fails, a RuntimeError is raised."""
+
+    def mock_prompt(*args, **kwargs):
+        return HostArtifactResult(
+            value=None,
+            provenance={},
+            attempts=(),
+            error="model timeout",
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+
+    with pytest.raises(
+        RuntimeError, match="Semantic claim binding failed: model timeout"
+    ):
+        service.evaluate_claims(
+            run_id=UUID(mock_packet["run_id"]),
+            packet_revision=mock_packet["coverage_revision"],
+            prompt_version="v1",
+            model_name="test-model",
+        )
+
+
+def test_missing_evaluations_key_produces_empty_bindings(
+    service, mock_packet, monkeypatch
+):
+    """When the model returns no evaluations key, the service produces a valid packet with no bindings."""
+
+    def mock_prompt(*args, **kwargs):
+        return HostArtifactResult(
+            value={},
+            provenance={},
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+
+    new_rev = service.evaluate_claims(
+        run_id=UUID(mock_packet["run_id"]),
+        packet_revision=mock_packet["coverage_revision"],
+        prompt_version="v1",
+        model_name="test-model",
+    )
+
+    assert new_rev == mock_packet["coverage_revision"] + 1
+    persisted = service.evidence.persisted[0]
+    assert len(persisted.claim_evidence_bindings) == 0
+
+
+def test_multiple_bindings_per_claim(service, mock_packet, monkeypatch):
+    """A single claim can have multiple bindings with different relationships."""
+    claim_id = mock_packet["claims"][0]["claim_id"]
+    passage_id = mock_packet["passages"][0]["passage_id"]
+
+    def mock_prompt(*args, **kwargs):
+        return HostArtifactResult(
+            value={
+                "evaluations": [
+                    {
+                        "claim_id": claim_id,
+                        "semantic_status": "qualified",
+                        "bindings": [
+                            {
+                                "passage_ids": [passage_id],
+                                "relationship": "supports",
+                                "confidence": 0.9,
+                                "uncertainty": "partial support",
+                            },
+                            {
+                                "passage_ids": [passage_id],
+                                "relationship": "qualifies",
+                                "confidence": 0.6,
+                                "uncertainty": "context limits applicability",
+                            },
+                        ],
+                    }
+                ]
+            },
+            provenance={},
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+
+    service.evaluate_claims(
+        run_id=UUID(mock_packet["run_id"]),
+        packet_revision=mock_packet["coverage_revision"],
+        prompt_version="v1",
+        model_name="test-model",
+    )
+
+    persisted = service.evidence.persisted[0]
+    assert len(persisted.claim_evidence_bindings) == 2
+    relationships = {b.relationship for b in persisted.claim_evidence_bindings}
+    assert "supports" in relationships
+    assert "qualifies" in relationships
+    assert persisted.claims[0].semantic_status == "qualified"
+
+
+def test_missing_packet_raises_value_error(mock_packet, monkeypatch):
+    """When export_packet returns None, a ValueError is raised."""
+
+    class NoneEvidenceService:
+        def export_packet(self, run_id, revision):
+            return None
+
+        def persist_packet(self, packet):
+            return 1
+
+    class MockSemanticCallService:
+        def uow_factory(self):
+            class MockUOW:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    pass
+
+                class runs:
+                    @staticmethod
+                    def get_run_status(run_id):
+                        return {"lifecycle_revision": 1, "execution_mode": "agent_led"}
+
+            return MockUOW()
+
+        def start_model_call(self, *args, **kwargs):
+            return "mock-call-id"
+
+        def record_model_call(self, call_id, *args, **kwargs):
+            pass
+
+        def finish_model_call(self, call_id, *args, **kwargs):
+            return []
+
+    svc = ClaimBindingService(MockSemanticCallService(), NoneEvidenceService())
+
+    with pytest.raises(ValueError, match="not found"):
+        svc.evaluate_claims(
+            run_id=UUID(mock_packet["run_id"]),
+            packet_revision=mock_packet["coverage_revision"],
+            prompt_version="v1",
+            model_name="test-model",
+        )
+
+
+def test_binding_ids_are_unique(service, mock_packet, monkeypatch):
+    """Each binding gets a unique ID via uuid4()."""
+    claim_id = mock_packet["claims"][0]["claim_id"]
+    passage_id = mock_packet["passages"][0]["passage_id"]
+
+    def mock_prompt(*args, **kwargs):
+        return HostArtifactResult(
+            value={
+                "evaluations": [
+                    {
+                        "claim_id": claim_id,
+                        "semantic_status": "supported",
+                        "bindings": [
+                            {
+                                "passage_ids": [passage_id],
+                                "relationship": "supports",
+                                "confidence": 0.95,
+                                "uncertainty": "none",
+                            }
+                        ],
+                    }
+                ]
+            },
+            provenance={},
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+
+    service.evaluate_claims(
+        run_id=UUID(mock_packet["run_id"]),
+        packet_revision=mock_packet["coverage_revision"],
+        prompt_version="v1",
+        model_name="test-model",
+    )
+
+    persisted = service.evidence.persisted[0]
+    binding_ids = [str(b.binding_id) for b in persisted.claim_evidence_bindings]
+    assert len(binding_ids) == len(set(binding_ids))
 
 
 import os
@@ -262,7 +467,6 @@ def test_evaluate_claims_integration(service, mock_packet):
         run_id=UUID(mock_packet["run_id"]),
         packet_revision=mock_packet["coverage_revision"],
         prompt_version="v1",
-        endpoint_alias="local",
         model_name="chat",
     )
 

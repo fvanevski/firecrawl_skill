@@ -80,7 +80,6 @@ class EvidenceService:
         )
 
         passages = []
-        omitted_passages = []
         token_count = 0
         max_tokens = effective_caps.max_evidence_packet_tokens
 
@@ -122,8 +121,6 @@ class EvidenceService:
 
                 passages.append(passage)
                 token_count += cand_tokens
-            else:
-                omitted_passages.append(passage)
 
         # Source diversity and freshness summaries
         diversity_summary = {

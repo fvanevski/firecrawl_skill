@@ -2,6 +2,7 @@
 
 import json
 import logging
+from copy import deepcopy
 from uuid import UUID, uuid4
 
 from model_gateway import call_structured
@@ -40,7 +41,6 @@ class ClaimBindingService:
         run_id: UUID,
         packet_revision: int,
         prompt_version: str,
-        endpoint_alias: str,
         model_name: str,
         provider: str = "local",
     ) -> int:
@@ -89,8 +89,6 @@ class ClaimBindingService:
         with self.semantic.uow_factory() as uow:
             status = uow.runs.get_run_status(run_id)
             context["run_revision"] = status["lifecycle_revision"]
-
-        from copy import deepcopy
 
         schema = deepcopy(self.schema)
         valid_claim_ids = [c["claim_id"] for c in claims]
