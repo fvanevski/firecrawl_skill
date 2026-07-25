@@ -287,3 +287,187 @@ def test_evidence_packet_persistence_and_immutability(
     # Export latest (should be 2)
     exported_latest = svc.export_packet(run_id)
     assert exported_latest["packet_revision"] == 2
+
+
+@INTEGRATION_MARK
+def test_evidence_packet_unique_constraint_violation(
+    tmp_path, prepared_database_for_evidence_packets
+):
+    """Persisting a duplicate (run_id, packet_revision) raises a unique violation."""
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=TEST_DSN,
+        blob_root=tmp_path / "blobs",
+    )
+    svc = build_evidence_service(config)
+    run_id = uuid4()
+    ensure_run_exists(TEST_DSN, run_id)
+    spec_id = uuid4()
+
+    caps = ResourceCaps.from_mapping(
+        {
+            **DEFAULT_POLICY.profiles["standard"].to_dict(),
+            "max_evidence_packet_tokens": 8000,
+        }
+    )
+
+    packet = svc.build_evidence_packet(
+        run_id=run_id,
+        research_spec_id=spec_id,
+        coverage_revision=1,
+        candidates=[_make_candidate()],
+        retrieval_events=[],
+        effective_caps=caps,
+    )
+
+    # Persist first packet (revision 1)
+    rev1 = svc.persist_packet(packet)
+    assert rev1 == 1
+
+    # Build a second packet with the same run_id but same coverage_revision
+    # so it gets revision 1 again — this should violate the UNIQUE constraint.
+    packet2 = svc.build_evidence_packet(
+        run_id=run_id,
+        research_spec_id=spec_id,
+        coverage_revision=1,  # same coverage revision → same packet_revision
+        candidates=[_make_candidate()],
+        retrieval_events=[],
+        effective_caps=caps,
+    )
+    with pytest.raises(Exception):  # noqa: B017, psycopg UniqueViolation
+        svc.persist_packet(packet2)
+
+
+@INTEGRATION_MARK
+def test_export_packet_returns_none_for_missing_run():
+    """export_packet returns None when no packet exists for the given run_id."""
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=TEST_DSN,
+        blob_root=Path("/tmp/evidence-test-blobs"),
+    )
+    svc = build_evidence_service(config)
+    missing_run = uuid4()
+
+    # Should return None for a run that has no packets
+    assert svc.export_packet(missing_run) is None
+    assert svc.export_packet(missing_run, revision=1) is None
+
+
+def test_evidence_packet_referential_integrity():
+    """EvidencePacket rejects unknown passage IDs in bindings and groups."""
+    from research_domain.models import (
+        ClaimEvidenceBinding,
+        EvidenceClaim,
+        EvidenceGroup,
+        EvidencePacket,
+        EvidencePassage,
+        EvidenceRelationship,
+        SemanticStatus,
+    )
+
+    run_id = uuid4()
+    spec_id = uuid4()
+    passage_id = uuid4()
+    claim_id = uuid4()
+    fake_passage_id = uuid4()
+    fake_group_id = uuid4()
+
+    # Valid claim referencing the passage
+    claim = EvidenceClaim(
+        claim_id=claim_id,
+        statement="This is a test claim",
+        semantic_status=SemanticStatus.UNASSESSED,
+        uncertainty="low",
+    )
+
+    # Valid binding referencing the claim and passage
+    binding = ClaimEvidenceBinding(
+        binding_id=uuid4(),
+        claim_id=claim_id,
+        passage_ids=(passage_id,),
+        relationship=EvidenceRelationship.SUPPORTS,
+        confidence=0.9,
+        uncertainty="low",
+    )
+
+    # Valid group referencing the passage
+    group = EvidenceGroup(
+        group_id=fake_group_id,
+        passage_ids=(passage_id,),
+        rationale="test",
+        evaluated=True,
+    )
+
+    # Construct a valid packet first — should succeed
+    valid_packet = EvidencePacket(
+        schema_version=EvidencePacket.SCHEMA_VERSION,
+        run_id=run_id,
+        research_spec_id=spec_id,
+        coverage_revision=1,
+        claims=(claim,),
+        passages=(
+            EvidencePassage(
+                passage_id=passage_id,
+                candidate_id=uuid4(),
+                snapshot_id=uuid4(),
+                chunk_id=uuid4(),
+                text="test text",
+                source_url="https://example.com",
+            ),
+        ),
+        omitted_passages=(),
+        claim_evidence_bindings=(binding,),
+        corroborating_groups=(group,),
+        contradicting_groups=(),
+        qualifying_groups=(),
+        near_duplicate_groups=(),
+        source_diversity_summary={"unique_sources": 1, "sources": ["https://example.com"]},
+        freshness_summary={"most_recent": None, "oldest": None},
+        limitations=(),
+        unresolved_items=(),
+        retrieval_provenance=(),
+    )
+    assert valid_packet is not None
+
+    # Now construct an invalid packet with a binding referencing
+    # a passage_id that does not exist in the packet.
+    invalid_binding = ClaimEvidenceBinding(
+        binding_id=uuid4(),
+        claim_id=claim_id,
+        passage_ids=(fake_passage_id,),
+        relationship=EvidenceRelationship.SUPPORTS,
+        confidence=0.9,
+        uncertainty="low",
+    )
+
+    # __post_init__ should reject the unknown passage ID.
+    with pytest.raises(ValueError, match="unknown passage IDs"):
+        EvidencePacket(
+            schema_version=EvidencePacket.SCHEMA_VERSION,
+            run_id=run_id,
+            research_spec_id=spec_id,
+            coverage_revision=1,
+            claims=(claim,),
+            passages=(
+                EvidencePassage(
+                    passage_id=passage_id,
+                    candidate_id=uuid4(),
+                    snapshot_id=uuid4(),
+                    chunk_id=uuid4(),
+                    text="test text",
+                    source_url="https://example.com",
+                ),
+            ),
+            omitted_passages=(),
+            claim_evidence_bindings=(invalid_binding,),
+            corroborating_groups=(),
+            contradicting_groups=(),
+            qualifying_groups=(),
+            near_duplicate_groups=(),
+            source_diversity_summary={"unique_sources": 1, "sources": ["https://example.com"]},
+            freshness_summary={"most_recent": None, "oldest": None},
+            limitations=(),
+            unresolved_items=(),
+            retrieval_provenance=(),
+        )

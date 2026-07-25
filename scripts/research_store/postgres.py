@@ -18,7 +18,6 @@ from .domain import (
 from .parsing_legacy import parse_raw_search_response
 from .url import canonicalize_candidate_url
 
-
 try:
     from research_domain import load_model, serialize_model
     from research_domain.codec import to_dict
@@ -1453,7 +1452,7 @@ class PostgresUnitOfWork:
                     next_seq,
                 ),
             )
-            event_id, stored_type, stored_revision, stored_seq = cur.fetchone()
+            event_id, stored_type, stored_revision, _stored_seq = cur.fetchone()
             if (stored_type, stored_revision) != (event_type, revision):
                 raise ValueError("idempotency key was used for another event")
             return event_id
@@ -1768,7 +1767,7 @@ class PostgresUnitOfWork:
             plan_payload = serialize_model(plan_model)
 
         if not isinstance(plan_model, SearchPlan):
-            raise ValueError("provided payload is not a valid SearchPlan")
+            raise TypeError("provided payload is not a valid SearchPlan")
 
         if plan_model.revision != revision:
             raise ValueError("search plan revision does not match parameter")
@@ -2436,7 +2435,7 @@ class PostgresUnitOfWork:
 
         try:
             payload_data = json.loads(raw_bytes.decode("utf-8"))
-        except Exception:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             payload_data = {}
 
         items = []
@@ -4075,9 +4074,9 @@ class PostgresUnitOfWork:
                     item_type,
                     subject_id,
                     new_status,
-                    previous_status,
-                    new_freshness_status,
-                    previous_freshness_status,
+                    _previous_status,
+                    _new_freshness_status,
+                    _previous_freshness_status,
                     payload,
                 ) = evt
 
@@ -4215,14 +4214,10 @@ class PostgresUnitOfWork:
                     key = str(item_id)
                     if key in items:
                         authority_class = (payload or {}).get("authority_class")
-                        if authority_class:
-                            if (
+                        if authority_class and authority_class not in items[key]["authority_classes_present"]:
+                            items[key]["authority_classes_present"].append(
                                 authority_class
-                                not in items[key]["authority_classes_present"]
-                            ):
-                                items[key]["authority_classes_present"].append(
-                                    authority_class
-                                )
+                            )
 
                 elif event_type == "freshness_observed" and item_id:
                     key = str(item_id)
@@ -6499,171 +6494,6 @@ class PostgresUnitOfWork:
             )
             return dict(zip(keys, row))
 
-    def create(
-        self,
-        document_id: UUID,
-        snapshot_id: UUID,
-        parser_version: str,
-        normalization_version: str,
-        chunker_name: str,
-        chunker_version: str,
-        tokenizer_name: str,
-        chunk_count: int | None,
-        block_count: int | None,
-        configuration_sha256: str,
-        status: str = "pending",
-        error_message: str | None = None,
-    ) -> DerivationAttempt:  # noqa: F821
-        """Create a new derivation attempt.
-
-        Returns the created ``DerivationAttempt``.
-        """
-        from .domain import DerivationAttempt
-
-        with self.connection.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO document_derivations(
-                  document_id, snapshot_id, status,
-                  parser_version, normalization_version,
-                  chunker_name, chunker_version, tokenizer_name,
-                  chunk_count, block_count,
-                  configuration_sha256, error_message
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id, document_id, snapshot_id, status,
-                  parser_version, normalization_version,
-                  chunker_name, chunker_version, tokenizer_name,
-                  chunk_count, block_count, configuration_sha256,
-                  error_message, created_at
-                """,
-                (
-                    str(document_id),
-                    str(snapshot_id),
-                    status,
-                    parser_version,
-                    normalization_version,
-                    chunker_name,
-                    chunker_version,
-                    tokenizer_name,
-                    chunk_count,
-                    block_count,
-                    configuration_sha256,
-                    error_message,
-                ),
-            )
-            row = cur.fetchone()
-            keys = (
-                "id",
-                "document_id",
-                "snapshot_id",
-                "status",
-                "parser_version",
-                "normalization_version",
-                "chunker_name",
-                "chunker_version",
-                "tokenizer_name",
-                "chunk_count",
-                "block_count",
-                "configuration_sha256",
-                "error_message",
-                "created_at",
-            )
-            return DerivationAttempt.from_mapping(dict(zip(keys, row)))
-
-    def get(self, derivation_id: UUID) -> DerivationAttempt | None:  # noqa: F821
-        """Get a derivation attempt by ID."""
-        from .domain import DerivationAttempt
-
-        with self.connection.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, document_id, snapshot_id, status,
-                  parser_version, normalization_version,
-                  chunker_name, chunker_version, tokenizer_name,
-                  chunk_count, block_count, configuration_sha256,
-                  error_message, created_at
-                FROM document_derivations
-                WHERE id = %s
-                """,
-                (str(derivation_id),),
-            )
-            row = cur.fetchone()
-            if row is None:
-                return None
-            keys = (
-                "id",
-                "document_id",
-                "snapshot_id",
-                "status",
-                "parser_version",
-                "normalization_version",
-                "chunker_name",
-                "chunker_version",
-                "tokenizer_name",
-                "chunk_count",
-                "block_count",
-                "configuration_sha256",
-                "error_message",
-                "created_at",
-            )
-            return DerivationAttempt.from_mapping(dict(zip(keys, row)))
-
-    def list(
-        self,
-        document_id: UUID | None = None,
-        snapshot_id: UUID | None = None,
-        status: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """List derivation attempts with optional filters."""
-        conditions = []
-        params: list = []
-
-        if document_id is not None:
-            conditions.append("document_id = %s")
-            params.append(str(document_id))
-        if snapshot_id is not None:
-            conditions.append("snapshot_id = %s")
-            params.append(str(snapshot_id))
-        if status is not None:
-            conditions.append("status = %s")
-            params.append(status)
-
-        where = ""
-        if conditions:
-            where = "WHERE " + " AND ".join(conditions)
-
-        with self.connection.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT id, document_id, snapshot_id, status,
-                  parser_version, normalization_version,
-                  chunker_name, chunker_version, tokenizer_name,
-                  chunk_count, block_count, configuration_sha256,
-                  error_message, created_at
-                FROM document_derivations
-                {where}
-                ORDER BY created_at DESC
-                """,
-                params,
-            )
-            keys = (
-                "id",
-                "document_id",
-                "snapshot_id",
-                "status",
-                "parser_version",
-                "normalization_version",
-                "chunker_name",
-                "chunker_version",
-                "tokenizer_name",
-                "chunk_count",
-                "block_count",
-                "configuration_sha256",
-                "error_message",
-                "created_at",
-            )
-            return [dict(zip(keys, row)) for row in cur.fetchall()]
-
     def activate(self, derivation_id: UUID) -> DerivationAttempt:  # noqa: F821
         """Activate a pending derivation.
 
@@ -6938,7 +6768,7 @@ class PostgresUnitOfWork:
         configuration_sha256: str | None = None,
         status: str = "pending",
         error_message: str | None = None,
-    ) -> "DerivationAttempt":
+    ) -> DerivationAttempt:  # noqa: F821
         """Create a new derivation attempt.
 
         Args:

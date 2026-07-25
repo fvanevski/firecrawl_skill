@@ -191,7 +191,7 @@ class ClaimRecord:
             raise ValueError(f"invalid semantic_status: {self.semantic_status}")
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "ClaimRecord":
+    def from_mapping(cls, value: dict[str, Any]) -> ClaimRecord:
         def _uuid(v):
             return UUID(v) if not isinstance(v, UUID) else v
 
@@ -234,7 +234,7 @@ class EvidencePacketRecord:
     created_at: datetime
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "EvidencePacketRecord":
+    def from_mapping(cls, value: dict[str, Any]) -> EvidencePacketRecord:
         def _uuid(v):
             return UUID(v) if not isinstance(v, UUID) else v
 
@@ -292,7 +292,7 @@ class ClaimEvidenceLink:
             raise ValueError(f"confidence must be in [0, 1], got {self.confidence}")
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "ClaimEvidenceLink":
+    def from_mapping(cls, value: dict[str, Any]) -> ClaimEvidenceLink:
         def _uuid(v):
             return UUID(v) if not isinstance(v, UUID) else v
 
@@ -661,7 +661,7 @@ class ExtractionQualityMetrics:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ExtractionQualityMetrics":
+    def from_dict(cls, data: dict[str, Any]) -> ExtractionQualityMetrics:
         return cls(
             byte_length=data.get("byte_length", 0),
             visible_text_length=data.get("visible_text_length", 0),
@@ -750,7 +750,7 @@ class ExtractionAttempt:
             raise ValueError("attempt_number must be >= 1")
 
     @classmethod
-    def from_mapping(cls, row: dict[str, Any]) -> "ExtractionAttempt":
+    def from_mapping(cls, row: dict[str, Any]) -> ExtractionAttempt:
         def _uuid(v):
             return UUID(v) if not isinstance(v, UUID) and v is not None else v
 
@@ -945,7 +945,7 @@ class NormalizedBlock:
         transformation_reason: str | None = None,
         parser_version: str = "canonical-v1",
         id: UUID | None = None,
-    ) -> "NormalizedBlock":
+    ) -> NormalizedBlock:
         """Create a normalized block from a source block snapshot.
 
         Args:
@@ -1027,7 +1027,7 @@ class TransformationRecord:
         after_text: str = "",
         confidence: float = 1.0,
         rule_version: str = "normalization-v1",
-    ) -> "TransformationRecord":
+    ) -> TransformationRecord:
         """Create a transformation record.
 
         Args:
@@ -1120,7 +1120,7 @@ class DerivationAttempt:
                 raise ValueError("configuration_sha256 must be hex")
 
     @classmethod
-    def from_mapping(cls, row: dict[str, Any]) -> "DerivationAttempt":
+    def from_mapping(cls, row: dict[str, Any]) -> DerivationAttempt:
         return cls(
             id=UUID(row["id"]),
             document_id=UUID(row["document_id"]),

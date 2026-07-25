@@ -51,7 +51,9 @@ jobs:
             scripts/test_classifier.py \
             scripts/test_workflow.py \
             scripts/test_budget_policy.py \
-            scripts/test_index_runtime.py
+            scripts/test_index_runtime.py \
+            scripts/test_evidence_packet.py \
+            scripts/test_claims_evidence.py
 
   lint:
     name: Ruff
