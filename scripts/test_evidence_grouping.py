@@ -4,7 +4,7 @@ Covers:
 - Corroboration grouping from supports bindings.
 - Contradiction grouping from contradicts bindings.
 - Qualification grouping from qualifies bindings.
-- Context grouping from context bindings.
+- Context bindings are silently discarded (not returned).
 - Evaluated absence vs unevaluated state.
 - Source independence: independent corroboration vs repeated reporting.
 - Contradictory evidence preserved (not silently dropped).
@@ -317,8 +317,8 @@ def test_qualifying_group_created(service):
 # ---------------------------------------------------------------------------
 
 
-def test_context_group_created(service):
-    """A context binding produces a context group."""
+def test_context_binding_is_discarded(service):
+    """A context binding produces no group — context_groups is not returned."""
     claim = _make_claim()
     passage = _make_passage(source_url="https://context.com/a")
     binding = _make_binding(
@@ -336,11 +336,11 @@ def test_context_group_created(service):
 
     result = service.group_evidence(packet)
 
-    assert len(result["context_groups"]) == 1
-    group = result["context_groups"][0]
-    assert group.evaluated is True
-    assert group.passage_ids[0] == passage.passage_id
-    assert "context" in group.rationale.lower()
+    # context_groups is no longer returned; only the three top-level keys.
+    assert "context_groups" not in result
+    assert len(result["corroborating_groups"]) == 0
+    assert len(result["contradicting_groups"]) == 0
+    assert len(result["qualifying_groups"]) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +408,8 @@ def test_empty_packet_returns_empty_groups(service):
     assert len(result["corroborating_groups"]) == 0
     assert len(result["contradicting_groups"]) == 0
     assert len(result["qualifying_groups"]) == 0
-    assert len(result["context_groups"]) == 0
+    # context_groups is not returned.
+    assert "context_groups" not in result
 
 
 def test_bindings_no_claims_returns_empty_groups(service):
@@ -693,6 +694,100 @@ def test_evidence_service_group_evidence_raises_for_missing_packet():
     run_id = uuid4()
     with pytest.raises(ValueError, match="not found"):
         svc.group_evidence(run_id, revision=1)
+
+
+def test_evidence_service_group_evidence_happy_path():
+    """EvidenceService.group_evidence persists a new revision on success."""
+    from unittest.mock import MagicMock
+
+    from budget_policy import DEFAULT_POLICY
+
+    svc = __import__(
+        "research_store.evidence", fromlist=["EvidenceService"]
+    ).EvidenceService(
+        uow_factory=lambda: None,
+        budget_policy=DEFAULT_POLICY,
+    )
+
+    run_id = uuid4()
+    spec_id = uuid4()
+
+    # Build a minimal packet dict with a claim and a binding.
+    claim_id = uuid4()
+    passage_id = uuid4()
+    binding_id = uuid4()
+
+    packet_dict = {
+        "schema_version": "evidence-packet-v1",
+        "run_id": str(run_id),
+        "research_spec_id": str(spec_id),
+        "coverage_revision": 1,
+        "claims": [
+            {
+                "claim_id": str(claim_id),
+                "statement": "Test claim",
+                "semantic_status": "supported",
+                "uncertainty": "low",
+            },
+        ],
+        "passages": [
+            {
+                "passage_id": str(passage_id),
+                "candidate_id": str(uuid4()),
+                "snapshot_id": str(uuid4()),
+                "chunk_id": str(uuid4()),
+                "text": "test passage",
+                "source_url": "https://example.com/source",
+            },
+        ],
+        "omitted_passages": [],
+        "claim_evidence_bindings": [
+            {
+                "binding_id": str(binding_id),
+                "claim_id": str(claim_id),
+                "passage_ids": [str(passage_id)],
+                "relationship": "supports",
+                "confidence": 0.9,
+                "uncertainty": "low",
+                "model": "test-model",
+                "prompt_version": "v1",
+                "schema_version": 1,
+                "input_packet_revision": 1,
+            },
+        ],
+        "corroborating_groups": [],
+        "contradicting_groups": [],
+        "qualifying_groups": [],
+        "near_duplicate_groups": [],
+        "source_diversity_summary": {"unique_sources": 1, "sources": []},
+        "freshness_summary": {"most_recent": None, "oldest": None},
+        "limitations": [],
+        "unresolved_items": [],
+        "independence_assessments": [],
+        "retrieval_provenance": [],
+    }
+
+    mock_uow = MagicMock()
+    mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+    mock_uow.__exit__ = MagicMock(return_value=False)
+
+    # Mock the record returned by get_evidence_packet.
+    record = MagicMock()
+    record.to_dict = MagicMock(return_value=packet_dict)
+    record.packet_revision = 1
+    mock_uow.get_evidence_packet = MagicMock(return_value=record)
+
+    svc.uow_factory = lambda: mock_uow
+
+    new_rev = svc.group_evidence(run_id, revision=1)
+
+    # Should have created a new revision (1 → 2).
+    assert new_rev == 2
+
+    # Should have called persist_evidence_packet with the new revision.
+    mock_uow.persist_evidence_packet.assert_called_once()
+    call_args = mock_uow.persist_evidence_packet.call_args
+    assert call_args[0][3] == 2  # packet_revision argument
 
 
 # ---------------------------------------------------------------------------

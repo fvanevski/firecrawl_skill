@@ -283,7 +283,8 @@ class EvidenceService:
 
         Returns:
             The revision number of the newly persisted packet with groups.
-            Returns the input revision unchanged when no bindings exist.
+            Returns the current revision unchanged when no bindings exist
+            or when grouping fails.
         """
         with self.uow_factory() as uow:
             packet_rec = uow.get_evidence_packet(run_id, revision)
@@ -302,9 +303,9 @@ class EvidenceService:
                     "No claim-evidence bindings for %s r%s; "
                     "skipping evidence grouping.",
                     run_id,
-                    packet.packet_revision,
+                    packet_rec.packet_revision,
                 )
-                return packet.packet_revision
+                return packet_rec.packet_revision
 
             try:
                 new_packet = self.grouping_service.build_packet_with_groups(
@@ -315,14 +316,14 @@ class EvidenceService:
                     "Evidence grouping failed for %s r%s: %s; "
                     "returning current revision unchanged.",
                     run_id,
-                    packet.packet_revision,
+                    packet_rec.packet_revision,
                     exc,
                 )
-                return packet.packet_revision
+                return packet_rec.packet_revision
 
             payload = _to_dict(new_packet)
 
-            new_rev = packet.packet_revision + 1
+            new_rev = packet_rec.packet_revision + 1
             uow.persist_evidence_packet(
                 new_packet.run_id,
                 new_packet.research_spec_id,

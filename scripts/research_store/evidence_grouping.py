@@ -16,10 +16,9 @@ Grouping semantics
 * **Qualifying** — bindings with relationship ``qualifies`` produce one
   qualifying group per binding.  Qualifying groups capture contextual
   constraints on a claim.
-* **Context** — bindings with relationship ``context`` are collected but do
-  not form a top-level group field in the current packet schema.  They are
-  returned in the ``context_groups`` key of the grouping result so callers
-  can persist or display them later.
+* **Context** — bindings with relationship ``context`` are silently
+  discarded.  They do not form a top-level group field in the current
+  packet schema and are not returned by the grouping engine.
 
 Evaluated absence
 -----------------
@@ -51,7 +50,6 @@ The service returns a dict compatible with the ``EvidencePacket`` schema:
         "corroborating_groups": [EvidenceGroup, ...],
         "contradicting_groups": [EvidenceGroup, ...],
         "qualifying_groups": [EvidenceGroup, ...],
-        "context_groups": [EvidenceGroup, ...],
     }
 
 Each group carries the exact ``passage_ids`` from the bindings and a
@@ -238,7 +236,6 @@ class EvidenceGroupingService:
             "corroborating_groups": tuple(corroborating),
             "contradicting_groups": tuple(contradicting),
             "qualifying_groups": tuple(qualifying),
-            "context_groups": tuple(context_groups),
         }
 
     def _make_support_group(
@@ -381,9 +378,9 @@ class EvidenceGroupingService:
         Returns:
             A new EvidencePacket with
             ``corroborating_groups``, ``contradicting_groups``,
-            ``qualifying_groups`` populated from the claim-evidence bindings.
-            The ``context_groups`` result is returned separately so callers
-            can decide how to handle them (not a top-level packet field yet).
+            and ``qualifying_groups`` populated from the claim-evidence
+            bindings.  Bindings with ``context`` relationship are not
+            included in the returned packet.
         """
         groups = self.group_evidence(packet)
 
