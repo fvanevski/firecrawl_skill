@@ -76,6 +76,10 @@ class PacketDiff:
         modified_groups: Groups present in both but with differences.
         added_unresolved: Unresolved items present in new but not in old.
         removed_unresolved: Unresolved items present in old but not in new.
+        added_omitted_passages: Omitted passages present in new but not in old.
+        removed_omitted_passages: Omitted passages present in old but not in new.
+        modified_omitted_passages: Omitted passages present in both but
+            with differences.
         coverage_revision_changed: Whether coverage revision changed.
         token_count_changed: Whether total token count changed.
         summary: Human-readable summary.
@@ -88,6 +92,9 @@ class PacketDiff:
     added_passages: tuple[PassageDelta, ...] = ()
     removed_passages: tuple[PassageDelta, ...] = ()
     modified_passages: tuple[PassageDelta, ...] = ()
+    added_omitted_passages: tuple[PassageDelta, ...] = ()
+    removed_omitted_passages: tuple[PassageDelta, ...] = ()
+    modified_omitted_passages: tuple[PassageDelta, ...] = ()
     added_claims: tuple[ClaimDelta, ...] = ()
     removed_claims: tuple[ClaimDelta, ...] = ()
     modified_claims: tuple[ClaimDelta, ...] = ()
@@ -108,6 +115,18 @@ class PacketDiff:
             parts.append(f"-{len(self.removed_passages)} passages")
         if self.modified_passages:
             parts.append(f"~{len(self.modified_passages)} passages modified")
+        if self.added_omitted_passages:
+            parts.append(
+                f"+{len(self.added_omitted_passages)} omitted passages"
+            )
+        if self.removed_omitted_passages:
+            parts.append(
+                f"-{len(self.removed_omitted_passages)} omitted passages"
+            )
+        if self.modified_omitted_passages:
+            parts.append(
+                f"~{len(self.modified_omitted_passages)} omitted passages modified"
+            )
         if self.added_claims:
             parts.append(f"+{len(self.added_claims)} claims")
         if self.removed_claims:
@@ -165,6 +184,39 @@ class PacketDiff:
                     "new_text_len": p.new_text_len,
                 }
                 for p in self.modified_passages
+            ],
+            "added_omitted_passages": [
+                {
+                    "passage_id": p.passage_id,
+                    "delta": p.delta,
+                    "old_url": p.old_url,
+                    "new_url": p.new_url,
+                    "old_text_len": p.old_text_len,
+                    "new_text_len": p.new_text_len,
+                }
+                for p in self.added_omitted_passages
+            ],
+            "removed_omitted_passages": [
+                {
+                    "passage_id": p.passage_id,
+                    "delta": p.delta,
+                    "old_url": p.old_url,
+                    "new_url": p.new_url,
+                    "old_text_len": p.old_text_len,
+                    "new_text_len": p.new_text_len,
+                }
+                for p in self.removed_omitted_passages
+            ],
+            "modified_omitted_passages": [
+                {
+                    "passage_id": p.passage_id,
+                    "delta": p.delta,
+                    "old_url": p.old_url,
+                    "new_url": p.new_url,
+                    "old_text_len": p.old_text_len,
+                    "new_text_len": p.new_text_len,
+                }
+                for p in self.modified_omitted_passages
             ],
             "added_claims": [
                 {
@@ -320,6 +372,54 @@ def diff_packets(
                 )
             )
 
+    # Build lookup maps for omitted passages.
+    old_omitted = {p.passage_id: p for p in old_packet.omitted_passages}
+    new_omitted = {p.passage_id: p for p in new_packet.omitted_passages}
+
+    # Omitted passage deltas.
+    added_omitted = []
+    removed_omitted = []
+    modified_omitted = []
+
+    for pid, new_p in new_omitted.items():
+        if pid not in old_omitted:
+            added_omitted.append(
+                PassageDelta(
+                    passage_id=str(pid),
+                    delta="added",
+                    new_url=new_p.source_url,
+                    new_text_len=len(new_p.text),
+                )
+            )
+        else:
+            old_p = old_omitted[pid]
+            if (
+                old_p.source_url != new_p.source_url
+                or old_p.text != new_p.text
+                or old_p.candidate_id != new_p.candidate_id
+            ):
+                modified_omitted.append(
+                    PassageDelta(
+                        passage_id=str(pid),
+                        delta="modified",
+                        old_url=old_p.source_url,
+                        new_url=new_p.source_url,
+                        old_text_len=len(old_p.text),
+                        new_text_len=len(new_p.text),
+                    )
+                )
+
+    for pid, old_p in old_omitted.items():
+        if pid not in new_omitted:
+            removed_omitted.append(
+                PassageDelta(
+                    passage_id=str(pid),
+                    delta="removed",
+                    old_url=old_p.source_url,
+                    old_text_len=len(old_p.text),
+                )
+            )
+
     # Claim deltas.
     added_claims = []
     removed_claims = []
@@ -429,6 +529,9 @@ def diff_packets(
         added_passages=tuple(added_passages),
         removed_passages=tuple(removed_passages),
         modified_passages=tuple(modified_passages),
+        added_omitted_passages=tuple(added_omitted),
+        removed_omitted_passages=tuple(removed_omitted),
+        modified_omitted_passages=tuple(modified_omitted),
         added_claims=tuple(added_claims),
         removed_claims=tuple(removed_claims),
         modified_claims=tuple(modified_claims),

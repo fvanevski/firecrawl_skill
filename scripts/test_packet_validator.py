@@ -415,6 +415,60 @@ class TestPacketDiff:
         assert len(diff.removed_unresolved) == 1
         assert len(diff.added_unresolved) == 1
 
+    def test_added_and_removed_omitted_passages(self):
+        """Omitted passages added or removed between revisions are detected."""
+        old_omitted = _make_passage(passage_id=UUID(int=100), text="old omitted")
+        new_omitted = _make_passage(passage_id=UUID(int=200), text="new omitted")
+        claim = _make_claim(claim_id=UUID(int=100))
+
+        old_packet = _make_packet(
+            claims=[claim],
+            omitted_passages=[old_omitted],
+            freshness_summary={"most_recent": "2025-06-01T00:00:00Z"},
+        )
+        new_packet = _make_packet(
+            claims=[claim],
+            omitted_passages=[new_omitted],
+            freshness_summary={"most_recent": "2025-06-01T00:00:00Z"},
+        )
+
+        diff = diff_packets(old_packet, new_packet)
+        assert len(diff.added_omitted_passages) == 1
+        assert len(diff.removed_omitted_passages) == 1
+        assert diff.added_omitted_passages[0].delta == "added"
+        assert diff.removed_omitted_passages[0].delta == "removed"
+
+    def test_modified_omitted_passage(self):
+        """An omitted passage with changed text or URL is detected as modified."""
+        omitted_v1 = _make_passage(
+            passage_id=UUID(int=100),
+            text="original omitted text",
+            source_url="https://example.com/v1",
+        )
+        omitted_v2 = _make_passage(
+            passage_id=UUID(int=100),
+            text="updated omitted text",
+            source_url="https://example.com/v2",
+        )
+        claim = _make_claim(claim_id=UUID(int=100))
+
+        old_packet = _make_packet(
+            claims=[claim],
+            omitted_passages=[omitted_v1],
+            freshness_summary={"most_recent": "2025-06-01T00:00:00Z"},
+        )
+        new_packet = _make_packet(
+            claims=[claim],
+            omitted_passages=[omitted_v2],
+            freshness_summary={"most_recent": "2025-06-01T00:00:00Z"},
+        )
+
+        diff = diff_packets(old_packet, new_packet)
+        assert len(diff.modified_omitted_passages) == 1
+        assert diff.modified_omitted_passages[0].delta == "modified"
+        assert diff.modified_omitted_passages[0].old_url == "https://example.com/v1"
+        assert diff.modified_omitted_passages[0].new_url == "https://example.com/v2"
+
     def test_diff_to_json(self):
         """PacketDiff can be serialised to JSON."""
         diff = PacketDiff(
