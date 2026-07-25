@@ -359,9 +359,7 @@ class BenchmarkRunner:
             candidate_limits=limits,
             recalls_at_limits=tuple(recalls),
             knee_limit=self._find_knee(limits, recalls),
-            recall_gain_per_candidate=self._recall_gain_per_candidate(
-                limits, recalls
-            ),
+            recall_gain_per_candidate=self._recall_gain_per_candidate(limits, recalls),
         )
 
     # -----------------------------------------------------------------------
@@ -413,12 +411,12 @@ class BenchmarkRunner:
 
             if mode == DegradedMode.ALL_UNAVAILABLE:
                 status = MechanicalStatus.FAILED
-                errors = ("all retrieval components unavailable")
+                errors = "all retrieval components unavailable"
             elif mode == DegradedMode.QDRANT_UNAVAILABLE:
-                warnings = ("qdrant unavailable, falling back to lexical")
+                warnings = "qdrant unavailable, falling back to lexical"
                 fallback_used = True
             elif mode == DegradedMode.LEXICAL_UNAVAILABLE:
-                warnings = ("lexical unavailable, falling back to dense")
+                warnings = "lexical unavailable, falling back to dense"
                 fallback_used = True
 
             results.append(
@@ -430,9 +428,7 @@ class BenchmarkRunner:
                     errors=errors,
                     warnings=warnings,
                     recall_vs_normal=round(recall_ratio, 10),
-                    passages_delivered=int(
-                        degraded_recall * 100
-                    ),  # Simulated count
+                    passages_delivered=int(degraded_recall * 100),  # Simulated count
                     fallback_used=fallback_used,
                 )
             )
@@ -481,9 +477,7 @@ class BenchmarkRunner:
             selected = {ranked[0]}
         return frozenset(selected)
 
-    def _simulate_fused(
-        self, query: str, relevant_ids: frozenset[UUID]
-    ) -> list[dict]:
+    def _simulate_fused(self, query: str, relevant_ids: frozenset[UUID]) -> list[dict]:
         """Simulate fused (RRF) retrieval.
 
         Fused retrieval combines lexical and dense, typically achieving
@@ -509,9 +503,7 @@ class BenchmarkRunner:
             for i, cid in enumerate(selected)
         ]
 
-    def _simulate_rerank(
-        self, query: str, candidates: list[dict]
-    ) -> list[dict]:
+    def _simulate_rerank(self, query: str, candidates: list[dict]) -> list[dict]:
         """Simulate reranking.
 
         In production, this calls the Cohere-compatible reranker endpoint.
@@ -525,10 +517,12 @@ class BenchmarkRunner:
             # Perturb the fused score slightly
             base_score = cand.get("fused_score", 0.0)
             perturbation = (i * 0.001) % 0.1  # Deterministic perturbation
-            reranked.append({
-                **cand,
-                "reranker_score": round(base_score + perturbation, 6),
-            })
+            reranked.append(
+                {
+                    **cand,
+                    "reranker_score": round(base_score + perturbation, 6),
+                }
+            )
         return sorted(
             reranked,
             key=lambda c: -(c.get("reranker_score") or 0.0),
@@ -563,33 +557,35 @@ class BenchmarkRunner:
         """Generate simulated candidates for a query."""
         candidates = []
         for i, cid in enumerate(relevant_ids):
-            candidates.append({
-                "candidate_id": cid,
-                "fused_score": 1.0 / (60 + i + 1),
-                "text": f"cand {i}",
-                "excerpt": f"excerpt {i}",
-                "title": f"Title {i}",
-                "url": f"https://example.com/{i}",
-                "source_url": f"https://example.com/{i}",
-            })
+            candidates.append(
+                {
+                    "candidate_id": cid,
+                    "fused_score": 1.0 / (60 + i + 1),
+                    "text": f"cand {i}",
+                    "excerpt": f"excerpt {i}",
+                    "title": f"Title {i}",
+                    "url": f"https://example.com/{i}",
+                    "source_url": f"https://example.com/{i}",
+                }
+            )
         # Add some non-relevant candidates
         for i in range(10):
             fake_id = uuid4()
-            candidates.append({
-                "candidate_id": fake_id,
-                "fused_score": 1.0 / (60 + len(relevant_ids) + i + 1),
-                "text": f"noise {i}",
-                "excerpt": f"noise excerpt {i}",
-                "title": f"Noise Title {i}",
-                "url": f"https://noise.com/{i}",
-                "source_url": f"https://noise.com/{i}",
-            })
+            candidates.append(
+                {
+                    "candidate_id": fake_id,
+                    "fused_score": 1.0 / (60 + len(relevant_ids) + i + 1),
+                    "text": f"noise {i}",
+                    "excerpt": f"noise excerpt {i}",
+                    "title": f"Noise Title {i}",
+                    "url": f"https://noise.com/{i}",
+                    "source_url": f"https://noise.com/{i}",
+                }
+            )
         return candidates
 
     @staticmethod
-    def _find_knee(
-        limits: tuple[int, ...], recalls: list[float]
-    ) -> int:
+    def _find_knee(limits: tuple[int, ...], recalls: list[float]) -> int:
         """Find the knee of the recall curve.
 
         The knee is the point where marginal recall gain drops below

@@ -900,9 +900,7 @@ class RerankerContribution:
 
     def __post_init__(self):
         if len(self.fused_top_k) != len(self.reranked_top_k):
-            raise ValueError(
-                "fused_top_k and reranked_top_k must have the same length"
-            )
+            raise ValueError("fused_top_k and reranked_top_k must have the same length")
         if self.top_k_swap > len(self.fused_top_k):
             raise ValueError("top_k_swap cannot exceed top-k length")
         if self.rank_changes > len(self.fused_top_k):
@@ -939,9 +937,7 @@ class CandidateLimitMeasurement:
         # Recalls must be non-decreasing (more candidates cannot reduce recall)
         for i in range(1, len(self.recalls_at_limits)):
             if self.recalls_at_limits[i] < self.recalls_at_limits[i - 1]:
-                raise ValueError(
-                    "recalls_at_limits must be non-decreasing"
-                )
+                raise ValueError("recalls_at_limits must be non-decreasing")
 
 
 @dataclass(frozen=True)
@@ -968,13 +964,9 @@ class ClaimBindingQuality:
 
     def __post_init__(self):
         if self.bound_claims + self.unsupported_claims > self.total_claims:
-            raise ValueError(
-                "bound + unsupported claims cannot exceed total claims"
-            )
+            raise ValueError("bound + unsupported claims cannot exceed total claims")
         if self.single_source_claims + self.multi_source_claims > self.bound_claims:
-            raise ValueError(
-                "single + multi source claims cannot exceed bound claims"
-            )
+            raise ValueError("single + multi source claims cannot exceed bound claims")
 
 
 @dataclass(frozen=True)
@@ -1003,10 +995,11 @@ class DuplicateGroupingResult:
 
     def __post_init__(self):
         if self.grouped_candidates + self.unassessed_candidates > self.total_candidates:
-            raise ValueError(
-                "grouped + unassessed cannot exceed total candidates"
-            )
-        if self.exact_matches + self.syndicated_matches + self.canonical_matches > self.duplicate_groups:
+            raise ValueError("grouped + unassessed cannot exceed total candidates")
+        if (
+            self.exact_matches + self.syndicated_matches + self.canonical_matches
+            > self.duplicate_groups
+        ):
             raise ValueError("sum of group types cannot exceed total groups")
 
 
@@ -1029,7 +1022,10 @@ class SourceIndependenceResult:
     unassessed: int
 
     def __post_init__(self):
-        if self.independent + self.dependent + self.uncertain + self.unassessed > self.total_candidates:
+        if (
+            self.independent + self.dependent + self.uncertain + self.unassessed
+            > self.total_candidates
+        ):
             raise ValueError("sum of independence states cannot exceed total")
 
 
@@ -1055,15 +1051,11 @@ class EvidenceDensityMeasurement:
 
     def __post_init__(self):
         if self.delivered_passages + self.omitted_passages > self.total_passages:
-            raise ValueError(
-                "delivered + omitted cannot exceed total passages"
-            )
+            raise ValueError("delivered + omitted cannot exceed total passages")
         if self.unique_sources < 0:
             raise ValueError("unique_sources must be >= 0")
         if self.delivered_passages > 0 and self.unique_sources == 0:
-            raise ValueError(
-                "delivered passages must have at least one source"
-            )
+            raise ValueError("delivered passages must have at least one source")
 
 
 @dataclass(frozen=True)
@@ -1118,13 +1110,18 @@ class ProvenanceCompleteness:
     missing_candidate: int
 
     def __post_init__(self):
-        if self.complete_provenance + max(
-            self.missing_source, self.missing_snapshot,
-            self.missing_chunk, self.missing_candidate, 0
-        ) > self.total_passages:
-            raise ValueError(
-                "complete + missing cannot exceed total passages"
+        if (
+            self.complete_provenance
+            + max(
+                self.missing_source,
+                self.missing_snapshot,
+                self.missing_chunk,
+                self.missing_candidate,
+                0,
             )
+            > self.total_passages
+        ):
+            raise ValueError("complete + missing cannot exceed total passages")
 
 
 @dataclass(frozen=True)
@@ -1237,6 +1234,7 @@ class BenchmarkResult:
     def to_dict(self) -> dict:
         """Serialize the benchmark result to a dict."""
         from research_store.evidence import _to_dict
+
         return _to_dict(self)
 
     def summary(self) -> str:
@@ -1277,9 +1275,7 @@ class BenchmarkResult:
             pct = self.provenance_completeness.complete_provenance / max(
                 1, self.provenance_completeness.total_passages
             )
-            lines.append(
-                f"  Provenance completeness: {pct:.1%}"
-            )
+            lines.append(f"  Provenance completeness: {pct:.1%}")
         if self.degraded_modes:
             lines.append(f"  Degraded modes tested: {len(self.degraded_modes)}")
             for dm in self.degraded_modes:

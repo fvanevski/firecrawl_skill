@@ -453,7 +453,9 @@ class TestDegradedModes:
         dense = runner.measure_dense_recall()
         fused = runner.measure_fused_recall()
         results = runner.measure_degraded_modes(lexical, dense, fused)
-        lexical_only = [r for r in results if r.mode == DegradedMode.LEXICAL_UNAVAILABLE]
+        lexical_only = [
+            r for r in results if r.mode == DegradedMode.LEXICAL_UNAVAILABLE
+        ]
         assert len(lexical_only) == 1
         assert len(lexical_only[0].warnings) > 0
 
@@ -666,8 +668,16 @@ class TestRRFAndPack:
 
     def test_validate_relation_valid(self):
         validate_relation({"relation_class": "observed", "object_id": "test"})
-        validate_relation({"relation_class": "source_asserted", "object_literal": "test"})
-        validate_relation({"relation_class": "model_inferred", "object_id": "test", "extraction_model": "model"})
+        validate_relation(
+            {"relation_class": "source_asserted", "object_literal": "test"}
+        )
+        validate_relation(
+            {
+                "relation_class": "model_inferred",
+                "object_id": "test",
+                "extraction_model": "model",
+            }
+        )
 
     def test_validate_relation_invalid_class(self):
         with pytest.raises(ValueError, match="invalid relation_class"):
@@ -800,8 +810,16 @@ class TestDuplicateGroupingInBenchmark:
     def test_duplicate_service_exact_match(self):
         """Exact content hash match is detected by duplicate service."""
         svc = DuplicateGroupService()
-        c1 = {"id": uuid4(), "canonical_url": "https://a.com/1", "backend_metadata": {"content_hash": "h1"}}
-        c2 = {"id": uuid4(), "canonical_url": "https://b.com/2", "backend_metadata": {"content_hash": "h1"}}
+        c1 = {
+            "id": uuid4(),
+            "canonical_url": "https://a.com/1",
+            "backend_metadata": {"content_hash": "h1"},
+        }
+        c2 = {
+            "id": uuid4(),
+            "canonical_url": "https://b.com/2",
+            "backend_metadata": {"content_hash": "h1"},
+        }
         result = svc.evaluate_candidates([c1, c2])
         assert len(result["groups"]) == 1
         assert result["groups"][0]["rationale"] == "exact_content_hash_match"
@@ -809,8 +827,16 @@ class TestDuplicateGroupingInBenchmark:
     def test_duplicate_service_syndication(self):
         """Syndicated content is detected by duplicate service."""
         svc = DuplicateGroupService()
-        c1 = {"id": uuid4(), "canonical_url": "https://a.com/news", "title": "Breaking News Today!"}
-        c2 = {"id": uuid4(), "canonical_url": "https://b.com/news", "title": "Breaking News Today"}
+        c1 = {
+            "id": uuid4(),
+            "canonical_url": "https://a.com/news",
+            "title": "Breaking News Today!",
+        }
+        c2 = {
+            "id": uuid4(),
+            "canonical_url": "https://b.com/news",
+            "title": "Breaking News Today",
+        }
         result = svc.evaluate_candidates([c1, c2])
         assert len(result["groups"]) == 1
         assert result["groups"][0]["rationale"] == "likely_syndicated_title_match"
@@ -827,8 +853,16 @@ class TestDuplicateGroupingInBenchmark:
     def test_duplicate_service_no_false_positive(self):
         """Unrelated candidates are not grouped."""
         svc = DuplicateGroupService()
-        c1 = {"id": uuid4(), "canonical_url": "https://a.com/unique", "title": "Completely Unique Title One"}
-        c2 = {"id": uuid4(), "canonical_url": "https://b.com/unique", "title": "Totally Different Title Two"}
+        c1 = {
+            "id": uuid4(),
+            "canonical_url": "https://a.com/unique",
+            "title": "Completely Unique Title One",
+        }
+        c2 = {
+            "id": uuid4(),
+            "canonical_url": "https://b.com/unique",
+            "title": "Totally Different Title Two",
+        }
         result = svc.evaluate_candidates([c1, c2])
         assert len(result["groups"]) == 0
         assert len(result["unassessed"]) == 2
@@ -1241,7 +1275,9 @@ class TestEvidenceProvenance:
                 executed_mode="fused",
                 mechanical_status=MechanicalStatus.SUCCEEDED,
                 component_errors=(
-                    __import__("research_domain.models", fromlist=["MechanicalFailure"]).MechanicalFailure(
+                    __import__(
+                        "research_domain.models", fromlist=["MechanicalFailure"]
+                    ).MechanicalFailure(
                         failure_id=uuid4(),
                         component="qdrant",
                         error_class="ConnectionError",
@@ -1322,7 +1358,9 @@ class TestEvidencePacketCompleteness:
             uncertainty="low",
         )
 
-    def _make_binding(self, claim_id, passage_ids, relationship=EvidenceRelationship.SUPPORTS):
+    def _make_binding(
+        self, claim_id, passage_ids, relationship=EvidenceRelationship.SUPPORTS
+    ):
         return ClaimEvidenceBinding(
             binding_id=uuid4(),
             claim_id=claim_id,
@@ -1456,7 +1494,11 @@ class TestEvaluatedAbsence:
             retrieval_provenance=(),
         )
         result = grouping.group_evidence(packet)
-        absences = [g for g in result["corroborating_groups"] if "evaluated absence" in g.rationale.lower()]
+        absences = [
+            g
+            for g in result["corroborating_groups"]
+            if "evaluated absence" in g.rationale.lower()
+        ]
         assert len(absences) >= 1
         assert absences[0].evaluated is False
 
