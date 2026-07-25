@@ -16,9 +16,19 @@ from research_domain.models import (
 )
 
 from .duplicate_service import DuplicateGroupService
+from .evidence_grouping import EvidenceGroupingService
 from .tokenizer_registry import get_tokenizer
 
+try:
+    from ..research_domain.registry import load_model
+except ImportError:  # pragma: no cover
+    from research_domain.registry import load_model
+
 logger = logging.getLogger(__name__)
+
+# The try/except handles dual import paths: evidence.py can be imported
+# as a package submodule (research_store.evidence) or as a standalone
+# script (scripts/evidence.py) when run from the scripts directory.
 
 
 def _to_dict(obj: Any) -> Any:
@@ -56,6 +66,7 @@ class EvidenceService:
         self.budget_policy = budget_policy
         self.tokenizer = get_tokenizer(tokenizer_name)
         self.duplicate_service = DuplicateGroupService()
+        self.grouping_service = EvidenceGroupingService()
 
     def build_evidence_packet(
         self,
@@ -257,3 +268,67 @@ class EvidenceService:
             if packet_rec:
                 return packet_rec.to_dict()
             return None
+
+    def group_evidence(
+        self,
+        run_id: UUID,
+        revision: int | None = None,
+    ) -> int:
+        """Populate evidence groups on the latest (or specified) packet revision.
+
+        Reads the EvidencePacket, runs the grouping engine to populate
+        ``corroborating_groups``, ``contradicting_groups``, and
+        ``qualifying_groups`` from the existing claim-evidence bindings,
+        then persists a new packet revision.
+
+        Returns:
+            The revision number of the newly persisted packet with groups.
+            Returns the current revision unchanged when no bindings exist
+            or when grouping fails.
+        """
+        with self.uow_factory() as uow:
+            packet_rec = uow.get_evidence_packet(run_id, revision)
+            if not packet_rec:
+                raise ValueError(
+                    f"EvidencePacket {run_id} r{revision or 'latest'} not found"
+                )
+
+            packet_dict = packet_rec.to_dict()
+            packet = load_model(packet_dict)
+
+            # If there are no claim-evidence bindings, there is nothing
+            # to group.  Return the current revision unchanged.
+            if not packet.claim_evidence_bindings:
+                logger.info(
+                    "No claim-evidence bindings for %s r%s; "
+                    "skipping evidence grouping.",
+                    run_id,
+                    packet_rec.packet_revision,
+                )
+                return packet_rec.packet_revision
+
+            try:
+                new_packet = self.grouping_service.build_packet_with_groups(
+                    packet,
+                )
+            except ValueError as exc:  # pragma: no cover
+                logger.error(
+                    "Evidence grouping failed for %s r%s: %s; "
+                    "returning current revision unchanged.",
+                    run_id,
+                    packet_rec.packet_revision,
+                    exc,
+                )
+                return packet_rec.packet_revision
+
+            payload = _to_dict(new_packet)
+
+            new_rev = packet_rec.packet_revision + 1
+            uow.persist_evidence_packet(
+                new_packet.run_id,
+                new_packet.research_spec_id,
+                new_packet.coverage_revision,
+                new_rev,
+                payload,
+            )
+            return new_rev
