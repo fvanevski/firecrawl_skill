@@ -16,6 +16,10 @@ This Codex skill combines Firecrawl web acquisition with a persistent, auditable
 - Rebuild, activate, roll back, or prune fingerprinted Qdrant vector indexes without modifying authoritative corpus data.
 - Manage multi-step research runs (`fr_<uuid>`) with explicit lifecycle states, automatic semantic audits (`--auto-audit`), pivots, and Catalog v5 provenance.
 - Map validated ResearchSpec semantics to versioned hard resource caps, rule-coded proposal rejections, stricter user limits, and immutable per-run PostgreSQL budget snapshots.
+- Construct complete evidence packets with claim-to-passage bindings, corroboration/contradiction/qualification groups, near-duplicate detection, source-independence assessment, and token-budget enforcement.
+- Validate evidence packets for referential integrity, claim coverage, group completeness, freshness, unresolved requirements, token budget, retrieval provenance, and semantic stage completeness.
+- Diff evidence packet revisions to identify substantive evidence and coverage changes.
+- Run a deterministic, self-contained retrieval and evidence benchmark suite (no network, Qdrant, or LLM required) measuring lexical/dense/fused recall, reranker contribution, candidate limits, degraded modes, and IR metrics.
 
 ## First use
 
@@ -127,6 +131,37 @@ recording non-mutating service proposals, or `authoritative` to record routed
 wrapper invocations against an existing research run. Inspect the comparison
 ledger with `research-db legacy-comparisons --divergent-only`. See
 `references/legacy-adapters.md` for the deprecation map and repair procedure.
+
+## Evidence packet management
+
+```bash
+# Build an evidence packet from candidate IDs
+"<skill-root>/scripts/research-db" build-evidence-packet "<id-1>" "<id-2>" --max-tokens 3000
+
+# Validate an evidence packet for completeness and referential integrity
+"<skill-root>/scripts/research-db" packet-validate "$RUN_ID" [--revision N] [--include-warnings]
+
+# Inspect an evidence packet (with optional bounded/citation-ready output)
+"<skill-root>/scripts/research-db" packet-inspect "$RUN_ID" --bounded --max-passages 20 --max-claims 10
+
+# Diff two evidence packet revisions
+"<skill-root>/scripts/research-db" packet-diff "$RUN_ID" --old-revision N --new-revision N
+
+# Export an evidence packet as JSON
+"<skill-root>/scripts/research-db" packet-export "$RUN_ID" --output packet.json [--bounded]
+```
+
+Evidence packets contain claims, evidence passages, claim-to-passage bindings, corroborating/contradicting/qualifying groups, near-duplicate groups, source-independence assessments, and retrieval provenance. The validator checks referential integrity, claim coverage, group completeness, freshness, unresolved requirements, token budget, retrieval provenance, and semantic stage completeness.
+
+## Retrieval and evidence benchmark
+
+```bash
+# Run the deterministic benchmark suite (no network, Qdrant, or LLM required)
+env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
+  "<skill-root>/scripts/test_retrieval_benchmark.py"
+```
+
+The benchmark measures lexical, dense, and fused recall; reranker contribution; candidate limits; and behavior across 7 degraded modes (lexical-only, dense-only, fused-only, reranker unavailable, Qdrant unavailable, lexical unavailable, all unavailable). All 111 tests are deterministic and require no external dependencies.
 
 ## Validation
 
