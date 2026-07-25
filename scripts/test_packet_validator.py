@@ -237,9 +237,7 @@ class TestPacketCompletenessState:
         result = validator.validate(packet)
         # An unassessed claim with a binding is an error.
         assert result.is_valid is False
-        assert any(
-            f.code == "BOUND_UNASSESSED_CLAIM" for f in result.errors
-        )
+        assert any(f.code == "BOUND_UNASSESSED_CLAIM" for f in result.errors)
 
     def test_packet_with_supported_claim_no_binding_errors(self):
         """A supported claim without any binding is an error."""
@@ -256,9 +254,7 @@ class TestPacketCompletenessState:
         validator = EvidencePacketValidator()
         result = validator.validate(packet)
         assert result.is_valid is False
-        assert any(
-            f.code == "CLAIM_NO_BINDING" for f in result.errors
-        )
+        assert any(f.code == "CLAIM_NO_BINDING" for f in result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -517,9 +513,7 @@ class TestReferentialValidation:
             candidate_ids=frozenset([known_candidate]),
         )
         assert result.is_valid is False
-        assert any(
-            f.code == "UNKNOWN_CANDIDATE_REF" for f in result.errors
-        )
+        assert any(f.code == "UNKNOWN_CANDIDATE_REF" for f in result.errors)
 
     def test_unknown_snapshot_ref_errors(self):
         """A passage referencing an unknown snapshot ID is an error."""
@@ -537,9 +531,7 @@ class TestReferentialValidation:
             snapshot_ids=frozenset([known_snapshot]),
         )
         assert result.is_valid is False
-        assert any(
-            f.code == "UNKNOWN_SNAPSHOT_REF" for f in result.errors
-        )
+        assert any(f.code == "UNKNOWN_SNAPSHOT_REF" for f in result.errors)
 
     def test_valid_packet_with_no_unknown_refs(self):
         """A well-formed packet passes referential validation."""
@@ -567,7 +559,8 @@ class TestReferentialValidation:
         )
         assert result.is_valid is True
         assert not any(
-            f.code in (
+            f.code
+            in (
                 "UNKNOWN_CLAIM_REF",
                 "UNKNOWN_PASSAGE_REF",
                 "UNKNOWN_CANDIDATE_REF",
@@ -639,9 +632,7 @@ class TestFreshnessValidation:
         packet = _make_packet(freshness_summary={})
         validator = EvidencePacketValidator()
         result = validator.validate(packet)
-        assert any(
-            f.code == "MISSING_FRESHNESS_SUMMARY" for f in result.warnings
-        )
+        assert any(f.code == "MISSING_FRESHNESS_SUMMARY" for f in result.warnings)
 
     def test_freshness_ordering_error_warns(self):
         """Freshness with most_recent before oldest generates a warning."""
@@ -653,9 +644,7 @@ class TestFreshnessValidation:
         )
         validator = EvidencePacketValidator()
         result = validator.validate(packet)
-        assert any(
-            f.code == "FRESHNESS_ORDERING" for f in result.warnings
-        )
+        assert any(f.code == "FRESHNESS_ORDERING" for f in result.warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -693,9 +682,7 @@ class TestTokenBudgetValidation:
         validator = EvidencePacketValidator()
         result = validator.validate(packet, effective_caps=tiny_caps)
         assert result.is_valid is False
-        assert any(
-            f.code == "TOKEN_BUDGET_EXCEEDED" for f in result.errors
-        )
+        assert any(f.code == "TOKEN_BUDGET_EXCEEDED" for f in result.errors)
 
     def test_omitted_passages_warn(self):
         """Omitted passages generate a warning."""
@@ -723,9 +710,7 @@ class TestTokenBudgetValidation:
         )
         validator = EvidencePacketValidator()
         result = validator.validate(packet, effective_caps=caps)
-        assert any(
-            f.code == "OMITTED_PASSAGES" for f in result.warnings
-        )
+        assert any(f.code == "OMITTED_PASSAGES" for f in result.warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -753,9 +738,7 @@ class TestRetrievalExecutionValidation:
         validator = EvidencePacketValidator()
         result = validator.validate(packet)
         assert result.is_valid is False
-        assert any(
-            f.code == "MISSING_RETRIEVAL_PROVENANCE" for f in result.errors
-        )
+        assert any(f.code == "MISSING_RETRIEVAL_PROVENANCE" for f in result.errors)
 
     def test_passage_missing_source_url_warns(self):
         """EvidencePassage rejects empty source_url at construction.
@@ -794,9 +777,7 @@ class TestRetrievalExecutionValidation:
         validator = EvidencePacketValidator()
         result = validator.validate(packet)
         # The packet is valid because candidate_id is always present.
-        assert not any(
-            f.code == "MISSING_CANDIDATE_ID" for f in result.errors
-        )
+        assert not any(f.code == "MISSING_CANDIDATE_ID" for f in result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -829,9 +810,7 @@ class TestSemanticStageValidation:
         validator = EvidencePacketValidator()
         result = validator.validate(packet)
         assert result.is_valid is False
-        assert any(
-            f.code == "BOUND_UNASSESSED_CLAIM" for f in result.errors
-        )
+        assert any(f.code == "BOUND_UNASSESSED_CLAIM" for f in result.errors)
 
     def test_binding_missing_model_errors(self):
         """ClaimEvidenceBinding rejects empty model at construction."""
@@ -893,9 +872,7 @@ class TestUnresolvedRequirements:
             coverage_items=frozenset([known_id]),
         )
         assert result.is_valid is False
-        assert any(
-            f.code == "UNRESOLVED_UNKNOWN_COVERAGE" for f in result.errors
-        )
+        assert any(f.code == "UNRESOLVED_UNKNOWN_COVERAGE" for f in result.errors)
 
     def test_no_coverage_context_warns(self):
         """Unresolved items without coverage context generate a warning."""
@@ -904,10 +881,7 @@ class TestUnresolvedRequirements:
         )
         validator = EvidencePacketValidator()
         result = validator.validate(packet)
-        assert any(
-            f.code == "UNRESOLVED_NO_COVERAGE_CONTEXT"
-            for f in result.warnings
-        )
+        assert any(f.code == "UNRESOLVED_NO_COVERAGE_CONTEXT" for f in result.warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -933,7 +907,10 @@ class TestBoundedCitationReadyOutput:
 
     def test_bounded_output_limits_claims(self):
         """max_claims limits the number of claims in output."""
-        claims = [_make_claim(claim_id=UUID(int=i), statement=f"claim {i}") for i in range(1, 6)]
+        claims = [
+            _make_claim(claim_id=UUID(int=i), statement=f"claim {i}")
+            for i in range(1, 6)
+        ]
         passage = _make_passage()
         packet = _make_packet(
             claims=claims,

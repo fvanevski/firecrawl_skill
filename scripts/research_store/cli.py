@@ -2748,9 +2748,7 @@ def main(argv=None):
         else:
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(output_path.parent), suffix=".tmp"
-            )
+            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
                     f.write(vr.to_json(indent=2))
@@ -2758,7 +2756,11 @@ def main(argv=None):
             except BaseException:
                 os.unlink(tmp_path)
                 raise
-            result = {"output": output, "is_valid": vr.is_valid, "is_complete": vr.is_complete}
+            result = {
+                "output": output,
+                "is_valid": vr.is_valid,
+                "is_complete": vr.is_complete,
+            }
 
     elif args.command == "packet-inspect":
         from .container import build_evidence_service
@@ -2799,9 +2801,7 @@ def main(argv=None):
         else:
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(output_path.parent), suffix=".tmp"
-            )
+            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
                     f.write(json.dumps(output_dict, indent=2, default=str))
@@ -2847,9 +2847,7 @@ def main(argv=None):
         else:
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(output_path.parent), suffix=".tmp"
-            )
+            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
                     f.write(diff.to_json(indent=2))
@@ -2886,9 +2884,7 @@ def main(argv=None):
 
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(
-            dir=str(output_path.parent), suffix=".tmp"
-        )
+        fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as f:
                 f.write(json.dumps(output_dict, indent=2, default=str))

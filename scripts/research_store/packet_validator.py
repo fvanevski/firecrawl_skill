@@ -220,7 +220,9 @@ class EvidencePacketValidator:
 
         # 6. Token budget.
         if effective_caps is not None:
-            self._check_token_budget(packet, effective_caps, errors=errors, warnings=warnings)
+            self._check_token_budget(
+                packet, effective_caps, errors=errors, warnings=warnings
+            )
 
         # 7. Retrieval execution.
         self._check_retrieval_execution(
@@ -235,10 +237,7 @@ class EvidencePacketValidator:
 
         return ValidationResult(
             is_valid=len(errors) == 0,
-            is_complete=(
-                len(errors) == 0
-                and len(warnings) == 0
-            ),
+            is_complete=(len(errors) == 0 and len(warnings) == 0),
             errors=tuple(errors),
             warnings=tuple(warnings),
             info=tuple(info),
@@ -287,8 +286,7 @@ class EvidencePacketValidator:
                                 f"unknown passage {pid}"
                             ),
                             path=(
-                                f"claim_evidence_bindings/"
-                                f"{binding.binding_id}/passages"
+                                f"claim_evidence_bindings/{binding.binding_id}/passages"
                             ),
                         )
                     )
@@ -327,8 +325,7 @@ class EvidencePacketValidator:
                                 f"references unknown passage {pid}"
                             ),
                             path=(
-                                f"retrieval_provenance/"
-                                f"{rp.retrieval_event_id}/passages"
+                                f"retrieval_provenance/{rp.retrieval_event_id}/passages"
                             ),
                         )
                     )
@@ -479,8 +476,7 @@ class EvidencePacketValidator:
                         code="DUPLICATE_PASSAGE_IN_GROUP",
                         severity=ValidationSeverity.ERROR,
                         message=(
-                            f"group {group.group_id} contains duplicate "
-                            f"passage IDs"
+                            f"group {group.group_id} contains duplicate passage IDs"
                         ),
                         path=f"groups/{group.group_id}",
                     )
@@ -493,8 +489,7 @@ class EvidencePacketValidator:
                         code="MISSING_GROUP_RATIONALE",
                         severity=ValidationSeverity.ERROR,
                         message=(
-                            f"group {group.group_id} is evaluated but has "
-                            f"no rationale"
+                            f"group {group.group_id} is evaluated but has no rationale"
                         ),
                         path=f"groups/{group.group_id}",
                     )
@@ -543,9 +538,7 @@ class EvidencePacketValidator:
                 ValidationFinding(
                     code="NO_FRESHNESS_DATES",
                     severity=ValidationSeverity.WARNING,
-                    message=(
-                        "freshness_summary has no most_recent or oldest dates"
-                    ),
+                    message=("freshness_summary has no most_recent or oldest dates"),
                     path="freshness_summary",
                 )
             )
@@ -562,10 +555,7 @@ class EvidencePacketValidator:
                         ValidationFinding(
                             code="FRESHNESS_ORDERING",
                             severity=ValidationSeverity.WARNING,
-                            message=(
-                                "freshness_summary most_recent is before "
-                                "oldest"
-                            ),
+                            message=("freshness_summary most_recent is before oldest"),
                             path="freshness_summary",
                             detail={
                                 "most_recent": most_recent,
@@ -587,9 +577,7 @@ class EvidencePacketValidator:
             ValidationFinding(
                 code="FRESHNESS_SUMMARY",
                 severity=ValidationSeverity.INFO,
-                message=(
-                    f"freshness: oldest={oldest}, most_recent={most_recent}"
-                ),
+                message=(f"freshness: oldest={oldest}, most_recent={most_recent}"),
             )
         )
 
@@ -606,9 +594,7 @@ class EvidencePacketValidator:
             return
 
         if coverage_items is not None:
-            unknown = (
-                set(packet.unresolved_items) - coverage_items
-            )
+            unknown = set(packet.unresolved_items) - coverage_items
             if unknown:
                 errors.append(
                     ValidationFinding(
@@ -748,9 +734,7 @@ class EvidencePacketValidator:
                     ValidationFinding(
                         code="MISSING_SOURCE_URL",
                         severity=ValidationSeverity.WARNING,
-                        message=(
-                            f"passage {passage.passage_id} has no source_url"
-                        ),
+                        message=(f"passage {passage.passage_id} has no source_url"),
                         path=f"passages/{passage.passage_id}",
                     )
                 )
@@ -760,9 +744,7 @@ class EvidencePacketValidator:
                     ValidationFinding(
                         code="MISSING_CANDIDATE_ID",
                         severity=ValidationSeverity.ERROR,
-                        message=(
-                            f"passage {passage.passage_id} has no candidate_id"
-                        ),
+                        message=(f"passage {passage.passage_id} has no candidate_id"),
                         path=f"passages/{passage.passage_id}",
                     )
                 )
@@ -772,9 +754,7 @@ class EvidencePacketValidator:
                     ValidationFinding(
                         code="MISSING_SNAPSHOT_ID",
                         severity=ValidationSeverity.ERROR,
-                        message=(
-                            f"passage {passage.passage_id} has no snapshot_id"
-                        ),
+                        message=(f"passage {passage.passage_id} has no snapshot_id"),
                         path=f"passages/{passage.passage_id}",
                     )
                 )
@@ -784,9 +764,7 @@ class EvidencePacketValidator:
                     ValidationFinding(
                         code="MISSING_CHUNK_ID",
                         severity=ValidationSeverity.ERROR,
-                        message=(
-                            f"passage {passage.passage_id} has no chunk_id"
-                        ),
+                        message=(f"passage {passage.passage_id} has no chunk_id"),
                         path=f"passages/{passage.passage_id}",
                     )
                 )
@@ -801,9 +779,7 @@ class EvidencePacketValidator:
     ) -> None:
         """Check that required semantic stages have been executed."""
         # Check that claims with bindings have semantic_status set.
-        bound_claim_ids = {
-            b.claim_id for b in packet.claim_evidence_bindings
-        }
+        bound_claim_ids = {b.claim_id for b in packet.claim_evidence_bindings}
 
         for claim in packet.claims:
             if claim.semantic_status == SemanticStatus.UNASSESSED:
@@ -839,9 +815,7 @@ class EvidencePacketValidator:
                     ValidationFinding(
                         code="MISSING_BINDING_MODEL",
                         severity=ValidationSeverity.ERROR,
-                        message=(
-                            f"binding {binding.binding_id} has no model"
-                        ),
+                        message=(f"binding {binding.binding_id} has no model"),
                         path=f"claim_evidence_bindings/{binding.binding_id}",
                     )
                 )
@@ -850,9 +824,7 @@ class EvidencePacketValidator:
                     ValidationFinding(
                         code="MISSING_BINDING_PROMPT_VERSION",
                         severity=ValidationSeverity.ERROR,
-                        message=(
-                            f"binding {binding.binding_id} has no prompt_version"
-                        ),
+                        message=(f"binding {binding.binding_id} has no prompt_version"),
                         path=f"claim_evidence_bindings/{binding.binding_id}",
                     )
                 )

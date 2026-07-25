@@ -408,12 +408,8 @@ def diff_packets(
             )
 
     # Unresolved item deltas.
-    added_unresolved = tuple(
-        str(u) for u in sorted(new_unresolved - old_unresolved)
-    )
-    removed_unresolved = tuple(
-        str(u) for u in sorted(old_unresolved - new_unresolved)
-    )
+    added_unresolved = tuple(str(u) for u in sorted(new_unresolved - old_unresolved))
+    removed_unresolved = tuple(str(u) for u in sorted(old_unresolved - new_unresolved))
 
     # Coverage revision change.
     coverage_revision_changed = (
