@@ -21,6 +21,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from budget_policy import DEFAULT_POLICY, ResourceCaps
+from research_domain.models import IndependenceStatus
 from research_store.evidence import EvidenceService
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
@@ -429,9 +430,10 @@ def test_evidence_packet_referential_integrity():
             "unique_sources": 1,
             "sources": ["https://example.com"],
         },
-        freshness_summary={"most_recent": None, "oldest": None},
+        freshness_summary={},
         limitations=(),
         unresolved_items=(),
+        independence_assessments=(),
         retrieval_provenance=(),
     )
     assert valid_packet is not None
@@ -479,8 +481,101 @@ def test_evidence_packet_referential_integrity():
                 "unique_sources": 1,
                 "sources": ["https://example.com"],
             },
-            freshness_summary={"most_recent": None, "oldest": None},
+            freshness_summary={},
             limitations=(),
             unresolved_items=(),
+            independence_assessments=(),
             retrieval_provenance=(),
         )
+
+
+@INTEGRATION_MARK
+def test_evidence_packet_duplicate_assessments(
+    tmp_path, prepared_database_for_evidence_packets
+):
+    """EvidenceService.build_evidence_packet populates near_duplicate_groups and independence_assessments."""
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=TEST_DSN,
+        blob_root=tmp_path / "blobs",
+    )
+    svc = build_evidence_service(config)
+    run_id = uuid4()
+    ensure_run_exists(TEST_DSN, run_id)
+    spec_id = uuid4()
+
+    caps = ResourceCaps.from_mapping(
+        {
+            **DEFAULT_POLICY.profiles["standard"].to_dict(),
+            "max_evidence_packet_tokens": 8000,
+        }
+    )
+
+    # Candidates with matching content hashes (exact duplicate)
+    c1 = _make_candidate(
+        url="https://sourceA.com/article",
+        text="Word " * 100,
+    )
+    c1["backend_metadata"] = {"content_hash": "abc123"}
+    c1["canonical_url"] = "https://sourceA.com/article"
+    c1["title"] = "Breaking News: Major Event Happens Today"
+
+    c2 = _make_candidate(
+        url="https://sourceB.com/article",
+        text="Word " * 100,
+    )
+    c2["backend_metadata"] = {"content_hash": "abc123"}
+    c2["canonical_url"] = "https://sourceB.com/article"
+    c2["title"] = "Breaking News Major Event Happens Today!"
+
+    # Candidate with no duplicate signal (should be UNASSESSED)
+    c3 = _make_candidate(
+        url="https://unique.com/unique",
+        text="Word " * 10,
+    )
+    c3["canonical_url"] = "https://unique.com/unique"
+    c3["title"] = "Completely Unique Content For This Source"
+
+    packet = svc.build_evidence_packet(
+        run_id=run_id,
+        research_spec_id=spec_id,
+        coverage_revision=1,
+        candidates=[c1, c2, c3],
+        retrieval_events=[],
+        effective_caps=caps,
+    )
+
+    # Should have near_duplicate_groups from the duplicate content hash
+    assert len(packet.near_duplicate_groups) >= 1
+    hash_group = None
+    for g in packet.near_duplicate_groups:
+        if g.rationale == "exact_content_hash_match":
+            hash_group = g
+            break
+    assert hash_group is not None, "Expected exact_content_hash_match group"
+    assert hash_group.evaluated is True
+    assert len(hash_group.passage_ids) == 2
+
+    # Each candidate must have exactly one assessment (no duplicates, no gaps).
+    from collections import Counter
+
+    counts = Counter(a.candidate_id for a in packet.independence_assessments)
+    assert all(c == 1 for c in counts.values()), (
+        "Each candidate should have exactly one independence assessment"
+    )
+    # Both duplicate candidates should be DEPENDENT or UNCERTAIN.
+    for a in packet.independence_assessments:
+        assert a.status in (
+            IndependenceStatus.DEPENDENT,
+            IndependenceStatus.UNCERTAIN,
+            IndependenceStatus.UNASSESSED,
+        )
+
+    # c3 should be UNASSESSED
+    unassessed = [
+        a
+        for a in packet.independence_assessments
+        if a.status == IndependenceStatus.UNASSESSED
+    ]
+    assert len(unassessed) >= 1, "Expected at least one UNASSESSED candidate"
+    assert unassessed[0].rationale == "no duplicate or syndication signal found"

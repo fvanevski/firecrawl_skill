@@ -2636,7 +2636,7 @@ class PostgresUnitOfWork:
             query = """SELECT id, run_id, canonical_url, canonical_url_sha256, original_url,
                               title, snippet, domain, backend, published_at, date_signals,
                               backend_metadata, recurrence_count, duplicate_group_id,
-                              first_seen_at, last_seen_at, created_at
+                              first_seen_at, last_seen_at, created_at, independence_assessment
                        FROM search_candidates WHERE id=%s"""
             params = [candidate_id]
             if run_id is not None:
@@ -2666,6 +2666,7 @@ class PostgresUnitOfWork:
                 "first_seen_at": row[14],
                 "last_seen_at": row[15],
                 "created_at": row[16],
+                "independence_assessment": row[17],
             }
 
     def list_candidates(
@@ -2676,7 +2677,7 @@ class PostgresUnitOfWork:
             query = """SELECT id, run_id, canonical_url, canonical_url_sha256, original_url,
                               title, snippet, domain, backend, published_at, date_signals,
                               backend_metadata, recurrence_count, duplicate_group_id,
-                              first_seen_at, last_seen_at, created_at
+                              first_seen_at, last_seen_at, created_at, independence_assessment
                        FROM search_candidates WHERE run_id=%s"""
             params = [run_id]
 
@@ -2714,6 +2715,7 @@ class PostgresUnitOfWork:
                         "first_seen_at": row[14],
                         "last_seen_at": row[15],
                         "created_at": row[16],
+                        "independence_assessment": row[17],
                     }
                 )
             return results
@@ -2751,13 +2753,13 @@ class PostgresUnitOfWork:
                 select_cols = """DISTINCT c.id, c.run_id, c.canonical_url, c.canonical_url_sha256, c.original_url,
                                   c.title, c.snippet, c.domain, c.backend, c.published_at, c.date_signals,
                                   c.backend_metadata, c.recurrence_count, c.duplicate_group_id,
-                                  c.first_seen_at, c.last_seen_at, c.created_at"""
+                                  c.first_seen_at, c.last_seen_at, c.created_at, c.independence_assessment"""
             else:
                 base_from = """FROM search_candidates c WHERE c.run_id=%s"""
                 select_cols = """c.id, c.run_id, c.canonical_url, c.canonical_url_sha256, c.original_url,
                                   c.title, c.snippet, c.domain, c.backend, c.published_at, c.date_signals,
                                   c.backend_metadata, c.recurrence_count, c.duplicate_group_id,
-                                  c.first_seen_at, c.last_seen_at, c.created_at"""
+                                  c.first_seen_at, c.last_seen_at, c.created_at, c.independence_assessment"""
 
             where_clauses = []
             params = [run_id]
@@ -2826,6 +2828,7 @@ class PostgresUnitOfWork:
                         "first_seen_at": row[14],
                         "last_seen_at": row[15],
                         "created_at": row[16],
+                        "independence_assessment": row[17],
                     }
                 )
 
@@ -2880,6 +2883,19 @@ class PostgresUnitOfWork:
         target_group_id = UUID(str(group_id)) if group_id is not None else cand_uuids[0]
 
         with self.connection.cursor() as cur:
+            import datetime
+
+            cur.execute(
+                """INSERT INTO duplicate_groups(id, run_id, rationale, created_at)
+                   VALUES (%s, %s, 'legacy assignment', %s)
+                   ON CONFLICT (id) DO NOTHING""",
+                (
+                    target_group_id,
+                    UUID(str(run_id)) if run_id else None,
+                    datetime.datetime.now(datetime.timezone.utc),
+                ),
+            )
+
             if run_id is not None:
                 run_uuid = UUID(str(run_id))
                 cur.execute(
@@ -2896,6 +2912,30 @@ class PostgresUnitOfWork:
                     (target_group_id, cand_uuids),
                 )
         return target_group_id
+
+    def persist_duplicate_group(self, group_id, run_id, rationale):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO duplicate_groups (id, run_id, rationale)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET rationale = EXCLUDED.rationale
+                """,
+                (UUID(str(group_id)), UUID(str(run_id)), rationale),
+            )
+
+    def update_candidate_independence(self, candidate_id, independence_assessment_dict):
+        import json
+
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE search_candidates
+                SET independence_assessment = %s::jsonb
+                WHERE id = %s
+                """,
+                (json.dumps(independence_assessment_dict), UUID(str(candidate_id))),
+            )
 
     def record_semantic_call(
         self,

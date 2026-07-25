@@ -10,9 +10,12 @@ from research_domain.models import (
     EvidenceGroup,
     EvidencePacket,
     EvidencePassage,
+    IndependenceAssessment,
+    IndependenceStatus,
     RetrievalProvenance,
 )
 
+from .duplicate_service import DuplicateGroupService
 from .tokenizer_registry import get_tokenizer
 
 logger = logging.getLogger(__name__)
@@ -52,6 +55,7 @@ class EvidenceService:
         self.uow_factory = uow_factory
         self.budget_policy = budget_policy
         self.tokenizer = get_tokenizer(tokenizer_name)
+        self.duplicate_service = DuplicateGroupService()
 
     def build_evidence_packet(
         self,
@@ -150,6 +154,53 @@ class EvidenceService:
                 )
             )
 
+        # Apply deterministic near-duplicate and source-independence grouping
+        result = self.duplicate_service.evaluate_candidates(candidates)
+        dup_groups = result["groups"]
+        unassessed_ids = result.get("unassessed", [])
+
+        cand_to_passage = {
+            p.candidate_id: p.passage_id for p in passages + omitted_passages
+        }
+
+        independence_assessments = []
+
+        for g in dup_groups:
+            group_passage_ids = []
+            for cid in g["candidate_ids"]:
+                pid = cand_to_passage.get(cid)
+                if pid:
+                    group_passage_ids.append(pid)
+
+            if len(group_passage_ids) > 1:
+                near_duplicate_groups.append(
+                    EvidenceGroup(
+                        group_id=g["group_id"],
+                        passage_ids=tuple(group_passage_ids),
+                        rationale=g["rationale"],
+                        evaluated=True,
+                    )
+                )
+
+            for cid, ass in g.get("assessments", {}).items():
+                independence_assessments.append(
+                    IndependenceAssessment(
+                        candidate_id=cid,
+                        status=ass["status"],
+                        rationale=ass["rationale"],
+                    )
+                )
+
+        # Record UNASSESSED candidates that fell through all grouping criteria
+        for cid in unassessed_ids:
+            independence_assessments.append(
+                IndependenceAssessment(
+                    candidate_id=UUID(str(cid)),
+                    status=IndependenceStatus.UNASSESSED,
+                    rationale="no duplicate or syndication signal found",
+                )
+            )
+
         return EvidencePacket(
             schema_version=EvidencePacket.SCHEMA_VERSION,
             run_id=run_id,
@@ -167,6 +218,7 @@ class EvidenceService:
             freshness_summary=freshness_summary,
             limitations=(),
             unresolved_items=(),
+            independence_assessments=tuple(independence_assessments),
             retrieval_provenance=tuple(retrieval_events),
         )
 

@@ -1,22 +1,42 @@
 {
-  "$defs": {},
-  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/terminal-decision-v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/terminal-decision-v1.json",
+  "title": "TerminalDecision",
+  "type": "object",
   "additionalProperties": false,
   "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "terminal-decision-v1"
+    },
+    "decision_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "run_revision": {
+      "type": "integer"
+    },
     "coverage_revision": {
       "type": "integer"
     },
-    "created_at": {
-      "format": "date-time",
-      "type": "string"
-    },
-    "decision_id": {
-      "format": "uuid",
-      "type": "string"
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "sufficient",
+        "partial",
+        "blocked",
+        "failed",
+        "cancelled"
+      ]
     },
     "no_progress_signals": {
+      "type": "array",
       "items": {
+        "type": "string",
         "enum": [
           "no_new_candidates",
           "no_new_assets",
@@ -27,37 +47,18 @@
           "cost_budget_exhausted",
           "wall_clock_exhausted",
           "unsatisfiable_source"
-        ],
-        "type": "string"
-      },
-      "type": "array"
+        ]
+      }
     },
-    "outcome": {
-      "enum": [
-        "sufficient",
-        "partial",
-        "blocked",
-        "failed",
-        "cancelled"
-      ],
+    "unresolved_gap": {
       "type": "string"
     },
     "policy_version": {
       "type": "string"
     },
-    "run_id": {
-      "format": "uuid",
-      "type": "string"
-    },
-    "run_revision": {
-      "type": "integer"
-    },
-    "schema_version": {
-      "const": "terminal-decision-v1",
-      "type": "string"
-    },
-    "unresolved_gap": {
-      "type": "string"
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
     }
   },
   "required": [
@@ -72,6 +73,5 @@
     "policy_version",
     "created_at"
   ],
-  "title": "TerminalDecision",
-  "type": "object"
+  "$defs": {}
 }
