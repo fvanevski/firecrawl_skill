@@ -7,7 +7,6 @@ interrupted upgrade rolls back to v5 and can be retried with ``upgrade head``.
 
 from alembic import op
 
-
 revision = "0006_workflow_state"
 down_revision = "0005_run_lifecycle"
 branch_labels = None

@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
 """Budget-guarded live validation for the Firecrawl scratch-file skill."""
 
 import argparse
 import datetime as dt
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -13,9 +11,9 @@ import sys
 import tempfile
 import textwrap
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import urlopen
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_ROOT = SCRIPT_DIR.parent
@@ -58,7 +56,7 @@ def catalog_record_valid(record):
 
 
 def now_stamp():
-    return dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")  # noqa: DTZ005
 
 
 def words(path):
@@ -159,7 +157,7 @@ class Campaign:
                 env[key] = str(value)
         started = time.time()
         try:
-            result = subprocess.run(command, text=True, capture_output=True, env=env, timeout=timeout)
+            result = subprocess.run(command, text=True, capture_output=True, env=env, timeout=timeout)  # noqa: PLW1510
             status = "pass" if result.returncode == 0 else "fail"
             output = result.stdout + ("\n--- stderr ---\n" + result.stderr if result.stderr else "")
             returncode = result.returncode
@@ -187,7 +185,7 @@ class Campaign:
                 payload = json.loads(response.read().decode("utf-8"))
             case["status"] = "pass" if payload.get("message") == "Firecrawl API" else "fail"
             case["payload"] = payload
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             case.update(status="fail", error=f"{type(exc).__name__}: {exc}")
         self.cases.append(case)
         print(f"[{case['status'].upper()}] api_root")

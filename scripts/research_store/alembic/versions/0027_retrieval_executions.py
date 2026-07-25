@@ -7,7 +7,6 @@ the execution parameters, modes, and component health for each retrieval operati
 
 from alembic import op
 
-
 revision = "0027_retrieval_executions"
 down_revision = "0026_document_derivations"
 branch_labels = None

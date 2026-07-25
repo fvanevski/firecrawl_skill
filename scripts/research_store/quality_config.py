@@ -83,7 +83,7 @@ class QualityConfig:
     # When False and content_type_consistent is also False → degradation.
 
     @classmethod
-    def from_env(cls) -> "QualityConfig":
+    def from_env(cls) -> QualityConfig:
         """Build a config from environment variables.
 
         All values are optional — omitted env vars use the defaults

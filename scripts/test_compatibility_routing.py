@@ -32,7 +32,7 @@ TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
 def run_frun(*args, env=None):
     """Run the frun script with the given arguments."""
-    return subprocess.run(
+    return subprocess.run(  # noqa: PLW1510
         [str(SCRIPTS / "frun"), *map(str, args)],
         text=True,
         capture_output=True,
@@ -43,7 +43,7 @@ def run_frun(*args, env=None):
 
 def run_research_db(*args, env=None):
     """Run the research-db script with the given arguments."""
-    return subprocess.run(
+    return subprocess.run(  # noqa: PLW1510
         [str(SCRIPTS / "research-db"), *map(str, args)],
         text=True,
         capture_output=True,

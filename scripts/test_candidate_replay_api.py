@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-# ruff: noqa: E402
-
-from dataclasses import replace
 import json
 import os
-from pathlib import Path
 import sys
+from dataclasses import replace
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -17,7 +15,6 @@ sys.path.insert(0, str(SCRIPTS))
 from research_store.config import StoreConfig
 from research_store.container import build_run_service
 from research_store.postgres import connect, migrate, require_disposable_database_reset
-
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 

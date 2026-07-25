@@ -179,13 +179,13 @@ class CorpusService:
                 if self._is_html_content(mime_type, raw):
                     logging.getLogger(__name__).exception(
                         "Unexpected parser error, trying normalized HTML fallback: %s",
-                        exc,
+                        exc,  # noqa: TRY401
                     )
                     normalized_result = self._try_normalized_html(raw, mime_type)
                     if normalized_result is not None:
                         return normalized_result
                 logging.getLogger(__name__).exception(
-                    "Unexpected parser error, falling back to legacy: %s", exc
+                    "Unexpected parser error, falling back to legacy: %s", exc  # noqa: TRY401
                 )
 
         if self._is_html_content(mime_type, raw):
@@ -298,7 +298,7 @@ class CorpusService:
                             uow.link_run_asset(
                                 research_run_external_id, result.snapshot_id, "acquired"
                             )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     failures += 1
                     uow.record_batch_asset(
                         batch_id,
@@ -403,7 +403,7 @@ class CorpusService:
                                 f"qdrant alias points to {active!r}, "
                                 f"expected {self.config.physical_collection!r}"
                             )
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         component_health["qdrant"] = "failed"
                         component_health["embedding"] = "failed"
                         errors.append(f"qdrant/embedding error: {e!s}")
@@ -441,7 +441,7 @@ class CorpusService:
                 try:
                     candidates = self.reranker(query, candidates)
                     reranked_candidates = candidates
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     component_health["reranker"] = "failed"
                     errors.append(f"reranker error: {e!s}")
                 timing["reranker"] = time.time() - t4
@@ -829,7 +829,7 @@ class ClaimManifestService:
                         ),
                     )
                     inserted_claims += 1
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     failed_claims.append(
                         {
                             "claim_id": str(claim.get("claim_id", "unknown")),
@@ -850,7 +850,7 @@ class ClaimManifestService:
                         confidence=link.get("confidence", 1.0),
                     )
                     inserted_links += 1
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     exc_str = str(exc).lower()
                     if (
                         "unique constraint" in exc_str

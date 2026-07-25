@@ -27,15 +27,13 @@ Exit criteria verified:
 """
 from __future__ import annotations
 
-# ruff: noqa: E402
-
-from dataclasses import replace
 import hashlib
 import io
 import json
 import os
-from pathlib import Path
 import sys
+from dataclasses import replace
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -154,13 +152,13 @@ class TestParseRawSearchResponse:
 
     def test_provider_error_http_500(self):
         raw = json.dumps({"detail": "internal server error"})
-        status, count, _, err = parse_raw_search_response(raw, http_status=500)
+        status, count, _, _err = parse_raw_search_response(raw, http_status=500)
         assert status == "provider_error"
         assert count == 0
 
     def test_provider_error_http_429(self):
         raw = json.dumps({"message": "rate limited"})
-        status, count, _, err = parse_raw_search_response(raw, http_status=429)
+        status, _count, _, err = parse_raw_search_response(raw, http_status=429)
         assert status == "provider_error"
         assert "rate limited" in (err or "")
 
@@ -173,14 +171,14 @@ class TestParseRawSearchResponse:
 
     def test_parse_error_binary_garbage(self):
         raw = b"\xff\xfe\x00\x01garbage"
-        status, count, _, err = parse_raw_search_response(raw)
+        status, count, _, _err = parse_raw_search_response(raw)
         # Either UTF-8 decode error → parse_error, or JSON parse error → parse_error
         assert status == "parse_error"
         assert count == 0
 
     def test_parse_error_json_number_root(self):
         raw = "42"
-        status, count, _, err = parse_raw_search_response(raw)
+        status, _count, _, err = parse_raw_search_response(raw)
         assert status == "parse_error"
         assert "root must be an object or array" in (err or "")
 
@@ -193,7 +191,7 @@ class TestParseRawSearchResponse:
             {"url": "", "title": "Empty URL"}, # empty url → skipped later
         ]})
         # Parser returns count of all items in the array (3)
-        status, count, summary, err = parse_raw_search_response(raw)
+        status, count, _summary, err = parse_raw_search_response(raw)
         assert status == "succeeded"
         assert count == 3  # parser counts all items; extraction skips invalid
         assert err is None

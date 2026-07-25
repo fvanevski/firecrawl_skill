@@ -98,47 +98,47 @@ NORMALIZATION_VERSION = "normalization-v1"
 
 # Cookie-related patterns (from legacy cleanup.py)
 _COOKIE_PATTERNS = [
-    re.compile(r"\buse cookies\b", re.I),
-    re.compile(r"\bcookie policy\b", re.I),
-    re.compile(r"\baccept (all )?cookies\b", re.I),
-    re.compile(r"\bprivacy preference\b", re.I),
-    re.compile(r"\bmanage consent\b", re.I),
-    re.compile(r"\bcookie settings\b", re.I),
+    re.compile(r"\buse cookies\b", re.IGNORECASE),
+    re.compile(r"\bcookie policy\b", re.IGNORECASE),
+    re.compile(r"\baccept (all )?cookies\b", re.IGNORECASE),
+    re.compile(r"\bprivacy preference\b", re.IGNORECASE),
+    re.compile(r"\bmanage consent\b", re.IGNORECASE),
+    re.compile(r"\bcookie settings\b", re.IGNORECASE),
 ]
 
 # Navigation patterns
 _NAVIGATION_PATTERNS = [
-    re.compile(r"^\*?\s*\[?skip to (main )?content\b", re.I),
-    re.compile(r"^\*?\s*\[?toggle navigation\b", re.I),
-    re.compile(r"^\*?\s*\[?menu\b", re.I),
-    re.compile(r"^\*?\s*\[?navigation\b", re.I),
-    re.compile(r"^\*?\s*\[?back to top\b", re.I),
-    re.compile(r"^\*?\s*\[?go to home\b", re.I),
-    re.compile(r"^\*?\s*\[?site map\b", re.I),
-    re.compile(r"^\*?\s*\[?accessibility( link)?\b", re.I),
-    re.compile(r"^\*?\s*\[?live\b", re.I),
+    re.compile(r"^\*?\s*\[?skip to (main )?content\b", re.IGNORECASE),
+    re.compile(r"^\*?\s*\[?toggle navigation\b", re.IGNORECASE),
+    re.compile(r"^\*?\s*\[?menu\b", re.IGNORECASE),
+    re.compile(r"^\*?\s*\[?navigation\b", re.IGNORECASE),
+    re.compile(r"^\*?\s*\[?back to top\b", re.IGNORECASE),
+    re.compile(r"^\*?\s*\[?go to home\b", re.IGNORECASE),
+    re.compile(r"^\*?\s*\[?site map\b", re.IGNORECASE),
+    re.compile(r"^\*?\s*\[?accessibility( link)?\b", re.IGNORECASE),
+    re.compile(r"^\*?\s*\[?live\b", re.IGNORECASE),
 ]
 
 # Social patterns
 _SOCIAL_PATTERNS = [
     re.compile(
         r"\bshare on (facebook|twitter|linkedin|reddit|pinterest|pocket|whatsapp)\b",
-        re.I,
+        re.IGNORECASE,
     ),
-    re.compile(r"^follow (us|me) on\b", re.I),
+    re.compile(r"^follow (us|me) on\b", re.IGNORECASE),
 ]
 
 # Misc boilerplate
 _MISCB_PATTERNS = [
-    re.compile(r"^sign in to your account$", re.I),
-    re.compile(r"^sign (in|up|out)$", re.I),
-    re.compile(r"^log (in|out)$", re.I),
-    re.compile(r"^create (an? )?free account$", re.I),
-    re.compile(r"^subscribe to (our )?newsletter$", re.I),
-    re.compile(r"^all rights reserved\.?$", re.I),
-    re.compile(r"^copyright © \d{4}", re.I),
-    re.compile(r"^terms of (service|use)$", re.I),
-    re.compile(r"^privacy policy$", re.I),
+    re.compile(r"^sign in to your account$", re.IGNORECASE),
+    re.compile(r"^sign (in|up|out)$", re.IGNORECASE),
+    re.compile(r"^log (in|out)$", re.IGNORECASE),
+    re.compile(r"^create (an? )?free account$", re.IGNORECASE),
+    re.compile(r"^subscribe to (our )?newsletter$", re.IGNORECASE),
+    re.compile(r"^all rights reserved\.?$", re.IGNORECASE),
+    re.compile(r"^copyright © \d{4}", re.IGNORECASE),
+    re.compile(r"^terms of (service|use)$", re.IGNORECASE),
+    re.compile(r"^privacy policy$", re.IGNORECASE),
 ]
 
 # Tracking parameters
@@ -195,13 +195,13 @@ _NAV_KEYWORDS = frozenset(
 )
 
 # Footnote patterns
-_FOOTNOTE_PATTERN = re.compile(r"(?:^|\n)(?:footnote|fn|fn\.)\s*\d+", re.I)
+_FOOTNOTE_PATTERN = re.compile(r"(?:^|\n)(?:footnote|fn|fn\.)\s*\d+", re.IGNORECASE)
 
 # Citation patterns (e.g. [1], [2], [3])
 _CITATION_PATTERN = re.compile(r"\[\d+\]")
 
 # Source URL patterns
-_SOURCE_URL_PATTERN = re.compile(r"^\[?source\]?\s*:?$|^https?://", re.I)
+_SOURCE_URL_PATTERN = re.compile(r"^\[?source\]?\s*:?$|^https?://", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -785,44 +785,44 @@ def _legacy_clean_markdown(content: str) -> str:
     in_code_block = False
 
     cookie_patterns = [
-        _re.compile(r"\buse cookies\b", re.I),
-        _re.compile(r"\bcookie policy\b", re.I),
-        _re.compile(r"\baccept (all )?cookies\b", re.I),
-        _re.compile(r"\bprivacy preference\b", re.I),
-        _re.compile(r"\bmanage consent\b", re.I),
-        _re.compile(r"\bcookie settings\b", re.I),
+        _re.compile(r"\buse cookies\b", _re.IGNORECASE),
+        _re.compile(r"\bcookie policy\b", _re.IGNORECASE),
+        _re.compile(r"\baccept (all )?cookies\b", _re.IGNORECASE),
+        _re.compile(r"\bprivacy preference\b", _re.IGNORECASE),
+        _re.compile(r"\bmanage consent\b", _re.IGNORECASE),
+        _re.compile(r"\bcookie settings\b", _re.IGNORECASE),
     ]
 
     navigation_patterns = [
-        _re.compile(r"^\*?\s*\[?skip to (main )?content\b", re.I),
-        _re.compile(r"^\*?\s*\[?toggle navigation\b", re.I),
-        _re.compile(r"^\*?\s*\[?menu\b", re.I),
-        _re.compile(r"^\*?\s*\[?navigation\b", re.I),
-        _re.compile(r"^\*?\s*\[?back to top\b", re.I),
-        _re.compile(r"^\*?\s*\[?go to home\b", re.I),
-        _re.compile(r"^\*?\s*\[?site map\b", re.I),
-        _re.compile(r"^\*?\s*\[?accessibility( link)?\b", re.I),
-        _re.compile(r"^\*?\s*\[?live\b", re.I),
+        _re.compile(r"^\*?\s*\[?skip to (main )?content\b", _re.IGNORECASE),
+        _re.compile(r"^\*?\s*\[?toggle navigation\b", _re.IGNORECASE),
+        _re.compile(r"^\*?\s*\[?menu\b", _re.IGNORECASE),
+        _re.compile(r"^\*?\s*\[?navigation\b", _re.IGNORECASE),
+        _re.compile(r"^\*?\s*\[?back to top\b", _re.IGNORECASE),
+        _re.compile(r"^\*?\s*\[?go to home\b", _re.IGNORECASE),
+        _re.compile(r"^\*?\s*\[?site map\b", _re.IGNORECASE),
+        _re.compile(r"^\*?\s*\[?accessibility( link)?\b", _re.IGNORECASE),
+        _re.compile(r"^\*?\s*\[?live\b", _re.IGNORECASE),
     ]
 
     social_patterns = [
         _re.compile(
             r"\bshare on (facebook|twitter|linkedin|reddit|pinterest|pocket|whatsapp)\b",
-            re.I,
+            _re.IGNORECASE,
         ),
-        _re.compile(r"^follow (us|me) on\b", re.I),
+        _re.compile(r"^follow (us|me) on\b", _re.IGNORECASE),
     ]
 
     misc_boilerplate = [
-        _re.compile(r"^sign in to your account$", re.I),
-        _re.compile(r"^sign (in|up|out)$", re.I),
-        _re.compile(r"^log (in|out)$", re.I),
-        _re.compile(r"^create (an? )?free account$", re.I),
-        _re.compile(r"^subscribe to (our )?newsletter$", re.I),
-        _re.compile(r"^all rights reserved\.?$", re.I),
-        _re.compile(r"^copyright © \d{4}", re.I),
-        _re.compile(r"^terms of (service|use)$", re.I),
-        _re.compile(r"^privacy policy$", re.I),
+        _re.compile(r"^sign in to your account$", _re.IGNORECASE),
+        _re.compile(r"^sign (in|up|out)$", _re.IGNORECASE),
+        _re.compile(r"^log (in|out)$", _re.IGNORECASE),
+        _re.compile(r"^create (an? )?free account$", _re.IGNORECASE),
+        _re.compile(r"^subscribe to (our )?newsletter$", _re.IGNORECASE),
+        _re.compile(r"^all rights reserved\.?$", _re.IGNORECASE),
+        _re.compile(r"^copyright © \d{4}", _re.IGNORECASE),
+        _re.compile(r"^terms of (service|use)$", _re.IGNORECASE),
+        _re.compile(r"^privacy policy$", _re.IGNORECASE),
     ]
 
     for line in lines:
@@ -846,16 +846,12 @@ def _legacy_clean_markdown(content: str) -> str:
 
         # Match simple boilerplate patterns for short lines
         line_len = len(stripped)
-        if line_len < 150:
-            if any(pat.search(stripped) for pat in cookie_patterns):
-                is_boilerplate = True
-            elif any(pat.search(stripped) for pat in social_patterns):
+        if line_len < 150:  # noqa: SIM102
+            if any(pat.search(stripped) for pat in cookie_patterns) or any(pat.search(stripped) for pat in social_patterns):
                 is_boilerplate = True
 
-        if line_len < 100:
-            if any(pat.search(stripped) for pat in navigation_patterns):
-                is_boilerplate = True
-            elif any(pat.search(stripped) for pat in misc_boilerplate):
+        if line_len < 100:  # noqa: SIM102
+            if any(pat.search(stripped) for pat in navigation_patterns) or any(pat.search(stripped) for pat in misc_boilerplate):
                 is_boilerplate = True
 
         # Check for lines containing mostly links
@@ -865,55 +861,54 @@ def _legacy_clean_markdown(content: str) -> str:
                 text_rem = _re.sub(r"\[([^\]]+)\]\(([^)]+)\)", "", stripped).strip()
                 text_rem_clean = _re.sub(r"[\*\-\|#\s\•\·]+", "", text_rem).strip()
 
-                if len(text_rem_clean) < 5:
-                    if (
-                        any(
-                            lt.lower().strip()
-                            in {
-                                "home",
-                                "about",
-                                "contact",
-                                "pricing",
-                                "blog",
-                                "careers",
-                                "features",
-                                "privacy",
-                                "terms",
-                                "cookies",
-                                "login",
-                                "register",
-                                "sign in",
-                                "sign up",
-                                "facebook",
-                                "twitter",
-                                "linkedin",
-                                "instagram",
-                                "youtube",
-                                "github",
-                                "next",
-                                "previous",
-                                "prev",
-                                "search",
-                                "subscribe",
-                                "newsletter",
-                                "terms of use",
-                                "skip to content",
-                                "skip to main content",
-                                "accessibility",
-                                "live",
-                            }
-                            for lt, _ in links
-                        )
-                        or len(links) >= 2
-                    ):
-                        is_boilerplate = True
+                if len(text_rem_clean) < 5 and (
+                    any(
+                        lt.lower().strip()
+                        in {
+                            "home",
+                            "about",
+                            "contact",
+                            "pricing",
+                            "blog",
+                            "careers",
+                            "features",
+                            "privacy",
+                            "terms",
+                            "cookies",
+                            "login",
+                            "register",
+                            "sign in",
+                            "sign up",
+                            "facebook",
+                            "twitter",
+                            "linkedin",
+                            "instagram",
+                            "youtube",
+                            "github",
+                            "next",
+                            "previous",
+                            "prev",
+                            "search",
+                            "subscribe",
+                            "newsletter",
+                            "terms of use",
+                            "skip to content",
+                            "skip to main content",
+                            "accessibility",
+                            "live",
+                        }
+                        for lt, _ in links
+                    )
+                    or len(links) >= 2
+                ):
+                    is_boilerplate = True
 
         if not is_boilerplate:
             # Clean tracking query parameters from markdown links
             def clean_link(match):
                 anchor = match.group(1)
                 url = match.group(2)
-                if url.startswith("javascript:") or url.startswith("#"):
+                if url.startswith(("javascript:", "#")):
                     return anchor
                 if "?" in url:
                     base, query = url.split("?", 1)
@@ -921,7 +916,7 @@ def _legacy_clean_markdown(content: str) -> str:
                     filtered_params = []
                     for p in params:
                         if "=" in p:
-                            k, v = p.split("=", 1)
+                            k, _v = p.split("=", 1)
                             if k.lower() not in _TRACKING_PARAMS:
                                 filtered_params.append(p)
                         else:

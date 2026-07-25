@@ -12,8 +12,6 @@ Covers:
 
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
 import sys
 from pathlib import Path
 

@@ -67,11 +67,24 @@ output, offset preservation, and version tracking.
 
 from __future__ import annotations
 
+# Hierarchical chunking (P5-06)
+from ..hierarchical_chunker import (
+    HierarchicalChunk,
+    hierarchical_chunks,
+)
+
+# Legacy compatibility — re-export from the old parsing_legacy.py module
+from ..parsing_legacy import (
+    deterministic_chunks,
+    parse_raw_search_response,
+    structural_blocks,
+)
+
 # Public API — interfaces
 from .interfaces import (
     Parser,
-    ParseResult,
     ParserError,
+    ParseResult,
     ParserSelectionError,
     TypedBlock,
     UnsupportedFormatError,
@@ -86,34 +99,21 @@ from .registry import (
     parse,
 )
 
-# Legacy compatibility — re-export from the old parsing_legacy.py module
-from ..parsing_legacy import (
-    deterministic_chunks,
-    parse_raw_search_response,
-    structural_blocks,
-)
-
-# Hierarchical chunking (P5-06)
-from ..hierarchical_chunker import (
-    HierarchicalChunk,
-    hierarchical_chunks,
-)
-
 __all__ = [
-    "Parser",
+    "HierarchicalChunk",
     "ParseResult",
+    "Parser",
     "ParserError",
-    "ParserSelectionError",
     "ParserRegistry",
+    "ParserSelectionError",
     "SelectionRecord",
     "TypedBlock",
     "UnsupportedFormatError",
     "build_default_registry",
     "deterministic_chunks",
     "get_registry",
+    "hierarchical_chunks",
     "parse",
     "parse_raw_search_response",
     "structural_blocks",
-    "hierarchical_chunks",
-    "HierarchicalChunk",
 ]

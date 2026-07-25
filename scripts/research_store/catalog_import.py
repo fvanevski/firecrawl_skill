@@ -20,10 +20,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid4
 
 
@@ -616,7 +617,7 @@ class CatalogImportService:
 
         try:
             source_state_sha256 = _compute_dir_sha256(catalog_root)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             errors.append(f"Failed to compute source state hash: {exc}")
             source_state_sha256 = ""
 
@@ -674,7 +675,7 @@ class CatalogImportService:
                             # Postgres claim_id is UUID
                             cur.execute("SELECT claim_id::text FROM research_claims WHERE claim_id::text = ANY(%s)", (claim_ids,))
                             existing_claims.update(row[0] for row in cur.fetchall())
-                        except Exception:
+                        except Exception:  # noqa: BLE001,S110
                             pass
 
                     assess_ids = [
@@ -687,7 +688,7 @@ class CatalogImportService:
                         # But wait, audit_assessments doesn't have an "assessment_id". It has target_id and target_hash.
                         # We'll just map by checking if there's any assessment for this target_id and target_hash, but for now we skip DB hydrate for assessment since we don't have a reliable primary key mapping.
                         pass
-            except Exception:
+            except Exception:  # noqa: BLE001,S110
                 # Fallback to empty sets if DB fails or mock uow is used
                 pass
 
@@ -747,9 +748,9 @@ class CatalogImportService:
         record: CatalogRecord,
         existing_runs: set[str],
         existing_invocations: set[str],
-        existing_events: set[str] = None,
-        existing_claims: set[str] = None,
-        existing_assessments: set[str] = None,
+        existing_events: set[str] | None = None,
+        existing_claims: set[str] | None = None,
+        existing_assessments: set[str] | None = None,
     ) -> MappingResult:
         existing_events = existing_events or set()
         existing_claims = existing_claims or set()

@@ -1,14 +1,13 @@
-#!/usr/bin/env python3
 # classifier.py — Automated pre-scrape candidate classification and schema selection
 #
 # Usage:
 #   python3 classifier.py <scratch_dir_or_meta_json> [--schema-profile ecommerce|forum]
 #
 
+import argparse
+import json
 import os
 import sys
-import json
-import argparse
 
 # ── Heuristic Profiles ──────────────────────────────────────────────────────
 PROFILES = {
@@ -382,7 +381,7 @@ def process_directory(directory, chosen_profile=None):
     try:
         with open(source_file) as f:
             data = json.load(f)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"❌ Error reading metadata file: {e}", file=sys.stderr)
         sys.exit(1)
         

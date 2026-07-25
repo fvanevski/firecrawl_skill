@@ -1,17 +1,15 @@
 import importlib.util
-from importlib.machinery import SourceFileLoader
-from concurrent.futures import ThreadPoolExecutor
 import json
 import os
-from pathlib import Path
 import subprocess
-import sys
 import textwrap
+from concurrent.futures import ThreadPoolExecutor
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 from research_store.semantic_service import SemanticCallService
-
 
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -195,7 +193,7 @@ def fake_cli(tmp_path):
 
 
 def run_script(name, *args, env=None):
-    return subprocess.run(
+    return subprocess.run(  # noqa: PLW1510
         [str(SCRIPTS / name), *map(str, args)],
         text=True,
         capture_output=True,
@@ -882,7 +880,7 @@ def test_v4_snapshot_survives_scratch_body_removal(fake_cli):
 
 
 def test_v4_ambiguous_url_requires_exact_candidate_reference(fake_cli):
-    env, tmp_path = fake_cli
+    env, _tmp_path = fake_cli
     run_id = run_script("frun", "start", "general duplicate source research", env=env).stdout.strip()
     scraped = run_script("fscrape", "https://example.com/same", "https://example.com/same", "--research-run-id", run_id, env=env)
     assert scraped.returncode == 0, scraped.stderr
@@ -949,7 +947,7 @@ def test_v5_normalizes_model_packet_paths_to_stable_evidence_ids():
 
 
 def test_v4_schema_transition_discards_old_catalog_without_backup(fake_cli):
-    env, tmp_path = fake_cli
+    env, _tmp_path = fake_cli
     root = Path(env["FIRECRAWL_CATALOG_DIR"])
     invocations_dir = root / "invocations"
     invocations_dir.mkdir(parents=True)
@@ -1041,7 +1039,7 @@ def test_semantic_gateway_persists_success_and_redacts_sensitive_data(monkeypatc
 
     class Response:
         status = 200
-        headers = {"x-request-id": "req-secret"}
+        headers = {"x-request-id": "req-secret"}  # noqa: RUF012
         def __init__(self, payload): self.payload = payload
         def __enter__(self): return self
         def __exit__(self, *_): return False
@@ -1090,7 +1088,7 @@ def test_semantic_gateway_persists_failure_paths(monkeypatch, failure):
 
     class Response:
         status = 200
-        headers = {}
+        headers = {}  # noqa: RUF012
         def __init__(self, payload): self.payload = payload
         def __enter__(self): return self
         def __exit__(self, *_): return False
@@ -1131,7 +1129,7 @@ def test_semantic_fallback_is_explicit_and_keeps_both_calls(monkeypatch):
 
     class Response:
         status = 200
-        headers = {}
+        headers = {}  # noqa: RUF012
         def __init__(self, payload): self.payload = payload
         def __enter__(self): return self
         def __exit__(self, *_): return False
@@ -1300,11 +1298,11 @@ def test_v5_candidate_triage_rejects_irrelevant_volume(monkeypatch):
         {"url": "https://apnews.com/article/iran", "title": "US and Iran conflict update", "snippet": "July reporting", "rank": 2},
     ]
     class Result:
-        value = {"decisions": [
+        value = {"decisions": [  # noqa: RUF012
             {"candidate_id": "", "relevance": "unrelated", "source_suitability": "unsuitable", "subquestions": [], "freshness": "unknown", "independence": "unknown", "scrape": False, "priority": 0, "rationale": "vehicle lookup"},
             {"candidate_id": "", "relevance": "high", "source_suitability": "authoritative_secondary", "subquestions": ["latest developments"], "freshness": "likely current", "independence": "independent reporting", "scrape": True, "priority": 95, "rationale": "directly addresses objective"},
         ]}
-        provenance = {"provider": "local"}; attempts = []; error = ""
+        provenance = {"provider": "local"}; attempts = []; error = ""  # noqa: RUF012
     def fake_structured(*args, **kwargs):
         cards = json.loads(args[3].split("Candidate cards:\n", 1)[1])
         value = json.loads(json.dumps(Result.value))

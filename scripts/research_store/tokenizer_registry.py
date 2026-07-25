@@ -42,8 +42,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ def _try_tiktoken(name: str) -> Tokenizer | None:
             if hasattr(tiktoken, "__version__")
             else "latest",
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug("tiktoken fallback for %s: %s", name, exc)
         return None
 

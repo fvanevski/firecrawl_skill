@@ -30,20 +30,19 @@ _SCRIPT_DIR = __file__.rsplit("/", 1)[0] or "."
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-import shadow_comparison  # noqa: E402
-from shadow_comparison import (  # noqa: E402,F401
+import shadow_comparison
+from shadow_comparison import (  # noqa: F401
     BenchmarkObjective,
     ComparisonResult,
+    CoverageLedResult,
     Divergence,
     LegacyResult,
-    CoverageLedResult,
     ShadowComparisonEngine,
+    fsearch_smart_legacy_policy,
     generate_report,
     list_divergences,
-    fsearch_smart_legacy_policy,
     research_orchestrator_coverage_led_policy,
 )
-
 
 # ===================================================================
 # Fixtures
@@ -499,8 +498,8 @@ class TestCLI(unittest.TestCase):
 
     def test_no_command_shows_help(self):
         """Test that no command prints help and returns 1."""
-        import io
         import contextlib
+        import io
 
         f = io.StringIO()
         with contextlib.redirect_stdout(f):
@@ -509,8 +508,8 @@ class TestCLI(unittest.TestCase):
 
     def test_run_live_adapters_with_manifest(self):
         """Test CLI run command executing live adapters."""
-        import io
         import contextlib
+        import io
 
         f = io.StringIO()
         with contextlib.redirect_stdout(f):

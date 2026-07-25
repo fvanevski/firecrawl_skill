@@ -1,23 +1,24 @@
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installation.
-
-from copy import deepcopy
 import json
-from pathlib import Path
 import sys
+from copy import deepcopy
+from pathlib import Path
 from uuid import UUID
 
 import pytest
-
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_domain import DomainValidationError, ValidationContext, dumps, load_model
-from research_domain.registry import COMPATIBILITY_POLICY, MODEL_BY_VERSION, schema_registry, serialize_model
-
+from research_domain.registry import (
+    COMPATIBILITY_POLICY,
+    MODEL_BY_VERSION,
+    schema_registry,
+    serialize_model,
+)
 
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
 SCHEMAS = ROOT / "schemas" / "research-workflow"

@@ -64,7 +64,6 @@ recovery boundary or apply a forward repair migration.
 
 from alembic import op
 
-
 revision = "0026_document_derivations"
 down_revision = "0025_hierarchical_chunks"
 branch_labels = None

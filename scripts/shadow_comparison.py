@@ -30,9 +30,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid5
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ class BenchmarkObjective:
     expected_behavior: str
 
     @classmethod
-    def from_dict(cls, data: dict) -> "BenchmarkObjective":
+    def from_dict(cls, data: dict) -> BenchmarkObjective:
         required = {
             "objective_id",
             "objective",
@@ -84,7 +85,7 @@ class BenchmarkObjective:
         )
 
     @classmethod
-    def load_manifest(cls, manifest_path: str | Path) -> list["BenchmarkObjective"]:
+    def load_manifest(cls, manifest_path: str | Path) -> list[BenchmarkObjective]:
         """Load benchmark objectives from a manifest JSON file.
 
         Args:
@@ -151,7 +152,7 @@ class LegacyResult:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "LegacyResult":
+    def from_dict(cls, data: dict) -> LegacyResult:
         filtered = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         if "extracted_urls" in filtered and isinstance(filtered["extracted_urls"], list):
             filtered["extracted_urls"] = tuple(filtered["extracted_urls"])
@@ -208,7 +209,7 @@ class CoverageLedResult:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "CoverageLedResult":
+    def from_dict(cls, data: dict) -> CoverageLedResult:
         filtered = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         if "extracted_urls" in filtered and isinstance(filtered["extracted_urls"], list):
             filtered["extracted_urls"] = tuple(filtered["extracted_urls"])
@@ -241,7 +242,7 @@ class Divergence:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Divergence":
+    def from_dict(cls, data: dict) -> Divergence:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
@@ -286,13 +287,13 @@ class ComparisonResult:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ComparisonResult":
+    def from_dict(cls, data: dict) -> ComparisonResult:
         """Reconstruct a ``ComparisonResult`` from a serialized dict.
 
         Strictly validates that required schema keys exist.
         """
         if not isinstance(data, dict):
-            raise ValueError("ComparisonResult data must be a dict")
+            raise ValueError("ComparisonResult data must be a dict")  # noqa: TRY004
         required = {"objective_id", "legacy", "coverage_led"}
         missing = required - set(data)
         if missing:
@@ -536,10 +537,7 @@ class ShadowComparisonEngine:
         # 4. Extracted and Candidate URL set consistency
         if len(legacy.extracted_urls) > len(legacy.candidate_urls) and legacy.candidate_urls:
             return False
-        if len(coverage_led.extracted_urls) > len(coverage_led.candidate_urls) and coverage_led.candidate_urls:
-            return False
-
-        return True
+        return not (len(coverage_led.extracted_urls) > len(coverage_led.candidate_urls) and coverage_led.candidate_urls)
 
     def _compare_results(
         self,
@@ -731,12 +729,7 @@ class ShadowComparisonEngine:
         """Check if a result represents false completion."""
         if result.final_state != "completed":
             return False
-        if (
-            hasattr(result, "coverage_status")
-            and result.coverage_status != "sufficient"
-        ):
-            return True
-        return False
+        return bool(hasattr(result, "coverage_status") and result.coverage_status != "sufficient")
 
     def _synthetic_legacy_result(self, objective: BenchmarkObjective) -> LegacyResult:
         """Generate a synthetic legacy result for dry-run comparison.

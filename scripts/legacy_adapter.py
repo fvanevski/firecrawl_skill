@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """CLI bridge used by legacy wrappers at their completed-decision boundary."""
 
 from __future__ import annotations

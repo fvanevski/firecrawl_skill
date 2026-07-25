@@ -1,11 +1,11 @@
-import sys
 import os
-import pytest
+import sys
 
 # Ensure our local firecrawl scripts directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from classifier import classify_target, PROFILES
+from classifier import PROFILES, classify_target
+
 
 def test_ecommerce_url_patterns():
     # Conforming URL structures should trigger ecommerce candidate status
@@ -117,7 +117,7 @@ def test_academic_debate_patterns():
 
 def test_schema_robustness_definitions():
     # Test that JSON Schema shapes are fully defined and robust
-    for name, config in PROFILES.items():
+    for config in PROFILES.values():
         schema = config.get("target_schema")
         assert isinstance(schema, dict)
         assert schema.get("type") == "object"
@@ -126,7 +126,7 @@ def test_schema_robustness_definitions():
         
         # Verify defensive "null" typing is used to prevent extraction hallucination
         properties = schema["properties"]
-        for prop_name, prop_def in properties.items():
+        for prop_def in properties.values():
             prop_type = prop_def.get("type")
             # If it has a type field, it should allow null (as a list of types) or be an array
             if isinstance(prop_type, list):

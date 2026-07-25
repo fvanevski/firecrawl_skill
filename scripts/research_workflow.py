@@ -1,16 +1,12 @@
-#!/usr/bin/env python3
 """LLM planning and evidence organization for Firecrawl smart research."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import math
-import os
 from urllib.parse import urlsplit
 
 from model_gateway import call_structured, estimate_tokens
-
 
 BRIEF_SCHEMA = {
     "type": "object", "additionalProperties": False,

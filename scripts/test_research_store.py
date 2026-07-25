@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
+import sys
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-import sys
 from uuid import uuid4
 
 import pytest
@@ -719,7 +717,7 @@ def test_search_assets_with_run_id_persists_execution_and_events():
         embedder=None,
     )
 
-    execution, results = service.search_assets(
+    _execution, results = service.search_assets(
         "persistence", candidate_limit=5, run_id=run_id, requested_mode="lexical"
     )
     assert len(results) == 1
@@ -873,7 +871,7 @@ def test_search_assets_cli_output_format():
         embedder=None,
     )
 
-    execution, results = service.search_assets(
+    execution, _results = service.search_assets(
         "cli", candidate_limit=5, requested_mode="lexical"
     )
 
@@ -903,8 +901,9 @@ def test_search_assets_cli_output_format():
 
 def test_retrieval_stage_trace_logging():
     """Verify that all ranking stages are logged, logging failure is fatal, and rejection reasons are set."""
-    import pytest
     from uuid import uuid4
+
+    import pytest
 
     candidate_id = uuid4()
     candidate_id_2 = uuid4()
@@ -962,7 +961,7 @@ def test_retrieval_stage_trace_logging():
 
     # Should crash because log_retrieval_batch raises RuntimeError
     with pytest.raises(RuntimeError, match="Intentional logging failure"):
-        execution, results = service.search_assets(
+        _execution, _results = service.search_assets(
             "trace", candidate_limit=1, run_id=run_id, requested_mode="lexical"
         )
 
@@ -1065,7 +1064,7 @@ def test_get_retrieval_trace_api():
         embedder=None,
     )
 
-    execution, results = service.search_assets(
+    _execution, _results = service.search_assets(
         "trace", candidate_limit=1, run_id=run_id, requested_mode="lexical"
     )
 
@@ -1290,7 +1289,7 @@ def test_reranked_stage_events_with_fused_intermediate():
         reranker=MockReranker(),
     )
 
-    execution, results = service.search_assets(
+    _execution, results = service.search_assets(
         "rerank test", candidate_limit=1, run_id=run_id, requested_mode="semantic"
     )
 

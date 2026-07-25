@@ -1,5 +1,6 @@
 import re
 
+
 def clean_markdown(content):
     if not content:
         return ""
@@ -16,41 +17,41 @@ def clean_markdown(content):
 
     # Regex patterns for various boilerplate elements
     cookie_patterns = [
-        re.compile(r'\buse cookies\b', re.I),
-        re.compile(r'\bcookie policy\b', re.I),
-        re.compile(r'\baccept (all )?cookies\b', re.I),
-        re.compile(r'\bprivacy preference\b', re.I),
-        re.compile(r'\bmanage consent\b', re.I),
-        re.compile(r'\bcookie settings\b', re.I),
+        re.compile(r'\buse cookies\b', re.IGNORECASE),
+        re.compile(r'\bcookie policy\b', re.IGNORECASE),
+        re.compile(r'\baccept (all )?cookies\b', re.IGNORECASE),
+        re.compile(r'\bprivacy preference\b', re.IGNORECASE),
+        re.compile(r'\bmanage consent\b', re.IGNORECASE),
+        re.compile(r'\bcookie settings\b', re.IGNORECASE),
     ]
 
     navigation_patterns = [
-        re.compile(r'^\*?\s*\[?skip to (main )?content\b', re.I),
-        re.compile(r'^\*?\s*\[?toggle navigation\b', re.I),
-        re.compile(r'^\*?\s*\[?menu\b', re.I),
-        re.compile(r'^\*?\s*\[?navigation\b', re.I),
-        re.compile(r'^\*?\s*\[?back to top\b', re.I),
-        re.compile(r'^\*?\s*\[?go to home\b', re.I),
-        re.compile(r'^\*?\s*\[?site map\b', re.I),
-        re.compile(r'^\*?\s*\[?accessibility( link)?\b', re.I),
-        re.compile(r'^\*?\s*\[?live\b', re.I),
+        re.compile(r'^\*?\s*\[?skip to (main )?content\b', re.IGNORECASE),
+        re.compile(r'^\*?\s*\[?toggle navigation\b', re.IGNORECASE),
+        re.compile(r'^\*?\s*\[?menu\b', re.IGNORECASE),
+        re.compile(r'^\*?\s*\[?navigation\b', re.IGNORECASE),
+        re.compile(r'^\*?\s*\[?back to top\b', re.IGNORECASE),
+        re.compile(r'^\*?\s*\[?go to home\b', re.IGNORECASE),
+        re.compile(r'^\*?\s*\[?site map\b', re.IGNORECASE),
+        re.compile(r'^\*?\s*\[?accessibility( link)?\b', re.IGNORECASE),
+        re.compile(r'^\*?\s*\[?live\b', re.IGNORECASE),
     ]
 
     social_patterns = [
-        re.compile(r'\bshare on (facebook|twitter|linkedin|reddit|pinterest|pocket|whatsapp)\b', re.I),
-        re.compile(r'^follow (us|me) on\b', re.I),
+        re.compile(r'\bshare on (facebook|twitter|linkedin|reddit|pinterest|pocket|whatsapp)\b', re.IGNORECASE),
+        re.compile(r'^follow (us|me) on\b', re.IGNORECASE),
     ]
 
     misc_boilerplate = [
-        re.compile(r'^sign in to your account$', re.I),
-        re.compile(r'^sign (in|up|out)$', re.I),
-        re.compile(r'^log (in|out)$', re.I),
-        re.compile(r'^create (an? )?free account$', re.I),
-        re.compile(r'^subscribe to (our )?newsletter$', re.I),
-        re.compile(r'^all rights reserved\.?$', re.I),
-        re.compile(r'^copyright © \d{4}', re.I),
-        re.compile(r'^terms of (service|use)$', re.I),
-        re.compile(r'^privacy policy$', re.I),
+        re.compile(r'^sign in to your account$', re.IGNORECASE),
+        re.compile(r'^sign (in|up|out)$', re.IGNORECASE),
+        re.compile(r'^log (in|out)$', re.IGNORECASE),
+        re.compile(r'^create (an? )?free account$', re.IGNORECASE),
+        re.compile(r'^subscribe to (our )?newsletter$', re.IGNORECASE),
+        re.compile(r'^all rights reserved\.?$', re.IGNORECASE),
+        re.compile(r'^copyright © \d{4}', re.IGNORECASE),
+        re.compile(r'^terms of (service|use)$', re.IGNORECASE),
+        re.compile(r'^privacy policy$', re.IGNORECASE),
     ]
 
     for line in lines:
@@ -74,16 +75,12 @@ def clean_markdown(content):
 
         # Match simple boilerplate patterns for short lines
         line_len = len(stripped)
-        if line_len < 150:
-            if any(pat.search(stripped) for pat in cookie_patterns):
-                is_boilerplate = True
-            elif any(pat.search(stripped) for pat in social_patterns):
+        if line_len < 150:  # noqa: SIM102
+            if any(pat.search(stripped) for pat in cookie_patterns) or any(pat.search(stripped) for pat in social_patterns):
                 is_boilerplate = True
 
-        if line_len < 100:
-            if any(pat.search(stripped) for pat in navigation_patterns):
-                is_boilerplate = True
-            elif any(pat.search(stripped) for pat in misc_boilerplate):
+        if line_len < 100:  # noqa: SIM102
+            if any(pat.search(stripped) for pat in navigation_patterns) or any(pat.search(stripped) for pat in misc_boilerplate):
                 is_boilerplate = True
 
         # Check for lines containing mostly links (link-to-text ratio) or navigation blocks
@@ -116,7 +113,7 @@ def clean_markdown(content):
                 url = match.group(2)
 
                 # Skip javascript and simple anchor links
-                if url.startswith("javascript:") or url.startswith("#"):
+                if url.startswith(("javascript:", "#")):
                     return anchor
 
                 # Filter out tracking params
@@ -126,7 +123,7 @@ def clean_markdown(content):
                     filtered_params = []
                     for p in params:
                         if "=" in p:
-                            k, v = p.split("=", 1)
+                            k, _v = p.split("=", 1)
                             if k.lower() not in {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "ref", "ref_", "spm", "fbclid", "gclid"}:
                                 filtered_params.append(p)
                         else:

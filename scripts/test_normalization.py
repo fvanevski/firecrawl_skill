@@ -22,8 +22,6 @@ Covers:
 
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -34,18 +32,17 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store.domain import (
-    NormalizedBlock,
-    TransformationRecord,
     VALID_NORMALIZATION_DISPOSITIONS,
     VALID_NORMALIZATION_RULE_IDS,
+    NormalizedBlock,
+    TransformationRecord,
 )
 from research_store.normalization import (
+    NORMALIZATION_VERSION,
     NormalizationResult,
     NormalizationService,
-    NORMALIZATION_VERSION,
 )
 from research_store.parsing.interfaces import TypedBlock
-
 
 # ---------------------------------------------------------------------------
 # Domain model tests

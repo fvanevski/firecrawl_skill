@@ -17,8 +17,6 @@ Tests cover:
 
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
 import os
 import sys
 from pathlib import Path
@@ -36,7 +34,6 @@ from research_store.domain import (
 from research_store.quality_config import QualityConfig
 from research_store.quality_evaluator import evaluate_quality
 from research_store.quality_service import QualityService
-
 
 # -----------------------------------------------------------------------
 # Fixtures
@@ -720,7 +717,7 @@ class TestQualityServiceIntegration:
         config = QualityConfig(anti_bot_hard_fail=True)
         quality = QualityService(mock_service, config=config)
 
-        with pytest.raises(
+        with pytest.raises(  # noqa: B017
             Exception
         ):  # Could be ExtractionAttemptError or QualityEvaluationError
             quality.auto_evaluate(uuid4())
@@ -737,7 +734,7 @@ class TestQualityServiceIntegration:
         config = QualityConfig(anti_bot_hard_fail=True)
         quality = QualityService(mock_service, config=config)
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             quality.auto_evaluate(uuid4())
         # Should have attempted to read the blob
         mock_service.blob_store.get.assert_called_once()

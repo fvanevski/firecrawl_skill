@@ -76,7 +76,6 @@ recovery boundary or apply a forward repair migration.
 
 from alembic import op
 
-
 revision = "0024_norm_blocks_transform"
 down_revision = "0023_parser_version"
 branch_labels = None

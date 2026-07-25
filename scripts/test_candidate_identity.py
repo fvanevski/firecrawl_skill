@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import replace
-import hashlib
 import json
 import os
-from pathlib import Path
 import sys
-from uuid import UUID, uuid4
+from dataclasses import replace
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -17,7 +16,6 @@ from research_store.config import StoreConfig
 from research_store.container import build_run_service
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 from research_store.url import canonicalize_candidate_url, redact_sensitive_url
-
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 

@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .interfaces import ParseResult, Parser, TypedBlock
+from .interfaces import Parser, ParseResult, TypedBlock
 
 
 class JsonParser(Parser):

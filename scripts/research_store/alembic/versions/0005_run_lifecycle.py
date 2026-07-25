@@ -2,7 +2,6 @@
 
 from alembic import op
 
-
 revision = "0005_run_lifecycle"
 down_revision = "0004_drop_legacy_manifest_key"
 branch_labels = None

@@ -15,16 +15,16 @@ This module tests:
 from __future__ import annotations
 
 import hashlib
-import pytest
 from pathlib import Path
 
+import pytest
 from research_store.config import StoreConfig
 from research_store.domain import Block, Chunk
 from research_store.hierarchical_chunker import (
     HierarchicalChunk,
-    hierarchical_chunks,
     _classify_block,
     _validate_chunks,
+    hierarchical_chunks,
 )
 from research_store.parsing import structural_blocks
 from research_store.parsing_legacy import (
@@ -37,7 +37,6 @@ from research_store.tokenizer_registry import (
     get_tokenizer,
     registry_fingerprint,
 )
-
 
 # ---------------------------------------------------------------------------
 # Tokenizer registry tests
@@ -730,7 +729,7 @@ class TestMigration:
         import importlib.util
 
         try:
-            import alembic
+            import alembic  # noqa: F401
         except ImportError:
             pytest.skip("alembic not installed")
 

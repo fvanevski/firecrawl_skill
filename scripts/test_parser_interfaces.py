@@ -26,6 +26,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+from research_store.domain import Block
 from research_store.parsing import (
     ParseResult,
     ParserRegistry,
@@ -36,14 +37,12 @@ from research_store.parsing import (
     get_registry,
     parse,
 )
-from research_store.parsing.interfaces import Parser
 from research_store.parsing.extensions import (
     CodeParser,
     LegalDocumentParser,
     PdfParser,
 )
-from research_store.domain import Block
-
+from research_store.parsing.interfaces import Parser
 
 # ---------------------------------------------------------------------------
 # Adapter contract tests
@@ -159,7 +158,7 @@ code block
 """
         result = parser.parse(source)
         assert result.success
-        types = set(b.block_type for b in result.blocks)
+        types = {b.block_type for b in result.blocks}
         assert "heading" in types
         assert "paragraph" in types
         assert "list_item" in types
@@ -781,8 +780,8 @@ class TestDeterministicChunkIdentity:
     """Tests that chunks remain deterministic via legacy path."""
 
     def test_same_input_same_chunks(self):
-        from research_store.parsing import deterministic_chunks
         from research_store.domain import Block
+        from research_store.parsing import deterministic_chunks
 
         blocks = [
             Block(0, "heading", "Title"),
@@ -972,8 +971,8 @@ class TestBackwardCompatibility:
 
     def test_deterministic_chunks_still_works(self):
         """Legacy deterministic_chunks() must still function."""
-        from research_store.parsing import deterministic_chunks
         from research_store.domain import Block
+        from research_store.parsing import deterministic_chunks
 
         blocks = [
             Block(0, "heading", "Title"),

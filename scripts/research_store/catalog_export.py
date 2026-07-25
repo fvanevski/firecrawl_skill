@@ -8,25 +8,25 @@ Catalog files are derived output and are never read as workflow authority.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
 import ctypes
 import fcntl
 import gzip
-from hashlib import sha256
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import tempfile
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+from datetime import datetime
+from hashlib import sha256
+from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 from .blob import ContentAddressedBlobStore
 from .invocation_events import _sanitize
-
 
 EXPORT_SCHEMA_VERSION = "catalog-export-v1"
 EXPORT_SCHEMA_REVISION = 1
@@ -729,11 +729,11 @@ class CatalogExportService:
             files = self._stage_tree(target, write)
             self._record_export(run_id, projection, target, "catalog_v5_run", source_hash, "complete", attempt_key)
             status = "complete"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             error = f"{type(exc).__name__}: {exc}"
             try:
                 self._record_export(run_id, projection, target, "catalog_v5_run", source_hash, "failed", attempt_key, error)
-            except Exception as record_exc:
+            except Exception as record_exc:  # noqa: BLE001
                 error += f"; failure recording failed: {type(record_exc).__name__}: {record_exc}"
             status = "failed"
         return ExportRunResult(run, invocations, events, snapshots, claims, assessments, source_hash, EXPORT_SCHEMA_VERSION, target, status, files, error)
@@ -751,11 +751,11 @@ class CatalogExportService:
             files = self._stage_tree(target, writer_factory(projection, records))
             self._record_export(run_id, projection, target, export_type, source_hash, "complete", attempt_key)
             return CatalogExportResult(export_id, source_hash, EXPORT_SCHEMA_VERSION, "run", str(run_id), target, "complete", files)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             error = f"{type(exc).__name__}: {exc}"
             try:
                 self._record_export(run_id, projection, target, export_type, source_hash, "failed", attempt_key, error)
-            except Exception as record_exc:
+            except Exception as record_exc:  # noqa: BLE001
                 error += f"; failure recording failed: {type(record_exc).__name__}: {record_exc}"
             return CatalogExportResult(export_id, source_hash, EXPORT_SCHEMA_VERSION, "run", str(run_id), target, "failed", [], error)
 

@@ -4,17 +4,17 @@ from .acquisition_service import AcquisitionService, FirecrawlSearchAdapter
 from .compat_export import CompatibilityExportResult, SearchCompatibilityExporter
 from .config import StoreConfig
 from .domain import (
+    VALID_NORMALIZATION_DISPOSITIONS,
+    VALID_NORMALIZATION_RULE_IDS,
     BlobReference,
     ExtractionAttempt,
     ExtractionQualityMetrics,
     NormalizedBlock,
     TransformationRecord,
-    VALID_NORMALIZATION_DISPOSITIONS,
-    VALID_NORMALIZATION_RULE_IDS,
 )
+from .execution_policy import ExecutionModePolicy
 from .extraction_repository import ExtractionAttemptRepository
 from .extraction_service import ExtractionError, ExtractionService
-from .execution_policy import ExecutionModePolicy
 from .legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from .orchestrator import (
     OrchestratorConfig,
@@ -35,12 +35,14 @@ from .stages import (
 )
 
 __all__ = [
+    "VALID_NORMALIZATION_DISPOSITIONS",
+    "VALID_NORMALIZATION_RULE_IDS",
     "AcquisitionService",
+    "AdapterMode",
     "BlobReference",
     "CompatibilityExportResult",
     "ContextKeys",
     "CorpusService",
-    "AdapterMode",
     "ExecutionModePolicy",
     "ExtractionAttempt",
     "ExtractionAttemptRepository",
@@ -56,10 +58,6 @@ __all__ = [
     "QualityEvaluationError",
     "QualityService",
     "ResearchOrchestrator",
-    "TransformationRecord",
-    "VALID_NORMALIZATION_DISPOSITIONS",
-    "VALID_NORMALIZATION_RULE_IDS",
-    "evaluate_quality",
     "ResearchRunService",
     "SearchCompatibilityExporter",
     "SemanticCallService",
@@ -67,4 +65,6 @@ __all__ = [
     "StageOutcome",
     "StageResult",
     "StoreConfig",
+    "TransformationRecord",
+    "evaluate_quality",
 ]

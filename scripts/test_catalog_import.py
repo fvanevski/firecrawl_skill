@@ -21,9 +21,9 @@ from unittest.mock import MagicMock
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPTS))  # noqa: E402
+sys.path.insert(0, str(SCRIPTS))
 
-from research_store.catalog_import import (  # noqa: E402
+from research_store.catalog_import import (
     CATALOG_ASSESSMENT_TYPE,
     CATALOG_EVENT_TYPE,
     CATALOG_INVOCATION_TYPE,
@@ -33,12 +33,11 @@ from research_store.catalog_import import (  # noqa: E402
     CatalogRootNotFound,
     ReconciliationReport,
     _compute_dir_sha256,
-    _is_valid_run_id,
-    _is_valid_invocation_id,
     _is_valid_assessment_id,
     _is_valid_event_id,
+    _is_valid_invocation_id,
+    _is_valid_run_id,
 )
-
 
 # ---------------------------------------------------------------------------
 # Validation helpers

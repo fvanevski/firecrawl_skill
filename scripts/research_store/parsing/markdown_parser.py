@@ -28,8 +28,7 @@ from __future__ import annotations
 
 import re
 
-from .interfaces import ParseResult, Parser, TypedBlock
-
+from .interfaces import Parser, ParseResult, TypedBlock
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")

@@ -1,12 +1,11 @@
-#!/usr/bin/env python3
 """Replay recorded Firecrawl CLI responses without network access."""
 
 from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
 def load_fixture(path: str | Path) -> dict:

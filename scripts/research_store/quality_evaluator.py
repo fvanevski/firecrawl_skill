@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import html
 import re
-from typing import Iterable
+from collections.abc import Iterable
 
 from .domain import ExtractionQualityMetrics
 from .quality_config import QualityConfig
@@ -220,7 +220,7 @@ def _count_tables(text: str, raw_text: str) -> int:
     i = 0
     while i < len(lines) - 1:
         # Check for header line (has | and non-pipe content)
-        if "|" in lines[i]:
+        if "|" in lines[i]:  # noqa: SIM102
             # Check for separator line (only dashes, pipes, spaces)
             if i + 1 < len(lines):
                 sep = lines[i + 1].strip()
@@ -336,9 +336,7 @@ def _check_title_present(text: str, raw_text: str, declared_title: str | None) -
         return True
     # Check for HTML h1
     html_h1 = re.findall(r"<h1[^>]*>([^<]+)</h1>", raw_text, re.IGNORECASE)
-    if html_h1:
-        return True
-    return False
+    return bool(html_h1)
 
 
 def _check_content_type_consistency(
@@ -362,7 +360,7 @@ def _check_content_type_consistency(
     expected = (expected_mime_type or "").lower().strip()
 
     # If declared is HTML but content is clearly plain text.
-    if "text/html" in declared and _is_plain_text_heuristic(raw_text):
+    if "text/html" in declared and _is_plain_text_heuristic(raw_text):  # noqa: SIM102
         if expected and "text/html" not in expected:
             return False
     # If declared is plain text but content has HTML structure

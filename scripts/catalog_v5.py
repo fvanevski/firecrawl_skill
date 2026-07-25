@@ -1,26 +1,25 @@
-#!/usr/bin/env python3
 """Catalog v5: immutable observations plus staged, cited LLM assessments."""
 
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
-from datetime import datetime, timezone
 import fcntl
 import gzip
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import shutil
+import sys
 import tempfile
 import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from model_gateway import call_structured, estimate_tokens
-
 
 SCHEMA_VERSION = 5
 SUPPORTED_SCHEMA_VERSIONS = {5}
@@ -206,9 +205,9 @@ def collect_date_signals(entry, acquired_at=None):
     evidence += " " + " ".join(item.get("text", "") for item in entry.get("excerpts", []))
     for match in re.finditer(r"(?<!\d)(20\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])(?!\d)", evidence):
         signals.append({"value": match.group(0), "location": "visible_text", "signal_type": "absolute_text", "parser_confidence": "medium"})
-    for match in re.finditer(r"\b(?:last updated|updated|published)\s+(?:on\s+)?([A-Z][a-z]+\s+\d{1,2},\s+20\d{2})", evidence, re.I):
+    for match in re.finditer(r"\b(?:last updated|updated|published)\s+(?:on\s+)?([A-Z][a-z]+\s+\d{1,2},\s+20\d{2})", evidence, re.IGNORECASE):
         signals.append({"value": match.group(1), "location": "visible_text", "signal_type": "labeled_text", "parser_confidence": "medium"})
-    for match in re.finditer(r"\b(\d{1,3})\s+(hour|day|week)s?\s+ago\b", evidence, re.I):
+    for match in re.finditer(r"\b(\d{1,3})\s+(hour|day|week)s?\s+ago\b", evidence, re.IGNORECASE):
         signals.append({"value": match.group(0), "location": "visible_text", "signal_type": "relative_text", "anchor": acquired_at, "parser_confidence": "medium"})
     unique = []
     for signal in signals:
@@ -226,7 +225,7 @@ def source_hints(url):
 
 
 def constraint_domains(query):
-    return [value.lower().strip(". )\"") for value in re.findall(r"\bsite:([^\s]+)", query or "", re.I)]
+    return [value.lower().strip(". )\"") for value in re.findall(r"\bsite:([^\s]+)", query or "", re.IGNORECASE)]
 
 
 def host_matches(host, domain):
@@ -254,8 +253,8 @@ def requested_window(input_data):
     tbs = str(input_data.get("tbs", "")).lower()
     match = re.search(r"qdr:([dwmy])", tbs)
     if match: return {"d": 1, "w": 7, "m": 31, "y": 366}[match.group(1)]
-    match = re.search(r"\b(?:past|last|previous|latest)\s+(\d{1,3})\s+days?\b", text, re.I)
-    return int(match.group(1)) if match else 1 if re.search(r"\b(today|past day|last day)\b", text, re.I) else 7 if re.search(r"\b(past week|last week)\b", text, re.I) else None
+    match = re.search(r"\b(?:past|last|previous|latest)\s+(\d{1,3})\s+days?\b", text, re.IGNORECASE)
+    return int(match.group(1)) if match else 1 if re.search(r"\b(today|past day|last day)\b", text, re.IGNORECASE) else 7 if re.search(r"\b(past week|last week)\b", text, re.IGNORECASE) else None
 
 
 def classify_error(error):
@@ -926,9 +925,9 @@ def export_invocation_to_filesystem(invocation_id, run_id=None):
     Returns:
         Path to the written filesystem record, or None if export failed.
     """
+    from research_store.config import StoreConfig
     from research_store.container import build_run_service
     from research_store.invocation_catalog import InvocationCatalogService
-    from research_store.config import StoreConfig
 
     if not enabled():
         return None
@@ -949,7 +948,7 @@ def export_invocation_to_filesystem(invocation_id, run_id=None):
         path = invocation_path(invocation_id)
         atomic_write(path, catalog_record)
         return str(path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"WARNING: filesystem export failed: {exc}", file=sys.stderr)
         return None
 
@@ -967,9 +966,9 @@ def export_run_events_to_filesystem(run_id):
     Returns:
         Path to the written events file, or None if export failed.
     """
+    from research_store.config import StoreConfig
     from research_store.container import build_run_service
     from research_store.invocation_catalog import InvocationCatalogService
-    from research_store.config import StoreConfig
 
     if not enabled():
         return None
@@ -1002,7 +1001,7 @@ def export_run_events_to_filesystem(run_id):
                 handle.write(json.dumps(entry, sort_keys=True) + "\n")
                 handle.flush()
         return str(events_path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"WARNING: filesystem export failed: {exc}", file=sys.stderr)
         return None
 

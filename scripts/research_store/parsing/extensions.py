@@ -39,8 +39,7 @@ registry:
 
 from __future__ import annotations
 
-
-from .interfaces import ParseResult, Parser, UnsupportedFormatError
+from .interfaces import Parser, ParseResult, UnsupportedFormatError
 
 
 class PdfParser(Parser):

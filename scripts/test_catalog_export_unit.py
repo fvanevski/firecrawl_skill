@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import UUID
 
@@ -9,15 +9,16 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parent
 import sys
+
 sys.path.insert(0, str(SCRIPTS))
 
 import catalog_v5
 from research_store.catalog_export import (
     SCHEMA_VERSION,
+    CatalogExportService,
     _atomic_write_json,
     _catalog_id,
     _map_event,
-    CatalogExportService,
 )
 
 

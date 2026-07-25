@@ -6,8 +6,6 @@ RESEARCH_STORE_TEST_DATABASE_URL and are marked with pytest.mark.skipif.
 
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
 import hashlib
 import os
 import sys
@@ -1403,12 +1401,12 @@ def test_blob_store_failure_during_complete_attempt(
     """
     from unittest.mock import patch
 
-    aid = extraction_service.create_attempt(
+    extraction_service.create_attempt(
         candidate_id=sample_candidate,
         run_id=sample_run,
     )
 
-    with patch.object(extraction_service, 'store_raw_blob', side_effect=Exception("Blob store failure")):
+    with patch.object(extraction_service, 'store_raw_blob', side_effect=Exception("Blob store failure")):  # noqa: SIM117
         with pytest.raises(Exception, match="Blob store failure"):
             extraction_service.store_raw_blob(b"content")
 

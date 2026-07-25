@@ -33,9 +33,10 @@ Authority model:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid4
 
 
@@ -111,7 +112,7 @@ class InvocationEvent:
     actor_identifier: str | None = None
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "InvocationEvent":
+    def from_mapping(cls, value: dict[str, Any]) -> InvocationEvent:
         """Construct from a database row mapping."""
         return cls(
             id=value["id"],
@@ -157,7 +158,7 @@ class EventAppendResult:
     reused: bool
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "EventAppendResult":
+    def from_mapping(cls, value: dict[str, Any]) -> EventAppendResult:
         return cls(
             event_id=value.get("event_id") or value["id"],
             sequence_number=value["sequence_number"],
@@ -224,13 +225,13 @@ def _validate_event_type(event_type: str) -> None:
 def _validate_run_id(run_id: UUID) -> None:
     """Raise ``ValueError`` if ``run_id`` is invalid."""
     if not isinstance(run_id, UUID):
-        raise ValueError("run_id must be a UUID")
+        raise ValueError("run_id must be a UUID")  # noqa: TRY004
 
 
 def _validate_invocation_id(invocation_id: UUID) -> None:
     """Raise ``ValueError`` if ``invocation_id`` is invalid."""
     if not isinstance(invocation_id, UUID):
-        raise ValueError("invocation_id must be a UUID")
+        raise ValueError("invocation_id must be a UUID")  # noqa: TRY004
 
 
 class InvocationEventError(Exception):

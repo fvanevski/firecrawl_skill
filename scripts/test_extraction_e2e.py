@@ -49,8 +49,6 @@ And injects failures around:
 
 from __future__ import annotations
 
-# ruff: noqa: E402
-
 import json
 import os
 import sys
@@ -242,10 +240,11 @@ class TestExtractionProvenance:
 
     def test_quality_metrics_versioned(self, fixture_mixed_structure):
         """Quality metrics carry the version from QualityConfig and evaluate thresholds."""
-        from research_store.quality_evaluator import evaluate_quality
-        from research_store.quality_config import QualityConfig
-        from research_store.quality_service import QualityService
         from unittest.mock import MagicMock
+
+        from research_store.quality_config import QualityConfig
+        from research_store.quality_evaluator import evaluate_quality
+        from research_store.quality_service import QualityService
 
         # Standard config evaluates to acceptable for this valid fixture
         config_standard = QualityConfig(quality_version="quality-v2")
@@ -876,12 +875,11 @@ class TestFaultInjection:
         with patch.object(
             e2e_extraction_service.blob_store,
             "put",
-            side_effect=IOError("disk full"),
+            side_effect=OSError("disk full"),
+        ), pytest.raises(
+            ExtractionError, match="blob_store is required|disk full"
         ):
-            with pytest.raises(
-                ExtractionError, match="blob_store is required|disk full"
-            ):
-                e2e_extraction_service.store_raw_blob(b"content")
+            e2e_extraction_service.store_raw_blob(b"content")
 
         # Verify the attempt exists but has no raw blob
         attempts = e2e_extraction_service.list_attempts(
@@ -909,7 +907,6 @@ class TestFaultInjection:
         This directly demonstrates that the UoW atomicity guarantee holds
         under mid-transaction failure.
         """
-        from research_store.postgres import PostgresUnitOfWork
 
         original_factory = e2e_extraction_service.uow_factory
 
@@ -925,7 +922,6 @@ class TestFaultInjection:
             def __enter__(self_inner):
                 self_inner._real_uow = original_factory().__enter__()
                 # Override commit to raise, forcing __exit__ to roll back
-                real_commit = self_inner._real_uow.commit
 
                 def commit_that_fails():
                     raise RuntimeError("simulated commit failure")
@@ -956,7 +952,7 @@ class TestFaultInjection:
                     candidate_id=sample_candidate,
                     run_id=sample_run,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001,S110
                 pass  # Expected — rollback was forced
         finally:
             # Restore the original factory before any assertion.
@@ -1101,8 +1097,8 @@ class TestFaultInjection:
         document that is not linked to any extraction attempt, making the
         provenance gap detectable and auditable.
         """
-        from research_store.service import CorpusService
         from research_store.domain import IngestRequest
+        from research_store.service import CorpusService
 
         # Create a failed attempt (no selection will be made).
         attempt_id = e2e_extraction_service.create_attempt(
@@ -1143,7 +1139,7 @@ class TestFaultInjection:
         ingest_result = corpus_service.ingest(request)
 
         # The document must exist but must have no extraction_attempt_id.
-        with e2e_extraction_service.uow_factory() as uow:
+        with e2e_extraction_service.uow_factory() as uow:  # noqa: SIM117
             with uow.connection.cursor() as cur:
                 cur.execute(
                     "SELECT extraction_attempt_id FROM documents WHERE id = %s",
@@ -1239,8 +1235,8 @@ class TestRedriveReindexFlow:
     def test_rederive_service_interface_idempotent(self, e2e_extraction_service, fixture_concise_notice, sample_candidate, sample_run, tmp_path):
         """Rederive creates a new derivation and is idempotent on repeat calls."""
         from research_store.derivation_service import DerivationService
-        from research_store.service import CorpusService
         from research_store.quality_evaluator import evaluate_quality
+        from research_store.service import CorpusService
 
         # Setup: Ingest a document first to get a real snapshot_id/document_id
         attempt_id = e2e_extraction_service.create_attempt(candidate_id=sample_candidate, run_id=sample_run)
@@ -1301,9 +1297,9 @@ class TestRedriveReindexFlow:
     def test_multi_derivation_coexistence(self, e2e_extraction_service, fixture_mixed_structure, sample_candidate, sample_run, tmp_path):
         """Legacy chunks and new hierarchical chunks can coexist without overwriting each other."""
         from research_store.derivation_service import DerivationService
-        from research_store.service import CorpusService
-        from research_store.quality_evaluator import evaluate_quality
         from research_store.domain import IngestRequest
+        from research_store.quality_evaluator import evaluate_quality
+        from research_store.service import CorpusService
 
         attempt_id = e2e_extraction_service.create_attempt(candidate_id=sample_candidate, run_id=sample_run)
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_mixed_structure)
@@ -1372,9 +1368,9 @@ class TestRedriveReindexFlow:
         derivation is append-only.
         """
         from research_store.derivation_service import DerivationService
-        from research_store.service import CorpusService
-        from research_store.quality_evaluator import evaluate_quality
         from research_store.domain import IngestRequest
+        from research_store.quality_evaluator import evaluate_quality
+        from research_store.service import CorpusService
 
         # ---- Setup: ingest with parser markdown-v1 ----
         attempt_id = e2e_extraction_service.create_attempt(
@@ -1436,7 +1432,7 @@ class TestRedriveReindexFlow:
         )
 
         # ---- CRITICAL assertions: source snapshot and original document survive ----
-        with e2e_extraction_service.uow_factory() as uow:
+        with e2e_extraction_service.uow_factory() as uow:  # noqa: SIM117
             with uow.connection.cursor() as cur:
                 # (a) The original source snapshot must still exist.
                 cur.execute(
@@ -1599,6 +1595,7 @@ class TestChunkingProvenance:
         """Every chunk has a content_sha256 hash, and identical input
         produces identical hashes (determinism)."""
         import hashlib
+
         from research_store.hierarchical_chunker import hierarchical_chunks
         from research_store.parsing import structural_blocks
 

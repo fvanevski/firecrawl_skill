@@ -128,7 +128,6 @@ recovery boundary or apply a forward-repair migration.
 
 from alembic import op
 
-
 revision = "0018_audit_assessments"
 down_revision = "0017_claims_evidence"
 branch_labels = None

@@ -18,13 +18,11 @@ Covers:
 
 from __future__ import annotations
 
-# ruff: noqa: E402
-
+import os
+import sys
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
-import os
-import sys
 from uuid import UUID, uuid4
 
 import pytest
@@ -33,17 +31,17 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store.config import StoreConfig
-from research_store.domain import (
-    DerivationAttempt,
-    DerivationComparisonReport,
-    IngestRequest,
-    VALID_DERIVATION_STATUSES,
-)
-from research_store.postgres import connect, migrate, require_disposable_database_reset
 from research_store.derivation_service import (
     DerivationService,
     _configuration_sha256,
 )
+from research_store.domain import (
+    VALID_DERIVATION_STATUSES,
+    DerivationAttempt,
+    DerivationComparisonReport,
+    IngestRequest,
+)
+from research_store.postgres import connect, migrate, require_disposable_database_reset
 
 ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
@@ -757,8 +755,9 @@ class TestDerivationServiceIntegration:
 
     def test_rederive_blob_fault_injection(self, service, derivation_service, tmp_path):
         """Rederive aborts transaction cleanly if blob write fails."""
-        import pytest
         from unittest.mock import patch
+
+        import pytest
         
         result = _seed_corpus(service)
         document_id = result.document_id
@@ -783,8 +782,9 @@ class TestDerivationServiceIntegration:
 
     def test_rederive_db_commit_fault_injection(self, service, derivation_service, tmp_path):
         """Rederive aborts cleanly if DB commit fails."""
-        import pytest
         from unittest.mock import patch
+
+        import pytest
         
         result = _seed_corpus(service)
         document_id = result.document_id
@@ -825,6 +825,7 @@ class TestDerivationUoWMethods:
         migrate(TEST_DSN)
         config = _make_config(tmp_path)
         from functools import partial
+
         from research_store.postgres import PostgresUnitOfWork
 
         return partial(
@@ -1034,9 +1035,8 @@ class TestDerivationUoWMethods:
 
     def test_activate_nonexistent_derivation(self, uow_factory):
         """Activating a nonexistent derivation raises ValueError."""
-        with uow_factory() as uow:
-            with pytest.raises(ValueError, match="not found"):
-                uow.derivations.activate(uuid4())
+        with uow_factory() as uow, pytest.raises(ValueError, match="not found"):
+            uow.derivations.activate(uuid4())
 
     def test_activate_non_pending_derivation(self, uow_factory):
         """Activating an already-active derivation raises ValueError."""
@@ -1185,6 +1185,7 @@ class TestMultiDerivationCoexistence:
     def test_old_and_new_derivations_coexist(self, service, tmp_path):
         """Old and new derivations coexist after parser upgrade."""
         from functools import partial
+
         from research_store.postgres import PostgresUnitOfWork
 
         config = _make_config(tmp_path)
@@ -1242,6 +1243,7 @@ class TestMultiDerivationCoexistence:
     def test_source_snapshot_preserved(self, service, tmp_path):
         """Source snapshot is not recreated during rederive."""
         from functools import partial
+
         from research_store.postgres import PostgresUnitOfWork
 
         config = _make_config(tmp_path)

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
 import tempfile
+from pathlib import Path
 from typing import BinaryIO
 
 from .domain import BlobReference

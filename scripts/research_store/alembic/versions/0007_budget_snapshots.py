@@ -6,7 +6,6 @@ index, job, lease, provenance, or existing workflow records.
 
 from alembic import op
 
-
 revision = "0007_budget_snapshots"
 down_revision = "0006_workflow_state"
 branch_labels = None

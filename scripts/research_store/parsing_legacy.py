@@ -7,7 +7,6 @@ from typing import Any
 
 from .domain import Block, Chunk
 
-
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _LIST = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+")
@@ -202,17 +201,16 @@ def parse_raw_search_response(
             str(error_msg),
         )
 
-    if isinstance(data, dict):
-        if data.get("success") is False or "error" in data:
-            error_msg = (
-                data.get("error") or data.get("message") or "Provider reported failure"
-            )
-            return (
-                "provider_error",
-                0,
-                {"error": error_msg},
-                str(error_msg),
-            )
+    if isinstance(data, dict) and (data.get("success") is False or "error" in data):
+        error_msg = (
+            data.get("error") or data.get("message") or "Provider reported failure"
+        )
+        return (
+            "provider_error",
+            0,
+            {"error": error_msg},
+            str(error_msg),
+        )
 
     items = []
     if isinstance(data, list):

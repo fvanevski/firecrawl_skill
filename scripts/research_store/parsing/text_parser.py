@@ -28,8 +28,7 @@ MIME type detection fails.
 
 from __future__ import annotations
 
-
-from .interfaces import ParseResult, Parser, TypedBlock
+from .interfaces import Parser, ParseResult, TypedBlock
 
 
 class PlainTextParser(Parser):

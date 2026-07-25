@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-# ruff: noqa: E402
-
-from dataclasses import replace
 import json
 import os
-from pathlib import Path
 import sys
+from dataclasses import replace
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -14,13 +12,14 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.acquisition_service import AcquisitionService, FirecrawlSearchAdapter
+from research_store.acquisition_service import (
+    AcquisitionService,
+    FirecrawlSearchAdapter,
+)
 from research_store.config import StoreConfig
 from research_store.container import build_acquisition_service, build_run_service
 from research_store.domain import SearchAdapterResult, utcnow
 from research_store.postgres import connect, migrate, require_disposable_database_reset
-
-
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 

@@ -1,7 +1,8 @@
 import hashlib
 import json
+from collections.abc import Callable
 from uuid import UUID
-from typing import Callable
+
 
 def compute_audit_packet_hash_from_db(run_id: UUID, uow_factory: Callable) -> str:
     """Compute the audit packet hash dynamically from the PostgreSQL projection."""
@@ -9,7 +10,7 @@ def compute_audit_packet_hash_from_db(run_id: UUID, uow_factory: Callable) -> st
     
     export_service = CatalogExportService(uow_factory)
     projection = export_service._load_projection(run_id)
-    run, invocations, events, snapshots, claims, assessments, manifest = export_service._map_records(projection)
+    run, invocations, events, _snapshots, _claims, _assessments, _manifest = export_service._map_records(projection)
     
     target = run
     records = invocations

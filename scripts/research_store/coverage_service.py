@@ -30,15 +30,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping
+from typing import Any
 from uuid import UUID, uuid4
 
 from research_domain.models import (
     CoverageItem,
-    CoverageLedger,
     CoverageItemType,
+    CoverageLedger,
     CoverageStatus,
     FreshnessStatus,
     OverallCoverageStatus,
@@ -104,7 +105,7 @@ class CoverageEvent:
     created_at: datetime
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "CoverageEvent":
+    def from_mapping(cls, value: dict[str, Any]) -> CoverageEvent:
         return cls(
             id=value["id"],
             run_id=value["run_id"],
@@ -166,7 +167,7 @@ class CoverageSnapshot:
     created_at: datetime
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "CoverageSnapshot":
+    def from_mapping(cls, value: dict[str, Any]) -> CoverageSnapshot:
         return cls(
             id=value["id"],
             run_id=value["run_id"],
@@ -662,14 +663,14 @@ class CoverageService:
                     ),
                     remaining_gap=item.get("remaining_gap", ""),
                     confidence=item.get("confidence", 0.0),
-                    mechanical_failure_ids=tuple(),
+                    mechanical_failure_ids=(),
                 )
                 for item in ledger["items"]
             ),
             overall_status=_str_to_overall_status(
                 ledger.get("overall_status", "unassessed")
             ),
-            mechanical_failures=tuple(),
+            mechanical_failures=(),
         )
 
     # ------------------------------------------------------------------
@@ -851,11 +852,11 @@ def _str_to_overall_status(value: str) -> OverallCoverageStatus:
 
 
 __all__ = [
-    "CoverageService",
-    "CoverageEvent",
-    "CoverageSnapshot",
     "CoverageError",
+    "CoverageEvent",
+    "CoverageService",
+    "CoverageSnapshot",
+    "DuplicateCoverageEventError",
     "StaleCoverageRevisionError",
     "UnknownCoverageItemError",
-    "DuplicateCoverageEventError",
 ]

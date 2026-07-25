@@ -7,7 +7,6 @@ Create Date: 2026-07-23
 """
 from alembic import op
 
-
 revision = "0023_parser_version"
 down_revision = "0022_extraction_attempt_linkage"
 branch_labels = None

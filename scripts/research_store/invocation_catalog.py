@@ -31,9 +31,10 @@ Event types supported (mapped from Catalog v5):
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid4
 
 from .invocation_events import (
@@ -86,7 +87,7 @@ class InvocationRecord:
     created_at: datetime
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "InvocationRecord":
+    def from_mapping(cls, value: dict[str, Any]) -> InvocationRecord:
         return cls(
             id=value["id"],
             run_id=value["run_id"],
@@ -335,7 +336,7 @@ class InvocationCatalogService:
             if row is None:
                 raise KeyError(f"invocation {invocation_id} not found")
 
-            _, inv_run_id, operation, current_status, revision, input_data, started_at = row
+            _, _inv_run_id, operation, current_status, _revision, _input_data, started_at = row
             if current_status != "running":
                 raise InvocationCatalogError(
                     f"invocation {invocation_id} is not running (status={current_status})"

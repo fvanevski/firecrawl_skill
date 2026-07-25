@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
 """Create and validate portable Firecrawl scratch invocation IDs."""
 
 import argparse
 import os
 import re
 import uuid
-
 
 ID_PATTERN = re.compile(r"^fc_[a-f0-9]{32}$")
 

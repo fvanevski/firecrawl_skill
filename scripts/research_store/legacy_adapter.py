@@ -7,12 +7,12 @@ existing service boundaries and records the comparison.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
 import hashlib
 import json
-from typing import Any, Callable
-
+from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
 ENTRY_POINT_OPERATIONS = {
     "frun": "research_run.lifecycle",
@@ -32,7 +32,7 @@ class AdapterMode(str, Enum):
     AUTHORITATIVE = "authoritative"
 
     @classmethod
-    def parse(cls, value: str) -> "AdapterMode":
+    def parse(cls, value: str) -> AdapterMode:
         try:
             return cls(value)
         except ValueError as exc:
@@ -219,9 +219,9 @@ class LegacyEntryPointAdapter:
 
 
 __all__ = [
+    "ENTRY_POINT_OPERATIONS",
     "AdapterMode",
     "AdapterResult",
-    "ENTRY_POINT_OPERATIONS",
     "LegacyAdapterError",
     "LegacyEntryPointAdapter",
 ]

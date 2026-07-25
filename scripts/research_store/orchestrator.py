@@ -38,24 +38,24 @@ from .run_service import (
     StaleRunRevisionError,
 )
 from .stages import (
+    STRATEGY_DECISION_FAIL,
+    STRATEGY_DECISION_PARTIAL,
+    STRATEGY_DECISION_SEARCH,
+    STRATEGY_DECISION_SYNTHESIZE,
     ContextKeys,
     StageHandler,
     StageOutcome,
     StageResult,
     _coverage_decision,
     decision_to_state,
-    STRATEGY_DECISION_SYNTHESIZE,
-    STRATEGY_DECISION_SEARCH,
-    STRATEGY_DECISION_PARTIAL,
-    STRATEGY_DECISION_FAIL,
 )
+from .strategy_service import StrategyRevisionService
 from .terminal_decision import (
     TerminalDecisionConfig,
     TerminalDecisionOutcome,
     TerminalDecisionPolicy,
 )
 from .terminal_decision_service import TerminalDecisionService
-from .strategy_service import StrategyRevisionService
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +288,7 @@ class CorpusReviewStage:
                 source_event_id=None,
                 source_invocation_id=None,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return StageResult.failed(
                 "corpus_review", f"coverage creation failed: {exc}"
             )
@@ -324,7 +324,7 @@ class CorpusReviewStage:
                 coverage_revision=1,
                 idempotency_key=f"snapshot:initial:{run_id}",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return StageResult.failed(
                 "corpus_review", f"snapshot creation failed: {exc}"
             )
@@ -439,8 +439,8 @@ class AcquisitionStage:
                 successful_urls += result.get("successful_urls", 0)
                 # Collect candidate IDs for coverage events
                 for cid in result.get("candidate_ids", []):
-                    candidate_ids.append(cid)
-            except Exception as exc:
+                    candidate_ids.append(cid)  # noqa: PERF402
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("acquisition query failed: %s — %s", query_text, exc)
 
         # Apply candidate_identified events to coverage
@@ -463,7 +463,7 @@ class AcquisitionStage:
                             "candidate_count": candidate_count,
                         },
                     )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("coverage update after acquisition failed: %s", exc)
 
         # Update context with acquisition results
@@ -590,7 +590,7 @@ class ExtractionStage:
                             else:
                                 raw_requests[idx] = replace(req, extraction_attempt_id=aid)
                             attempt_map[url] = aid
-                        except Exception as exc:
+                        except Exception as exc:  # noqa: BLE001
                             logger.warning("Failed to create extraction attempt for %s: %s", url, exc)
 
             try:
@@ -612,7 +612,7 @@ class ExtractionStage:
                                 self.extraction_service.complete_attempt(attempt_id=aid, exit_status=status)
                                 if status == "succeeded":
                                     self.extraction_service.select_final_attempt(attempt_id=aid)
-                            except Exception as exc:
+                            except Exception as exc:  # noqa: BLE001
                                 logger.warning("Failed to complete extraction attempt %s: %s", aid, exc)
                                 
                 completed_assets = [
@@ -621,10 +621,10 @@ class ExtractionStage:
                     if asset.get("status") == "complete"
                 ]
                 extraction_success_count = len(completed_assets)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("corpus_service ingestion batch failed: %s", exc)
 
-        if isinstance(successful_urls, int):
+        if isinstance(successful_urls, int):  # noqa: SIM102
             if extraction_success_count == 0 and successful_urls > 0:
                 extraction_success_count = successful_urls
 
@@ -665,7 +665,7 @@ class ExtractionStage:
                             idempotency_key=f"extract:{run_id}:w{wave_count}:{i}:{url}",
                             payload={"source_url": url, "extraction_status": "success"},
                         )
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001
                         logger.warning("coverage event for extraction failed: %s", exc)
             except (RunStateError, StaleRunRevisionError) as exc:
                 return StageResult.failed("extraction", str(exc))
@@ -744,7 +744,7 @@ class IndexingStage:
                     self.corpus_service.embedder, "fingerprint", index_fingerprint
                 )
                 logger.info("indexing batch completed: %s", batch_result)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("vector indexing worker batch failed: %s", exc)
 
         context[ContextKeys.INDEX_BUILD_ID] = index_build_id
@@ -813,7 +813,7 @@ class CoverageReviewStage:
                 run_id,
                 idempotency_key=f"rebuild:{run_id}:{coverage_revision or 0}",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return StageResult.failed(
                 "coverage_review", f"projection rebuild failed: {exc}"
             )
@@ -854,7 +854,7 @@ class CoverageReviewStage:
                 coverage_revision=new_coverage_revision,
                 idempotency_key=f"snapshot:review:{run_id}:{new_coverage_revision}",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("coverage snapshot creation failed: %s", exc)
 
         # Update context with coverage results
@@ -1053,7 +1053,7 @@ class CoverageReviewStage:
                     validation.rejection_reasons,
                 )
                 return None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("strategy proposal validation failed: %s", exc)
             return None
 
@@ -1112,7 +1112,7 @@ class CoverageReviewStage:
                 context[ContextKeys.AUTHORIZED_QUERIES] = existing
 
             return proposal.proposal_id
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("strategy proposal creation failed: %s", exc)
             return None
 
@@ -1176,7 +1176,7 @@ class CoverageReviewStage:
                     for q in parsed.get("queries", []):
                         if isinstance(q, str) and q.strip():
                             queries.append({"query": q.strip(), "facet": "adaptive"})
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "LLM query planning failed, falling back to gap heuristic: %s", exc
                 )
@@ -1246,7 +1246,7 @@ class NextActionStage:
                         "next_action",
                         f"strategy decision {decision_id} was rejected: {decision.rejection_reasons}",
                     )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("strategy decision validation failed: %s", exc)
 
         # The actual work is delegated to the appropriate service.
@@ -1476,7 +1476,7 @@ class ResearchOrchestrator:
         orchestrator_config: OrchestratorConfig | None = None,
         corpus_service: Any | None = None,
         terminal_config: Any | None = None,
-    ) -> "ResearchOrchestrator":
+    ) -> ResearchOrchestrator:
         """Build an orchestrator with all required services.
 
         Args:
@@ -1507,14 +1507,14 @@ class ResearchOrchestrator:
         if corpus_service is None:
             try:
                 corpus_service = build_service(config)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug("corpus_service auto-build deferred: %s", exc)
 
         extraction_service = None
         try:
             from .container import build_extraction_service
             extraction_service = build_extraction_service(config)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.debug("extraction_service auto-build deferred: %s", exc)
 
         legacy_adapter = None
@@ -1958,7 +1958,7 @@ class ResearchOrchestrator:
                             "final_state": final_state,
                         },
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     logger.warning("legacy adapter export failed: %s", exc)
 
             return OrchestratorResult(
@@ -1973,7 +1973,7 @@ class ResearchOrchestrator:
             )
 
         except Exception as exc:
-            logger.exception("orchestration failed: %s", exc)
+            logger.exception("orchestration failed: %s", exc)  # noqa: TRY401
             return self._failed_result(run_id, str(exc))
 
     def run_from_external_id(
@@ -2049,7 +2049,7 @@ class ResearchOrchestrator:
                 raw_payload=f"stage invocation: {stage_name}",
                 idempotency_key=f"invocation:{stage_name}:{run_id}:w{wave_count}",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.debug(
                 "stage invocation recording failed for %s: %s", stage_name, exc
             )
@@ -2164,7 +2164,7 @@ class ResearchOrchestrator:
                         decision=decision,
                         idempotency_key=idempotency_key,
                     )
-                except Exception as persist_exc:
+                except Exception as persist_exc:  # noqa: BLE001
                     # Non-blocking: a persistence failure should not prevent
                     # the orchestrator from acting on the terminal decision.
                     logger.warning(
@@ -2174,7 +2174,7 @@ class ResearchOrchestrator:
                     )
 
             return decision.outcome
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "terminal decision evaluation failed, falling back to budget check: %s",
                 exc,
@@ -2192,7 +2192,12 @@ class ResearchOrchestrator:
 
 
 __all__ = [
+    "STRATEGY_DECISION_FAIL",
+    "STRATEGY_DECISION_PARTIAL",
+    "STRATEGY_DECISION_SEARCH",
+    "STRATEGY_DECISION_SYNTHESIZE",
     "AcquisitionStage",
+    "ContextKeys",
     "CorpusReviewStage",
     "CoverageReviewStage",
     "ExtractionStage",
@@ -2206,16 +2211,11 @@ __all__ = [
     "StageOutcome",
     "StageResult",
     "SynthesisStage",
-    "TerminalStage",
-    "ContextKeys",
-    "_coverage_decision",
-    "decision_to_state",
-    "STRATEGY_DECISION_SYNTHESIZE",
-    "STRATEGY_DECISION_SEARCH",
-    "STRATEGY_DECISION_PARTIAL",
-    "STRATEGY_DECISION_FAIL",
     "TerminalDecisionConfig",
     "TerminalDecisionOutcome",
     "TerminalDecisionPolicy",
     "TerminalDecisionService",
+    "TerminalStage",
+    "_coverage_decision",
+    "decision_to_state",
 ]

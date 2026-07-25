@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import hashlib
 import json
 import os
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from .blob import ContentAddressedBlobStore
@@ -171,7 +172,7 @@ class SearchCompatibilityExporter:
             _export_json(meta_json_path, meta_payload)
             files_created.append(meta_json_path)
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             export_status = "failed"
             export_err = f"{type(exc).__name__}: {exc}"
 
@@ -189,7 +190,7 @@ class SearchCompatibilityExporter:
                     metadata=meta_payload,
                 )
                 uow.commit()
-        except Exception:
+        except Exception:  # noqa: BLE001,S110
             pass
 
         return CompatibilityExportResult(

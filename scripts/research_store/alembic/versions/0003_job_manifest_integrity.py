@@ -2,7 +2,6 @@
 
 from alembic import op
 
-
 revision = "0003_job_manifest_integrity"
 down_revision = "0002_research_store_integrity"
 branch_labels = None

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-
 SUPPORTED_EXECUTION_MODES = frozenset(
     {"agent_led", "autonomous_local", "deterministic_debug"}
 )
@@ -80,8 +79,8 @@ class ExecutionModePolicy:
 
 
 __all__ = [
+    "SUPPORTED_EXECUTION_MODES",
     "ExecutionModeError",
     "ExecutionModePolicy",
-    "SUPPORTED_EXECUTION_MODES",
     "SemanticAuthority",
 ]

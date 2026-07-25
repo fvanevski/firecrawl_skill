@@ -41,8 +41,8 @@ Usage::
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -113,7 +113,7 @@ class TerminalDecisionConfig:
             raise TerminalDecisionPolicyError("max_equivalent_proposals must be >= 1")
 
     @classmethod
-    def load(cls) -> "TerminalDecisionConfig":
+    def load(cls) -> TerminalDecisionConfig:
         """Load configuration from environment variables with defaults.
 
         Consistent with BudgetPolicy.load() pattern.
@@ -549,9 +549,9 @@ class TerminalDecisionPolicy:
 
 
 __all__ = [
-    "TerminalDecisionPolicy",
-    "TerminalDecisionConfig",
-    "TerminalDecisionPolicyError",
     "InvalidCoverageStatusError",
     "NegativeCountError",
+    "TerminalDecisionConfig",
+    "TerminalDecisionPolicy",
+    "TerminalDecisionPolicyError",
 ]

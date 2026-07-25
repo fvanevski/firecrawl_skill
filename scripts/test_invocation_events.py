@@ -24,27 +24,25 @@ from uuid import UUID, uuid4
 # Ensure scripts directory is on the path before importing test modules
 # (E402: module level import not at top — sys.path.insert is required first)
 SCRIPTS = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPTS))  # noqa: E402
+sys.path.insert(0, str(SCRIPTS))
 
-import pytest  # noqa: E402
-
-from research_store.invocation_events import (  # noqa: E402
+import pytest
+from research_store.invocation_catalog import (
+    InvocationAlreadyRunning,
+    InvocationCatalogError,
+    InvocationCatalogService,
+    InvocationRecord,
+)
+from research_store.invocation_events import (
     DuplicateEventKey,
     EventAppendResult,
     EventService,
+    InvalidEventType,
     InvocationEvent,
     _sanitize,
-    InvalidEventType,
     _validate_event_type,
 )
-from research_store.invocation_catalog import (  # noqa: E402
-    InvocationCatalogService,
-    InvocationCatalogError,
-    InvocationAlreadyRunning,
-    InvocationRecord,
-)
-from research_store.postgres import PostgresUnitOfWork  # noqa: E402
-
+from research_store.postgres import PostgresUnitOfWork
 
 # ------------------------------------------------------------------
 # Fixtures
@@ -343,8 +341,9 @@ class TestFilesystemDerivation:
     """Filesystem records are derived after database commit."""
 
     def test_export_invocation_to_filesystem(self, run_id, database_url, tmp_path):
-        from research_store.config import StoreConfig
         import dataclasses
+
+        from research_store.config import StoreConfig
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
@@ -379,10 +378,11 @@ class TestFilesystemDerivation:
 
     def test_filesystem_not_read_for_state(self, run_id, database_url):
         """Verify that current state is determined from PostgreSQL, not filesystem."""
+        import dataclasses
+
+        from research_store.config import StoreConfig
         from research_store.container import build_run_service
         from research_store.invocation_catalog import InvocationCatalogService
-        from research_store.config import StoreConfig
-        import dataclasses
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
@@ -570,10 +570,11 @@ class TestExportFailureIsolation:
 
     def test_database_commit_succeeds_when_export_fails(self, run_id, database_url):
         """If filesystem export fails, PostgreSQL commit still succeeds."""
+        import dataclasses
+
+        from research_store.config import StoreConfig
         from research_store.container import build_run_service
         from research_store.invocation_catalog import InvocationCatalogService
-        from research_store.config import StoreConfig
-        import dataclasses
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
@@ -632,10 +633,11 @@ class TestExportCatalogFormat:
     """Export produces correct Catalog v5-compatible format."""
 
     def test_export_format_fields(self, run_id, database_url):
+        import dataclasses
+
         from research_store.config import StoreConfig
         from research_store.container import build_run_service
         from research_store.invocation_catalog import InvocationCatalogService
-        import dataclasses
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 

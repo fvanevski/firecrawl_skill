@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
 import os
-from pathlib import Path
 import subprocess
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from .blob import ContentAddressedBlobStore
@@ -22,16 +23,15 @@ class FirecrawlSearchAdapter:
     @staticmethod
     def _default_runner(cmd: list[str], timeout: int = 60) -> tuple[int, bytes, str]:
         try:
-            proc = subprocess.run(
+            proc = subprocess.run(  # noqa: PLW1510
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 timeout=timeout,
             )
             return proc.returncode, proc.stdout, proc.stderr.decode("utf-8", errors="replace")
         except subprocess.TimeoutExpired:
             return -1, b"", "ETIMEDOUT: Firecrawl search process timed out"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return -1, b"", f"Transport error: {type(exc).__name__}: {exc}"
 
     def search(
@@ -273,7 +273,7 @@ class AcquisitionService:
                     resp_data,
                 )
                 scratch_exported = True
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 scratch_err = f"{type(exc).__name__}: {exc}"
 
         return AcquisitionResult(

@@ -17,15 +17,15 @@ PRD mapping: FR-018
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
 from hashlib import sha256
 from io import BytesIO
-import json
-import os
-import shutil
-import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -34,11 +34,11 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+from research_store.blob import ContentAddressedBlobStore
 from research_store.catalog_export import (
     EXPORT_SCHEMA_VERSION,
     ExportTargetNotFound,
 )
-from research_store.blob import ContentAddressedBlobStore
 from research_store.config import StoreConfig
 from research_store.container import (
     build_catalog_export_service,
@@ -46,8 +46,12 @@ from research_store.container import (
 )
 from research_store.invocation_catalog import InvocationCatalogService
 from research_store.invocation_events import EventService
-from research_store.postgres import PostgresUnitOfWork, connect, migrate, require_disposable_database_reset
-
+from research_store.postgres import (
+    PostgresUnitOfWork,
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
 
 TEST_DSN = "postgresql://postgres:postgres@localhost:5432/firecrawl_test"
 

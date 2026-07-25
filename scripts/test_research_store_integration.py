@@ -8,15 +8,13 @@ guesses or reuses DATABASE_URL because its session setup drops the public schema
 
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
-from copy import deepcopy
-from dataclasses import replace
-from concurrent.futures import ThreadPoolExecutor
 import json
 import os
-from pathlib import Path
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -24,19 +22,19 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.config import StoreConfig
+from research_domain import load_model, schema_registry, serialize_model
 from research_store import cli as store_cli
+from research_store.config import StoreConfig
 from research_store.container import build_service
 from research_store.domain import IngestRequest
+from research_store.legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 from research_store.run_service import (
     ResearchRunService,
     RunStateError,
     StaleRunRevisionError,
 )
-from research_store.legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from research_store.semantic_service import SemanticCallService
-from research_domain import load_model, schema_registry, serialize_model
 
 ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
@@ -160,7 +158,7 @@ def prepared_database():
 
     # PostgreSQL transactional DDL leaves no partial workflow objects after an
     # interrupted attempt, so the supported repair is a normal forward retry.
-    with pytest.raises(RuntimeError, match="synthetic interruption"):
+    with pytest.raises(RuntimeError, match="synthetic interruption"):  # noqa: SIM117
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("CREATE TABLE interrupted_v6_probe(id integer)")
             raise RuntimeError("synthetic interruption")
@@ -515,7 +513,7 @@ def test_shadow_comparisons_are_queryable_append_only_and_do_not_mutate_run(serv
             external_run_id=created.external_id, divergent_only=True
         )
     assert [row["id"] for row in divergent] == [first.comparison_id]
-    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:  # noqa: SIM117
         with pytest.raises(Exception, match="append-only"):
             cursor.execute(
                 "UPDATE legacy_adapter_comparisons SET divergent=true WHERE id=%s",
@@ -614,7 +612,7 @@ def test_concurrent_event_idempotency_and_conflicting_reuse_rejection(service):
         first, second = list(executor.map(append_once, range(2)))
     assert first == second
 
-    with service.uow_factory() as uow:
+    with service.uow_factory() as uow:  # noqa: SIM117
         with pytest.raises(ValueError, match="another event"):
             uow.append_event(
                 run_id,
@@ -696,7 +694,7 @@ def test_research_run_service_records_exactly_one_event_per_transition(service):
             actor_type="integration-test",
             outcome="satisfied" if state == "completed" else None,
         )
-        revision += 1
+        revision += 1  # noqa: SIM113
         assert result.lifecycle_revision == revision
         assert result.next_state == state
         assert not result.reused
@@ -776,7 +774,7 @@ def test_research_run_service_serializes_conflicting_transitions(service):
                 idempotency_key=f"transition:{candidate}",
                 actor_type="integration-test",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return exc
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1881,8 +1879,8 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_freshness_observed_event(self, service):
         """Verify freshness_observed updates freshness_status."""
-        from research_store.coverage_service import CoverageService
         from research_domain.models import FreshnessStatus
+        from research_store.coverage_service import CoverageService
         from research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
@@ -1976,13 +1974,12 @@ class TestCoverageWorkflowObservationEvents:
         )
         item_id = items[0].coverage_item_id
 
-        with service.uow_factory() as uow:
-            with uow.connection.cursor() as cur:
-                cur.execute(
-                    "SELECT id FROM research_events WHERE run_id=%s LIMIT 1",
-                    (status.id,),
-                )
-                source_event = cur.fetchone()[0]
+        with service.uow_factory() as uow, uow.connection.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM research_events WHERE run_id=%s LIMIT 1",
+                (status.id,),
+            )
+            source_event = cur.fetchone()[0]
 
         event = coverage.apply_asset_acquired(
             status.id,
@@ -2010,9 +2007,10 @@ class TestResearchOrchestratorIntegration:
 
     def test_orchestrator_end_to_end(self, service):
         """Execute ResearchOrchestrator.run() end-to-end with PostgreSQL."""
-        from research_store.orchestrator import ResearchOrchestrator, OrchestratorConfig
-        from research_store.run_service import ResearchRunService
         from uuid import uuid4
+
+        from research_store.orchestrator import OrchestratorConfig, ResearchOrchestrator
+        from research_store.run_service import ResearchRunService
 
         # Build orchestrator
         orchestrator = ResearchOrchestrator.build(
@@ -2077,13 +2075,12 @@ class TestResearchOrchestratorIntegration:
         assert final_status.state in ("completed", "partial", "failed")
 
         # Verify state transitions were recorded
-        with service.uow_factory() as uow:
-            with uow.connection.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) FROM research_run_transitions WHERE run_id=%s",
-                    (run_id,),
-                )
-                transition_count = cur.fetchone()[0]
+        with service.uow_factory() as uow, uow.connection.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM research_run_transitions WHERE run_id=%s",
+                (run_id,),
+            )
+            transition_count = cur.fetchone()[0]
         assert transition_count > 0
 
         # Verify revision tracking: the lifecycle_revision should have
@@ -3148,9 +3145,10 @@ def test_catalog_import_apply_idempotency_integration(tmp_path, monkeypatch):
     """Verify apply() idempotency on a second run correctly skips records."""
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
 
+    import json
+
     from research_store.catalog_import import CatalogImportService
     from research_store.container import build_catalog_import_service
-    import json
 
     service = build_catalog_import_service()
     import_svc = CatalogImportService(
@@ -3182,10 +3180,10 @@ def test_catalog_import_apply_conflict_detection_integration(tmp_path, monkeypat
     """Verify apply() correctly detects and reports conflicts."""
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
 
+    import json
+
     from research_store.catalog_import import CatalogImportService
     from research_store.container import build_catalog_import_service
-    from research_store.run_service import ResearchRunService
-    import json
 
     service = build_catalog_import_service()
     import_svc = CatalogImportService(
@@ -3306,7 +3304,7 @@ def test_hierarchical_chunk_derivation_key_constraint():
         cursor.connection.commit()
 
         # Try to insert duplicate — should fail
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017,SIM117
             with connect(TEST_DSN) as conn, conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO chunks(
@@ -3386,7 +3384,7 @@ def test_hierarchical_chunk_parent_block_fk():
 
         # Try invalid parent_block_id — should fail
         invalid_uuid = str(uuid4())
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017,SIM117
             with connect(TEST_DSN) as conn, conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO chunks(
@@ -3412,9 +3410,10 @@ def test_hierarchical_chunk_parent_block_fk():
 
 def test_hierarchical_chunk_persist_ingest_sets_parent_block_id():
     """Verify persist_ingest produces non-NULL parent_block_id when blocks exist."""
-    from research_store.domain import IngestRequest
-    from research_store.container import build_service
     from dataclasses import replace
+
+    from research_store.container import build_service
+    from research_store.domain import IngestRequest
 
     svc = build_service(
         replace(
@@ -3524,8 +3523,8 @@ def test_hierarchical_chunk_migration_preserves_legacy_data():
 
 def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     """Verify that retrieval stage events are persisted in batch and ordered correctly by stage."""
-    from scripts.research_store.ports import DocumentRepository
     from types import SimpleNamespace
+
     from scripts.research_store.service import CorpusService
     
     with service.uow_factory() as uow:
@@ -3568,7 +3567,7 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     
     # Run a search with a candidate limit of 1
     # Both chunks are returned by semantic. Lexical doesn't run because requested_mode="semantic"
-    execution, results = corpus_service.search_assets(
+    execution, _results = corpus_service.search_assets(
         "test trace ordering", candidate_limit=1, run_id=run_id, requested_mode="semantic"
     )
     

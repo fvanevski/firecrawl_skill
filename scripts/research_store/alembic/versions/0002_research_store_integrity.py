@@ -8,7 +8,6 @@ provenance.
 
 from alembic import op
 
-
 revision = "0002_research_store_integrity"
 down_revision = "0001_research_store"
 branch_labels = None

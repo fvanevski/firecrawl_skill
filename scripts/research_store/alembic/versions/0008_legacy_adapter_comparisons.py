@@ -6,7 +6,6 @@ derivation, index, job, lease, provenance, or compatibility-export records.
 
 from alembic import op
 
-
 revision = "0008_legacy_adapter_comparisons"
 down_revision = "0007_budget_snapshots"
 branch_labels = None

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import hashlib
 import io
-
 import json
 import os
-from pathlib import Path
 import sys
-from uuid import UUID, uuid4
+from dataclasses import replace
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -18,11 +17,9 @@ sys.path.insert(0, str(SCRIPTS))
 from research_store.blob import ContentAddressedBlobStore
 from research_store.config import StoreConfig
 from research_store.container import build_run_service
-from research_store.domain import utcnow
 from research_store.parsing import parse_raw_search_response
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 from research_store.replay import SearchResponseReplayReader
-
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
@@ -67,14 +64,14 @@ def test_parse_raw_search_response_empty():
 def test_parse_raw_search_response_provider_error():
     # Via payload failure flag
     raw1 = json.dumps({"success": False, "error": "Rate limit exceeded"})
-    status1, count1, summary1, err1 = parse_raw_search_response(raw1)
+    status1, count1, _summary1, err1 = parse_raw_search_response(raw1)
     assert status1 == "provider_error"
     assert count1 == 0
     assert err1 == "Rate limit exceeded"
 
     # Via HTTP status code >= 400
     raw2 = json.dumps({"detail": "Server error"})
-    status2, count2, summary2, err2 = parse_raw_search_response(raw2, http_status=500)
+    status2, count2, _summary2, err2 = parse_raw_search_response(raw2, http_status=500)
     assert status2 == "provider_error"
     assert count2 == 0
     assert err2 == "Server error"
@@ -82,7 +79,7 @@ def test_parse_raw_search_response_provider_error():
 
 def test_parse_raw_search_response_parse_error():
     raw = "<html>502 Bad Gateway</html>"
-    status, count, summary, err = parse_raw_search_response(raw)
+    status, count, _summary, err = parse_raw_search_response(raw)
     assert status == "parse_error"
     assert count == 0
     assert "Failed to parse search response as JSON" in err

@@ -75,7 +75,7 @@ class IndexWorker:
             except LeaseLost:
                 result["lease_lost"] += 1
                 continue
-            except Exception as exc:  # keep the durable worker alive per job
+            except Exception as exc:  # keep the durable worker alive per job  # noqa: BLE001
                 error = f"{type(exc).__name__}: {exc}"
 
             with self.uow_factory() as uow:
@@ -160,7 +160,7 @@ class IndexWorker:
                 heartbeat = getattr(uow.index_jobs, "heartbeat_worker", None)
                 if heartbeat:
                     heartbeat(self.worker_id, metadata or {})
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Observability must not change job correctness or daemon liveness.
             return
 
@@ -249,7 +249,7 @@ class OpenAICompatibleEmbedder:
             fingerprint,
         )
 
-    def for_job(self, job: dict) -> "OpenAICompatibleEmbedder":
+    def for_job(self, job: dict) -> OpenAICompatibleEmbedder:
         """Bind a claimed job to its immutable model definition."""
         if self.fingerprint and job.get("fingerprint") != self.fingerprint:
             raise ValueError(

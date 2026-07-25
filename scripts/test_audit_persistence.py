@@ -14,9 +14,6 @@ Covers:
 
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
-import json
 import os
 import sys
 from pathlib import Path
@@ -31,13 +28,8 @@ from research_store.cli import parser as research_store_parser
 from research_store.domain import (
     AuditAssessment,
     AuditStageOutput,
-    VALID_AUDIT_STATUSES,
-    VALID_AUDIT_STAGES,
-    VALID_AUDIT_STAGE_STATUSES,
-    VALID_AUDIT_TARGET_TYPES,
 )
 from research_store.service import AuditService
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -67,7 +59,7 @@ def _make_audit_uow(
 
         def insert_audit_assessment_if_absent(self, **kw):
             if kw["status"] == "completed":
-                for aid, existing in assessments.items():
+                for existing in assessments.values():
                     if (
                         existing.get("run_id") == kw["run_id"]
                         and existing.get("target_type") == kw["target_type"]
@@ -398,14 +390,14 @@ def test_audit_sanitizes_secrets():
     assert saved_assessment["audit_packet_manifest"]["api_key"] == "[REDACTED]"
     assert "[REDACTED]" in saved_assessment["audit_packet_manifest"]["header"]
 
-    sid = svc.add_stage_output(
+    svc.add_stage_output(
         assessment_id=aid,
         stage="rubric",
         sequence_number=1,
         status="completed",
         output={"api_key": "secret-999"},
     )
-    saved_stage = list(stages.values())[0]
+    saved_stage = next(iter(stages.values()))
     assert saved_stage["output"]["api_key"] == "[REDACTED]"
 
 
@@ -601,9 +593,10 @@ def _ensure_run_exists(config, run_id):
 @INTEGRATION_MARK
 def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
     """Full lifecycle: create assessment, add stages, query, export."""
-    from research_store.container import build_audit_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -680,9 +673,10 @@ def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
 @INTEGRATION_MARK
 def test_stale_assessment_retained_on_new_assessment(tmp_path, prepared_database_for_audit):
     """New assessment with different target_hash does not overwrite stale one."""
-    from research_store.container import build_audit_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -694,7 +688,7 @@ def test_stale_assessment_retained_on_new_assessment(tmp_path, prepared_database
     _ensure_run_exists(config, run_id)
 
     # First assessment with hash1
-    aid1 = svc.create_assessment(
+    svc.create_assessment(
         run_id=run_id,
         target_type="run",
         target_id=run_id,
@@ -708,7 +702,7 @@ def test_stale_assessment_retained_on_new_assessment(tmp_path, prepared_database
     )
 
     # Second assessment with hash2 (different target hash)
-    aid2 = svc.create_assessment(
+    svc.create_assessment(
         run_id=run_id,
         target_type="run",
         target_id=run_id,
@@ -741,9 +735,10 @@ def test_stale_assessment_retained_on_new_assessment(tmp_path, prepared_database
 @INTEGRATION_MARK
 def test_audit_status_filter(tmp_path, prepared_database_for_audit):
     """Assessments can be filtered by status."""
-    from research_store.container import build_audit_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -789,9 +784,10 @@ def test_audit_status_filter(tmp_path, prepared_database_for_audit):
 @INTEGRATION_MARK
 def test_audit_stage_filter_by_status(tmp_path, prepared_database_for_audit):
     """Stage outputs can be filtered by status."""
-    from research_store.container import build_audit_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -838,9 +834,10 @@ def test_audit_stage_filter_by_status(tmp_path, prepared_database_for_audit):
 @INTEGRATION_MARK
 def test_audit_stage_filter_by_stage_name(tmp_path, prepared_database_for_audit):
     """Stage outputs can be filtered by stage name."""
-    from research_store.container import build_audit_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -883,9 +880,10 @@ def test_audit_stage_filter_by_stage_name(tmp_path, prepared_database_for_audit)
 @INTEGRATION_MARK
 def test_audit_export_round_trip(tmp_path, prepared_database_for_audit):
     """Export can be round-tripped through import-like re-creation."""
-    from research_store.container import build_audit_service
-    from research_store.config import StoreConfig
     from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -1137,9 +1135,10 @@ if TEST_DSN:
     @INTEGRATION_MARK
     def test_detect_stale_assessments_integration(tmp_path, prepared_database_for_audit):
         """detect_stale_assessments works against real PostgreSQL."""
-        from research_store.container import build_audit_service
-        from research_store.config import StoreConfig
         from dataclasses import replace
+
+        from research_store.config import StoreConfig
+        from research_store.container import build_audit_service
 
         config = replace(
             StoreConfig.from_env(),
@@ -1466,7 +1465,7 @@ class TestIdempotentScheduling:
             try:
                 barrier.wait()
                 results.append(svc.schedule_assessment(**self._identity(run_id)))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
         threads = [threading.Thread(target=schedule) for _ in range(3)]

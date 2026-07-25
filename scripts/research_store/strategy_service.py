@@ -25,11 +25,13 @@ observations and authorization decisions.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid4
 
+from budget_policy import BudgetPolicy, BudgetSnapshot
 from research_domain.models import (
     RejectionReason,
     ScopeExpansionRationale,
@@ -37,8 +39,6 @@ from research_domain.models import (
     StrategyRevisionDecision,
     StrategyRevisionProposal,
 )
-
-from budget_policy import BudgetPolicy, BudgetSnapshot
 
 from .strategy_validator import (
     StrategyRevisionValidator,
@@ -90,7 +90,7 @@ class ProposalSummary:
     created_at: datetime
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "ProposalSummary":
+    def from_mapping(cls, value: dict[str, Any]) -> ProposalSummary:
         return cls(
             proposal_id=UUID(str(value["proposal_id"])),
             run_id=UUID(str(value["run_id"])),
@@ -125,7 +125,7 @@ class DecisionSummary:
     created_at: datetime
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "DecisionSummary":
+    def from_mapping(cls, value: dict[str, Any]) -> DecisionSummary:
         return cls(
             decision_id=UUID(str(value["decision_id"])),
             proposal_id=UUID(str(value["proposal_id"])),
@@ -613,10 +613,10 @@ class StrategyRevisionService:
 
 
 __all__ = [
+    "DecisionNotFoundError",
+    "DecisionSummary",
+    "ProposalNotFoundError",
+    "ProposalSummary",
     "StrategyRevisionService",
     "StrategyServiceError",
-    "ProposalNotFoundError",
-    "DecisionNotFoundError",
-    "ProposalSummary",
-    "DecisionSummary",
 ]

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Provider-aware structured-output gateway for Firecrawl workflows.
 
 The gateway deliberately owns transport and response normalization only.  It
@@ -16,9 +15,15 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 try:
-    from research_store.semantic_service import redact_sensitive, validate_structured_payload
+    from research_store.semantic_service import (
+        redact_sensitive,
+        validate_structured_payload,
+    )
 except ModuleNotFoundError:  # Loaded as scripts.model_gateway from the repository root.
-    from scripts.research_store.semantic_service import redact_sensitive, validate_structured_payload
+    from scripts.research_store.semantic_service import (
+        redact_sensitive,
+        validate_structured_payload,
+    )
 
 
 DEFAULT_LOCAL_URL = "http://192.168.4.115:8002/v1"
@@ -112,7 +117,7 @@ def probe_local(base_url, api_key=""):
             "models": [item.get("id") for item in models if isinstance(item, dict)],
             "max_context_tokens": max((item.get("max_model_len", 0) or 0 for item in models if isinstance(item, dict)), default=0),
         }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return {"status": "unavailable", "error": _redact(f"{type(exc).__name__}: {exc}")[:500]}
 
 

@@ -1,22 +1,19 @@
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the repository scripts without installing a package.
-
-from hashlib import sha256
 import importlib.util
-from importlib.machinery import SourceFileLoader
-from io import BytesIO
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from hashlib import sha256
+from importlib.machinery import SourceFileLoader
+from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -68,7 +65,7 @@ def replay_env(tmp_path: Path, fixture_path: Path) -> dict[str, str]:
 
 
 def run_script(name: str, *args, env: dict[str, str]) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return subprocess.run(  # noqa: PLW1510
         [str(SCRIPTS / name), *map(str, args)],
         text=True,
         capture_output=True,
@@ -333,7 +330,7 @@ def test_qdrant_retrieval_outage_is_explicitly_reported():
         index=BrokenQdrant(),
         embedder=lambda _query: [0.1],
     )
-    execution, results = service.search_assets("fixture", candidate_limit=1)
+    execution, _results = service.search_assets("fixture", candidate_limit=1)
     from research_domain.models import MechanicalStatus
     assert execution.mechanical_status == MechanicalStatus.DEGRADED
     assert execution.component_health["qdrant"] == "failed"
@@ -370,7 +367,7 @@ def test_reranker_outage_is_explicitly_reported():
         embedder=lambda _query: [0.1],
         reranker=BrokenReranker()
     )
-    execution, results = service.search_assets("fixture", candidate_limit=1)
+    execution, _results = service.search_assets("fixture", candidate_limit=1)
     from research_domain.models import MechanicalStatus
     assert execution.mechanical_status == MechanicalStatus.DEGRADED
     assert execution.component_health["reranker"] == "failed"

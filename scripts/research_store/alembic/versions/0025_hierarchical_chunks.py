@@ -15,8 +15,8 @@ This migration adds:
    Tokenizer-backed hierarchical chunking.
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0025_hierarchical_chunks"
 down_revision = "0024_norm_blocks_transform"

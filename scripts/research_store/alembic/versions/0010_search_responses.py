@@ -6,7 +6,6 @@ corpus, snapshot, legacy, or search plan records.
 
 from alembic import op
 
-
 revision = "0010_search_responses"
 down_revision = "0009_search_plans"
 branch_labels = None

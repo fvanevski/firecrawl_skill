@@ -10,20 +10,18 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 import pytest
-
-from research_store.coverage_service import (
-    CoverageService,
-    CoverageEvent,
-    CoverageSnapshot,
-    CoverageError,
-    UnknownCoverageItemError,
-)
 from research_domain.models import (
     CoverageItemType,
     CoverageStatus,
     OverallCoverageStatus,
 )
-
+from research_store.coverage_service import (
+    CoverageError,
+    CoverageEvent,
+    CoverageService,
+    CoverageSnapshot,
+    UnknownCoverageItemError,
+)
 
 # ---------------------------------------------------------------------------
 # Memory repository fixture
@@ -148,9 +146,8 @@ class MemoryCoverageRepository:
             )
 
         # Unknown item check
-        if item_id is not None:
-            if str(item_id) not in self.items:
-                raise ValueError(f"unknown coverage item {item_id} for run {run_id}")
+        if item_id is not None and str(item_id) not in self.items:
+            raise ValueError(f"unknown coverage item {item_id} for run {run_id}")
 
         # For gap events, set status directly
         effective_status = new_status
@@ -257,14 +254,13 @@ class MemoryCoverageRepository:
                 key = str(evt.item_id)
                 if key in items:
                     authority_class = (evt.payload or {}).get("authority_class")
-                    if authority_class:
-                        if (
+                    if authority_class and (
+                        authority_class
+                        not in items[key]["authority_classes_present"]
+                    ):
+                        items[key]["authority_classes_present"].append(
                             authority_class
-                            not in items[key]["authority_classes_present"]
-                        ):
-                            items[key]["authority_classes_present"].append(
-                                authority_class
-                            )
+                        )
 
             elif evt.item_id and evt.event_type == "freshness_observed":
                 key = str(evt.item_id)
@@ -400,7 +396,7 @@ def coverage_fixture():
 
 class TestCoverageItemCreation:
     def test_creates_items_from_spec(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         spec = {
             "questions": [
@@ -434,7 +430,7 @@ class TestCoverageItemCreation:
         assert CoverageItemType.CONTRADICTION_REQUIREMENT in types
 
     def test_rejects_empty_spec(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         spec = {"questions": [], "claims_to_validate": []}
         with pytest.raises(CoverageError, match="at least one question"):
@@ -446,7 +442,7 @@ class TestCoverageItemCreation:
             service.create_items_from_spec(None, {"questions": []})
 
     def test_idempotent_item_creation(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         spec = {"questions": [{"question_id": uuid4(), "text": "What is X?"}]}
         first = service.create_items_from_spec(run_id, spec)
@@ -455,7 +451,7 @@ class TestCoverageItemCreation:
 
     def test_idempotent_item_creation_returns_same_ids(self):
         """Idempotent re-initialization returns the exact same item IDs."""
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         spec = {"questions": [{"question_id": uuid4(), "text": "What is X?"}]}
         first = service.create_items_from_spec(run_id, spec)
@@ -464,7 +460,7 @@ class TestCoverageItemCreation:
 
     def test_idempotent_creation_all_types_same_ids(self):
         """Batch-level idempotency with all 6 item types returns same IDs."""
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         spec = {
             "questions": [{"question_id": uuid4(), "text": "Q1"}],
@@ -497,7 +493,7 @@ class TestEventApplication:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         event = service.apply_event(
             run_id,
             "item_status_changed",
@@ -517,7 +513,7 @@ class TestEventApplication:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         first = service.apply_event(
             run_id,
             "item_status_changed",
@@ -580,7 +576,7 @@ class TestEventApplication:
             )
 
     def test_rejects_unknown_item(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         fake_item = uuid4()
         with pytest.raises(ValueError, match="unknown coverage item"):
@@ -593,7 +589,7 @@ class TestEventApplication:
             )
 
     def test_rejects_empty_idempotency_key(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -612,13 +608,13 @@ class TestEventApplication:
             service.apply_event(None, "item_status_changed")
 
     def test_rejects_missing_event_type(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         with pytest.raises(CoverageError, match="event_type is required"):
             service.apply_event(run_id, None)
 
     def test_event_with_source_references(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -638,7 +634,7 @@ class TestEventApplication:
         assert str(event.source_invocation_id) == str(source_invocation)
 
     def test_event_with_payload(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -656,7 +652,7 @@ class TestEventApplication:
 
 class TestProjectionRebuilding:
     def test_rebuilds_from_items_only(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -712,7 +708,7 @@ class TestProjectionRebuilding:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_event(
             run_id,
             "item_status_changed",
@@ -730,7 +726,7 @@ class TestProjectionRebuilding:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_event(
             run_id,
             "item_gap_identified",
@@ -741,7 +737,7 @@ class TestProjectionRebuilding:
         assert ledger.overall_status == OverallCoverageStatus.BLOCKED
 
     def test_rebuild_is_idempotent(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -755,7 +751,7 @@ class TestProjectionRebuilding:
 
 class TestSnapshots:
     def test_creates_snapshot(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         ledger = {
             "schema_version": "coverage-ledger-v1",
@@ -775,7 +771,7 @@ class TestSnapshots:
         assert len(snap.content_sha256) == 64
 
     def test_snapshot_idempotent(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         ledger = {"items": [], "overall_status": "sufficient"}
         first = service.create_snapshot(
@@ -787,7 +783,7 @@ class TestSnapshots:
         assert first.id == second.id
 
     def test_retrieves_snapshot_by_revision(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         ledger = {"items": [], "overall_status": "sufficient"}
         service.create_snapshot(
@@ -798,13 +794,13 @@ class TestSnapshots:
         assert snap.coverage_revision == 3
 
     def test_returns_none_for_missing_snapshot(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         snap = service.get_snapshot(run_id, 999)
         assert snap is None
 
     def test_gets_latest_snapshot(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_snapshot(
             run_id,
@@ -823,14 +819,14 @@ class TestSnapshots:
         assert latest.coverage_revision == 5
 
     def test_no_snapshot_returns_none(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         assert service.current_snapshot(run_id) is None
 
 
 class TestEventQuerying:
     def test_lists_events(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -852,12 +848,12 @@ class TestEventQuerying:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         events = service.list_events(run_id, item_id=UUID(item_id))
         assert all(str(e.item_id) == item_id for e in events)
 
     def test_filters_by_event_type(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -867,7 +863,7 @@ class TestEventQuerying:
         assert all(e.event_type == "item_created" for e in events)
 
     def test_gets_single_event(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -881,13 +877,13 @@ class TestEventQuerying:
         assert event.id == first_event_id
 
     def test_get_event_raises_for_unknown(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         with pytest.raises(UnknownCoverageItemError):
             service.get_event(run_id, uuid4())
 
     def test_count_events(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -896,7 +892,7 @@ class TestEventQuerying:
         assert service.count_events(run_id) >= 1
 
     def test_get_current_revision(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         assert service.get_current_revision(run_id) == 0
         service.create_items_from_spec(
@@ -995,7 +991,7 @@ class TestResearchSpecLedgerMapping:
 
     def test_all_six_item_types_created(self):
         """Every mandatory ResearchSpec field produces a ledger item."""
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         spec = {
             "questions": [
@@ -1037,7 +1033,7 @@ class TestResearchSpecLedgerMapping:
                 {"question_id": uuid4(), "text": "Q3"},
             ],
         }
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         items = service.create_items_from_spec(run_id, spec)
         assert len(items) == 3
@@ -1050,7 +1046,7 @@ class TestResearchSpecLedgerMapping:
                 {"claim_id": uuid4(), "statement": "C2"},
             ],
         }
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         items = service.create_items_from_spec(run_id, spec)
         assert len(items) == 2
@@ -1075,7 +1071,7 @@ class TestResearchSpecLedgerMapping:
                 {"requirement_id": uuid4(), "description": "CD1"},
             ],
         }
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         items = service.create_items_from_spec(run_id, spec)
         assert len(items) == 6
@@ -1095,7 +1091,7 @@ class TestResearchSpecLedgerMapping:
             "questions": [{"question_id": uuid4(), "text": "Q1"}],
             "claims_to_validate": [{"claim_id": uuid4(), "statement": "C1"}],
         }
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         items = service.create_items_from_spec(run_id, spec)
         for item in items:
@@ -1107,7 +1103,7 @@ class TestResearchSpecLedgerMapping:
         spec = {
             "questions": [{"question_id": "a1b2c3", "text": "Q1"}],
         }
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         items = service.create_items_from_spec(run_id, spec)
         assert items[0].subject_id == "a1b2c3"
@@ -1116,7 +1112,7 @@ class TestResearchSpecLedgerMapping:
         spec = {
             "questions": [{"question_id": uuid4(), "text": "Q1"}],
         }
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(run_id, spec, execution_mode="autonomous_local")
         event = service.list_events(run_id)[0]
@@ -1130,7 +1126,7 @@ class TestIdempotencyEdgeCases:
         spec = {
             "questions": [{"question_id": uuid4(), "text": "Q1"}],
         }
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         first = service.create_items_from_spec(run_id, spec)
         second = service.create_items_from_spec(run_id, spec)
@@ -1153,7 +1149,7 @@ class TestIdempotencyEdgeCases:
                 {"requirement_id": uuid4(), "description": "CD1"}
             ],
         }
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         first = service.create_items_from_spec(run_id, spec)
         second = service.create_items_from_spec(run_id, spec)
@@ -1162,7 +1158,7 @@ class TestIdempotencyEdgeCases:
 
     def test_different_runs_get_independent_items(self):
         spec = {"questions": [{"question_id": uuid4(), "text": "Q1"}]}
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_a = uuid4()
         run_b = uuid4()
         items_a = service.create_items_from_spec(run_a, spec)
@@ -1189,13 +1185,13 @@ class TestInvalidInput:
             service.create_items_from_spec(run_id, None)
 
     def test_empty_spec_dict(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         with pytest.raises(CoverageError, match="at least one question"):
             service.create_items_from_spec(run_id, {})
 
     def test_spec_with_only_empty_lists(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         spec = {
             "questions": [],
@@ -1219,7 +1215,7 @@ class TestCoverageSummary:
     """Test the coverage_summary() convenience API."""
 
     def test_summary_after_initialization(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         spec = {
             "questions": [
@@ -1247,7 +1243,7 @@ class TestCoverageSummary:
             ],
         }
         service.create_items_from_spec(run_id, spec)
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_event(
             run_id,
             "item_status_changed",
@@ -1264,7 +1260,7 @@ class TestCoverageSummary:
 
     def test_summary_empty_run(self):
         """A run with no items returns zero counts."""
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         summary = service.coverage_summary(run_id)
         assert summary["total_items"] == 0
@@ -1273,7 +1269,7 @@ class TestCoverageSummary:
         assert summary["type_counts"] == {}
 
     def test_summary_contains_schema_version(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -1300,7 +1296,7 @@ class TestCandidateIdentified:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         candidate_id = uuid4()
         event = service.apply_candidate_identified(
             run_id, UUID(item_id), candidate_id=candidate_id
@@ -1315,7 +1311,7 @@ class TestCandidateIdentified:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         candidate_id = uuid4()
         service.apply_candidate_identified(
             run_id, UUID(item_id), candidate_id=candidate_id
@@ -1332,7 +1328,7 @@ class TestCandidateIdentified:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         candidate_id = uuid4()
         service.apply_candidate_identified(
             run_id, UUID(item_id), candidate_id=candidate_id
@@ -1350,7 +1346,7 @@ class TestCandidateIdentified:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         c1, c2 = uuid4(), uuid4()
         service.apply_candidate_identified(run_id, UUID(item_id), candidate_id=c1)
         service.apply_candidate_identified(run_id, UUID(item_id), candidate_id=c2)
@@ -1364,7 +1360,7 @@ class TestCandidateIdentified:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         candidate_id = uuid4()
         first = service.apply_candidate_identified(
             run_id, UUID(item_id), candidate_id=candidate_id
@@ -1381,7 +1377,7 @@ class TestCandidateIdentified:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         with pytest.raises(CoverageError, match="candidate_id is required"):
             service.apply_candidate_identified(run_id, UUID(item_id), candidate_id=None)  # type: ignore[arg-type]
 
@@ -1396,7 +1392,7 @@ class TestExtractionAttempted:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         event = service.apply_extraction_attempted(
             run_id, UUID(item_id), source_url="https://example.com"
         )
@@ -1411,7 +1407,7 @@ class TestExtractionAttempted:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_extraction_attempted(
             run_id, UUID(item_id), source_url="https://example.com"
         )
@@ -1425,7 +1421,7 @@ class TestExtractionAttempted:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_extraction_attempted(
             run_id, UUID(item_id), source_url="https://example.com"
         )
@@ -1440,7 +1436,7 @@ class TestExtractionAttempted:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         with pytest.raises(CoverageError, match="source_url is required"):
             service.apply_extraction_attempted(run_id, UUID(item_id), source_url="")  # type: ignore[arg-type]
 
@@ -1455,7 +1451,7 @@ class TestAssetAcquired:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         event = service.apply_asset_acquired(
             run_id, UUID(item_id), source_url="https://example.com"
         )
@@ -1468,7 +1464,7 @@ class TestAssetAcquired:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_asset_acquired(
             run_id, UUID(item_id), source_url="https://example.com"
         )
@@ -1482,7 +1478,7 @@ class TestAssetAcquired:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_asset_acquired(
             run_id, UUID(item_id), source_url="https://example.com"
         )
@@ -1506,7 +1502,7 @@ class TestAssetAcquired:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         url = "https://example.com"
         service.apply_asset_acquired(
             run_id, UUID(item_id), source_url=url, idempotency_key="acq:1"
@@ -1526,7 +1522,7 @@ class TestAssetAcquired:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_asset_acquired(
             run_id, UUID(item_id), source_url="https://example.com"
         )
@@ -1544,7 +1540,7 @@ class TestAssetAcquired:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_asset_acquired(
             run_id, UUID(item_id), source_url="https://example.com"
         )
@@ -1560,7 +1556,7 @@ class TestAssetAcquired:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         with pytest.raises(CoverageError, match="source_url is required"):
             service.apply_asset_acquired(run_id, UUID(item_id), source_url="")  # type: ignore[arg-type]
 
@@ -1575,7 +1571,7 @@ class TestEvidenceRetrieved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         passage_ids = [str(uuid4()), str(uuid4())]
         event = service.apply_evidence_retrieved(
             run_id, UUID(item_id), passage_ids=passage_ids
@@ -1589,7 +1585,7 @@ class TestEvidenceRetrieved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         passage_ids = [str(uuid4()), str(uuid4())]
         service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
         ledger = service.rebuild_projection(run_id)
@@ -1604,7 +1600,7 @@ class TestEvidenceRetrieved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         passage_ids = [str(uuid4())]
         service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
         service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
@@ -1619,7 +1615,7 @@ class TestEvidenceRetrieved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         passage_ids = [str(uuid4())]
         service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
         ledger = service.rebuild_projection(run_id)
@@ -1633,7 +1629,7 @@ class TestEvidenceRetrieved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         with pytest.raises(CoverageError, match="passage_ids is required"):
             service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=[])
 
@@ -1648,7 +1644,7 @@ class TestSourceClassObserved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         event = service.apply_source_class_observed(
             run_id, UUID(item_id), authority_class="primary"
         )
@@ -1661,7 +1657,7 @@ class TestSourceClassObserved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_source_class_observed(
             run_id, UUID(item_id), authority_class="primary"
         )
@@ -1679,7 +1675,7 @@ class TestSourceClassObserved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_source_class_observed(
             run_id, UUID(item_id), authority_class="primary"
         )
@@ -1697,7 +1693,7 @@ class TestSourceClassObserved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         with pytest.raises(CoverageError, match="authority_class is required"):
             service.apply_source_class_observed(
                 run_id, UUID(item_id), authority_class=""
@@ -1711,7 +1707,7 @@ class TestSourceClassObserved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         with pytest.raises(CoverageError, match="authority_class is required"):
             service.apply_source_class_observed(
                 run_id,
@@ -1730,7 +1726,7 @@ class TestFreshnessObserved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         event = service.apply_freshness_observed(
             run_id, UUID(item_id), freshness_status="satisfied"
         )
@@ -1743,7 +1739,7 @@ class TestFreshnessObserved:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_freshness_observed(
             run_id, UUID(item_id), freshness_status="unsatisfied"
         )
@@ -1757,7 +1753,7 @@ class TestSourceCountCorrectness:
     """Test that independent-source counts are correct and not inflated."""
 
     def test_no_events_means_zero_count(self):
-        repo, service = coverage_fixture()
+        _repo, service = coverage_fixture()
         run_id = uuid4()
         service.create_items_from_spec(
             run_id,
@@ -1781,7 +1777,7 @@ class TestSourceCountCorrectness:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         # 5 extraction attempts, same URL — should give count of 1
         for _ in range(5):
             service.apply_extraction_attempted(
@@ -1798,7 +1794,7 @@ class TestSourceCountCorrectness:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         url = "https://example.com"
         for _ in range(3):
             service.apply_asset_acquired(run_id, UUID(item_id), source_url=url)
@@ -1813,7 +1809,7 @@ class TestSourceCountCorrectness:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         passage_ids = [str(uuid4()) for _ in range(10)]
         service.apply_evidence_retrieved(run_id, UUID(item_id), passage_ids=passage_ids)
         ledger = service.rebuild_projection(run_id)
@@ -1830,7 +1826,7 @@ class TestSourceEventIdProvenance:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         source_event = uuid4()
         event = service.apply_asset_acquired(
             run_id,
@@ -1847,7 +1843,7 @@ class TestSourceEventIdProvenance:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         source_event = uuid4()
         service.apply_candidate_identified(
             run_id,
@@ -1871,7 +1867,7 @@ class TestRestartAndReplay:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
 
         # Apply a mix of events
         candidate_id = uuid4()
@@ -1914,7 +1910,7 @@ class TestRestartAndReplay:
             run_id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
-        item_id = list(repo.items.keys())[0]
+        item_id = next(iter(repo.items.keys()))
         service.apply_asset_acquired(
             run_id, UUID(item_id), source_url="https://example.com"
         )

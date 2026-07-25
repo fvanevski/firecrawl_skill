@@ -14,8 +14,9 @@ link.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from .config import StoreConfig
@@ -172,9 +173,7 @@ class ExtractionService:
         # sqlite3 / built-in
         import sqlite3
 
-        if isinstance(exc, sqlite3.IntegrityError):
-            return True
-        return False
+        return bool(isinstance(exc, sqlite3.IntegrityError))
 
     def complete_attempt(
         self,
