@@ -6,9 +6,9 @@ from .acquisition_service import AcquisitionService
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
 from .extraction_service import ExtractionService
-from .postgres import PostgresUnitOfWork
 from .indexing import OpenAICompatibleEmbedder
 from .legacy_adapter import AdapterMode, LegacyEntryPointAdapter
+from .postgres import PostgresUnitOfWork
 from .qdrant import QdrantIndex
 from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
@@ -254,6 +254,31 @@ def build_audit_service(config: StoreConfig | None = None):
             config.normalization_version,
             config.chunker_version,
         )
+    )
+
+
+def build_evidence_service(config: StoreConfig | None = None):
+    """Build an EvidenceService wired to the PostgreSQL database."""
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    from budget_policy import DEFAULT_POLICY
+
+    from .evidence import EvidenceService
+
+    return EvidenceService(
+        partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        ),
+        budget_policy=DEFAULT_POLICY,
+        tokenizer_name=config.tokenizer_name,
     )
 
 

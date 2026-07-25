@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
 import hashlib
 import json
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Mapping
 from uuid import NAMESPACE_URL, uuid5
 
 from research_domain.models import (
@@ -20,7 +20,6 @@ from research_domain.models import (
     SourceRequirement,
     TimeWindow,
 )
-
 
 POLICY_PATH = Path(__file__).parents[1] / "references" / "budget-policy-v1.json"
 TIER_ORDER = ("focused", "standard", "intensive")
@@ -56,7 +55,7 @@ class ResourceCaps:
             )
 
     @classmethod
-    def from_mapping(cls, values: Mapping[str, int]) -> "ResourceCaps":
+    def from_mapping(cls, values: Mapping[str, int]) -> ResourceCaps:
         expected = {item.name for item in fields(cls)}
         unknown = sorted(set(values) - expected)
         missing = sorted(expected - set(values))
@@ -167,7 +166,7 @@ class BudgetPolicy:
         self.config_sha256 = hashlib.sha256(canonical).hexdigest()
 
     @classmethod
-    def load(cls, path: Path = POLICY_PATH) -> "BudgetPolicy":
+    def load(cls, path: Path = POLICY_PATH) -> BudgetPolicy:
         return cls(json.loads(path.read_text(encoding="utf-8")))
 
     @staticmethod
@@ -415,12 +414,12 @@ def conservative_research_spec(objective: str, research_archetype: str) -> Resea
 
 
 __all__ = [
+    "DEFAULT_POLICY",
     "BudgetDecision",
     "BudgetPolicy",
     "BudgetPolicyError",
     "BudgetRejection",
     "BudgetSnapshot",
-    "DEFAULT_POLICY",
     "ResourceCaps",
     "conservative_research_spec",
 ]

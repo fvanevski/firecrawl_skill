@@ -191,7 +191,7 @@ class ClaimRecord:
             raise ValueError(f"invalid semantic_status: {self.semantic_status}")
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "ClaimRecord":
+    def from_mapping(cls, value: dict[str, Any]) -> ClaimRecord:
         def _uuid(v):
             return UUID(v) if not isinstance(v, UUID) else v
 
@@ -215,6 +215,47 @@ class ClaimRecord:
             "semantic_status": self.semantic_status,
             "uncertainty": self.uncertainty,
             "evidence_packet_revision": self.evidence_packet_revision,
+            "created_at": (
+                self.created_at.isoformat()
+                if hasattr(self.created_at, "isoformat")
+                else str(self.created_at)
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class EvidencePacketRecord:
+    id: UUID
+    run_id: UUID
+    research_spec_id: UUID
+    coverage_revision: int
+    packet_revision: int
+    payload: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_mapping(cls, value: dict[str, Any]) -> EvidencePacketRecord:
+        def _uuid(v):
+            return UUID(v) if not isinstance(v, UUID) else v
+
+        return cls(
+            id=_uuid(value["id"]),
+            run_id=_uuid(value["run_id"]),
+            research_spec_id=_uuid(value["research_spec_id"]),
+            coverage_revision=value["coverage_revision"],
+            packet_revision=value["packet_revision"],
+            payload=value["payload"],
+            created_at=value["created_at"],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "run_id": str(self.run_id),
+            "research_spec_id": str(self.research_spec_id),
+            "coverage_revision": self.coverage_revision,
+            "packet_revision": self.packet_revision,
+            "payload": self.payload,
             "created_at": (
                 self.created_at.isoformat()
                 if hasattr(self.created_at, "isoformat")
@@ -251,7 +292,7 @@ class ClaimEvidenceLink:
             raise ValueError(f"confidence must be in [0, 1], got {self.confidence}")
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "ClaimEvidenceLink":
+    def from_mapping(cls, value: dict[str, Any]) -> ClaimEvidenceLink:
         def _uuid(v):
             return UUID(v) if not isinstance(v, UUID) else v
 
@@ -620,7 +661,7 @@ class ExtractionQualityMetrics:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ExtractionQualityMetrics":
+    def from_dict(cls, data: dict[str, Any]) -> ExtractionQualityMetrics:
         return cls(
             byte_length=data.get("byte_length", 0),
             visible_text_length=data.get("visible_text_length", 0),
@@ -677,7 +718,9 @@ class ExtractionAttempt:
     quality_metrics: ExtractionQualityMetrics | None = None
     failure_class: str = "none"
     retry_parent_id: UUID | None = None
-    disposition: str = "unassessed"  # 'acceptable' | 'poor' | 'ambiguous' | 'unassessed'
+    disposition: str = (
+        "unassessed"  # 'acceptable' | 'poor' | 'ambiguous' | 'unassessed'
+    )
     error_message: str | None = None
     selection_reason: str | None = None
     created_at: datetime = field(default_factory=utcnow)
@@ -707,7 +750,7 @@ class ExtractionAttempt:
             raise ValueError("attempt_number must be >= 1")
 
     @classmethod
-    def from_mapping(cls, row: dict[str, Any]) -> "ExtractionAttempt":
+    def from_mapping(cls, row: dict[str, Any]) -> ExtractionAttempt:
         def _uuid(v):
             return UUID(v) if not isinstance(v, UUID) and v is not None else v
 
@@ -902,7 +945,7 @@ class NormalizedBlock:
         transformation_reason: str | None = None,
         parser_version: str = "canonical-v1",
         id: UUID | None = None,
-    ) -> "NormalizedBlock":
+    ) -> NormalizedBlock:
         """Create a normalized block from a source block snapshot.
 
         Args:
@@ -984,7 +1027,7 @@ class TransformationRecord:
         after_text: str = "",
         confidence: float = 1.0,
         rule_version: str = "normalization-v1",
-    ) -> "TransformationRecord":
+    ) -> TransformationRecord:
         """Create a transformation record.
 
         Args:
@@ -1077,7 +1120,7 @@ class DerivationAttempt:
                 raise ValueError("configuration_sha256 must be hex")
 
     @classmethod
-    def from_mapping(cls, row: dict[str, Any]) -> "DerivationAttempt":
+    def from_mapping(cls, row: dict[str, Any]) -> DerivationAttempt:
         return cls(
             id=UUID(row["id"]),
             document_id=UUID(row["document_id"]),
