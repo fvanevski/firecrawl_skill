@@ -10,32 +10,9 @@ from __future__ import annotations
 
 import os
 import sys
-import urllib.parse
 from pathlib import Path
 
 import pytest
-
-
-def _get_test_dsn():
-    try:
-        with open(
-            "/opt/containers/research-postgres/secrets/research_postgres_password.txt"
-        ) as f:
-            pwd = urllib.parse.quote(f.read().strip(), safe="")
-            return f"postgresql://research_app:{pwd}@127.0.0.1:55432/firecrawl_test"
-    except FileNotFoundError:
-        return "postgresql://postgres:postgres@localhost:55432/firecrawl_test"
-
-
-# Authoritatively set default disposable integration test services so they aren't skipped
-os.environ.setdefault("RESEARCH_STORE_TEST_DATABASE_URL", _get_test_dsn())
-os.environ.setdefault("FIRECRAWL_LLM_LOCAL_BASE_URL", "http://localhost:8002/v1")
-os.environ.setdefault("FIRECRAWL_LLM_LOCAL_MODEL", "chat")
-os.environ.setdefault("FIRECRAWL_LLM_LOCAL_API_KEY", "EMPTY")
-os.environ.setdefault("FIRECRAWL_AUDIT_LOCAL_BASE_URL", "http://localhost:8002/v1")
-os.environ.setdefault("FIRECRAWL_AUDIT_LOCAL_MODEL", "chat")
-os.environ.setdefault("FIRECRAWL_AUDIT_LOCAL_API_KEY", "EMPTY")
-
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
