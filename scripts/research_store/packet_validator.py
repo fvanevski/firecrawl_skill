@@ -17,6 +17,13 @@ The validator does **not** mutate the packet.  It returns a
 ``ValidationResult`` that can be consumed by CLI commands, agent consumers,
 or downstream synthesis without risk of a packet being falsely marked
 complete.
+
+**Defense in depth.**  Several checks duplicate constraints enforced by the
+domain model's ``__post_init__`` (e.g. non-empty ``source_url``,
+non-empty ``model``, ``input_packet_revision >= 1``).  Those checks are
+retained because packets may be deserialized from external JSON (e.g. from
+PostgreSQL via ``load_model``) that bypasses ``__post_init__``.  The
+validator is the authoritative gate before synthesis or export.
 """
 
 from __future__ import annotations
@@ -884,8 +891,21 @@ def bounded_citation_ready_output(
         max_claims: Maximum number of claims to include.
 
     Returns:
-        A dict with keys ``claims``, ``passages``, ``groups``, and
-        ``metadata``.  All IDs are stringified.
+        A dict with keys ``claims``, ``passages``, ``bindings``,
+        ``groups``, and ``metadata``.  All IDs are stringified.
+
+    Design choices:
+
+    - **First-N slicing.**  Claims and passages are truncated by position
+      (``[:max_claims]`` / ``[:max_passages]``), not by confidence or
+      semantic status.  This keeps the function deterministic and O(1)
+      beyond the slice boundary.  A downstream synthesiser should
+      re-sort or re-filter if quality matters more than reproducibility.
+
+    - **Near-duplicate groups excluded.**  ``near_duplicate_groups`` are
+      omitted from the output because they are metadata about source
+      redundancy, not direct evidence for or against a claim.  They are
+      tracked in the full packet for auditability.
     """
     claims_out = []
     for claim in packet.claims[:max_claims]:

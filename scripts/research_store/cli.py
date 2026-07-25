@@ -2742,7 +2742,9 @@ def main(argv=None):
                 print(vr.to_json(indent=2))
                 return 0
             print(vr.to_json(indent=2), file=sys.stderr)
-            if not args.include_warnings and vr.errors:
+            if vr.errors:
+                return 1
+            if not args.include_warnings and vr.warnings:
                 return 1
             return 0
         else:

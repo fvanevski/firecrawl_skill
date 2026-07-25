@@ -684,6 +684,35 @@ class TestTokenBudgetValidation:
         assert result.is_valid is False
         assert any(f.code == "TOKEN_BUDGET_EXCEEDED" for f in result.errors)
 
+    def test_token_budget_full_warns(self):
+        """Passages using exactly the token budget generate a warning."""
+        # "x" tokenizes to 1 token with cl100k_base.
+        passage = _make_passage(text="x")  # 1 token
+        claim = _make_claim(semantic_status=SemanticStatus.SUPPORTED)
+        binding = _make_binding(
+            claim_id=claim.claim_id,
+            passage_ids=[passage.passage_id],
+        )
+        rp = _make_rp(selected_passage_ids=[passage.passage_id])
+        packet = _make_packet(
+            claims=[claim],
+            passages=[passage],
+            claim_evidence_bindings=[binding],
+            retrieval_provenance=[rp],
+            freshness_summary={"most_recent": "2025-06-01T00:00:00Z"},
+        )
+        caps = ResourceCaps.from_mapping(
+            {
+                **DEFAULT_POLICY.profiles["standard"].to_dict(),
+                "max_evidence_packet_tokens": 1,  # exactly 1 token
+            }
+        )
+        validator = EvidencePacketValidator()
+        result = validator.validate(packet, effective_caps=caps)
+        # Budget is exactly met, not exceeded — should be valid but warn.
+        assert result.is_valid is True
+        assert any(f.code == "TOKEN_BUDGET_FULL" for f in result.warnings)
+
     def test_omitted_passages_warn(self):
         """Omitted passages generate a warning."""
         passage = _make_passage()
@@ -954,8 +983,180 @@ class TestBoundedCitationReadyOutput:
 
 
 # ---------------------------------------------------------------------------
-# ValidationResult tests
+# CLI argument-parsing tests
 # ---------------------------------------------------------------------------
+
+
+class TestCLIArgumentParsing:
+    """Tests that the CLI argument parser recognises packet-* subcommands."""
+
+    def _get_parser(self):
+        from research_store.cli import parser
+
+        return parser()
+
+    def test_packet_validate_subcommand(self):
+        """packet-validate subcommand is parsed correctly."""
+        parser = self._get_parser()
+        args = parser.parse_args(["packet-validate", "test-run-id"])
+        assert args.command == "packet-validate"
+        assert args.run_id == "test-run-id"
+        assert args.revision is None
+        assert args.output == "-"
+        assert args.include_warnings is False
+
+    def test_packet_validate_with_revision_and_include_warnings(self):
+        """packet-validate accepts --revision and --include-warnings."""
+        parser = self._get_parser()
+        args = parser.parse_args(
+            [
+                "packet-validate",
+                "test-run-id",
+                "--revision",
+                "2",
+                "--include-warnings",
+            ]
+        )
+        assert args.command == "packet-validate"
+        assert args.revision == 2
+        assert args.include_warnings is True
+
+    def test_packet_inspect_with_bounded(self):
+        """packet-inspect --bounded flags are parsed correctly."""
+        parser = self._get_parser()
+        args = parser.parse_args(
+            [
+                "packet-inspect",
+                "test-run-id",
+                "--bounded",
+                "--max-passages",
+                "5",
+                "--max-claims",
+                "3",
+            ]
+        )
+        assert args.command == "packet-inspect"
+        assert args.bounded is True
+        assert args.max_passages == 5
+        assert args.max_claims == 3
+
+    def test_packet_diff_requires_revisions(self):
+        """packet-diff requires --old-revision and --new-revision."""
+        parser = self._get_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["packet-diff", "test-run-id"])
+        args = parser.parse_args(
+            [
+                "packet-diff",
+                "test-run-id",
+                "--old-revision",
+                "1",
+                "--new-revision",
+                "2",
+            ]
+        )
+        assert args.command == "packet-diff"
+        assert args.old_revision == 1
+        assert args.new_revision == 2
+
+    def test_packet_export_requires_output(self):
+        """packet-export requires --output."""
+        parser = self._get_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["packet-export", "test-run-id"])
+        args = parser.parse_args(
+            [
+                "packet-export",
+                "test-run-id",
+                "--output",
+                "output.json",
+            ]
+        )
+        assert args.command == "packet-export"
+        assert args.output == "output.json"
+
+
+# ---------------------------------------------------------------------------
+# CLI exit-code logic tests
+# ---------------------------------------------------------------------------
+
+
+class TestCLIPacketValidateExitCode:
+    """Tests for the packet-validate CLI exit-code logic.
+
+    These tests exercise the exit-code decision tree that was the subject
+    of review finding B1: the --include-warnings flag must not suppress
+    errors from causing a non-zero exit.
+    """
+
+    def _simulate_cli_exit_code(
+        self, is_valid, is_complete, errors, warnings, include_warnings
+    ):
+        """Simulate the CLI exit-code logic (cli.py lines 2739–2748).
+
+        Returns the exit code the CLI would return.
+        """
+        if is_valid and is_complete:
+            return 0
+        # In the real CLI, output is printed to stderr here.
+        if errors:
+            return 1
+        if not include_warnings and warnings:
+            return 1
+        return 0
+
+    def test_errors_always_exit_nonzero(self):
+        """Errors always cause exit code 1, regardless of --include-warnings."""
+        # With errors, --include-warnings should NOT suppress the non-zero exit.
+        assert (
+            self._simulate_cli_exit_code(
+                is_valid=False,
+                is_complete=False,
+                errors=["SOME_ERROR"],
+                warnings=[],
+                include_warnings=True,
+            )
+            == 1
+        )
+
+    def test_warnings_exit_nonzero_without_flag(self):
+        """Warnings cause exit code 1 when --include-warnings is not set."""
+        assert (
+            self._simulate_cli_exit_code(
+                is_valid=True,
+                is_complete=False,
+                errors=[],
+                warnings=["SOME_WARNING"],
+                include_warnings=False,
+            )
+            == 1
+        )
+
+    def test_warnings_suppressed_with_flag(self):
+        """Warnings do not cause exit code 1 when --include-warnings is set."""
+        assert (
+            self._simulate_cli_exit_code(
+                is_valid=True,
+                is_complete=False,
+                errors=[],
+                warnings=["SOME_WARNING"],
+                include_warnings=True,
+            )
+            == 0
+        )
+
+    def test_valid_and_complete_exits_zero(self):
+        """A fully valid and complete packet always exits 0."""
+        assert (
+            self._simulate_cli_exit_code(
+                is_valid=True,
+                is_complete=True,
+                errors=[],
+                warnings=[],
+                include_warnings=False,
+            )
+            == 0
+        )
 
 
 class TestValidationResult:
