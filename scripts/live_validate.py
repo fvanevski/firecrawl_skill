@@ -162,9 +162,9 @@ class Campaign:
                 env[key] = str(value)
         started = time.time()
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: PLW1510
                 command, text=True, capture_output=True, env=env, timeout=timeout
-            )  # noqa: PLW1510
+            )
             status = "pass" if result.returncode == 0 else "fail"
             output = result.stdout + (
                 "\n--- stderr ---\n" + result.stderr if result.stderr else ""

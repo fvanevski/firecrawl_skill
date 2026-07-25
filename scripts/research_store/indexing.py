@@ -76,8 +76,8 @@ class IndexWorker:
                 result["lease_lost"] += 1
                 continue
             except (
-                Exception
-            ) as exc:  # keep the durable worker alive per job  # noqa: BLE001
+                Exception  # noqa: BLE001
+            ) as exc:  # keep the durable worker alive per job
                 error = f"{type(exc).__name__}: {exc}"
 
             with self.uow_factory() as uow:

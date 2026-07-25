@@ -1406,13 +1406,15 @@ def test_blob_store_failure_during_complete_attempt(
         run_id=sample_run,
     )
 
-    with patch.object(
-        extraction_service,
-        "store_raw_blob",
-        side_effect=Exception("Blob store failure"),
-    ):  # noqa: SIM117
-        with pytest.raises(Exception, match="Blob store failure"):
-            extraction_service.store_raw_blob(b"content")
+    with (
+        patch.object(
+            extraction_service,
+            "store_raw_blob",
+            side_effect=Exception("Blob store failure"),
+        ),
+        pytest.raises(Exception, match="Blob store failure"),
+    ):
+        extraction_service.store_raw_blob(b"content")
 
     attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
     assert len(attempts) == 1

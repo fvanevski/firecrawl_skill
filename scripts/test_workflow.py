@@ -1877,8 +1877,8 @@ def test_v5_candidate_triage_rejects_irrelevant_volume(monkeypatch):
     ]
 
     class Result:
-        value = {
-            "decisions": [  # noqa: RUF012
+        value = {  # noqa: RUF012
+            "decisions": [
                 {
                     "candidate_id": "",
                     "relevance": "unrelated",
@@ -1903,9 +1903,9 @@ def test_v5_candidate_triage_rejects_irrelevant_volume(monkeypatch):
                 },
             ]
         }
-        provenance = {"provider": "local"}
-        attempts = []
-        error = ""  # noqa: RUF012
+        provenance = {"provider": "local"}  # noqa: RUF012
+        attempts = []  # noqa: RUF012
+        error = ""
 
     def fake_structured(*args, **kwargs):
         cards = json.loads(args[3].split("Candidate cards:\n", 1)[1])
