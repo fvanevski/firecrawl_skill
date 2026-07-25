@@ -2,17 +2,9 @@
 
 import json
 import logging
-from typing import Any
 from uuid import UUID, uuid4
 
 from model_gateway import call_structured
-from research_domain.models import (
-    ClaimEvidenceBinding,
-    EvidenceClaim,
-    EvidencePacket,
-    EvidenceRelationship,
-    SemanticStatus,
-)
 from research_domain.registry import load_model
 
 from .evidence import EvidenceService

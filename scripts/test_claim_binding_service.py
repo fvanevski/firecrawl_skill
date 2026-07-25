@@ -1,12 +1,13 @@
 """Tests for semantic claim binding service."""
 
 import json
-import pytest
 from copy import deepcopy
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from research_store.semantic_service import HostArtifactResult
+import pytest
 from research_store.claim_binding_service import ClaimBindingService
+from research_store.semantic_service import HostArtifactResult
+
 
 class MockEvidenceService:
     def __init__(self, packet: dict):
