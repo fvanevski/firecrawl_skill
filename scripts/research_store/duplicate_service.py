@@ -1,9 +1,8 @@
-import hashlib
 import re
 from collections import defaultdict
 from uuid import uuid4
 
-from research_domain.models import IndependenceAssessment, IndependenceStatus
+from research_domain.models import IndependenceStatus
 
 
 class DuplicateGroupService:
@@ -68,8 +67,6 @@ class DuplicateGroupService:
             c_ids = []
             assessments = {}
             
-            # The first one is treated as the primary (canonical) source in the group for assessment
-            primary_c = group_cands[0]
             
             for i, c in enumerate(group_cands):
                 cid = c["id"]
@@ -101,15 +98,15 @@ class DuplicateGroupService:
             })
 
         # Process exact hashes first
-        for h, cands in by_hash.items():
+        for cands in by_hash.values():
             create_group(cands, "exact_content_hash_match", IndependenceStatus.DEPENDENT)
 
         # Process canonical URLs
-        for url, cands in by_canonical.items():
+        for cands in by_canonical.values():
             create_group(cands, "canonical_url_match", IndependenceStatus.DEPENDENT)
 
         # Process normalized titles (likely syndication)
-        for t, cands in by_title_normalized.items():
+        for cands in by_title_normalized.values():
             create_group(cands, "likely_syndicated_title_match", IndependenceStatus.UNCERTAIN)
 
         # Remaining candidates are UNASSESSED or UNCERTAIN independent

@@ -13,8 +13,8 @@ from research_domain.models import (
     RetrievalProvenance,
 )
 
-from .tokenizer_registry import get_tokenizer
 from .duplicate_service import DuplicateGroupService
+from .tokenizer_registry import get_tokenizer
 
 logger = logging.getLogger(__name__)
 

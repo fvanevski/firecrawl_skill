@@ -2883,6 +2883,14 @@ class PostgresUnitOfWork:
         target_group_id = UUID(str(group_id)) if group_id is not None else cand_uuids[0]
 
         with self.connection.cursor() as cur:
+            import datetime
+            cur.execute(
+                """INSERT INTO duplicate_groups(id, run_id, rationale, created_at)
+                   VALUES (%s, %s, 'legacy assignment', %s)
+                   ON CONFLICT (id) DO NOTHING""",
+                (target_group_id, UUID(str(run_id)) if run_id else None, datetime.datetime.now(datetime.timezone.utc))
+            )
+
             if run_id is not None:
                 run_uuid = UUID(str(run_id))
                 cur.execute(

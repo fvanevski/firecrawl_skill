@@ -1,7 +1,8 @@
 import uuid
 
-from research_store.duplicate_service import DuplicateGroupService
 from research_domain.models import IndependenceStatus
+from research_store.duplicate_service import DuplicateGroupService
+
 
 def test_duplicate_group_service_exact_hash():
     svc = DuplicateGroupService()
