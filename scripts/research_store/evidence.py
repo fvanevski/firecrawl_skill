@@ -26,6 +26,10 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+# The try/except handles dual import paths: evidence.py can be imported
+# as a package submodule (research_store.evidence) or as a standalone
+# script (scripts/evidence.py) when run from the scripts directory.
+
 
 def _to_dict(obj: Any) -> Any:
     """Recursively convert domain objects to dicts for JSON serialization."""
@@ -302,7 +306,20 @@ class EvidenceService:
                 )
                 return packet.packet_revision
 
-            new_packet = self.grouping_service.build_packet_with_groups(packet)
+            try:
+                new_packet = self.grouping_service.build_packet_with_groups(
+                    packet,
+                )
+            except ValueError as exc:  # pragma: no cover
+                logger.error(
+                    "Evidence grouping failed for %s r%s: %s; "
+                    "returning current revision unchanged.",
+                    run_id,
+                    packet.packet_revision,
+                    exc,
+                )
+                return packet.packet_revision
+
             payload = _to_dict(new_packet)
 
             new_rev = packet.packet_revision + 1

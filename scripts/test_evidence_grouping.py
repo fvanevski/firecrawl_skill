@@ -484,6 +484,128 @@ def test_build_packet_with_groups_preserves_near_duplicate_groups(service):
 
 
 # ---------------------------------------------------------------------------
+# Evaluated absence through build_packet_with_groups
+# ---------------------------------------------------------------------------
+
+
+def test_build_packet_with_groups_unsupported_claim(service):
+    """build_packet_with_groups succeeds with unsupported claim (no bindings)."""
+    claim = _make_claim(
+        semantic_status=SemanticStatus.UNSUPPORTED,
+        statement="Unsupported claim",
+    )
+
+    packet = _make_packet(claims=[claim], passages=(), bindings=())
+
+    new_packet = service.build_packet_with_groups(packet)
+
+    # Should have one unevaluated corroborating group
+    assert len(new_packet.corroborating_groups) == 1
+    group = new_packet.corroborating_groups[0]
+    assert group.evaluated is False
+    assert group.passage_ids == ()
+    assert "unsupported" in group.rationale.lower()
+    # Other fields preserved
+    assert new_packet.passages == ()
+    assert new_packet.claim_evidence_bindings == ()
+
+
+def test_build_packet_with_groups_unassessed_claim(service):
+    """build_packet_with_groups succeeds with unassessed claim (no bindings)."""
+    claim = _make_claim(
+        semantic_status=SemanticStatus.UNASSESSED,
+        statement="Unassessed claim",
+    )
+
+    packet = _make_packet(claims=[claim], passages=(), bindings=())
+
+    new_packet = service.build_packet_with_groups(packet)
+
+    assert len(new_packet.corroborating_groups) == 1
+    group = new_packet.corroborating_groups[0]
+    assert group.evaluated is False
+    assert group.passage_ids == ()
+    assert "unassessed" in group.rationale.lower()
+
+
+def test_build_packet_with_groups_uncertain_claim(service):
+    """build_packet_with_groups succeeds with uncertain claim (no bindings)."""
+    claim = _make_claim(
+        semantic_status=SemanticStatus.UNCERTAIN,
+        statement="Uncertain claim",
+    )
+
+    packet = _make_packet(claims=[claim], passages=(), bindings=())
+
+    new_packet = service.build_packet_with_groups(packet)
+
+    assert len(new_packet.corroborating_groups) == 1
+    group = new_packet.corroborating_groups[0]
+    assert group.evaluated is False
+    assert group.passage_ids == ()
+    assert "uncertain" in group.rationale.lower()
+
+
+def test_build_packet_with_groups_supported_no_bindings(service):
+    """build_packet_with_groups succeeds with supported claim but no bindings.
+
+    This tests the "evaluated absence" path: the model said supported but
+    produced no bindings.  The group must have evaluated=False because
+    EvidenceGroup.__post_init__ rejects evaluated=True with empty passage_ids.
+    """
+    claim = _make_claim(
+        semantic_status=SemanticStatus.SUPPORTED,
+        statement="Supported claim with no bindings",
+    )
+
+    packet = _make_packet(claims=[claim], passages=(), bindings=())
+
+    new_packet = service.build_packet_with_groups(packet)
+
+    assert len(new_packet.corroborating_groups) == 1
+    group = new_packet.corroborating_groups[0]
+    assert group.evaluated is False
+    assert group.passage_ids == ()
+    assert "evaluated absence" in group.rationale.lower()
+
+
+def test_build_packet_with_groups_contradicted_no_bindings(service):
+    """build_packet_with_groups succeeds with contradicted claim but no bindings."""
+    claim = _make_claim(
+        semantic_status=SemanticStatus.CONTRADICTED,
+        statement="Contradicted claim with no bindings",
+    )
+
+    packet = _make_packet(claims=[claim], passages=(), bindings=())
+
+    new_packet = service.build_packet_with_groups(packet)
+
+    assert len(new_packet.contradicting_groups) == 1
+    group = new_packet.contradicting_groups[0]
+    assert group.evaluated is False
+    assert group.passage_ids == ()
+    assert "evaluated absence" in group.rationale.lower()
+
+
+def test_build_packet_with_groups_qualified_no_bindings(service):
+    """build_packet_with_groups succeeds with qualified claim but no bindings."""
+    claim = _make_claim(
+        semantic_status=SemanticStatus.QUALIFIED,
+        statement="Qualified claim with no bindings",
+    )
+
+    packet = _make_packet(claims=[claim], passages=(), bindings=())
+
+    new_packet = service.build_packet_with_groups(packet)
+
+    assert len(new_packet.qualifying_groups) == 1
+    group = new_packet.qualifying_groups[0]
+    assert group.evaluated is False
+    assert group.passage_ids == ()
+    assert "evaluated absence" in group.rationale.lower()
+
+
+# ---------------------------------------------------------------------------
 # Passage provenance
 # ---------------------------------------------------------------------------
 

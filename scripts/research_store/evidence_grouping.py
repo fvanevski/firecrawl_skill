@@ -3,18 +3,19 @@
 This module provides :class:`EvidenceGroupingService`, which populates the
 ``corroborating_groups``, ``contradicting_groups``, and ``qualifying_groups``
 fields on an ``EvidencePacket`` by analysing the claim-evidence bindings
-produced by :class:`ClaimBindingService` together with the duplicate-group
-assessments produced by :class:`DuplicateGroupService`.
+produced by :class:`ClaimBindingService`.
 
 Grouping semantics
 ------------------
-* **Corroborating** — bindings with relationship ``supports`` grouped by
-  claim.  Independent corroboration requires distinct source URLs; repeated
-  reporting from the same host is recorded separately.
-* **Contradicting** — bindings with relationship ``contradicts`` grouped by
-  claim.  Contradictory evidence is always preserved, never silently dropped.
-* **Qualifying** — bindings with relationship ``qualifies`` grouped by claim.
-  Qualifying groups capture contextual constraints on a claim.
+* **Corroborating** — bindings with relationship ``supports`` produce one
+  corroborating group per binding.  The rationale records the number of
+  distinct source URLs and flags single-source corroboration.
+* **Contradicting** — bindings with relationship ``contradicts`` produce one
+  contradicting group per binding.  Contradictory evidence is always
+  preserved, never silently dropped.
+* **Qualifying** — bindings with relationship ``qualifies`` produce one
+  qualifying group per binding.  Qualifying groups capture contextual
+  constraints on a claim.
 * **Context** — bindings with relationship ``context`` are collected but do
   not form a top-level group field in the current packet schema.  They are
   returned in the ``context_groups`` key of the grouping result so callers
@@ -22,22 +23,25 @@ Grouping semantics
 
 Evaluated absence
 -----------------
-When a claim has **no** bindings at all (or only ``unsupported`` /
-``unassessed`` / ``uncertain`` semantic status), the corresponding group
-field is populated with a single unevaluated group:
+When a claim has **no** bindings (regardless of its ``semantic_status``),
+the grouping engine creates a single unevaluated group with empty
+``passage_ids`` and ``evaluated=False``.  The rationale distinguishes
+between:
 
-    ``EvidenceGroup(group_id=..., passage_ids=(), rationale=..., evaluated=False)``
-
-This distinguishes **unevaluated** state from **evaluated absence**.
+- **Unevaluated** — the semantic model has not yet evaluated the claim
+  (``unsupported``, ``unassessed``, ``uncertain``).
+- **Evaluated absence** — the model evaluated the claim as
+  ``supported``, ``contradicted``, or ``qualified`` but produced no
+  bindings.
 
 Source independence
 -------------------
-The service accepts duplicate-group assessments from
-``DuplicateGroupService.evaluate_candidates`` so that corroboration counts
-reflect **independent** sources rather than repeated wire stories.  Bindings
-whose passages share a ``DEPENDENT`` duplicate-group rationale are grouped
-together under a ``repeated_reporting`` sub-group rather than inflating
-independent corroboration.
+The service extracts source URLs from passages referenced by bindings and
+notes in the rationale whether corroboration comes from a single source
+or multiple independent sources.  It does not consult duplicate-group
+assessments — that work is handled by :class:`DuplicateGroupService` and
+is available on the ``EvidencePacket`` via ``near_duplicate_groups`` and
+``independence_assessments``.
 
 Return format
 -------------
@@ -52,7 +56,7 @@ The service returns a dict compatible with the ``EvidencePacket`` schema:
 
 Each group carries the exact ``passage_ids`` from the bindings and a
 rationale that records the relationship type, claim statement, and
-(in when available) source-independence assessment.
+source URLs.
 """
 
 from __future__ import annotations
@@ -187,7 +191,10 @@ class EvidenceGroupingService:
                     )
                 elif status == "supported":
                     # Evaluated absence — the model said supported but
-                    # produced no bindings (shouldn't happen, but handle it).
+                    # produced no bindings.  Use evaluated=False so that
+                    # EvidenceGroup.__post_init__ does not reject the empty
+                    # passage_ids.  The rationale still distinguishes this
+                    # from a truly unevaluated claim.
                     rationale = (
                         f"Claim '{claim.statement}' is supported but no "
                         "passage bindings were produced; evaluated absence."
@@ -197,7 +204,7 @@ class EvidenceGroupingService:
                             group_id=uuid4(),
                             passage_ids=(),
                             rationale=rationale,
-                            evaluated=True,
+                            evaluated=False,
                         )
                     )
                 elif status == "contradicted":
@@ -210,7 +217,7 @@ class EvidenceGroupingService:
                             group_id=uuid4(),
                             passage_ids=(),
                             rationale=rationale,
-                            evaluated=True,
+                            evaluated=False,
                         )
                     )
                 elif status == "qualified":
@@ -223,7 +230,7 @@ class EvidenceGroupingService:
                             group_id=uuid4(),
                             passage_ids=(),
                             rationale=rationale,
-                            evaluated=True,
+                            evaluated=False,
                         )
                     )
 
