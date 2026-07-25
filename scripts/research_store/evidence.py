@@ -7,7 +7,6 @@ from uuid import UUID, uuid4
 
 from budget_policy import BudgetPolicy, ResourceCaps
 from research_domain.models import (
-    EvidenceGroup,
     EvidencePacket,
     EvidencePassage,
     RetrievalProvenance,

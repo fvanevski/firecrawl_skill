@@ -257,7 +257,7 @@ def test_evaluate_claims_integration(service, mock_packet):
         }
     ]
 
-    new_rev = service.evaluate_claims(
+    service.evaluate_claims(
         run_id=UUID(mock_packet["run_id"]),
         packet_revision=mock_packet["coverage_revision"],
         prompt_version="v1",
