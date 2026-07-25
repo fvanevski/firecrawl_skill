@@ -53,7 +53,7 @@ from research_store.postgres import (
     require_disposable_database_reset,
 )
 
-TEST_DSN = "postgresql://postgres:postgres@localhost:5432/firecrawl_test"
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
 
 @pytest.fixture(scope="session")

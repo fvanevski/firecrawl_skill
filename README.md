@@ -130,14 +130,14 @@ ledger with `research-db legacy-comparisons --divergent-only`. See
 
 ## Validation
 
-Run the full deterministic suite without network access:
+Run the full deterministic and integration test suite:
 
 ```bash
 env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
   "<skill-root>/scripts/"
 ```
 
-Run `scripts/test_research_store_integration.py` only against an explicitly named disposable PostgreSQL target whose name contains a standalone `test` segment, and set `RESEARCH_STORE_TEST_ALLOW_RESET` to that exact name. Its guarded session setup drops the public schema and covers populated migrations, database concurrency, derivations, retry ledgers, leases, runs, budget snapshots, and manifest binding. Use a separate recorded disposable-service campaign for wrapper preflight/fail-closed behavior, Valkey loss, damaged Qdrant rebuild, alias activation, and rollback proofs required before production.
+Integration tests automatically connect to the disposable `firecrawl_test` PostgreSQL database (port 55432) and the local vLLM endpoint (port 8002) using defaults injected by `scripts/conftest.py`. The guarded session setup drops the public schema and covers populated migrations, database concurrency, derivations, retry ledgers, leases, runs, budget snapshots, and manifest binding. Use a separate recorded disposable-service campaign for wrapper preflight/fail-closed behavior, Valkey loss, damaged Qdrant rebuild, alias activation, and rollback proofs required before production.
 
 For the design invariants, read `references/research-store-architecture.md`. For deployment, migration, backup/restore, worker, indexing, and recovery procedures, read `references/research-store-operations.md`. For Catalog v5 manifests and semantic audits, read `references/catalog-v5.md`.
 The Phase 5 exit decision and its acceptance evidence are recorded in
