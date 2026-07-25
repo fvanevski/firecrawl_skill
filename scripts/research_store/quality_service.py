@@ -284,7 +284,7 @@ class QualityService:
 
         try:
             return self.extraction_service.blob_store.get(blob_ref.uri).read()
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
     def evaluate_from_content(

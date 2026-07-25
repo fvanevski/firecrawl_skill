@@ -28,13 +28,11 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from budget_policy import BudgetDecision, BudgetPolicy, BudgetSnapshot
 from research_domain.models import (
     RejectionReason,
     ScopeExpansionRationale,
 )
-
-from budget_policy import BudgetDecision, BudgetPolicy, BudgetSnapshot
-
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -96,7 +94,7 @@ class ValidationResult:
         cls,
         scope_expansion: ScopeExpansionRationale | None = None,
         budget_decision: BudgetDecision | None = None,
-    ) -> "ValidationResult":
+    ) -> ValidationResult:
         return cls(
             valid=True,
             rejection_reasons=(),
@@ -110,7 +108,7 @@ class ValidationResult:
         *reasons: RejectionReason,
         scope_expansion: ScopeExpansionRationale | None = None,
         budget_decision: BudgetDecision | None = None,
-    ) -> "ValidationResult":
+    ) -> ValidationResult:
         return cls(
             valid=False,
             rejection_reasons=tuple(reasons),
@@ -367,15 +365,15 @@ class StrategyRevisionValidator:
 
 
 __all__ = [
-    "StrategyRevisionValidator",
-    "ValidationResult",
-    "StrategyValidationError",
-    "StaleRunRevisionError",
+    "BudgetExceededError",
+    "DuplicateActionError",
+    "ScopeExpansionError",
     "StaleCoverageRevisionError",
+    "StaleRunRevisionError",
+    "StrategyRevisionValidator",
+    "StrategyValidationError",
+    "TerminalRunStateError",
     "UnknownCoverageItemError",
     "UnknownRunError",
-    "DuplicateActionError",
-    "BudgetExceededError",
-    "ScopeExpansionError",
-    "TerminalRunStateError",
+    "ValidationResult",
 ]

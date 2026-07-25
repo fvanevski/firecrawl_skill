@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
+import sys
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-import sys
 from uuid import uuid4
 
 import pytest
@@ -235,11 +233,14 @@ def test_execution_mode_policy_routes_one_explicit_authority(
     mode, host, fixture, authority
 ):
     policy = ExecutionModePolicy()
-    assert policy.route(
-        mode,
-        host_artifact_supplied=host,
-        deterministic_fixture_supplied=fixture,
-    ) == authority
+    assert (
+        policy.route(
+            mode,
+            host_artifact_supplied=host,
+            deterministic_fixture_supplied=fixture,
+        )
+        == authority
+    )
 
 
 @pytest.mark.parametrize(
@@ -251,9 +252,7 @@ def test_execution_mode_policy_routes_one_explicit_authority(
         ("deterministic_debug", False, False),
     ],
 )
-def test_execution_mode_policy_rejects_implicit_authority_changes(
-    mode, host, fixture
-):
+def test_execution_mode_policy_rejects_implicit_authority_changes(mode, host, fixture):
     with pytest.raises(ExecutionModeError):
         ExecutionModePolicy().route(
             mode,
@@ -453,10 +452,12 @@ def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
     assert results[0]["excerpt"] == "lexical fallback"
     assert execution.executed_mode == "lexical"
     from research_domain.models import MechanicalStatus
+
     assert execution.mechanical_status == MechanicalStatus.DEGRADED
     assert execution.index_fingerprint == "research_chunks_other_model"
     assert len(execution.warnings) == 1
     assert "expected" in execution.warnings[0]
+
 
 def test_search_assets_intentional_lexical_mode():
     candidate_id = uuid4()
@@ -518,7 +519,9 @@ def test_search_assets_intentional_lexical_mode():
         reranker=forbidden_reranker,
     )
 
-    execution, results = service.search_assets("fallback", candidate_limit=5, requested_mode="lexical")
+    execution, results = service.search_assets(
+        "fallback", candidate_limit=5, requested_mode="lexical"
+    )
     assert [result["candidate_id"] for result in results] == [str(candidate_id)]
     assert results[0]["excerpt"] == "lexical intentional"
     assert execution.executed_mode == "lexical"
@@ -526,7 +529,9 @@ def test_search_assets_intentional_lexical_mode():
     assert "qdrant" in execution.skipped_stages
     assert "reranker" in execution.skipped_stages
     from research_domain.models import MechanicalStatus
+
     assert execution.mechanical_status == MechanicalStatus.SUCCEEDED
+
 
 def test_search_assets_intentional_semantic_mode():
     candidate_id = uuid4()
@@ -571,7 +576,13 @@ def test_search_assets_intentional_semantic_mode():
             return {"active": "research_chunks_configured_model"}
 
         def search(self, *_args):
-            return [{"id": str(uuid4()), "score": 0.9, "payload": {"chunk_id": str(candidate_id), "title": "Test"}}]
+            return [
+                {
+                    "id": str(uuid4()),
+                    "score": 0.9,
+                    "payload": {"chunk_id": str(candidate_id), "title": "Test"},
+                }
+            ]
 
     def dummy_embedder(_query):
         return [0.1]
@@ -584,12 +595,15 @@ def test_search_assets_intentional_semantic_mode():
         embedder=dummy_embedder,
     )
 
-    execution, results = service.search_assets("test", candidate_limit=5, requested_mode="semantic")
+    execution, results = service.search_assets(
+        "test", candidate_limit=5, requested_mode="semantic"
+    )
     assert [result["candidate_id"] for result in results] == [str(candidate_id)]
     assert results[0]["excerpt"] == "semantic intentional"
     assert execution.executed_mode == "semantic"
     assert execution.index_fingerprint == "research_chunks_configured_model"
     from research_domain.models import MechanicalStatus
+
     assert execution.mechanical_status == MechanicalStatus.SUCCEEDED
 
     # Semantic mode timing and skipped_stages
@@ -601,6 +615,7 @@ def test_search_assets_intentional_semantic_mode():
 def test_semantic_mode_with_alias_mismatch_is_failed():
     """Semantic mode with wrong alias should be FAILED, not DEGRADED."""
     from uuid import uuid4
+
     candidate_id = uuid4()
 
     class Repository:
@@ -655,6 +670,7 @@ def test_semantic_mode_with_alias_mismatch_is_failed():
     assert execution.requested_mode == "semantic"
     assert execution.executed_mode == "lexical"
     from research_domain.models import MechanicalStatus
+
     assert execution.mechanical_status == MechanicalStatus.FAILED
     # Alias mismatch is a config issue, not a component failure
     assert execution.component_health["qdrant"] == "healthy"
@@ -670,6 +686,7 @@ def test_semantic_mode_with_alias_mismatch_is_failed():
 def test_search_assets_with_run_id_persists_execution_and_events():
     """Verify that when run_id is provided, execution record and retrieval events are persisted."""
     from uuid import uuid4
+
     candidate_id = uuid4()
     run_id = uuid4()
 
@@ -719,7 +736,7 @@ def test_search_assets_with_run_id_persists_execution_and_events():
         embedder=None,
     )
 
-    execution, results = service.search_assets(
+    _execution, results = service.search_assets(
         "persistence", candidate_limit=5, run_id=run_id, requested_mode="lexical"
     )
     assert len(results) == 1
@@ -732,6 +749,7 @@ def test_search_assets_with_run_id_persists_execution_and_events():
     assert persisted_exec.requested_mode == "lexical"
     assert persisted_exec.executed_mode == "lexical"
     from research_domain.models import MechanicalStatus
+
     assert persisted_exec.mechanical_status == MechanicalStatus.SUCCEEDED
     assert persisted_exec.index_fingerprint is None
 
@@ -754,6 +772,7 @@ def test_search_assets_with_run_id_persists_execution_and_events():
 def test_search_assets_hybrid_mode_with_qdrant_failure():
     """Hybrid mode (default) with Qdrant failure should degrade to lexical-only."""
     from uuid import uuid4
+
     candidate_id = uuid4()
 
     class Repository:
@@ -815,6 +834,7 @@ def test_search_assets_hybrid_mode_with_qdrant_failure():
     assert execution.requested_mode == "hybrid"
     assert execution.executed_mode == "lexical"
     from research_domain.models import MechanicalStatus
+
     assert execution.mechanical_status == MechanicalStatus.DEGRADED
     assert execution.component_health["qdrant"] == "failed"
     assert execution.component_health["embedding"] == "failed"
@@ -826,6 +846,7 @@ def test_search_assets_hybrid_mode_with_qdrant_failure():
 def test_search_assets_cli_output_format():
     """Verify CLI output contains all expected execution fields."""
     from uuid import uuid4
+
     candidate_id = uuid4()
 
     class Repository:
@@ -873,7 +894,7 @@ def test_search_assets_cli_output_format():
         embedder=None,
     )
 
-    execution, results = service.search_assets(
+    execution, _results = service.search_assets(
         "cli", candidate_limit=5, requested_mode="lexical"
     )
 
@@ -903,8 +924,9 @@ def test_search_assets_cli_output_format():
 
 def test_retrieval_stage_trace_logging():
     """Verify that all ranking stages are logged, logging failure is fatal, and rejection reasons are set."""
-    import pytest
     from uuid import uuid4
+
+    import pytest
 
     candidate_id = uuid4()
     candidate_id_2 = uuid4()
@@ -962,7 +984,7 @@ def test_retrieval_stage_trace_logging():
 
     # Should crash because log_retrieval_batch raises RuntimeError
     with pytest.raises(RuntimeError, match="Intentional logging failure"):
-        execution, results = service.search_assets(
+        _execution, _results = service.search_assets(
             "trace", candidate_limit=1, run_id=run_id, requested_mode="lexical"
         )
 
@@ -974,7 +996,7 @@ def test_retrieval_stage_trace_logging():
     assert _logged_events[1]["stage"] == "lexical"
     assert _logged_events[1]["candidate_id"] == str(candidate_id_2)
     assert _logged_events[1]["selected"] is False
-    
+
     assert _logged_events[2]["stage"] == "fused"
     assert _logged_events[2]["candidate_id"] == str(candidate_id)
     assert _logged_events[2]["selected"] is True
@@ -1042,7 +1064,8 @@ def test_get_retrieval_trace_api():
                         "rejection_reason": e.get("rejection_reason"),
                     }
                     for e in _trace_events
-                    if e.get("_execution_id") == exec_id or True  # all events for this mock
+                    if e.get("_execution_id") == exec_id
+                    or True  # all events for this mock
                 ],
                 key=lambda e: (stage_order.get(e["stage"], 99), e.get("rank", 0)),
             )
@@ -1065,7 +1088,7 @@ def test_get_retrieval_trace_api():
         embedder=None,
     )
 
-    execution, results = service.search_assets(
+    _execution, _results = service.search_assets(
         "trace", candidate_limit=1, run_id=run_id, requested_mode="lexical"
     )
 
@@ -1252,9 +1275,21 @@ def test_reranked_stage_events_with_fused_intermediate():
 
         def search(self, *_args):
             return [
-                {"id": str(uuid4()), "score": 0.9, "payload": {"chunk_id": str(candidate_id), "title": "Test"}},
-                {"id": str(uuid4()), "score": 0.8, "payload": {"chunk_id": str(candidate_id_2), "title": "Test 2"}},
-                {"id": str(uuid4()), "score": 0.7, "payload": {"chunk_id": str(candidate_id_3), "title": "Test 3"}},
+                {
+                    "id": str(uuid4()),
+                    "score": 0.9,
+                    "payload": {"chunk_id": str(candidate_id), "title": "Test"},
+                },
+                {
+                    "id": str(uuid4()),
+                    "score": 0.8,
+                    "payload": {"chunk_id": str(candidate_id_2), "title": "Test 2"},
+                },
+                {
+                    "id": str(uuid4()),
+                    "score": 0.7,
+                    "payload": {"chunk_id": str(candidate_id_3), "title": "Test 3"},
+                },
             ]
 
     class MockReranker:
@@ -1290,7 +1325,7 @@ def test_reranked_stage_events_with_fused_intermediate():
         reranker=MockReranker(),
     )
 
-    execution, results = service.search_assets(
+    _execution, results = service.search_assets(
         "rerank test", candidate_limit=1, run_id=run_id, requested_mode="semantic"
     )
 
@@ -1378,4 +1413,3 @@ def test_search_assets_empty_input_no_events_logged():
     assert len(results) == 0
     assert len(_logged_events) == 0
     assert execution.mechanical_status.name == "SUCCEEDED"
-

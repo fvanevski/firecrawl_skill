@@ -83,7 +83,6 @@ recovery boundary or apply a forward-repair migration.
 
 from alembic import op
 
-
 revision = "0020_catalog_import_tracking"
 down_revision = "0019_audit_identity"
 branch_labels = None

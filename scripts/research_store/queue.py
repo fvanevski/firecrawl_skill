@@ -42,7 +42,7 @@ class ValkeyQueue:
             pipeline.expire(self.wakeup_key, ttl_seconds)
             pipeline.execute()
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
 
     def wait(self, timeout_seconds: float = 5.0) -> bool:
@@ -55,7 +55,7 @@ class ValkeyQueue:
                 return False
             # redis-py accepts float timeouts on current Redis/Valkey servers.
             return client.blpop(self.wakeup_key, timeout=timeout_seconds) is not None
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
 
     def prune_cache(self):

@@ -25,7 +25,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-
+from budget_policy import BudgetPolicy, BudgetSnapshot, ResourceCaps
 from research_domain.models import (
     RejectionReason,
     ScopeExpansionRationale,
@@ -33,7 +33,6 @@ from research_domain.models import (
     StrategyDecision,
     StrategyRevisionDecision,
 )
-from budget_policy import BudgetPolicy, BudgetSnapshot, ResourceCaps
 from research_store.strategy_service import (
     DecisionNotFoundError,
     ProposalNotFoundError,
@@ -44,7 +43,6 @@ from research_store.strategy_validator import (
     StrategyRevisionValidator,
     ValidationResult,
 )
-
 
 # ---------------------------------------------------------------------------
 # Memory repository fixture
@@ -812,7 +810,7 @@ class TestStrategyRevisionValidator:
             is_terminal=True,
         )
         assert result.valid is False
-        reasons = set(r.value for r in result.rejection_reasons)
+        reasons = {r.value for r in result.rejection_reasons}
         assert "terminal_run_state" in reasons
         assert "unknown_decision_type" in reasons
         assert "missing_target_items" in reasons
@@ -1017,7 +1015,7 @@ class TestStrategyRevisionService:
             is_terminal=True,
         )
         assert decision.outcome == "rejected"
-        reasons = set(r.value for r in decision.rejection_reasons)
+        reasons = {r.value for r in decision.rejection_reasons}
         assert "terminal_run_state" in reasons
 
     # -- Authorization: rejected (budget) --

@@ -26,9 +26,10 @@ Usage::
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from research_domain.models import (
@@ -81,7 +82,7 @@ class TerminalDecisionRecord:
         decision: TerminalDecision,
         idempotency_key: str,
         created_at: datetime | None = None,
-    ) -> "TerminalDecisionRecord":
+    ) -> TerminalDecisionRecord:
         """Build a record from an in-memory ``TerminalDecision``."""
         now = created_at or utcnow()
         return cls(

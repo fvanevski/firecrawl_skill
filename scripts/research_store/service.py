@@ -179,13 +179,14 @@ class CorpusService:
                 if self._is_html_content(mime_type, raw):
                     logging.getLogger(__name__).exception(
                         "Unexpected parser error, trying normalized HTML fallback: %s",
-                        exc,
+                        exc,  # noqa: TRY401
                     )
                     normalized_result = self._try_normalized_html(raw, mime_type)
                     if normalized_result is not None:
                         return normalized_result
                 logging.getLogger(__name__).exception(
-                    "Unexpected parser error, falling back to legacy: %s", exc
+                    "Unexpected parser error, falling back to legacy: %s",
+                    exc,  # noqa: TRY401
                 )
 
         if self._is_html_content(mime_type, raw):
@@ -298,7 +299,7 @@ class CorpusService:
                             uow.link_run_asset(
                                 research_run_external_id, result.snapshot_id, "acquired"
                             )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     failures += 1
                     uow.record_batch_asset(
                         batch_id,
@@ -364,7 +365,9 @@ class CorpusService:
 
         with self.uow_factory() as uow:
             if requested_mode != "semantic":
-                lexical = uow.documents.search_lexical(query, candidate_limit * 2, filters)
+                lexical = uow.documents.search_lexical(
+                    query, candidate_limit * 2, filters
+                )
                 for item in lexical:
                     item["candidate_id"] = str(item["candidate_id"])
                     item["retriever"] = "postgres_fts"
@@ -374,7 +377,13 @@ class CorpusService:
                 timing["lexical"] = 0.0
 
             semantic = []
-            component_health = {"lexical": "healthy", "embedding": "healthy", "qdrant": "healthy", "reranker": "healthy", "fusion": "healthy"}
+            component_health = {
+                "lexical": "healthy",
+                "embedding": "healthy",
+                "qdrant": "healthy",
+                "reranker": "healthy",
+                "fusion": "healthy",
+            }
             errors = []
             warnings = []
             skipped_stages = []
@@ -403,7 +412,7 @@ class CorpusService:
                                 f"qdrant alias points to {active!r}, "
                                 f"expected {self.config.physical_collection!r}"
                             )
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         component_health["qdrant"] = "failed"
                         component_health["embedding"] = "failed"
                         errors.append(f"qdrant/embedding error: {e!s}")
@@ -441,7 +450,7 @@ class CorpusService:
                 try:
                     candidates = self.reranker(query, candidates)
                     reranked_candidates = candidates
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     component_health["reranker"] = "failed"
                     errors.append(f"reranker error: {e!s}")
                 timing["reranker"] = time.time() - t4
@@ -489,31 +498,39 @@ class CorpusService:
                 uow.record_retrieval_execution(run_id, execution)
                 events_to_log = []
 
-                def _add_stage_events(stage_name, source_list, limit=None, final_stage=False):
+                def _add_stage_events(
+                    stage_name, source_list, limit=None, final_stage=False
+                ):
                     for rank, item in enumerate(source_list, 1):
                         selected = final_stage and limit is not None and rank <= limit
                         rejection_reason = None
                         if not selected and limit is not None and rank > limit:
-                            rejection_reason = "below_candidate_limit" if final_stage else "below_reranker_limit"
+                            rejection_reason = (
+                                "below_candidate_limit"
+                                if final_stage
+                                else "below_reranker_limit"
+                            )
 
                         raw_score = item.get("lexical_score")
                         if raw_score is None:
                             raw_score = item.get("semantic_score")
 
-                        events_to_log.append({
-                            "stage": stage_name,
-                            "query": query,
-                            "filters": filters,
-                            "retriever": item.get("retriever", "hybrid_rrf"),
-                            "candidate_type": "chunk",
-                            "candidate_id": item["candidate_id"],
-                            "raw_score": raw_score,
-                            "normalized_score": item.get("fused_score"),
-                            "reranker_score": item.get("reranker_score"),
-                            "rank": rank,
-                            "selected": selected,
-                            "rejection_reason": rejection_reason,
-                        })
+                        events_to_log.append(
+                            {
+                                "stage": stage_name,
+                                "query": query,
+                                "filters": filters,
+                                "retriever": item.get("retriever", "hybrid_rrf"),
+                                "candidate_type": "chunk",
+                                "candidate_id": item["candidate_id"],
+                                "raw_score": raw_score,
+                                "normalized_score": item.get("fused_score"),
+                                "reranker_score": item.get("reranker_score"),
+                                "rank": rank,
+                                "selected": selected,
+                                "rejection_reason": rejection_reason,
+                            }
+                        )
 
                 if lexical:
                     _add_stage_events("lexical", lexical)
@@ -521,15 +538,27 @@ class CorpusService:
                     _add_stage_events("semantic", semantic)
 
                 # Fused is final if reranker is not run or fails
-                fused_is_final = (reranked_candidates is None)
-                _add_stage_events("fused", fused_candidates,
-                                  limit=candidate_limit if fused_is_final else self.config.reranker_candidate_limit,
-                                  final_stage=fused_is_final)
+                fused_is_final = reranked_candidates is None
+                _add_stage_events(
+                    "fused",
+                    fused_candidates,
+                    limit=candidate_limit
+                    if fused_is_final
+                    else self.config.reranker_candidate_limit,
+                    final_stage=fused_is_final,
+                )
 
                 if reranked_candidates is not None:
-                    _add_stage_events("reranked", reranked_candidates, limit=candidate_limit, final_stage=True)
+                    _add_stage_events(
+                        "reranked",
+                        reranked_candidates,
+                        limit=candidate_limit,
+                        final_stage=True,
+                    )
 
-                uow.retrieval_events.log_retrieval_batch(execution.execution_id, run_id, events_to_log)
+                uow.retrieval_events.log_retrieval_batch(
+                    execution.execution_id, run_id, events_to_log
+                )
 
             return execution, candidates
 
@@ -829,7 +858,7 @@ class ClaimManifestService:
                         ),
                     )
                     inserted_claims += 1
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     failed_claims.append(
                         {
                             "claim_id": str(claim.get("claim_id", "unknown")),
@@ -850,7 +879,7 @@ class ClaimManifestService:
                         confidence=link.get("confidence", 1.0),
                     )
                     inserted_links += 1
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     exc_str = str(exc).lower()
                     if (
                         "unique constraint" in exc_str

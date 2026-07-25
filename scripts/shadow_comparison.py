@@ -30,9 +30,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid5
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ class BenchmarkObjective:
     expected_behavior: str
 
     @classmethod
-    def from_dict(cls, data: dict) -> "BenchmarkObjective":
+    def from_dict(cls, data: dict) -> BenchmarkObjective:
         required = {
             "objective_id",
             "objective",
@@ -84,7 +85,7 @@ class BenchmarkObjective:
         )
 
     @classmethod
-    def load_manifest(cls, manifest_path: str | Path) -> list["BenchmarkObjective"]:
+    def load_manifest(cls, manifest_path: str | Path) -> list[BenchmarkObjective]:
         """Load benchmark objectives from a manifest JSON file.
 
         Args:
@@ -151,11 +152,15 @@ class LegacyResult:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "LegacyResult":
+    def from_dict(cls, data: dict) -> LegacyResult:
         filtered = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
-        if "extracted_urls" in filtered and isinstance(filtered["extracted_urls"], list):
+        if "extracted_urls" in filtered and isinstance(
+            filtered["extracted_urls"], list
+        ):
             filtered["extracted_urls"] = tuple(filtered["extracted_urls"])
-        if "candidate_urls" in filtered and isinstance(filtered["candidate_urls"], list):
+        if "candidate_urls" in filtered and isinstance(
+            filtered["candidate_urls"], list
+        ):
             filtered["candidate_urls"] = tuple(filtered["candidate_urls"])
         return cls(**filtered)
 
@@ -208,11 +213,15 @@ class CoverageLedResult:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "CoverageLedResult":
+    def from_dict(cls, data: dict) -> CoverageLedResult:
         filtered = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
-        if "extracted_urls" in filtered and isinstance(filtered["extracted_urls"], list):
+        if "extracted_urls" in filtered and isinstance(
+            filtered["extracted_urls"], list
+        ):
             filtered["extracted_urls"] = tuple(filtered["extracted_urls"])
-        if "candidate_urls" in filtered and isinstance(filtered["candidate_urls"], list):
+        if "candidate_urls" in filtered and isinstance(
+            filtered["candidate_urls"], list
+        ):
             filtered["candidate_urls"] = tuple(filtered["candidate_urls"])
         return cls(**filtered)
 
@@ -241,7 +250,7 @@ class Divergence:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Divergence":
+    def from_dict(cls, data: dict) -> Divergence:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
@@ -286,17 +295,19 @@ class ComparisonResult:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ComparisonResult":
+    def from_dict(cls, data: dict) -> ComparisonResult:
         """Reconstruct a ``ComparisonResult`` from a serialized dict.
 
         Strictly validates that required schema keys exist.
         """
         if not isinstance(data, dict):
-            raise ValueError("ComparisonResult data must be a dict")
+            raise ValueError("ComparisonResult data must be a dict")  # noqa: TRY004
         required = {"objective_id", "legacy", "coverage_led"}
         missing = required - set(data)
         if missing:
-            raise ValueError(f"missing required keys in ComparisonResult: {sorted(missing)}")
+            raise ValueError(
+                f"missing required keys in ComparisonResult: {sorted(missing)}"
+            )
 
         return cls(
             objective_id=data["objective_id"],
@@ -341,7 +352,9 @@ def fsearch_smart_legacy_policy(objective: BenchmarkObjective) -> LegacyResult:
     keywords = fsearch_smart.extract_keywords(objective.objective)
     complexity, _ = fsearch_smart.classify_complexity(objective.objective, keywords)
 
-    num_queries = 2 if complexity == "simple" else (3 if complexity == "moderate" else 5)
+    num_queries = (
+        2 if complexity == "simple" else (3 if complexity == "moderate" else 5)
+    )
     selected = fsearch_smart.subject_keywords(keywords, complexity)
     base_phrase = " ".join(selected) if selected else objective.objective
 
@@ -350,12 +363,16 @@ def fsearch_smart_legacy_policy(objective: BenchmarkObjective) -> LegacyResult:
         {"query": f"{base_phrase} details", "facet": "primary_sources"},
     ]
     if num_queries >= 3:
-        query_plan.append({"query": f"{base_phrase} developments", "facet": "recent_updates"})
+        query_plan.append(
+            {"query": f"{base_phrase} developments", "facet": "recent_updates"}
+        )
     if num_queries >= 5:
-        query_plan.extend([
-            {"query": f"{base_phrase} analysis", "facet": "evidence"},
-            {"query": f"{base_phrase} challenges", "facet": "limitations"},
-        ])
+        query_plan.extend(
+            [
+                {"query": f"{base_phrase} analysis", "facet": "evidence"},
+                {"query": f"{base_phrase} challenges", "facet": "limitations"},
+            ]
+        )
 
     candidate_urls = tuple(
         f"https://legacy-search.example.com/{objective.objective_id}/cand-{i}"
@@ -386,7 +403,9 @@ def fsearch_smart_legacy_policy(objective: BenchmarkObjective) -> LegacyResult:
     )
 
 
-def research_orchestrator_coverage_led_policy(objective: BenchmarkObjective) -> CoverageLedResult:
+def research_orchestrator_coverage_led_policy(
+    objective: BenchmarkObjective,
+) -> CoverageLedResult:
     """Live policy adapter executing the coverage-led ResearchOrchestrator control policy."""
     complexity_map = {"simple": 2, "moderate": 3, "complex": 5}
     n_queries = complexity_map.get(objective.expected_complexity, 3)
@@ -441,7 +460,8 @@ class ShadowComparisonEngine:
     def __init__(
         self,
         legacy_policy: Callable[[BenchmarkObjective], LegacyResult] | None = None,
-        coverage_led_policy: Callable[[BenchmarkObjective], CoverageLedResult] | None = None,
+        coverage_led_policy: Callable[[BenchmarkObjective], CoverageLedResult]
+        | None = None,
     ) -> None:
         """Initialize the comparison engine.
 
@@ -450,7 +470,9 @@ class ShadowComparisonEngine:
             coverage_led_policy: Callable that runs coverage-led policy. Defaults to research_orchestrator_coverage_led_policy.
         """
         self.legacy_policy = legacy_policy or fsearch_smart_legacy_policy
-        self.coverage_led_policy = coverage_led_policy or research_orchestrator_coverage_led_policy
+        self.coverage_led_policy = (
+            coverage_led_policy or research_orchestrator_coverage_led_policy
+        )
 
     def compare(
         self,
@@ -505,7 +527,9 @@ class ShadowComparisonEngine:
             false_completion_coverage_led=false_coverage,
             deterministic_integrity=deterministic_integrity,
             run_revision=max(legacy.run_revision, coverage_led.run_revision),
-            coverage_revision=max(legacy.coverage_revision, coverage_led.coverage_revision),
+            coverage_revision=max(
+                legacy.coverage_revision, coverage_led.coverage_revision
+            ),
         )
 
     def _verify_deterministic_integrity(
@@ -524,7 +548,9 @@ class ShadowComparisonEngine:
             return False
 
         # 2. Query plan structure
-        if not isinstance(legacy.query_plan, list) or not isinstance(coverage_led.query_plan, list):
+        if not isinstance(legacy.query_plan, list) or not isinstance(
+            coverage_led.query_plan, list
+        ):
             return False
 
         # 3. Revision validity
@@ -534,12 +560,15 @@ class ShadowComparisonEngine:
             return False
 
         # 4. Extracted and Candidate URL set consistency
-        if len(legacy.extracted_urls) > len(legacy.candidate_urls) and legacy.candidate_urls:
+        if (
+            len(legacy.extracted_urls) > len(legacy.candidate_urls)
+            and legacy.candidate_urls
+        ):
             return False
-        if len(coverage_led.extracted_urls) > len(coverage_led.candidate_urls) and coverage_led.candidate_urls:
-            return False
-
-        return True
+        return not (
+            len(coverage_led.extracted_urls) > len(coverage_led.candidate_urls)
+            and coverage_led.candidate_urls
+        )
 
     def _compare_results(
         self,
@@ -731,12 +760,10 @@ class ShadowComparisonEngine:
         """Check if a result represents false completion."""
         if result.final_state != "completed":
             return False
-        if (
+        return bool(
             hasattr(result, "coverage_status")
             and result.coverage_status != "sufficient"
-        ):
-            return True
-        return False
+        )
 
     def _synthetic_legacy_result(self, objective: BenchmarkObjective) -> LegacyResult:
         """Generate a synthetic legacy result for dry-run comparison.
@@ -794,7 +821,9 @@ class ShadowComparisonEngine:
         extracted_urls = tuple(
             f"https://example.com/source/{i}" for i in range(n_queries * 2)
         )
-        run_id = str(uuid5(_SHADOW_UUID_NAMESPACE, f"coverage-{objective.objective_id}"))
+        run_id = str(
+            uuid5(_SHADOW_UUID_NAMESPACE, f"coverage-{objective.objective_id}")
+        )
 
         return CoverageLedResult(
             run_id=run_id,

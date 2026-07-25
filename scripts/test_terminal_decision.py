@@ -36,19 +36,18 @@ _SCRIPT_DIR = __file__.rsplit("/", 1)[0] or "."
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from research_domain.models import (  # noqa: E402
+from research_domain.models import (
     NoProgressSignal,
     OverallCoverageStatus,
     TerminalDecision,
     TerminalDecisionOutcome,
 )
-from research_store.terminal_decision import (  # noqa: E402
+from research_store.terminal_decision import (
     NegativeCountError,
     TerminalDecisionConfig,
     TerminalDecisionPolicy,
     TerminalDecisionPolicyError,
 )
-
 
 # ===================================================================
 # Fixtures
@@ -931,8 +930,8 @@ class TestTerminalDecisionIdempotency(unittest.TestCase):
         )
         self.assertEqual(decision1.outcome, decision2.outcome)
         self.assertEqual(
-            set(s.value for s in decision1.no_progress_signals),
-            set(s.value for s in decision2.no_progress_signals),
+            {s.value for s in decision1.no_progress_signals},
+            {s.value for s in decision2.no_progress_signals},
         )
 
 

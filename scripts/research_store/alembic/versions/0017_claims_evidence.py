@@ -100,7 +100,6 @@ recovery boundary or apply a forward-repair migration.
 
 from alembic import op
 
-
 revision = "0017_claims_evidence"
 down_revision = "0016_invocation_events"
 branch_labels = None

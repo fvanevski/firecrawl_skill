@@ -4214,7 +4214,11 @@ class PostgresUnitOfWork:
                     key = str(item_id)
                     if key in items:
                         authority_class = (payload or {}).get("authority_class")
-                        if authority_class and authority_class not in items[key]["authority_classes_present"]:
+                        if (
+                            authority_class
+                            and authority_class
+                            not in items[key]["authority_classes_present"]
+                        ):
                             items[key]["authority_classes_present"].append(
                                 authority_class
                             )

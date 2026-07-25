@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-
 TRACKING = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 SENSITIVE_PARAMS = {
     "api_key",
@@ -28,13 +27,11 @@ def is_sensitive_param(name: str) -> bool:
     name_lower = name.lower()
     if name_lower in SENSITIVE_PARAMS:
         return True
-    if name_lower.endswith("_key") or name_lower.endswith("key"):
+    if name_lower.endswith(("_key", "key")):
         return True
-    if name_lower.endswith("_token") or name_lower.endswith("token"):
+    if name_lower.endswith(("_token", "token")):
         return True
-    if name_lower.endswith("_secret") or name_lower.endswith("secret"):
-        return True
-    return False
+    return bool(name_lower.endswith(("_secret", "secret")))
 
 
 def redact_sensitive_url(value: str) -> str:
@@ -56,7 +53,9 @@ def redact_sensitive_url(value: str) -> str:
 
     query_str = urlencode(redacted_query, safe="[]")
 
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, query_str, parts.fragment))
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, query_str, parts.fragment)
+    )
 
 
 def canonicalize_url(value: str) -> str:

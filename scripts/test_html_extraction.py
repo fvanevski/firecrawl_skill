@@ -237,7 +237,7 @@ class TestHtmlMainContentCorpus:
         )
         result = parser.parse(source)
         assert result.success
-        types = set(b.block_type for b in result.blocks)
+        types = {b.block_type for b in result.blocks}
         assert "heading" in types
         assert "paragraph" in types
         assert "list_item" in types
@@ -405,8 +405,8 @@ class TestFallbackPolicy:
 
     def test_html_fails_without_registry(self):
         """CorpusService._parse_content raises ValueError for HTML if no parser is available."""
-        from research_store.service import CorpusService
         import pytest
+        from research_store.service import CorpusService
 
         # Minimal mock config
         config = type(
@@ -430,8 +430,8 @@ class TestFallbackPolicy:
 
     def test_html_fallback_chain(self):
         """When main-content parser fails, normalized parser is tried."""
-        from research_store.service import CorpusService
         from research_store.parsing import build_default_registry
+        from research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -462,8 +462,8 @@ class TestFallbackPolicy:
         HtmlNormalizedParser is tried as an intermediate fallback."""
         from unittest.mock import patch
 
-        from research_store.service import CorpusService
         from research_store.parsing import build_default_registry
+        from research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -486,12 +486,15 @@ class TestFallbackPolicy:
         # but we patch it to raise so the fallback path is exercised.
         raw = b"<main><h1>Title</h1><p>Body</p></main>"
 
-        with patch(
-            "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
-            side_effect=ValueError("simulated failure"),
-        ), patch(
-            "research_store.service.CorpusService._try_normalized_html",
-            return_value=[{"type": "paragraph", "text": "mocked"}],
+        with (
+            patch(
+                "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
+                side_effect=ValueError("simulated failure"),
+            ),
+            patch(
+                "research_store.service.CorpusService._try_normalized_html",
+                return_value=[{"type": "paragraph", "text": "mocked"}],
+            ),
         ):
             blocks = service._parse_content(raw, "text/html")
             # Should fall through to normalized fallback, which succeeds
@@ -500,10 +503,10 @@ class TestFallbackPolicy:
     def test_html_parsing_fails_when_both_parsers_fail(self):
         """When both primary and normalized parsers fail, a ValueError is raised."""
         from unittest.mock import patch
-        import pytest
 
-        from research_store.service import CorpusService
+        import pytest
         from research_store.parsing import build_default_registry
+        from research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -524,15 +527,18 @@ class TestFallbackPolicy:
 
         raw = b"<main><h1>Title</h1><p>Body</p></main>"
 
-        with patch(
-            "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
-            side_effect=ValueError("simulated failure"),
-        ), patch(
-            "research_store.service.CorpusService._try_normalized_html",
-            return_value=None,
+        with (
+            patch(
+                "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
+                side_effect=ValueError("simulated failure"),
+            ),
+            patch(
+                "research_store.service.CorpusService._try_normalized_html",
+                return_value=None,
+            ),
+            pytest.raises(ValueError, match="HTML parsing failed"),
         ):
-            with pytest.raises(ValueError, match="HTML parsing failed"):
-                service._parse_content(raw, "text/html")
+            service._parse_content(raw, "text/html")
 
     def test_is_html_content(self):
         from research_store.service import CorpusService
@@ -599,8 +605,8 @@ class TestLegacyCompatibility:
     """Tests that typed blocks convert to legacy Block correctly."""
 
     def test_to_legacy_block(self):
-        from research_store.parsing.html_main_content import HtmlMainContentParser
         from research_store.domain import Block
+        from research_store.parsing.html_main_content import HtmlMainContentParser
 
         parser = HtmlMainContentParser()
         result = parser.parse(b"<h1>Title</h1><p>Body</p>")
@@ -645,8 +651,8 @@ class TestServiceIntegration:
     """Integration tests for CorpusService with HTML content."""
 
     def test_parse_content_with_registry(self):
-        from research_store.service import CorpusService
         from research_store.parsing import build_default_registry
+        from research_store.service import CorpusService
 
         # Minimal mock config — _parse_content only uses parser_registry
         config = type(
@@ -675,8 +681,8 @@ class TestServiceIntegration:
         assert "paragraph" in types
 
     def test_parse_content_no_registry(self):
-        from research_store.service import CorpusService
         import pytest
+        from research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -699,8 +705,8 @@ class TestServiceIntegration:
             service._parse_content(raw, "text/html")
 
     def test_parse_content_markdown(self):
-        from research_store.service import CorpusService
         from research_store.parsing import build_default_registry
+        from research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -726,8 +732,8 @@ class TestServiceIntegration:
         assert "heading" in types
 
     def test_parse_content_plain_text(self):
-        from research_store.service import CorpusService
         from research_store.parsing import build_default_registry
+        from research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -752,8 +758,8 @@ class TestServiceIntegration:
         assert blocks[0].block_type == "paragraph"
 
     def test_parse_content_json(self):
-        from research_store.service import CorpusService
         from research_store.parsing import build_default_registry
+        from research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -777,9 +783,9 @@ class TestServiceIntegration:
         assert len(blocks) >= 1
 
     def test_parse_content_unsupported_mime(self):
-        from research_store.service import CorpusService
         from research_store.parsing import build_default_registry
         from research_store.parsing.interfaces import UnsupportedFormatError
+        from research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -997,23 +1003,26 @@ class TestRepresentativeFixtures:
         source = b"<main>\n  <h1>Title</h1>\n  <p>Some paragraph text.</p>\n</main>"
         result = parser.parse(source)
         text = source.decode("utf-8")
-        
+
         blocks = result.blocks
         assert len(blocks) == 2
-        
+
         assert blocks[0].block_type == "heading"
-        assert text[blocks[0].char_start:blocks[0].char_end] == "Title"
-        
+        assert text[blocks[0].char_start : blocks[0].char_end] == "Title"
+
         assert blocks[1].block_type == "paragraph"
-        assert text[blocks[1].char_start:blocks[1].char_end] == "Some paragraph text."
+        assert text[blocks[1].char_start : blocks[1].char_end] == "Some paragraph text."
 
     def test_boilerplate_gating(self):
         """Test that boilerplate can be extracted if strip_boilerplate=False."""
         from research_store.parsing.html_main_content import HtmlMainContentParser
+
         parser = HtmlMainContentParser(strip_boilerplate=False)
-        source = b"<nav>Navigation Link</nav><main>Main content</main><aside>Sidebar</aside>"
+        source = (
+            b"<nav>Navigation Link</nav><main>Main content</main><aside>Sidebar</aside>"
+        )
         result = parser.parse(source)
-        
+
         all_text = " ".join(b.text for b in result.blocks)
         assert "Navigation Link" in all_text
         assert "Main content" in all_text
@@ -1054,8 +1063,7 @@ class TestIngestRoundTrip:
     def test_html_ingest_produces_blocks_and_chunks(self):
         """Verify that HTML content parsed by HtmlMainContentParser
         produces both blocks and chunks through the full pipeline."""
-        from research_store.parsing import deterministic_chunks
-        from research_store.parsing import build_default_registry
+        from research_store.parsing import build_default_registry, deterministic_chunks
 
         # Minimal mock config
         config = type(
@@ -1124,8 +1132,7 @@ class TestIngestRoundTrip:
     def test_html_offsets_propagate_through_chunking(self):
         """HTML blocks have char_start/char_end populated; this must propagate
         through the chunking pipeline — chunks are produced with heading_path."""
-        from research_store.parsing import deterministic_chunks
-        from research_store.parsing import build_default_registry
+        from research_store.parsing import build_default_registry, deterministic_chunks
 
         config = type(
             "Config",

@@ -18,8 +18,8 @@ These tests verify:
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 import unittest
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,29 +31,28 @@ _SCRIPT_DIR = __file__.rsplit("/", 1)[0] or "."
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from research_store.orchestrator import (  # noqa: E402
-    OrchestratorConfig,
-    OrchestratorResult,
-    ResearchOrchestrator,
-    PlanningStage,
-    CorpusReviewStage,
+from research_domain.models import OverallCoverageStatus
+from research_store.orchestrator import (
+    STRATEGY_DECISION_FAIL,
+    STRATEGY_DECISION_PARTIAL,
+    STRATEGY_DECISION_SEARCH,
+    STRATEGY_DECISION_SYNTHESIZE,
     AcquisitionStage,
+    ContextKeys,
+    CorpusReviewStage,
+    CoverageReviewStage,
     ExtractionStage,
     IndexingStage,
-    CoverageReviewStage,
-    TerminalStage,
-    StageResult,
+    OrchestratorConfig,
+    OrchestratorResult,
+    PlanningStage,
+    ResearchOrchestrator,
     StageOutcome,
-    ContextKeys,
+    StageResult,
+    TerminalStage,
     _coverage_decision,
     decision_to_state,
-    STRATEGY_DECISION_SYNTHESIZE,
-    STRATEGY_DECISION_SEARCH,
-    STRATEGY_DECISION_PARTIAL,
-    STRATEGY_DECISION_FAIL,
 )
-from research_domain.models import OverallCoverageStatus  # noqa: E402
-
 
 # ===================================================================
 # In-memory fixtures
@@ -1104,7 +1103,7 @@ class TestFsearchSmartIntegration(unittest.TestCase):
 
         skill_root = os.path.dirname(__file__)
         fsearch_path = os.path.join(skill_root, "..", "scripts", "fsearch_smart")
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: PLW1510
             [sys.executable, fsearch_path, "--help"],
             capture_output=True,
             text=True,
@@ -1325,9 +1324,9 @@ class TestStrategyAuthorization(unittest.TestCase):
         — a proposal referencing an older run lifecycle revision is rejected
         with RejectionReason.STALE_RUN_REVISION.
         """
+        from budget_policy import BudgetPolicy
         from research_store.strategy_service import StrategyRevisionService
         from research_store.strategy_validator import RejectionReason
-        from budget_policy import BudgetPolicy
 
         proposal_id = uuid4()
         target_item = uuid4()
@@ -1381,9 +1380,9 @@ class TestStrategyAuthorization(unittest.TestCase):
         — a proposal for a run in a terminal state (completed, partial, failed)
         is rejected with RejectionReason.TERMINAL_RUN_STATE.
         """
+        from budget_policy import BudgetPolicy
         from research_store.strategy_service import StrategyRevisionService
         from research_store.strategy_validator import RejectionReason
-        from budget_policy import BudgetPolicy
 
         proposal_id = uuid4()
         target_item = uuid4()
@@ -1437,9 +1436,9 @@ class TestStrategyAuthorization(unittest.TestCase):
         — a proposal with estimated cost exceeding effective hard limits
         is rejected with RejectionReason.BUDGET_EXCEEDED.
         """
+        from budget_policy import BudgetPolicy
         from research_store.strategy_service import StrategyRevisionService
         from research_store.strategy_validator import RejectionReason
-        from budget_policy import BudgetPolicy
 
         proposal_id = uuid4()
         target_item = uuid4()

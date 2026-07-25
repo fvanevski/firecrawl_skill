@@ -1,23 +1,24 @@
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installation.
-
-from copy import deepcopy
 import json
-from pathlib import Path
 import sys
+from copy import deepcopy
+from pathlib import Path
 from uuid import UUID
 
 import pytest
-
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_domain import DomainValidationError, ValidationContext, dumps, load_model
-from research_domain.registry import COMPATIBILITY_POLICY, MODEL_BY_VERSION, schema_registry, serialize_model
-
+from research_domain.registry import (
+    COMPATIBILITY_POLICY,
+    MODEL_BY_VERSION,
+    schema_registry,
+    serialize_model,
+)
 
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
 SCHEMAS = ROOT / "schemas" / "research-workflow"
@@ -87,13 +88,48 @@ def validation_context():
 @pytest.mark.parametrize(
     ("version", "path", "value", "message"),
     [
-        ("search-plan-v1", ["queries", 0, "target_question_ids"], ["00000000-0000-0000-0000-000000009999"], "unknown question IDs"),
-        ("candidate-assessment-v1", ["candidate_id"], "00000000-0000-0000-0000-000000009999", "unknown candidate IDs"),
-        ("coverage-ledger-v1", ["items", 0, "subject_id"], "00000000-0000-0000-0000-000000009999", "unknown question subject IDs"),
-        ("strategy-revision-v1", ["target_coverage_item_ids"], ["00000000-0000-0000-0000-000000009999"], "unknown coverage item IDs"),
-        ("evidence-packet-v1", ["passages", 0, "candidate_id"], "00000000-0000-0000-0000-000000009999", "unknown candidate IDs"),
-        ("evidence-packet-v1", ["claims", 0, "claim_id"], "00000000-0000-0000-0000-000000009999", "unknown evidence claim IDs"),
-        ("evidence-packet-v1", ["unresolved_items"], ["00000000-0000-0000-0000-000000009999"], "unknown coverage item IDs"),
+        (
+            "search-plan-v1",
+            ["queries", 0, "target_question_ids"],
+            ["00000000-0000-0000-0000-000000009999"],
+            "unknown question IDs",
+        ),
+        (
+            "candidate-assessment-v1",
+            ["candidate_id"],
+            "00000000-0000-0000-0000-000000009999",
+            "unknown candidate IDs",
+        ),
+        (
+            "coverage-ledger-v1",
+            ["items", 0, "subject_id"],
+            "00000000-0000-0000-0000-000000009999",
+            "unknown question subject IDs",
+        ),
+        (
+            "strategy-revision-v1",
+            ["target_coverage_item_ids"],
+            ["00000000-0000-0000-0000-000000009999"],
+            "unknown coverage item IDs",
+        ),
+        (
+            "evidence-packet-v1",
+            ["passages", 0, "candidate_id"],
+            "00000000-0000-0000-0000-000000009999",
+            "unknown candidate IDs",
+        ),
+        (
+            "evidence-packet-v1",
+            ["claims", 0, "claim_id"],
+            "00000000-0000-0000-0000-000000009999",
+            "unknown evidence claim IDs",
+        ),
+        (
+            "evidence-packet-v1",
+            ["unresolved_items"],
+            ["00000000-0000-0000-0000-000000009999"],
+            "unknown coverage item IDs",
+        ),
     ],
 )
 def test_unknown_references_are_rejected(version, path, value, message):
@@ -165,12 +201,94 @@ def test_v1_compatibility_policy_is_explicit_and_rejects_unknown_versions():
 @pytest.mark.parametrize(
     ("version", "prd_fields"),
     [
-        ("research-spec-v1", {"schema_version", "objective", "research_archetype", "risk_level", "execution_mode", "questions", "claims_to_validate", "entities", "jurisdictions", "time_window", "freshness_requirements", "required_source_classes", "corroboration_requirements", "contradiction_requirements", "excluded_interpretations", "structured_data_requirements", "completion_criteria", "user_constraints", "ambiguities", "assumptions"}),
-        ("search-plan-v1", {"schema_version", "research_spec_id", "revision", "queries"}),
-        ("candidate-assessment-v1", {"schema_version", "candidate_id", "relevance", "source_role", "target_question_ids", "target_claim_ids", "freshness_assessment", "independence_assessment", "extraction_recommendation", "priority", "rationale", "confidence", "uncertainty"}),
-        ("coverage-ledger-v1", {"schema_version", "run_id", "revision", "items", "overall_status"}),
-        ("strategy-revision-v1", {"schema_version", "run_revision", "decision", "target_coverage_item_ids", "proposed_queries", "proposed_candidate_ids", "proposed_retrieval_queries", "expected_contribution", "estimated_cost", "rationale", "confidence"}),
-        ("evidence-packet-v1", {"schema_version", "run_id", "research_spec_id", "coverage_revision", "claims", "passages", "claim_evidence_bindings", "corroborating_groups", "contradicting_groups", "qualifying_groups", "near_duplicate_groups", "source_diversity_summary", "freshness_summary", "limitations", "unresolved_items", "retrieval_provenance"}),
+        (
+            "research-spec-v1",
+            {
+                "schema_version",
+                "objective",
+                "research_archetype",
+                "risk_level",
+                "execution_mode",
+                "questions",
+                "claims_to_validate",
+                "entities",
+                "jurisdictions",
+                "time_window",
+                "freshness_requirements",
+                "required_source_classes",
+                "corroboration_requirements",
+                "contradiction_requirements",
+                "excluded_interpretations",
+                "structured_data_requirements",
+                "completion_criteria",
+                "user_constraints",
+                "ambiguities",
+                "assumptions",
+            },
+        ),
+        (
+            "search-plan-v1",
+            {"schema_version", "research_spec_id", "revision", "queries"},
+        ),
+        (
+            "candidate-assessment-v1",
+            {
+                "schema_version",
+                "candidate_id",
+                "relevance",
+                "source_role",
+                "target_question_ids",
+                "target_claim_ids",
+                "freshness_assessment",
+                "independence_assessment",
+                "extraction_recommendation",
+                "priority",
+                "rationale",
+                "confidence",
+                "uncertainty",
+            },
+        ),
+        (
+            "coverage-ledger-v1",
+            {"schema_version", "run_id", "revision", "items", "overall_status"},
+        ),
+        (
+            "strategy-revision-v1",
+            {
+                "schema_version",
+                "run_revision",
+                "decision",
+                "target_coverage_item_ids",
+                "proposed_queries",
+                "proposed_candidate_ids",
+                "proposed_retrieval_queries",
+                "expected_contribution",
+                "estimated_cost",
+                "rationale",
+                "confidence",
+            },
+        ),
+        (
+            "evidence-packet-v1",
+            {
+                "schema_version",
+                "run_id",
+                "research_spec_id",
+                "coverage_revision",
+                "claims",
+                "passages",
+                "claim_evidence_bindings",
+                "corroborating_groups",
+                "contradicting_groups",
+                "qualifying_groups",
+                "near_duplicate_groups",
+                "source_diversity_summary",
+                "freshness_summary",
+                "limitations",
+                "unresolved_items",
+                "retrieval_provenance",
+            },
+        ),
     ],
 )
 def test_model_and_schema_include_every_prd_field(version, prd_fields):

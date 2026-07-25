@@ -20,10 +20,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid4
 
 
@@ -616,7 +617,7 @@ class CatalogImportService:
 
         try:
             source_state_sha256 = _compute_dir_sha256(catalog_root)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             errors.append(f"Failed to compute source state hash: {exc}")
             source_state_sha256 = ""
 
@@ -652,29 +653,57 @@ class CatalogImportService:
                 with self.uow_factory() as uow:
                     cur = uow.connection.cursor()
 
-                    run_ids = [r.catalog_id for r in valid_records if r.record_type == CATALOG_RUN_TYPE]
+                    run_ids = [
+                        r.catalog_id
+                        for r in valid_records
+                        if r.record_type == CATALOG_RUN_TYPE
+                    ]
                     if run_ids:
-                        cur.execute("SELECT external_run_id FROM research_runs WHERE external_run_id = ANY(%s)", (run_ids,))
+                        cur.execute(
+                            "SELECT external_run_id FROM research_runs WHERE external_run_id = ANY(%s)",
+                            (run_ids,),
+                        )
                         existing_runs.update(row[0] for row in cur.fetchall())
 
-                    inv_ids = [r.catalog_id for r in valid_records if r.record_type == CATALOG_INVOCATION_TYPE]
+                    inv_ids = [
+                        r.catalog_id
+                        for r in valid_records
+                        if r.record_type == CATALOG_INVOCATION_TYPE
+                    ]
                     if inv_ids:
-                        cur.execute("SELECT external_invocation_id FROM research_invocations WHERE external_invocation_id = ANY(%s)", (inv_ids,))
+                        cur.execute(
+                            "SELECT external_invocation_id FROM research_invocations WHERE external_invocation_id = ANY(%s)",
+                            (inv_ids,),
+                        )
                         existing_invocations.update(row[0] for row in cur.fetchall())
 
-                    event_ids = [r.catalog_id for r in valid_records if r.record_type == CATALOG_EVENT_TYPE]
+                    event_ids = [
+                        r.catalog_id
+                        for r in valid_records
+                        if r.record_type == CATALOG_EVENT_TYPE
+                    ]
                     if event_ids:
-                        cur.execute("SELECT idempotency_key FROM research_events WHERE idempotency_key = ANY(%s)", (event_ids,))
+                        cur.execute(
+                            "SELECT idempotency_key FROM research_events WHERE idempotency_key = ANY(%s)",
+                            (event_ids,),
+                        )
                         existing_events.update(row[0] for row in cur.fetchall())
 
-                    claim_ids = [r.catalog_id for r in valid_records if r.record_type == CATALOG_CLAIM_TYPE]
+                    claim_ids = [
+                        r.catalog_id
+                        for r in valid_records
+                        if r.record_type == CATALOG_CLAIM_TYPE
+                    ]
                     if claim_ids:
                         # Convert to UUID strings for match
                         try:
                             # Postgres claim_id is UUID
-                            cur.execute("SELECT claim_id::text FROM research_claims WHERE claim_id::text = ANY(%s)", (claim_ids,))
+                            cur.execute(
+                                "SELECT claim_id::text FROM research_claims WHERE claim_id::text = ANY(%s)",
+                                (claim_ids,),
+                            )
                             existing_claims.update(row[0] for row in cur.fetchall())
-                        except Exception:
+                        except Exception:  # noqa: BLE001,S110
                             pass
 
                     assess_ids = [
@@ -687,7 +716,7 @@ class CatalogImportService:
                         # But wait, audit_assessments doesn't have an "assessment_id". It has target_id and target_hash.
                         # We'll just map by checking if there's any assessment for this target_id and target_hash, but for now we skip DB hydrate for assessment since we don't have a reliable primary key mapping.
                         pass
-            except Exception:
+            except Exception:  # noqa: BLE001,S110
                 # Fallback to empty sets if DB fails or mock uow is used
                 pass
 
@@ -747,9 +776,9 @@ class CatalogImportService:
         record: CatalogRecord,
         existing_runs: set[str],
         existing_invocations: set[str],
-        existing_events: set[str] = None,
-        existing_claims: set[str] = None,
-        existing_assessments: set[str] = None,
+        existing_events: set[str] | None = None,
+        existing_claims: set[str] | None = None,
+        existing_assessments: set[str] | None = None,
     ) -> MappingResult:
         existing_events = existing_events or set()
         existing_claims = existing_claims or set()
@@ -1105,8 +1134,14 @@ class CatalogImportService:
                 ON CONFLICT (external_run_id) DO NOTHING
                 RETURNING id""",
                 (
-                    catalog_id, "unknown", "running", "created",
-                    1, "legacy", "unknown", 0,
+                    catalog_id,
+                    "unknown",
+                    "running",
+                    "created",
+                    1,
+                    "legacy",
+                    "unknown",
+                    0,
                     "{}",
                 ),
             )
@@ -1150,8 +1185,14 @@ class CatalogImportService:
                 ON CONFLICT (external_invocation_id) DO NOTHING
                 RETURNING id""",
                 (
-                    run_pg_id, catalog_id, "unknown", "pending",
-                    1, catalog_id, "{}", "{}",
+                    run_pg_id,
+                    catalog_id,
+                    "unknown",
+                    "pending",
+                    1,
+                    catalog_id,
+                    "{}",
+                    "{}",
                 ),
             )
             row = cur.fetchone()

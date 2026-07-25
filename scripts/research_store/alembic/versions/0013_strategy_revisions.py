@@ -49,7 +49,6 @@ distinguished by ``row_type``.
 
 from alembic import op
 
-
 revision = "0013_strategy_revisions"
 down_revision = "0012_coverage_events"
 branch_labels = None

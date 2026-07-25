@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import hashlib
 import json
 import os
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from .blob import ContentAddressedBlobStore
@@ -72,7 +73,9 @@ class SearchCompatibilityExporter:
             candidates = uow.runs.list_candidates(run_id)
 
             for cand in candidates:
-                cand_occs = uow.runs.list_candidate_occurrences(cand["id"], run_id=run_id)
+                cand_occs = uow.runs.list_candidate_occurrences(
+                    cand["id"], run_id=run_id
+                )
                 for occ in cand_occs:
                     if str(occ["search_response_id"]) == str(search_response_id):
                         occurrences.append(
@@ -109,9 +112,8 @@ class SearchCompatibilityExporter:
                 }
             )
 
-        source_state_str = (
-            raw_bytes.decode("utf-8", errors="replace")
-            + json.dumps(candidate_items, sort_keys=True)
+        source_state_str = raw_bytes.decode("utf-8", errors="replace") + json.dumps(
+            candidate_items, sort_keys=True
         )
         source_state_sha256 = hashlib.sha256(
             source_state_str.encode("utf-8")
@@ -171,7 +173,7 @@ class SearchCompatibilityExporter:
             _export_json(meta_json_path, meta_payload)
             files_created.append(meta_json_path)
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             export_status = "failed"
             export_err = f"{type(exc).__name__}: {exc}"
 
@@ -189,7 +191,7 @@ class SearchCompatibilityExporter:
                     metadata=meta_payload,
                 )
                 uow.commit()
-        except Exception:
+        except Exception:  # noqa: BLE001,S110
             pass
 
         return CompatibilityExportResult(

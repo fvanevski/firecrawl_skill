@@ -31,9 +31,10 @@ Event types supported (mapped from Catalog v5):
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid4
 
 from .invocation_events import (
@@ -86,7 +87,7 @@ class InvocationRecord:
     created_at: datetime
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "InvocationRecord":
+    def from_mapping(cls, value: dict[str, Any]) -> InvocationRecord:
         return cls(
             id=value["id"],
             run_id=value["run_id"],
@@ -118,7 +119,9 @@ class InvocationRecord:
             "error": self.error,
             "metadata": self.metadata,
             "started_at": self.started_at.isoformat() if self.started_at else None,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "completed_at": self.completed_at.isoformat()
+            if self.completed_at
+            else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -194,7 +197,9 @@ class InvocationCatalogService:
             raise ValueError("operation is required")
 
         sanitized_input = _sanitize(input_data)
-        idempotency_key = idempotency_key or f"invocation:begin:{external_invocation_id}"
+        idempotency_key = (
+            idempotency_key or f"invocation:begin:{external_invocation_id}"
+        )
         input_json = json.dumps(sanitized_input)
 
         with self.uow_factory() as uow:
@@ -335,7 +340,15 @@ class InvocationCatalogService:
             if row is None:
                 raise KeyError(f"invocation {invocation_id} not found")
 
-            _, inv_run_id, operation, current_status, revision, input_data, started_at = row
+            (
+                _,
+                _inv_run_id,
+                operation,
+                current_status,
+                _revision,
+                _input_data,
+                started_at,
+            ) = row
             if current_status != "running":
                 raise InvocationCatalogError(
                     f"invocation {invocation_id} is not running (status={current_status})"
@@ -374,9 +387,20 @@ class InvocationCatalogService:
             )
             record_row = cur.fetchone()
             keys = (
-                "id", "run_id", "parent_invocation_id", "external_invocation_id",
-                "operation", "status", "lifecycle_revision", "input", "output",
-                "error", "metadata", "started_at", "completed_at", "created_at",
+                "id",
+                "run_id",
+                "parent_invocation_id",
+                "external_invocation_id",
+                "operation",
+                "status",
+                "lifecycle_revision",
+                "input",
+                "output",
+                "error",
+                "metadata",
+                "started_at",
+                "completed_at",
+                "created_at",
             )
             record = InvocationRecord.from_mapping(dict(zip(keys, record_row)))
 
@@ -485,9 +509,7 @@ class InvocationCatalogService:
             offset=offset,
         )
 
-    def get_event(
-        self, run_id: UUID, event_id: UUID
-    ) -> InvocationEvent:
+    def get_event(self, run_id: UUID, event_id: UUID) -> InvocationEvent:
         """Retrieve a single event by ID.
 
         Args:
@@ -530,7 +552,9 @@ class InvocationCatalogService:
             "operation": record.operation,
             "input": record.input,
             "started_at": record.started_at.isoformat() if record.started_at else None,
-            "finished_at": record.completed_at.isoformat() if record.completed_at else None,
+            "finished_at": record.completed_at.isoformat()
+            if record.completed_at
+            else None,
             "execution": {
                 "status": "succeeded" if record.status == "complete" else "failed",
                 "exit_code": None,

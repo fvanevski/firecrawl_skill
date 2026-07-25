@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-# ruff: noqa: E402
-
-from dataclasses import replace
 import json
 import os
-from pathlib import Path
 import sys
+from dataclasses import replace
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -16,13 +14,11 @@ sys.path.insert(0, str(SCRIPTS))
 
 from research_store.config import StoreConfig
 from research_store.container import (
-
     build_acquisition_service,
     build_compatibility_export_service,
     build_run_service,
 )
 from research_store.postgres import connect, migrate, require_disposable_database_reset
-
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
@@ -45,21 +41,23 @@ class MockSearchAdapter:
     def search(self, query_text: str, **kwargs):
         from research_store.domain import SearchAdapterResult, utcnow
 
-        payload = json.dumps({
-            "success": True,
-            "data": [
-                {
-                    "url": "https://export-test.com/item1",
-                    "title": "Export Item One",
-                    "snippet": "Snippet for export item one",
-                },
-                {
-                    "url": "https://export-test.org/item2",
-                    "title": "Export Item Two",
-                    "snippet": "Snippet for export item two",
-                },
-            ],
-        }).encode("utf-8")
+        payload = json.dumps(
+            {
+                "success": True,
+                "data": [
+                    {
+                        "url": "https://export-test.com/item1",
+                        "title": "Export Item One",
+                        "snippet": "Snippet for export item one",
+                    },
+                    {
+                        "url": "https://export-test.org/item2",
+                        "title": "Export Item Two",
+                        "snippet": "Snippet for export item two",
+                    },
+                ],
+            }
+        ).encode("utf-8")
         return SearchAdapterResult(
             raw_payload=payload,
             http_status=200,
@@ -72,10 +70,13 @@ class MockSearchAdapter:
 
 # --- Integration Tests (requires PostgreSQL) ---
 
+
 @pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
-def test_search_compatibility_export_golden_and_regeneration(tmp_path, prepared_database):
+def test_search_compatibility_export_golden_and_regeneration(
+    tmp_path, prepared_database
+):
     migrate(TEST_DSN)
     config = replace(
         StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
@@ -107,10 +108,14 @@ def test_search_compatibility_export_golden_and_regeneration(tmp_path, prepared_
     search_json = json.loads((target_dir / "_search.json").read_text(encoding="utf-8"))
     assert search_json["success"] is True
 
-    cands_json = json.loads((target_dir / "_candidates.json").read_text(encoding="utf-8"))
+    cands_json = json.loads(
+        (target_dir / "_candidates.json").read_text(encoding="utf-8")
+    )
     assert cands_json["search_response_id"] == str(acq_res.search_response_id)
     assert cands_json["candidate_count"] == 2
-    assert cands_json["candidates"][0]["canonical_url"] == "https://export-test.com/item1"
+    assert (
+        cands_json["candidates"][0]["canonical_url"] == "https://export-test.com/item1"
+    )
     assert cands_json["candidates"][0]["candidate_id"] is not None
 
     meta_json = json.loads((target_dir / "_meta.json").read_text(encoding="utf-8"))
@@ -128,13 +133,19 @@ def test_search_compatibility_export_golden_and_regeneration(tmp_path, prepared_
     assert not target_dir.exists()
 
     # Regenerate search exports from PostgreSQL authority
-    regen_results = exporter.regenerate_search_exports(run_id, tmp_path / "regen_output")
+    regen_results = exporter.regenerate_search_exports(
+        run_id, tmp_path / "regen_output"
+    )
     assert len(regen_results) == 1
     res2 = regen_results[0]
     assert res2.status == "complete"
     assert res2.source_state_sha256 == res1.source_state_sha256
 
-    regen_meta = json.loads((tmp_path / "regen_output" / "response_001" / "_meta.json").read_text(encoding="utf-8"))
+    regen_meta = json.loads(
+        (tmp_path / "regen_output" / "response_001" / "_meta.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert regen_meta["source_state_sha256"] == res1.source_state_sha256
 
 

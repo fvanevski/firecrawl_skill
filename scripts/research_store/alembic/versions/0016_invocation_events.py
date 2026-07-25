@@ -73,7 +73,6 @@ and columns use ``CREATE TYPE ... NOT EXISTS`` guards where possible.
 
 from alembic import op
 
-
 revision = "0016_invocation_events"
 down_revision = "0015_terminal_decisions"
 branch_labels = None

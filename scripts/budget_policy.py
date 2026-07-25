@@ -196,7 +196,8 @@ class BudgetPolicy:
             "tier.medium_risk": inputs["risk_level"] == RiskLevel.MEDIUM.value,
             "tier.freshness_sensitive": inputs["freshness_requirement_count"] > 0,
             "tier.multi_part_scope": semantic_scope >= 3,
-            "tier.corroboration_required": inputs["corroboration_requirement_count"] > 0,
+            "tier.corroboration_required": inputs["corroboration_requirement_count"]
+            > 0,
             "tier.multiple_source_classes": inputs["required_source_minimum"] >= 3,
             "tier.archetype_floor": inputs["research_archetype"]
             in {"breaking_news", "legislative_legal", "academic_debate"},
@@ -311,7 +312,11 @@ class BudgetPolicy:
                 )
                 continue
             limit = getattr(snapshot.effective_caps, name)
-            if isinstance(proposed, bool) or not isinstance(proposed, int) or proposed < 0:
+            if (
+                isinstance(proposed, bool)
+                or not isinstance(proposed, int)
+                or proposed < 0
+            ):
                 rejections.append(
                     BudgetRejection(
                         "proposal.invalid_value",

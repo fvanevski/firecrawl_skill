@@ -2,7 +2,6 @@
 
 from alembic import op
 
-
 revision = "0004_drop_legacy_manifest_key"
 down_revision = "0003_job_manifest_integrity"
 branch_labels = None

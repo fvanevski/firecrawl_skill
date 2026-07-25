@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import Any
 
-from .interfaces import Parser, ParserSelectionError, ParseResult
+from .interfaces import Parser, ParseResult, ParserSelectionError
 
 
 @dataclass(frozen=True)
@@ -176,9 +176,7 @@ class ParserRegistry:
         # 2. Prefix match
         if mime_type is not None:
             for prefix, cls in sorted(self._parsers.items()):
-                if mime_type.startswith(prefix + "/") or mime_type.startswith(
-                    prefix + ";"
-                ):
+                if mime_type.startswith((prefix + "/", prefix + ";")):
                     instance = cls()
                     return SelectionRecord(
                         requested_mime_type=mime_type,
@@ -200,7 +198,7 @@ class ParserRegistry:
                             selection_method="sniff",
                             parser_version=instance.parser_version,
                         )
-                except Exception:
+                except Exception:  # noqa: BLE001,S112
                     continue
 
         # 3b. Neither MIME type nor raw bytes — cannot select
@@ -245,9 +243,9 @@ def build_default_registry() -> ParserRegistry:
         A fully configured ``ParserRegistry`` instance.
     """
     from .extensions import (
-        PdfParser,
         CodeParser,
         LegalDocumentParser,
+        PdfParser,
     )
     from .html_parser import HtmlNormalizedParser
     from .json_parser import JsonParser

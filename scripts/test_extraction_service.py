@@ -6,8 +6,6 @@ RESEARCH_STORE_TEST_DATABASE_URL and are marked with pytest.mark.skipif.
 
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
 import hashlib
 import os
 import sys
@@ -1375,7 +1373,7 @@ def test_blob_store_failure_during_create_attempt(
     """
     from unittest.mock import patch
 
-    with patch.object(extraction_service, 'uow_factory') as mock_factory:
+    with patch.object(extraction_service, "uow_factory") as mock_factory:
         mock_uow = MagicMock()
         mock_uow.__enter__.return_value = mock_uow
         mock_uow.commit.side_effect = Exception("Simulated DB failure")
@@ -1403,14 +1401,20 @@ def test_blob_store_failure_during_complete_attempt(
     """
     from unittest.mock import patch
 
-    aid = extraction_service.create_attempt(
+    extraction_service.create_attempt(
         candidate_id=sample_candidate,
         run_id=sample_run,
     )
 
-    with patch.object(extraction_service, 'store_raw_blob', side_effect=Exception("Blob store failure")):
-        with pytest.raises(Exception, match="Blob store failure"):
-            extraction_service.store_raw_blob(b"content")
+    with (
+        patch.object(
+            extraction_service,
+            "store_raw_blob",
+            side_effect=Exception("Blob store failure"),
+        ),
+        pytest.raises(Exception, match="Blob store failure"),
+    ):
+        extraction_service.store_raw_blob(b"content")
 
     attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
     assert len(attempts) == 1
@@ -1434,7 +1438,7 @@ def test_on_delete_cascade_from_candidate(
     extraction_service.complete_attempt(attempt_id=aid, exit_status="succeeded")
     attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
     assert len(attempts) == 1
-    
+
     with extraction_service.uow_factory() as uow:
         # Simulate deleting the candidate
         uow.connection.execute(
@@ -1466,13 +1470,18 @@ def test_db_commit_failure_after_blob_write(
         candidate_id=sample_candidate, run_id=sample_run
     )
 
-    with patch.object(extraction_service, 'uow_factory') as mock_factory:
+    with patch.object(extraction_service, "uow_factory") as mock_factory:
         mock_uow = MagicMock()
         mock_uow.__enter__.return_value = mock_uow
         mock_uow.commit.side_effect = Exception("Simulated DB commit failure")
         mock_uow.extraction_attempts.get_attempt.return_value = ExtractionAttempt(
-            id=aid, candidate_id=sample_candidate, run_id=sample_run, attempt_number=1,
-            method="firecrawl_main_content", exit_status="succeeded", created_at=utcnow(),
+            id=aid,
+            candidate_id=sample_candidate,
+            run_id=sample_run,
+            attempt_number=1,
+            method="firecrawl_main_content",
+            exit_status="succeeded",
+            created_at=utcnow(),
         )
         mock_factory.return_value = mock_uow
 

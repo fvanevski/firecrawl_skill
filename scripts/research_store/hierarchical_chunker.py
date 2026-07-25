@@ -359,7 +359,7 @@ def _split_on_whitespace(
                 )
                 current_words = []
                 current_tokens = 0
-            
+
             # Slice the oversized word mechanically
             remaining_chars = list(word)
             while remaining_chars:
@@ -386,9 +386,9 @@ def _split_on_whitespace(
                         is_atomic=False,
                     )
                 )
-                remaining_chars = remaining_chars[len(chunk_chars):]
+                remaining_chars = remaining_chars[len(chunk_chars) :]
             continue
-            
+
         if current_words and current_tokens + word_tokens > max_tokens:
             result.append(
                 AtomicBlock(
@@ -469,7 +469,7 @@ def hierarchical_chunks(
 
     # Phase 1: Classify blocks into atomic units
     atomic_blocks: list[AtomicBlock] = [_classify_block(b) for b in blocks]
-    
+
     # Map heading path to the block ordinal representing that heading
     heading_path_to_ordinal: dict[tuple[str, ...], int] = {}
     for b in blocks:
@@ -498,7 +498,7 @@ def hierarchical_chunks(
         text = "\n\n".join(a.text for a in current)
         token_count = tokenizer.count(text)
         heading_path = current[-1].heading_path if current else ()
-        
+
         parent_block_ordinal = None
         # Use the heading path of the last block in the chunk to represent the chunk's section
         if current and current[-1].heading_path:

@@ -553,11 +553,13 @@ class DerivationService:
 
             return result
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             import traceback
+
             result["status"] = "failed"
             result["error"] = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
-            logger.error("Target %s %s failed:\n%s",
+            logger.error(
+                "Target %s %s failed:\n%s",
                 result.get("target_type"),
                 result.get("target_id"),
                 result["error"],

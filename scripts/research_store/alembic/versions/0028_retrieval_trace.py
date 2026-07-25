@@ -7,7 +7,6 @@ and stage tracing).
 
 from alembic import op
 
-
 revision = "0028_retrieval_trace"
 down_revision = "0027_retrieval_executions"
 branch_labels = None

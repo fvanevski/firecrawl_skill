@@ -22,7 +22,6 @@ response records.
 
 from alembic import op
 
-
 revision = "0012_coverage_events"
 down_revision = "0011_candidate_identity"
 branch_labels = None

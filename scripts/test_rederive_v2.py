@@ -18,13 +18,11 @@ Covers:
 
 from __future__ import annotations
 
-# ruff: noqa: E402
-
+import os
+import sys
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
-import os
-import sys
 from uuid import UUID, uuid4
 
 import pytest
@@ -33,17 +31,17 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store.config import StoreConfig
-from research_store.domain import (
-    DerivationAttempt,
-    DerivationComparisonReport,
-    IngestRequest,
-    VALID_DERIVATION_STATUSES,
-)
-from research_store.postgres import connect, migrate, require_disposable_database_reset
 from research_store.derivation_service import (
     DerivationService,
     _configuration_sha256,
 )
+from research_store.domain import (
+    VALID_DERIVATION_STATUSES,
+    DerivationAttempt,
+    DerivationComparisonReport,
+    IngestRequest,
+)
+from research_store.postgres import connect, migrate, require_disposable_database_reset
 
 ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
@@ -698,8 +696,6 @@ class TestDerivationServiceIntegration:
         # A future enhancement should enqueue an index job for the new
         # active derivation's chunks when activation occurs.
 
-
-
     def test_reindex_integration(self, service, derivation_service, tmp_path):
         """Active derivations correctly integrate with index selection."""
         from research_store.cli import _active_chunk_ids
@@ -720,7 +716,9 @@ class TestDerivationServiceIntegration:
         )
 
         # Activate the new derivation
-        pending = derivation_service.list_derivations(document_id=document_id, status="pending")
+        pending = derivation_service.list_derivations(
+            document_id=document_id, status="pending"
+        )
         derivation_id = UUID(pending[0]["id"])
         derivation_service.activate_derivation(derivation_id)
 
@@ -739,7 +737,7 @@ class TestDerivationServiceIntegration:
         # Verify CLI active chunk selector retrieves chunks for the active derivation
         active_chunks = _active_chunk_ids(config, str(document_id))
         assert len(active_chunks) > 0
-        
+
         # Verify old config returns old chunks
         old_config = Config(
             database_url=TEST_DSN,
@@ -757,15 +755,16 @@ class TestDerivationServiceIntegration:
 
     def test_rederive_blob_fault_injection(self, service, derivation_service, tmp_path):
         """Rederive aborts transaction cleanly if blob write fails."""
-        import pytest
         from unittest.mock import patch
-        
+
+        import pytest
+
         result = _seed_corpus(service)
         document_id = result.document_id
 
         with patch("research_store.service.CorpusService.ingest") as mock_ingest:
             mock_ingest.side_effect = RuntimeError("Simulated blob write failure")
-            
+
             with pytest.raises(RuntimeError, match="Simulated blob write failure"):
                 derivation_service.rederive(
                     document_id=document_id,
@@ -775,23 +774,26 @@ class TestDerivationServiceIntegration:
                     chunker_version="hierarchical-v1",
                     tokenizer_name="cl100k_base",
                 )
-                
+
         # Verify no orphaned derivations exist
         derivs = derivation_service.list_derivations(document_id=document_id)
         for d in derivs:
             assert d["parser_version"] != "html-normalized-v99"
 
-    def test_rederive_db_commit_fault_injection(self, service, derivation_service, tmp_path):
+    def test_rederive_db_commit_fault_injection(
+        self, service, derivation_service, tmp_path
+    ):
         """Rederive aborts cleanly if DB commit fails."""
-        import pytest
         from unittest.mock import patch
-        
+
+        import pytest
+
         result = _seed_corpus(service)
         document_id = result.document_id
 
         with patch("research_store.postgres.PostgresUnitOfWork.commit") as mock_commit:
             mock_commit.side_effect = RuntimeError("Simulated DB commit failure")
-            
+
             with pytest.raises(RuntimeError, match="Simulated DB commit failure"):
                 derivation_service.rederive(
                     document_id=document_id,
@@ -801,11 +803,12 @@ class TestDerivationServiceIntegration:
                     chunker_version="hierarchical-v1",
                     tokenizer_name="cl100k_base",
                 )
-                
+
         # The derivation attempt should have been rolled back because the UoW didn't commit
         derivs = derivation_service.list_derivations(document_id=document_id)
         for d in derivs:
             assert d["parser_version"] != "html-normalized-v99"
+
 
 # ---------------------------------------------------------------------------
 # Integration tests: UoW derivation methods
@@ -825,6 +828,7 @@ class TestDerivationUoWMethods:
         migrate(TEST_DSN)
         config = _make_config(tmp_path)
         from functools import partial
+
         from research_store.postgres import PostgresUnitOfWork
 
         return partial(
@@ -1034,9 +1038,8 @@ class TestDerivationUoWMethods:
 
     def test_activate_nonexistent_derivation(self, uow_factory):
         """Activating a nonexistent derivation raises ValueError."""
-        with uow_factory() as uow:
-            with pytest.raises(ValueError, match="not found"):
-                uow.derivations.activate(uuid4())
+        with uow_factory() as uow, pytest.raises(ValueError, match="not found"):
+            uow.derivations.activate(uuid4())
 
     def test_activate_non_pending_derivation(self, uow_factory):
         """Activating an already-active derivation raises ValueError."""
@@ -1185,6 +1188,7 @@ class TestMultiDerivationCoexistence:
     def test_old_and_new_derivations_coexist(self, service, tmp_path):
         """Old and new derivations coexist after parser upgrade."""
         from functools import partial
+
         from research_store.postgres import PostgresUnitOfWork
 
         config = _make_config(tmp_path)
@@ -1242,6 +1246,7 @@ class TestMultiDerivationCoexistence:
     def test_source_snapshot_preserved(self, service, tmp_path):
         """Source snapshot is not recreated during rederive."""
         from functools import partial
+
         from research_store.postgres import PostgresUnitOfWork
 
         config = _make_config(tmp_path)

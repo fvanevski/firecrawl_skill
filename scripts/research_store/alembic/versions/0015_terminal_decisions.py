@@ -56,7 +56,6 @@ definition and update the indexes accordingly.
 
 from alembic import op
 
-
 revision = "0015_terminal_decisions"
 down_revision = "0014_coverage_event_types"
 branch_labels = None

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """CLI bridge used by legacy wrappers at their completed-decision boundary."""
 
 from __future__ import annotations
@@ -20,10 +19,14 @@ def parser() -> argparse.ArgumentParser:
         default=os.environ.get("FIRECRAWL_LEGACY_ADAPTER_MODE", "compatibility"),
     )
     result.add_argument(
-        "--entry-point", choices=("frun", "fsearch_smart", "fsearch", "fscrape"), required=True
+        "--entry-point",
+        choices=("frun", "fsearch_smart", "fsearch", "fscrape"),
+        required=True,
     )
     result.add_argument("--action", required=True)
-    result.add_argument("--status", choices=("pending", "running", "complete", "failed"), required=True)
+    result.add_argument(
+        "--status", choices=("pending", "running", "complete", "failed"), required=True
+    )
     result.add_argument("--metadata")
     result.add_argument("--research-run-id")
     result.add_argument("--invocation-id")

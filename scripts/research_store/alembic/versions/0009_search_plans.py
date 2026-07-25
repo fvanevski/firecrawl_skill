@@ -6,7 +6,6 @@ corpus, snapshot, or legacy records.
 
 from alembic import op
 
-
 revision = "0009_search_plans"
 down_revision = "0008_legacy_adapter_comparisons"
 branch_labels = None

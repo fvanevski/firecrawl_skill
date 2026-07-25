@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -45,7 +45,7 @@ class StoreConfig:
     worker_poll_seconds: int
 
     @classmethod
-    def from_env(cls) -> "StoreConfig":
+    def from_env(cls) -> StoreConfig:
         temp = Path(os.environ.get("TMPDIR", "/tmp"))
         return cls(
             database_url=os.environ.get("DATABASE_URL", ""),

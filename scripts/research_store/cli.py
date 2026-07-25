@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import sys
+import tempfile
 from datetime import datetime, timezone
 from functools import partial
 from hashlib import sha256
-import json
-import os
 from pathlib import Path
-import sys
-import tempfile
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -29,7 +29,6 @@ from .qdrant import QdrantIndex
 from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
 from .service import dumps, json_default
-
 
 _KNOWN_PREFIXES = ("result_", "url_")
 
@@ -123,7 +122,7 @@ def _import_scratch(root: Path, service, dry_run: bool = False) -> dict:
                     }
                 )
                 report[entry["status"]] += 1
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             entry.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
             report["failed"] += 1
         report["items"].append(entry)
@@ -556,7 +555,9 @@ def parser():
     search = sub.add_parser("search-assets")
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=20)
-    search.add_argument("--mode", default="hybrid", choices=["hybrid", "lexical", "semantic"])
+    search.add_argument(
+        "--mode", default="hybrid", choices=["hybrid", "lexical", "semantic"]
+    )
     search.add_argument("--domain")
     search.add_argument("--source-type")
     search.add_argument("--date-from")
@@ -719,9 +720,7 @@ def _cmd_rederive_v2(config, args) -> int:
         derivation_id = last_result.get("derivation_id")
         if derivation_id:
             try:
-                activated = derivation_service.activate_derivation(
-                    _UUID(derivation_id)
-                )
+                activated = derivation_service.activate_derivation(_UUID(derivation_id))
                 result["activated"] = str(activated.id)
             except ValueError as exc:
                 result["activate_error"] = str(exc)
@@ -799,7 +798,7 @@ def _cmd_derivation_activate(config, args) -> int:
             )
         )
 
-        if args.document:
+        if args.document:  # noqa: SIM102
             # Validate document ownership
             if str(derivation.document_id) != str(_UUID(args.document)):
                 print(
@@ -1472,7 +1471,7 @@ def _doctor(config):
                 failed = True
         else:
             checks["worker"] = {"available": False, "reason": "migration required"}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         checks["postgres"] = {"ok": False, "error": str(exc)}
         failed = True
 
@@ -1483,7 +1482,7 @@ def _doctor(config):
             raise RuntimeError("blob root is not readable")
         checks["blobs"] = _blob_health(config)
         failed |= not checks["blobs"]["ok"]
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         checks["blobs"] = {"ok": False, "error": str(exc)}
         failed = True
 
@@ -1491,11 +1490,10 @@ def _doctor(config):
         aliases = _qdrant(config).list_aliases()
         active = aliases.get(config.qdrant_alias)
         qdrant = {"ok": True, "alias": config.qdrant_alias, "collection": active}
-        if active:
-            if not checks.get("schema", {}).get("at_head"):
-                qdrant["schema"] = _qdrant(config, active).inspect_schema()
-                checks["qdrant"] = qdrant
-                active = None
+        if active and not checks.get("schema", {}).get("at_head"):
+            qdrant["schema"] = _qdrant(config, active).inspect_schema()
+            checks["qdrant"] = qdrant
+            active = None
         if active:
             rows = [
                 row
@@ -1535,7 +1533,7 @@ def _doctor(config):
                 }
                 failed |= point_ids != chunk_ids
         checks["qdrant"] = qdrant
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         checks["qdrant"] = {"ok": False, "error": str(exc)}
         failed = True
 
@@ -1543,7 +1541,7 @@ def _doctor(config):
         import redis
 
         checks["valkey"] = {"ok": bool(redis.Redis.from_url(config.valkey_url).ping())}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         checks["valkey"] = {"ok": False, "error": str(exc)}
         failed = True
 
@@ -1575,7 +1573,7 @@ def _doctor(config):
                 if not ranked or ranked[0]["candidate_id"] != "relevant":
                     raise RuntimeError("unexpected reranker ordering")
                 checks[name] = {"ok": True}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             checks[name] = {"ok": False, "error": str(exc)}
             failed = True
     checks["configuration"] = {
@@ -2640,7 +2638,9 @@ def main(argv=None):
             "execution": {
                 "requested_mode": execution.requested_mode,
                 "executed_mode": execution.executed_mode,
-                "mechanical_status": execution.mechanical_status.value if hasattr(execution.mechanical_status, "value") else execution.mechanical_status,
+                "mechanical_status": execution.mechanical_status.value
+                if hasattr(execution.mechanical_status, "value")
+                else execution.mechanical_status,
                 "component_health": execution.component_health,
                 "errors": execution.errors,
                 "warnings": execution.warnings,
@@ -2649,7 +2649,7 @@ def main(argv=None):
                 "skipped_stages": execution.skipped_stages,
                 "timing": execution.timing,
             },
-            "candidates": candidates
+            "candidates": candidates,
         }
     elif args.command == "inspect-asset":
         result = service.inspect_asset(UUID(args.id))
@@ -2899,9 +2899,11 @@ def main(argv=None):
         # escalate to exit code 2.
         if report.records_conflicting > 0 or report.records_omitted > 0:
             raise SystemExit(1)
-        elif report.errors:
-            raise SystemExit(2)
-        elif report.records_malformed > 0 and report.records_inserted == 0:
+        elif (
+            report.errors
+            or report.records_malformed > 0
+            and report.records_inserted == 0
+        ):
             raise SystemExit(2)
         return 0
 

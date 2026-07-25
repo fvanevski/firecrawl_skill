@@ -45,7 +45,7 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 
-from .interfaces import ParseResult, Parser, TypedBlock
+from .interfaces import Parser, ParseResult, TypedBlock
 
 # Block-level tags that should flush accumulated text
 _BLOCK_END_TAGS = frozenset(
@@ -277,7 +277,7 @@ class HtmlNormalizedParser(Parser):
         collector = _HtmlBlockCollector()
         try:
             collector.feed(text)
-        except Exception:
+        except Exception:  # noqa: BLE001
             # If parsing fails, return an error result
             return ParseResult(
                 blocks=[],

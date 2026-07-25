@@ -75,7 +75,9 @@ class IndexWorker:
             except LeaseLost:
                 result["lease_lost"] += 1
                 continue
-            except Exception as exc:  # keep the durable worker alive per job
+            except (
+                Exception  # noqa: BLE001
+            ) as exc:  # keep the durable worker alive per job
                 error = f"{type(exc).__name__}: {exc}"
 
             with self.uow_factory() as uow:
@@ -128,7 +130,11 @@ class IndexWorker:
             raise RuntimeError("index job resolved to a different chunk")
 
         self._renew(job)
-        embedder = self.embedder.for_job(job) if hasattr(self.embedder, "for_job") else self.embedder
+        embedder = (
+            self.embedder.for_job(job)
+            if hasattr(self.embedder, "for_job")
+            else self.embedder
+        )
         vector = embedder(row["text"])
         expected_dimension = dimension or index.dimension
         if expected_dimension is not None and len(vector) != expected_dimension:
@@ -160,7 +166,7 @@ class IndexWorker:
                 heartbeat = getattr(uow.index_jobs, "heartbeat_worker", None)
                 if heartbeat:
                     heartbeat(self.worker_id, metadata or {})
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Observability must not change job correctness or daemon liveness.
             return
 
@@ -186,9 +192,17 @@ class IndexWorker:
             for signum in (signal.SIGTERM, signal.SIGINT):
                 try:
                     previous[signum] = signal.signal(signum, lambda *_: stop.set())
-                except ValueError:  # signal handlers can only be installed in main thread
+                except (
+                    ValueError
+                ):  # signal handlers can only be installed in main thread
                     break
-        totals = {"batches": 0, "claimed": 0, "complete": 0, "failed": 0, "lease_lost": 0}
+        totals = {
+            "batches": 0,
+            "claimed": 0,
+            "complete": 0,
+            "failed": 0,
+            "lease_lost": 0,
+        }
         started = monotonic()
         try:
             while not stop.is_set():
@@ -249,7 +263,7 @@ class OpenAICompatibleEmbedder:
             fingerprint,
         )
 
-    def for_job(self, job: dict) -> "OpenAICompatibleEmbedder":
+    def for_job(self, job: dict) -> OpenAICompatibleEmbedder:
         """Bind a claimed job to its immutable model definition."""
         if self.fingerprint and job.get("fingerprint") != self.fingerprint:
             raise ValueError(

@@ -32,7 +32,6 @@ from enum import Enum
 from typing import Any, Protocol
 from uuid import UUID
 
-
 # ---------------------------------------------------------------------------
 # Stage result types
 # ---------------------------------------------------------------------------
@@ -71,7 +70,7 @@ class StageResult:
     error: str | None = None
 
     @classmethod
-    def ok(cls, stage: str, summary: str, **kwargs: Any) -> "StageResult":
+    def ok(cls, stage: str, summary: str, **kwargs: Any) -> StageResult:
         return cls(
             stage=stage,
             outcome=StageOutcome.CONTINUE,
@@ -81,7 +80,7 @@ class StageResult:
         )
 
     @classmethod
-    def terminal(cls, stage: str, summary: str, **kwargs: Any) -> "StageResult":
+    def terminal(cls, stage: str, summary: str, **kwargs: Any) -> StageResult:
         return cls(
             stage=stage,
             outcome=StageOutcome.TERMINAL,
@@ -91,7 +90,7 @@ class StageResult:
         )
 
     @classmethod
-    def degraded(cls, stage: str, summary: str, **kwargs: Any) -> "StageResult":
+    def degraded(cls, stage: str, summary: str, **kwargs: Any) -> StageResult:
         return cls(
             stage=stage,
             outcome=StageOutcome.DEGRADED,
@@ -101,7 +100,7 @@ class StageResult:
         )
 
     @classmethod
-    def failed(cls, stage: str, error: str, **kwargs: Any) -> "StageResult":
+    def failed(cls, stage: str, error: str, **kwargs: Any) -> StageResult:
         return cls(
             stage=stage,
             outcome=StageOutcome.TERMINAL,

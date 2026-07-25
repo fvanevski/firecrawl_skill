@@ -10,8 +10,6 @@ RESEARCH_STORE_TEST_ALLOW_RESET to that exact database name.
 
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installing it.
-
 import dataclasses
 import os
 import sys
@@ -61,7 +59,6 @@ class TestNormalizeCLI:
 
         args = parser().parse_args(["normalize", "--all"])
         from research_store.cli import _cmd_normalize
-
         from research_store.config import StoreConfig
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
@@ -70,8 +67,7 @@ class TestNormalizeCLI:
 
     def test_normalize_with_blocks(self, service):
         """Normalizing a document with blocks should persist normalized blocks."""
-        from research_store.cli import parser
-        from research_store.cli import _cmd_normalize
+        from research_store.cli import _cmd_normalize, parser
         from research_store.config import StoreConfig
         from research_store.domain import IngestRequest
 
@@ -114,8 +110,7 @@ class TestNormalizeCLI:
 
     def test_normalize_idempotent(self, service):
         """Re-running normalize should upsert without errors."""
-        from research_store.cli import parser
-        from research_store.cli import _cmd_normalize
+        from research_store.cli import _cmd_normalize, parser
         from research_store.config import StoreConfig
         from research_store.domain import IngestRequest
 
@@ -150,8 +145,7 @@ class TestNormalizeCLI:
 
     def test_normalize_missing_document(self):
         """Normalizing a non-existent document should succeed with 0 blocks."""
-        from research_store.cli import parser
-        from research_store.cli import _cmd_normalize
+        from research_store.cli import _cmd_normalize, parser
         from research_store.config import StoreConfig
 
         fake_uuid = uuid4()
@@ -162,8 +156,7 @@ class TestNormalizeCLI:
 
     def test_normalize_without_args_fails(self):
         """Normalize without --document or --all should return error."""
-        from research_store.cli import parser
-        from research_store.cli import _cmd_normalize
+        from research_store.cli import _cmd_normalize, parser
         from research_store.config import StoreConfig
 
         args = parser().parse_args(["normalize"])

@@ -16,12 +16,11 @@ implementations together.
 
 from __future__ import annotations
 
-from hashlib import sha256
 import json
+from hashlib import sha256
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "0019_audit_identity"
 down_revision = "0018_audit_assessments"
@@ -186,4 +185,3 @@ def downgrade():
         "Research workflow migrations are forward-only; restore PostgreSQL "
         "from the pre-v19 recovery boundary or apply a forward repair migration."
     )
-

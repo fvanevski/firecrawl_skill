@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-# ruff: noqa: E402
-
-from dataclasses import replace
 import json
 import os
-from pathlib import Path
 import sys
+from dataclasses import replace
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -14,13 +12,14 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.acquisition_service import AcquisitionService, FirecrawlSearchAdapter
+from research_store.acquisition_service import (
+    AcquisitionService,
+    FirecrawlSearchAdapter,
+)
 from research_store.config import StoreConfig
 from research_store.container import build_acquisition_service, build_run_service
 from research_store.domain import SearchAdapterResult, utcnow
 from research_store.postgres import connect, migrate, require_disposable_database_reset
-
-
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
@@ -41,23 +40,26 @@ def prepared_database():
 
 # --- Mock Search Adapters for Unit Tests ---
 
+
 class MockSuccessSearchAdapter:
     def __init__(self, raw_payload: bytes | None = None):
-        self.raw_payload = raw_payload or json.dumps({
-            "success": True,
-            "data": [
-                {
-                    "url": "https://example.com/page1",
-                    "title": "Page One",
-                    "description": "First search result page",
-                },
-                {
-                    "url": "https://example.org/page2",
-                    "title": "Page Two",
-                    "description": "Second search result page",
-                },
-            ],
-        }).encode("utf-8")
+        self.raw_payload = raw_payload or json.dumps(
+            {
+                "success": True,
+                "data": [
+                    {
+                        "url": "https://example.com/page1",
+                        "title": "Page One",
+                        "description": "First search result page",
+                    },
+                    {
+                        "url": "https://example.org/page2",
+                        "title": "Page Two",
+                        "description": "Second search result page",
+                    },
+                ],
+            }
+        ).encode("utf-8")
         self.call_count = 0
 
     def search(self, query_text: str, **kwargs) -> SearchAdapterResult:
@@ -76,7 +78,9 @@ class MockSuccessSearchAdapter:
 class MockTransportErrorSearchAdapter:
     def search(self, query_text: str, **kwargs) -> SearchAdapterResult:
         return SearchAdapterResult(
-            raw_payload=json.dumps({"success": False, "error": "Network transport error: EAI_AGAIN"}).encode("utf-8"),
+            raw_payload=json.dumps(
+                {"success": False, "error": "Network transport error: EAI_AGAIN"}
+            ).encode("utf-8"),
             http_status=500,
             provider_request_id=None,
             transport_error="Network transport error: EAI_AGAIN",
@@ -87,6 +91,7 @@ class MockTransportErrorSearchAdapter:
 
 
 # --- Unit Tests ---
+
 
 def test_firecrawl_search_adapter_transport_error_classification():
     def failing_runner(cmd):
@@ -100,7 +105,9 @@ def test_firecrawl_search_adapter_transport_error_classification():
 
 
 def test_firecrawl_search_adapter_success_runner():
-    payload = json.dumps({"success": True, "data": [{"url": "https://example.com"}]}).encode("utf-8")
+    payload = json.dumps(
+        {"success": True, "data": [{"url": "https://example.com"}]}
+    ).encode("utf-8")
 
     def success_runner(cmd):
         return 0, payload, ""
@@ -119,6 +126,7 @@ def test_execute_search_invalid_query():
 
 
 # --- Integration Tests (requires PostgreSQL) ---
+
 
 @pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
@@ -307,10 +315,14 @@ def test_acquisition_service_crash_reconciliation(tmp_path, prepared_database):
     acq_svc = build_acquisition_service(config)
 
     # Manually insert a search response without candidates (simulating a crash window)
-    payload = json.dumps({
-        "success": True,
-        "data": [{"url": "https://reconcile.example.com/doc1", "title": "Reconciled Doc"}]
-    })
+    payload = json.dumps(
+        {
+            "success": True,
+            "data": [
+                {"url": "https://reconcile.example.com/doc1", "title": "Reconciled Doc"}
+            ],
+        }
+    )
     resp = run_svc.record_search_response(
         run_id,
         "reconciliation query",

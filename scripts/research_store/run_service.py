@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from .execution_policy import ExecutionModePolicy
-
 
 RUN_STATES = frozenset(
     {
@@ -70,7 +70,7 @@ class RunStatus:
     error: str | None
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "RunStatus":
+    def from_mapping(cls, value: dict[str, Any]) -> RunStatus:
         return cls(
             id=value["id"],
             external_id=value.get("external_id"),
@@ -112,7 +112,7 @@ class TransitionResult:
     reused: bool
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "TransitionResult":
+    def from_mapping(cls, value: dict[str, Any]) -> TransitionResult:
         return cls(**{field: value[field] for field in cls.__dataclass_fields__})
 
     def to_dict(self) -> dict[str, Any]:
@@ -135,7 +135,7 @@ class ModeChangeResult:
     reused: bool
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "ModeChangeResult":
+    def from_mapping(cls, value: dict[str, Any]) -> ModeChangeResult:
         return cls(**{field: value[field] for field in cls.__dataclass_fields__})
 
     def to_dict(self) -> dict[str, Any]:
@@ -519,6 +519,7 @@ class ResearchRunService:
         if store is None:
             import os
             from pathlib import Path
+
             from .blob import ContentAddressedBlobStore
 
             store = ContentAddressedBlobStore(
@@ -575,6 +576,7 @@ class ResearchRunService:
         if store is None:
             import os
             from pathlib import Path
+
             from .blob import ContentAddressedBlobStore
 
             store = ContentAddressedBlobStore(
@@ -597,6 +599,7 @@ class ResearchRunService:
         if store is None:
             import os
             from pathlib import Path
+
             from .blob import ContentAddressedBlobStore
 
             store = ContentAddressedBlobStore(
@@ -893,7 +896,9 @@ class ResearchRunService:
             event_id = result
             # Bump lifecycle revision atomically within the same transaction
             new_revision = expected_revision + 1
-            uow.runs._bump_lifecycle_revision(run_id, new_revision, expected_revision=expected_revision)
+            uow.runs._bump_lifecycle_revision(
+                run_id, new_revision, expected_revision=expected_revision
+            )
         return {
             "event_id": str(event_id),
             "run_id": str(run_id),

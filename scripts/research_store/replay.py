@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -62,7 +62,7 @@ class SearchResponseReplayReader:
         parsed_json = None
         try:
             parsed_json = json.loads(raw_bytes.decode("utf-8"))
-        except Exception:
+        except Exception:  # noqa: BLE001
             parsed_json = None
 
         return SearchResponseReplay(
@@ -93,4 +93,6 @@ class SearchResponseReplayReader:
         records = self.repository.list_search_responses(
             run_id, plan_query_id=plan_query_id
         )
-        return [self.replay_search_response(rec["id"], run_id=run_id) for rec in records]
+        return [
+            self.replay_search_response(rec["id"], run_id=run_id) for rec in records
+        ]

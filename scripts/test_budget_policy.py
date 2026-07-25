@@ -1,23 +1,19 @@
 from __future__ import annotations
 
-# ruff: noqa: E402 - load the sibling script package without installation.
-
-from dataclasses import replace
 import json
-from pathlib import Path
 import sys
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
-
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
-from budget_policy import BudgetPolicy, BudgetPolicyError, DEFAULT_POLICY
+from budget_policy import DEFAULT_POLICY, BudgetPolicy, BudgetPolicyError
 from research_domain import load_model
 from research_domain.models import RiskLevel
-
 
 VALID = json.loads(
     (ROOT / "tests" / "fixtures" / "research_domain" / "valid.json").read_text()
