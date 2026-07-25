@@ -16,6 +16,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+
 class TestMigration0030:
     """Tests for migration 0030 schema and behavior."""
 
@@ -71,5 +72,3 @@ class TestMigration0030:
         assert "CREATE TABLE IF NOT EXISTS duplicate_groups" in source
         assert "ADD COLUMN independence_assessment" in source
         assert "schema_migrations" in source
-
-

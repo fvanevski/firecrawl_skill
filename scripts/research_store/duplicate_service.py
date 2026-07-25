@@ -37,13 +37,13 @@ class DuplicateGroupService:
 
         for c in candidates:
             cid = c["candidate_id"] if "candidate_id" in c else c["id"]
-            
+
             # 1. Content hashes (if available in backend_metadata)
             meta = c.get("backend_metadata", {})
             content_hash = meta.get("content_hash")
             if content_hash:
                 by_hash[content_hash].append(c)
-                
+
             # 2. Canonical URL
             canonical = c.get("canonical_url", "")
             if canonical:
@@ -51,7 +51,7 @@ class DuplicateGroupService:
 
             # 3. Normalized Title (for syndication/wire reports)
             title = c.get("title") or ""
-            norm_title = re.sub(r'[^a-z0-9]', '', title.lower())
+            norm_title = re.sub(r"[^a-z0-9]", "", title.lower())
             if norm_title and len(norm_title) > 10:
                 by_title_normalized[norm_title].append(c)
 
@@ -66,40 +66,44 @@ class DuplicateGroupService:
             group_id = uuid4()
             c_ids = []
             assessments = {}
-            
-            
+
             for i, c in enumerate(group_cands):
                 cid = c["id"]
                 c_ids.append(cid)
                 assigned.add(cid)
-                
+
                 if i == 0:
-                    status = IndependenceStatus.UNCERTAIN if status_override is None else status_override
+                    status = (
+                        IndependenceStatus.UNCERTAIN
+                        if status_override is None
+                        else status_override
+                    )
                     assessments[cid] = {
                         "status": status,
-                        "rationale": "primary candidate in duplicate group"
+                        "rationale": "primary candidate in duplicate group",
                     }
                 else:
                     if status_override:
                         status = status_override
                     else:
                         status = IndependenceStatus.DEPENDENT
-                        
-                    assessments[cid] = {
-                        "status": status,
-                        "rationale": rationale
-                    }
 
-            groups.append({
-                "group_id": group_id,
-                "candidate_ids": c_ids,
-                "rationale": rationale,
-                "assessments": assessments
-            })
+                    assessments[cid] = {"status": status, "rationale": rationale}
+
+            groups.append(
+                {
+                    "group_id": group_id,
+                    "candidate_ids": c_ids,
+                    "rationale": rationale,
+                    "assessments": assessments,
+                }
+            )
 
         # Process exact hashes first
         for cands in by_hash.values():
-            create_group(cands, "exact_content_hash_match", IndependenceStatus.DEPENDENT)
+            create_group(
+                cands, "exact_content_hash_match", IndependenceStatus.DEPENDENT
+            )
 
         # Process canonical URLs
         for cands in by_canonical.values():
@@ -107,12 +111,14 @@ class DuplicateGroupService:
 
         # Process normalized titles (likely syndication)
         for cands in by_title_normalized.values():
-            create_group(cands, "likely_syndicated_title_match", IndependenceStatus.UNCERTAIN)
+            create_group(
+                cands, "likely_syndicated_title_match", IndependenceStatus.UNCERTAIN
+            )
 
         # Remaining candidates are UNASSESSED or UNCERTAIN independent
         # We don't group them, but we might want to return their assessments?
         # The requirement asks to persist duplicate groups and independence assessments.
-        
+
         # Optional: Save to DB if uow_factory is provided
         if self.uow_factory and run_id:
             with self.uow_factory() as uow:

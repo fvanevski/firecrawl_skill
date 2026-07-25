@@ -15,13 +15,17 @@ from pathlib import Path
 
 import pytest
 
+
 def _get_test_dsn():
     try:
-        with open("/opt/containers/research-postgres/secrets/research_postgres_password.txt") as f:
+        with open(
+            "/opt/containers/research-postgres/secrets/research_postgres_password.txt"
+        ) as f:
             pwd = urllib.parse.quote(f.read().strip(), safe="")
             return f"postgresql://research_app:{pwd}@127.0.0.1:55432/firecrawl_test"
     except FileNotFoundError:
         return "postgresql://postgres:postgres@localhost:55432/firecrawl_test"
+
 
 # Authoritatively set default disposable integration test services so they aren't skipped
 os.environ.setdefault("RESEARCH_STORE_TEST_DATABASE_URL", _get_test_dsn())

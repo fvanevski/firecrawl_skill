@@ -2884,11 +2884,16 @@ class PostgresUnitOfWork:
 
         with self.connection.cursor() as cur:
             import datetime
+
             cur.execute(
                 """INSERT INTO duplicate_groups(id, run_id, rationale, created_at)
                    VALUES (%s, %s, 'legacy assignment', %s)
                    ON CONFLICT (id) DO NOTHING""",
-                (target_group_id, UUID(str(run_id)) if run_id else None, datetime.datetime.now(datetime.timezone.utc))
+                (
+                    target_group_id,
+                    UUID(str(run_id)) if run_id else None,
+                    datetime.datetime.now(datetime.timezone.utc),
+                ),
             )
 
             if run_id is not None:
@@ -2916,11 +2921,12 @@ class PostgresUnitOfWork:
                 VALUES (%s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET rationale = EXCLUDED.rationale
                 """,
-                (UUID(str(group_id)), UUID(str(run_id)), rationale)
+                (UUID(str(group_id)), UUID(str(run_id)), rationale),
             )
 
     def update_candidate_independence(self, candidate_id, independence_assessment_dict):
         import json
+
         with self.connection.cursor() as cur:
             cur.execute(
                 """
@@ -2928,7 +2934,7 @@ class PostgresUnitOfWork:
                 SET independence_assessment = %s::jsonb
                 WHERE id = %s
                 """,
-                (json.dumps(independence_assessment_dict), UUID(str(candidate_id)))
+                (json.dumps(independence_assessment_dict), UUID(str(candidate_id))),
             )
 
     def record_semantic_call(

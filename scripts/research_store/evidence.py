@@ -154,15 +154,17 @@ class EvidenceService:
 
         # Apply deterministic near-duplicate and source-independence grouping
         dup_groups = self.duplicate_service.evaluate_candidates(candidates, run_id)
-        cand_to_passage = {p.candidate_id: p.passage_id for p in passages + omitted_passages}
-        
+        cand_to_passage = {
+            p.candidate_id: p.passage_id for p in passages + omitted_passages
+        }
+
         for g in dup_groups:
             group_passage_ids = []
             for cid in g["candidate_ids"]:
                 pid = cand_to_passage.get(cid)
                 if pid:
                     group_passage_ids.append(pid)
-                    
+
             if len(group_passage_ids) > 1:
                 near_duplicate_groups.append(
                     EvidenceGroup(
