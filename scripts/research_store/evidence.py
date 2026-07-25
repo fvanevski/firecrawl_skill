@@ -14,6 +14,7 @@ from research_domain.models import (
 )
 
 from .tokenizer_registry import get_tokenizer
+from .duplicate_service import DuplicateGroupService
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class EvidenceService:
         self.uow_factory = uow_factory
         self.budget_policy = budget_policy
         self.tokenizer = get_tokenizer(tokenizer_name)
+        self.duplicate_service = DuplicateGroupService(uow_factory)
 
     def build_evidence_packet(
         self,
@@ -149,6 +151,27 @@ class EvidenceService:
                     evaluated=False,
                 )
             )
+
+        # Apply deterministic near-duplicate and source-independence grouping
+        dup_groups = self.duplicate_service.evaluate_candidates(candidates, run_id)
+        cand_to_passage = {p.candidate_id: p.passage_id for p in passages + omitted_passages}
+        
+        for g in dup_groups:
+            group_passage_ids = []
+            for cid in g["candidate_ids"]:
+                pid = cand_to_passage.get(cid)
+                if pid:
+                    group_passage_ids.append(pid)
+                    
+            if len(group_passage_ids) > 1:
+                near_duplicate_groups.append(
+                    EvidenceGroup(
+                        group_id=g["group_id"],
+                        passage_ids=tuple(group_passage_ids),
+                        rationale=g["rationale"],
+                        evaluated=True,
+                    )
+                )
 
         return EvidencePacket(
             schema_version=EvidencePacket.SCHEMA_VERSION,
