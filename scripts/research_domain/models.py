@@ -778,7 +778,10 @@ class EvidencePacket:
             + self.near_duplicate_groups
         )
         _unique([item.group_id for item in groups], "evidence group IDs")
-        _unique([item.candidate_id for item in self.independence_assessments], "assessment candidate IDs")
+        _unique(
+            [item.candidate_id for item in self.independence_assessments],
+            "assessment candidate IDs",
+        )
         claim_ids = {item.claim_id for item in self.claims}
         passage_ids = {item.passage_id for item in all_passages}
         unknown_claims = {

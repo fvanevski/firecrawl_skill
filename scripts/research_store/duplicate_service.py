@@ -36,7 +36,6 @@ class DuplicateGroupService:
         by_title_normalized = defaultdict(list)
 
         for c in candidates:
-
             # 1. Content hashes (if available in backend_metadata)
             meta = c.get("backend_metadata", {})
             content_hash = meta.get("content_hash")
@@ -58,7 +57,9 @@ class DuplicateGroupService:
         groups = []
 
         def create_group(cands, rationale, status_override=None):
-            group_cands = [c for c in cands if c.get("id", c.get("candidate_id")) not in assigned]
+            group_cands = [
+                c for c in cands if c.get("id", c.get("candidate_id")) not in assigned
+            ]
             if len(group_cands) < 2:
                 return
 
