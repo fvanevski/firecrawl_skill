@@ -121,11 +121,17 @@ class DuplicateGroupService:
 
         # Optional: Save to DB if uow_factory is provided
         if self.uow_factory and run_id:
-            with self.uow_factory() as uow:
-                for g in groups:
-                    uow.persist_duplicate_group(g["group_id"], run_id, g["rationale"])
-                    for cid in g["candidate_ids"]:
-                        uow.assign_duplicate_group([cid], g["group_id"], run_id)
-                        uow.update_candidate_independence(cid, g["assessments"][cid])
+            uow = self.uow_factory()
+            if uow is not None:
+                with uow:
+                    for group in groups:
+                        uow.runs.persist_duplicate_group(
+                            group["group_id"], run_id, group["rationale"]
+                        )
+                        uow.runs.assign_duplicate_group(
+                            group["candidate_ids"], group["group_id"], run_id
+                        )
+                        for cid, ass in group["assessments"].items():
+                            uow.runs.update_candidate_independence(cid, ass)
 
         return groups
