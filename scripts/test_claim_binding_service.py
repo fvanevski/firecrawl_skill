@@ -227,7 +227,8 @@ def test_unsupported_claim_has_no_bindings(service, mock_packet, monkeypatch):
 import os
 
 INTEGRATION_MARK = pytest.mark.skipif(
-    not os.environ.get("OPENAI_API_KEY") and not os.environ.get("FIRECRAWL_LLM_LOCAL_BASE_URL"),
+    not os.environ.get("OPENAI_API_KEY")
+    and not os.environ.get("FIRECRAWL_LLM_LOCAL_BASE_URL"),
     reason="requires LLM endpoint",
 )
 
@@ -243,7 +244,7 @@ def test_evaluate_claims_integration(service, mock_packet):
             "claim_id": claim_id,
             "statement": "The Eiffel Tower is located in Paris.",
             "semantic_status": "unassessed",
-            "uncertainty": "none"
+            "uncertainty": "none",
         }
     ]
     mock_packet["passages"] = [
@@ -253,7 +254,7 @@ def test_evaluate_claims_integration(service, mock_packet):
             "snapshot_id": "00000000-0000-0000-0000-000000000602",
             "chunk_id": "00000000-0000-0000-0000-000000000603",
             "text": "Paris is home to many famous landmarks, including the iconic Eiffel Tower, which was built in 1889.",
-            "source_url": "https://example.com/paris"
+            "source_url": "https://example.com/paris",
         }
     ]
 
@@ -272,4 +273,3 @@ def test_evaluate_claims_integration(service, mock_packet):
     assert str(binding.passage_ids[0]) == passage_id
     assert binding.relationship == "supports"
     assert persisted.claims[0].semantic_status == "supported"
-

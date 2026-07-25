@@ -91,11 +91,16 @@ class ClaimBindingService:
             context["run_revision"] = status["lifecycle_revision"]
 
         from copy import deepcopy
+
         schema = deepcopy(self.schema)
         valid_claim_ids = [c["claim_id"] for c in claims]
         valid_passage_ids = [p["passage_id"] for p in passages]
-        schema["properties"]["evaluations"]["items"]["properties"]["claim_id"]["enum"] = valid_claim_ids
-        schema["properties"]["evaluations"]["items"]["properties"]["bindings"]["items"]["properties"]["passage_ids"]["items"]["enum"] = valid_passage_ids
+        schema["properties"]["evaluations"]["items"]["properties"]["claim_id"][
+            "enum"
+        ] = valid_claim_ids
+        schema["properties"]["evaluations"]["items"]["properties"]["bindings"]["items"][
+            "properties"
+        ]["passage_ids"]["items"]["enum"] = valid_passage_ids
 
         result = call_structured(
             provider=provider,
