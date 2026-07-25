@@ -36,7 +36,6 @@ class DuplicateGroupService:
         by_title_normalized = defaultdict(list)
 
         for c in candidates:
-            cid = c["candidate_id"] if "candidate_id" in c else c["id"]
 
             # 1. Content hashes (if available in backend_metadata)
             meta = c.get("backend_metadata", {})
