@@ -193,20 +193,32 @@ class IndexWorker:
             result["failed"] += len(group)
             return
 
+        # Track indices already failed during embedding so the post-completion
+        # loop does not double-count them.
+        already_failed: set[int] = set()
+        valid_vectors: list[tuple[dict, list[float]]] = []
+
         if valid_indices:
             valid_texts = [texts[i] for i in valid_indices]
             if hasattr(embedder, "batch"):
                 try:
                     batch_vectors = embedder.batch(valid_texts)
-                except ValueError as exc:
-                    # Batch endpoint failed — mark all jobs in this group
-                    # as failed (no partial results to fall back on).
-                    for job in group:
-                        self._fail_job(job, f"batch embed: {exc}")
-                    result["failed"] += len(group)
-                    return
-                for idx, vec in zip(valid_indices, batch_vectors):
-                    vectors[idx] = vec
+                except ValueError:
+                    # Batch endpoint failed — fall back to per-text embedding
+                    # so that partial failures only affect the offending job.
+                    for idx in valid_indices:
+                        try:
+                            vec = embedder(texts[idx])
+                            vectors[idx] = vec
+                        except ValueError as inner_exc:
+                            job = group[idx]
+                            self._fail_job(job, f"embed: {inner_exc}")
+                            result["failed"] += 1
+                            already_failed.add(idx)
+                else:
+                    # Batch succeeded — assign vectors to their indices.
+                    for idx, vec in zip(valid_indices, batch_vectors):
+                        vectors[idx] = vec
             else:
                 # Fallback: embed each text individually so that partial
                 # failures only affect the offending job.
@@ -215,18 +227,19 @@ class IndexWorker:
                         vec = embedder(texts[idx])
                         vectors[idx] = vec
                     except ValueError as exc:
+                        already_failed.add(idx)
                         job = group[idx]
                         self._fail_job(job, f"embed: {exc}")
                         result["failed"] += 1
 
         # Validate dimensions BEFORE upsert — reject incompatible vectors
         # so they never reach Qdrant.
-        valid_vectors: list[tuple[dict, list[float]]] = []
         for i, job in enumerate(group):
             if vectors[i] is None:
                 continue
             expected_dimension = job.get("dimension")
             if expected_dimension is not None and len(vectors[i]) != expected_dimension:
+                already_failed.add(i)
                 self._fail_job(
                     job,
                     f"embedding dimension {len(vectors[i])} does not match "
@@ -283,6 +296,16 @@ class IndexWorker:
                 result["lease_lost"] += 1
             else:
                 result["complete"] += 1
+
+        # Fail any jobs that had missing chunks or embedding errors.
+        # These jobs were skipped during upsert and completion — they must
+        # be explicitly marked as failed so they do not remain in claimed
+        # state indefinitely.  Skip indices already failed during embedding
+        # or dimension validation to avoid double-counting.
+        for i, job in enumerate(group):
+            if vectors[i] is None and i not in already_failed:
+                self._fail_job(job, "embedding failed")
+                result["failed"] += 1
 
     def _build_point(
         self, job: dict, vector: list[float], record: dict | None

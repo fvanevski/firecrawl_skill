@@ -759,10 +759,9 @@ class IndexingStage:
                     embedder=self.corpus_service.embedder,
                     queue=getattr(self.corpus_service, "queue", None),
                 )
-                batch_size = getattr(
-                    self.corpus_service.config, "embedding_batch_size", 32
+                batch_result = worker.run_batch(
+                    limit=self.corpus_service.config.embedding_batch_size
                 )
-                batch_result = worker.run_batch(limit=batch_size)
                 index_fingerprint = getattr(
                     self.corpus_service.embedder, "fingerprint", index_fingerprint
                 )
