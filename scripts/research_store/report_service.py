@@ -965,7 +965,7 @@ class LocalSynthesisService:
         # Update the validation stage record.
         with uow_factory() as uow:
             try:
-                record = uow.get_synthesis_stage(run_id, "validation")
+                record = uow.synthesis_stages.get_synthesis_stage(run_id, "validation")
             except KeyError:
                 record = None
 

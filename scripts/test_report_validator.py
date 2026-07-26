@@ -985,3 +985,24 @@ def test_strong_passage_support_no_warning():
     # The claim "The documented behavior is reproducible" shares terms with
     # the passage "The documented behavior is reproducible in test environments."
     assert not any(f.code == "WEAK_PASSAGE_SUPPORT" for f in result.warnings)
+
+
+def test_extract_terms_handles_versions_and_hyphens():
+    """_extract_terms should keep alphanumeric tokens ≥ 2 chars."""
+    from research_store.report_validator import _extract_terms
+
+    # Version numbers, hyphens, and punctuation should produce meaningful terms.
+    assert "v2" in _extract_terms("v2.0")
+    assert "7334" in _extract_terms("RFC-7334")
+    assert "don" in _extract_terms("don't")
+    assert "192" in _extract_terms("192.168.1.1")  # digits kept, single chars dropped
+
+    # Purely alphabetic text should work as before.
+    terms = _extract_terms("The documented behavior is reproducible")
+    assert "documented" in terms
+    assert "behavior" in terms
+    assert "reproducible" in terms
+
+    # Single-letter tokens are discarded.
+    assert "v" not in _extract_terms("v2.0")
+    assert "t" not in _extract_terms("don't")

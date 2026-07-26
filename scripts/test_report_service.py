@@ -1507,3 +1507,90 @@ def test_run_synthesis_fails_when_validation_fails():
     assert summary["stages"]["validation"]["status"] == "failed"
     assert summary["overall_status"] == "failed"
     assert "report validation failed" in summary.get("error", "")
+
+
+def test_run_synthesis_resumes_failed_validation_stage():
+    """A failed validation stage should be retried on resume."""
+    service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    claim_id = _VALID_PACKET["claims"][0]["claim_id"]
+
+    # Pre-populate outline, binding, draft, citation_pass as completed.
+    for sname in ("outline", "binding", "draft", "citation_pass"):
+        mock_uow.synthesis_stages.update_synthesis_stage(
+            {
+                "id": str(uuid4()),
+                "run_id": str(run_id),
+                "stage_name": sname,
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "test-model",
+                "prompt_version": "v1",
+                "schema_version": 1,
+                "artifact": (
+                    {
+                        "schema_version": "synthesis-citation-pass-v1",
+                        "run_id": str(run_id),
+                        "evidence_packet_revision": 2,
+                        "draft_revision": 1,
+                        "pass_status": "passed",
+                        "validation_results": [
+                            {
+                                "section_id": "s1",
+                                "claim_id": claim_id,
+                                "passage_ids": [
+                                    _VALID_PACKET["passages"][0]["passage_id"]
+                                ],
+                                "status": "valid",
+                                "issue": None,
+                            }
+                        ],
+                        "invented_citations": [],
+                        "unsupported_claims": [],
+                        "entailment_mismatches": [],
+                    }
+                    if sname == "citation_pass"
+                    else {}
+                ),
+                "error": None,
+                "attempts": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        )
+
+    # Pre-populate validation as failed so it gets retried.
+    validation_record = {
+        "id": str(uuid4()),
+        "run_id": str(run_id),
+        "stage_name": "validation",
+        "stage_status": "failed",
+        "semantic_call_id": None,
+        "semantic_artifact_id": None,
+        "evidence_packet_revision": 1,
+        "model_name": "test-model",
+        "prompt_version": "v1",
+        "schema_version": 1,
+        "artifact": None,
+        "error": "report validation failed: report is invalid (1 errors)",
+        "attempts": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    mock_uow.synthesis_stages.update_synthesis_stage(validation_record)
+
+    summary = service.run_synthesis(
+        run_id=run_id,
+        packet_revision=2,
+        model_name="test-model",
+    )
+
+    # All prior stages should be skipped.
+    for stage_key in ("outline", "binding", "draft", "citation_pass"):
+        assert summary["stages"][stage_key]["status"] == "skipped"
+
+    # Validation should have been retried and completed (valid report).
+    assert summary["stages"]["validation"]["status"] == "completed"
+    assert summary["overall_status"] == "completed"

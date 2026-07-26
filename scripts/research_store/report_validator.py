@@ -47,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -767,8 +768,10 @@ class ReportValidator:
 
 
 def _extract_terms(text: str) -> list[str]:
-    """Extract lowercase alphabetic terms from text.
+    """Extract meaningful terms from text.
 
-    Splits on non-alphabetic characters and filters out empty strings.
+    Splits on non-alphanumeric characters, normalises to lowercase, and
+    discards tokens shorter than two characters so that single-letter noise
+    (e.g. "v" from "v2.0") does not inflate the shared-term count.
     """
-    return [t for t in text.split() if t.isalpha()]
+    return [t for t in re.split(r"[^a-z0-9]+", text.lower()) if len(t) >= 2]

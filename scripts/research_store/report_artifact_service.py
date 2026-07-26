@@ -8,10 +8,12 @@ manifests, and validation results to PostgreSQL (issue #64).
 - PostgreSQL is the authoritative store for report artifacts.
 - Report artifacts are persisted as ``validation`` synthesis stages,
   linking to the EvidencePacket revision and synthesis model call.
-- The service is idempotent: running it twice with the same inputs
-  produces the same result.
-- All insertions use ``INSERT ... ON CONFLICT DO NOTHING`` so that
-  retries are safe.
+- The service is idempotent: ``validate_report()`` is a pure function of
+  packet + report and always produces the same result.
+- ``persist_validation_result()`` inserts a new row each time (new
+  ``stage_id``).  The caller is responsible for deduplication — in practice
+  the synthesis pipeline calls this once per run after a successful
+  validation pass.
 """
 
 from __future__ import annotations
@@ -117,7 +119,8 @@ class ReportArtifactService:
         """
         now = _utcnow()
         stage_id = uuid4()
-        semantic_call_id = uuid4()  # placeholder; real call_id from semantic service
+        # Validation does not call an LLM — no semantic call to record.
+        semantic_call_id: UUID | None = None
 
         record: dict[str, Any] = {
             "id": stage_id,
