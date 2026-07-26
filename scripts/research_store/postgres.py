@@ -6966,3 +6966,63 @@ class PostgresUnitOfWork:
             d["run_id"] = str(d["run_id"])
             d["research_spec_id"] = str(d["research_spec_id"])
             return EvidencePacketRecord.from_mapping(d)
+
+    # ------------------------------------------------------------------
+    # Agent-led handoff support (Phase 7, issue #62)
+    # ------------------------------------------------------------------
+
+    def get_research_spec(self, run_id: UUID) -> dict[str, Any] | None:
+        """Return the latest research spec payload for *run_id*, or ``None``.
+
+        Returns a dict with keys ``id``, ``run_id``, ``spec_revision``, and
+        ``payload`` (the serialized research spec).
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, spec_revision, payload
+                FROM research_specs
+                WHERE run_id=%s
+                ORDER BY spec_revision DESC LIMIT 1""",
+                (str(run_id),),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": str(row[0]),
+            "run_id": str(row[1]),
+            "spec_revision": row[2],
+            "payload": row[3],
+        }
+
+    def get_coverage_summary(self, run_id: UUID) -> dict[str, Any] | None:
+        """Return the latest coverage snapshot for *run_id*, or ``None``.
+
+        Returns a dict compatible with the coverage summary schema
+        (schema version ``coverage-ledger-v1``).  The dict includes
+        ``total_items`` derived from ``status_counts`` so that the
+        snapshot path and the rebuild path (``_rebuild_coverage_summary``)
+        produce compatible structures.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, coverage_revision, status_counts,
+                          type_counts, overall_status, created_at
+                FROM coverage_snapshots
+                WHERE run_id=%s
+                ORDER BY coverage_revision DESC LIMIT 1""",
+                (str(run_id),),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        status_counts = row[3] or {}
+        return {
+            "schema_version": "coverage-ledger-v1",
+            "run_id": str(run_id),
+            "coverage_revision": row[2],
+            "total_items": sum(status_counts.values()),
+            "status_counts": status_counts,
+            "type_counts": row[4] or {},
+            "overall_status": row[5],
+        }

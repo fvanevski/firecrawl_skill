@@ -355,5 +355,231 @@
     "unresolved_gap": "cost budget exhausted; no new candidates found",
     "policy_version": "terminal-decision-policy-v1",
     "created_at": "2026-07-21T12:00:00+00:00"
+  },
+  "handoff-payload-v1": {
+    "schema_version": "handoff-payload-v1",
+    "run_id": "00000000-0000-0000-0000-000000000401",
+    "research_spec": {
+      "schema_version": "research-spec-v1",
+      "research_spec_id": "00000000-0000-0000-0000-000000000100",
+      "objective": "Determine the current status and evidence for the fixture question.",
+      "research_archetype": "technical_troubleshooting",
+      "risk_level": "medium",
+      "execution_mode": "agent_led",
+      "questions": [
+        {
+          "question_id": "00000000-0000-0000-0000-000000000101",
+          "text": "What is the current behavior?"
+        }
+      ],
+      "claims_to_validate": [
+        {
+          "claim_id": "00000000-0000-0000-0000-000000000102",
+          "statement": "The documented behavior is reproducible."
+        }
+      ],
+      "entities": [
+        "Fixture Engine"
+      ],
+      "jurisdictions": [
+        "unspecified"
+      ],
+      "time_window": {
+        "start": null,
+        "end": null,
+        "description": "current documentation",
+        "uncertainty": "publication lag possible"
+      },
+      "freshness_requirements": [
+        {
+          "requirement_id": "00000000-0000-0000-0000-000000000103",
+          "description": "Use currently published documentation.",
+          "max_age_days": 30
+        }
+      ],
+      "required_source_classes": [
+        {
+          "requirement_id": "00000000-0000-0000-0000-000000000104",
+          "source_class": "primary documentation",
+          "minimum_count": 1
+        }
+      ],
+      "corroboration_requirements": [
+        {
+          "requirement_id": "00000000-0000-0000-0000-000000000105",
+          "description": "Confirm consequential claims independently.",
+          "required_independent_source_count": 2
+        }
+      ],
+      "contradiction_requirements": [
+        {
+          "requirement_id": "00000000-0000-0000-0000-000000000106",
+          "description": "Flag claims contradicted by authoritative sources.",
+          "required_independent_source_count": 1
+        }
+      ],
+      "excluded_interpretations": [],
+      "structured_data_requirements": [],
+      "completion_criteria": [
+        {
+          "requirement_id": "00000000-0000-0000-0000-000000000107",
+          "description": "At least one authoritative source."
+        }
+      ],
+      "user_constraints": [],
+      "ambiguities": [],
+      "assumptions": []
+    },
+    "coverage_ledger": {
+      "schema_version": "coverage-ledger-v1",
+      "run_id": "00000000-0000-0000-0000-000000000401",
+      "coverage_revision": 2,
+      "total_items": 3,
+      "status_counts": {
+        "satisfied": 2,
+        "unassessed": 1
+      },
+      "type_counts": {
+        "question": 1,
+        "claim": 1,
+        "corroboration_requirement": 1
+      },
+      "overall_status": "partial"
+    },
+    "evidence_packet": {
+      "schema_version": "evidence-packet-v1",
+      "run_id": "00000000-0000-0000-0000-000000000401",
+      "research_spec_id": "00000000-0000-0000-0000-000000000100",
+      "coverage_revision": 2,
+      "claims": [
+        {
+          "claim_id": "00000000-0000-0000-0000-000000000102",
+          "statement": "The documented behavior is reproducible.",
+          "semantic_status": "supported",
+          "uncertainty": "low"
+        }
+      ],
+      "passages": [
+        {
+          "passage_id": "00000000-0000-0000-0000-000000000601",
+          "candidate_id": "00000000-0000-0000-0000-000000000301",
+          "snapshot_id": "00000000-0000-0000-0000-000000000602",
+          "chunk_id": "00000000-0000-0000-0000-000000000603",
+          "text": "The fixture passage records the documented behavior.",
+          "source_url": "https://fixture.invalid/docs"
+        }
+      ],
+      "omitted_passages": [],
+      "claim_evidence_bindings": [
+        {
+          "binding_id": "00000000-0000-0000-0000-000000000604",
+          "claim_id": "00000000-0000-0000-0000-000000000102",
+          "passage_ids": [
+            "00000000-0000-0000-0000-000000000601"
+          ],
+          "relationship": "supports",
+          "confidence": 0.9,
+          "uncertainty": "low",
+          "model": "gpt-4",
+          "prompt_version": "v1",
+          "schema_version": 1,
+          "input_packet_revision": 1
+        }
+      ],
+      "corroborating_groups": [
+        {
+          "group_id": "00000000-0000-0000-0000-000000000605",
+          "passage_ids": [
+            "00000000-0000-0000-0000-000000000601"
+          ],
+          "rationale": "One primary passage is available.",
+          "evaluated": true
+        }
+      ],
+      "contradicting_groups": [],
+      "qualifying_groups": [],
+      "near_duplicate_groups": [],
+      "source_diversity_summary": {
+        "independent_source_count": 1
+      },
+      "freshness_summary": {
+        "status": "satisfied"
+      },
+      "limitations": [
+        "Independent corroboration remains missing."
+      ],
+      "unresolved_items": [
+        "00000000-0000-0000-0000-000000000402"
+      ],
+      "independence_assessments": [],
+      "retrieval_provenance": []
+    },
+    "evidence_packet_revision": 1,
+    "coverage_revision": 2,
+    "limitations": [
+      "Independent corroboration remains missing."
+    ],
+    "unresolved_items": [
+      "00000000-0000-0000-0000-000000000402"
+    ],
+    "outline": [
+      "1. Evidence summary",
+      "2. Supported findings (1 claim)",
+      "3. Limitations and unresolved items"
+    ],
+    "citation_ready": {
+      "claims": [
+        {
+          "claim_id": "00000000-0000-0000-0000-000000000102",
+          "statement": "The documented behavior is reproducible.",
+          "semantic_status": "supported",
+          "uncertainty": "low"
+        }
+      ],
+      "passages": [
+        {
+          "passage_id": "00000000-0000-0000-0000-000000000601",
+          "text": "The fixture passage records the documented behavior.",
+          "source_url": "https://fixture.invalid/docs",
+          "candidate_id": "00000000-0000-0000-0000-000000000301",
+          "snapshot_id": "00000000-0000-0000-0000-000000000602",
+          "chunk_id": "00000000-0000-0000-0000-000000000603"
+        }
+      ],
+      "bindings": {
+        "00000000-0000-0000-0000-000000000102": [
+          {
+            "binding_id": "00000000-0000-0000-0000-000000000604",
+            "passage_ids": [
+              "00000000-0000-0000-0000-000000000601"
+            ],
+            "relationship": "supports",
+            "confidence": 0.9
+          }
+        ]
+      },
+      "groups": [
+        {
+          "group_id": "00000000-0000-0000-0000-000000000605",
+          "passage_ids": [
+            "00000000-0000-0000-0000-000000000601"
+          ],
+          "rationale": "One primary passage is available.",
+          "evaluated": true
+        }
+      ],
+      "metadata": {
+        "schema_version": "evidence-packet-v1",
+        "run_id": "00000000-0000-0000-0000-000000000401",
+        "research_spec_id": "00000000-0000-0000-0000-000000000100",
+        "coverage_revision": 2
+      }
+    },
+    "token_limits": {
+      "max_input_tokens": 8192,
+      "max_output_tokens": 4096,
+      "max_retrieval_candidates": 50
+    },
+    "created_at": "2026-07-25T12:00:00+00:00"
   }
 }
