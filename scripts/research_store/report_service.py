@@ -631,9 +631,7 @@ class LocalSynthesisService:
         from .claim_binding_service import ClaimBindingService
 
         if self._binding_service is None:
-            self._binding_service = ClaimBindingService(
-                self.semantic, self.evidence
-            )
+            self._binding_service = ClaimBindingService(self.semantic, self.evidence)
 
         packet_revision = packet.get("coverage_revision", 1)
         new_revision = self._binding_service.evaluate_claims(
