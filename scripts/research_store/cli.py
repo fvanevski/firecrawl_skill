@@ -611,6 +611,50 @@ def parser():
     packet_export.add_argument("--max-claims", type=int, default=10)
 
     # ------------------------------------------------------------------
+    # Agent-led handoff (Phase 7, issue #62)
+    # ------------------------------------------------------------------
+    handoff = sub.add_parser(
+        "handoff",
+        help="Produce a bounded host-agent handoff payload (issue #62)",
+    )
+    handoff.add_argument("run_id", help="Research run UUID")
+    handoff.add_argument(
+        "--output",
+        default="-",
+        help="Output file (default: stdout)",
+    )
+    handoff.add_argument(
+        "--max-passages",
+        type=int,
+        default=128,
+        help="Max passages in citation-ready output (default: 128)",
+    )
+    handoff.add_argument(
+        "--max-claims",
+        type=int,
+        default=64,
+        help="Max claims in citation-ready output (default: 64)",
+    )
+    handoff.add_argument(
+        "--token-limit-max-input",
+        type=int,
+        default=None,
+        help="Override max_input_tokens cap",
+    )
+    handoff.add_argument(
+        "--token-limit-max-output",
+        type=int,
+        default=None,
+        help="Override max_output_tokens cap",
+    )
+    handoff.add_argument(
+        "--token-limit-max-retrieval",
+        type=int,
+        default=None,
+        help="Override max_retrieval_candidates cap",
+    )
+
+    # ------------------------------------------------------------------
     # Claim manifest commands (issue #32)
     # ------------------------------------------------------------------
     claim = sub.add_parser("claim-manifest")
@@ -2895,6 +2939,60 @@ def main(argv=None):
             os.unlink(tmp_path)
             raise
         result = {"exported_to": str(output_path)}
+
+    # ------------------------------------------------------------------
+    # Agent-led handoff (Phase 7, issue #62)
+    # ------------------------------------------------------------------
+    elif args.command == "handoff":
+        from .handoff import HandoffBuilder
+
+        config.require_database()
+        run_id = UUID(args.run_id)
+
+        token_limits = {}
+        if args.token_limit_max_input is not None:
+            token_limits["max_input_tokens"] = args.token_limit_max_input
+        if args.token_limit_max_output is not None:
+            token_limits["max_output_tokens"] = args.token_limit_max_output
+        if args.token_limit_max_retrieval is not None:
+            token_limits["max_retrieval_candidates"] = args.token_limit_max_retrieval
+
+        uow_factory = partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+            config.chunker_name,
+        )
+        builder = HandoffBuilder(
+            uow_factory,
+            token_limits=token_limits if token_limits else None,
+            max_passages=args.max_passages,
+            max_claims=args.max_claims,
+        )
+        payload = builder.build(run_id)
+        output_dict = payload.to_dict()
+
+        if args.output != "-":
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(json.dumps(output_dict, indent=2, default=str))
+                os.replace(tmp_path, str(output_path))
+                result = {"exported_to": str(output_path)}
+            except BaseException:
+                os.unlink(tmp_path)
+                raise
+        else:
+            print(json.dumps(output_dict, indent=2, default=str))
+            result = {}
 
     # ------------------------------------------------------------------
     # Claim manifest commands (issue #32)

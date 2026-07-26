@@ -17,6 +17,7 @@ __all__ = [
     "CURRENT_VERSION_BY_MODEL",
     "MODEL_BY_VERSION",
     "DomainValidationError",
+    "HandoffPayload",
     "ValidationContext",
     "dumps",
     "load_model",

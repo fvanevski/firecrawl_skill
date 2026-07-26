@@ -1,0 +1,98 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/handoff-payload-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "citation_ready": {
+      "additionalProperties": {},
+      "type": "object"
+    },
+    "coverage_ledger": {
+      "additionalProperties": {},
+      "type": "object"
+    },
+    "coverage_revision": {
+      "type": "integer"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "evidence_packet": {
+      "additionalProperties": {},
+      "type": "object"
+    },
+    "evidence_packet_revision": {
+      "type": "integer"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "outline": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "research_spec": {
+      "additionalProperties": {},
+      "type": "object"
+    },
+    "run_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "handoff-payload-v1",
+      "type": "string"
+    },
+    "token_limits": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "unresolved_items": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "research_spec",
+    "coverage_ledger",
+    "evidence_packet",
+    "evidence_packet_revision",
+    "coverage_revision",
+    "limitations",
+    "unresolved_items",
+    "outline",
+    "citation_ready",
+    "token_limits",
+    "created_at"
+  ],
+  "title": "HandoffPayload",
+  "type": "object"
+}
