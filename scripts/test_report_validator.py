@@ -902,3 +902,84 @@ def test_citation_pass_schema_validation():
 
     assert result.is_valid is True
     assert len(result.claim_manifest) == 2
+
+
+def test_weak_passage_support_warning():
+    """Claims with few shared terms between statement and passages should warn."""
+    packet = deepcopy(_VALID_PACKET)
+    # Add a claim whose statement shares no terms with the passage.
+    packet["claims"].append(
+        {
+            "claim_id": "00000000-0000-0000-0000-000000000104",
+            "statement": "The quantum entanglement protocol violates causality.",
+            "semantic_status": "supported",
+            "uncertainty": None,
+        }
+    )
+    # The passage text shares no terms with the claim statement.
+    packet["passages"].append(
+        {
+            "passage_id": "00000000-0000-0000-0000-000000000607",
+            "candidate_id": "00000000-0000-0000-0000-000000000303",
+            "snapshot_id": "00000000-0000-0000-0000-000000000608",
+            "chunk_id": "00000000-0000-0000-0000-000000000609",
+            "text": "The documented behavior is reproducible in test environments.",
+            "source_url": "https://fixture.invalid/docs2",
+        }
+    )
+
+    report = {
+        "schema_version": "synthesis-citation-pass-v1",
+        "run_id": str(_VALID_PACKET["run_id"]),
+        "evidence_packet_revision": 2,
+        "draft_revision": 1,
+        "pass_status": "passed",
+        "validation_results": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000104",
+                "passage_ids": ["00000000-0000-0000-0000-000000000607"],
+                "status": "valid",
+                "issue": None,
+            }
+        ],
+        "invented_citations": [],
+        "unsupported_claims": [],
+        "entailment_mismatches": [],
+    }
+
+    validator = ReportValidator(packet, report, current_packet_revision=2)
+    result = validator.validate()
+
+    # Should have a warning about weak passage support.
+    assert any(f.code == "WEAK_PASSENGE_SUPPORT" for f in result.warnings)
+
+
+def test_strong_passage_support_no_warning():
+    """Claims with good term overlap should not warn."""
+    report = {
+        "schema_version": "synthesis-citation-pass-v1",
+        "run_id": str(_VALID_PACKET["run_id"]),
+        "evidence_packet_revision": 2,
+        "draft_revision": 1,
+        "pass_status": "passed",
+        "validation_results": [
+            {
+                "section_id": "s1",
+                "claim_id": _VALID_PACKET["claims"][0]["claim_id"],
+                "passage_ids": [_VALID_PACKET["passages"][0]["passage_id"]],
+                "status": "valid",
+                "issue": None,
+            }
+        ],
+        "invented_citations": [],
+        "unsupported_claims": [],
+        "entailment_mismatches": [],
+    }
+
+    validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
+    result = validator.validate()
+
+    # The claim "The documented behavior is reproducible" shares terms with
+    # the passage "The documented behavior is reproducible in test environments."
+    assert not any(f.code == "WEAK_PASSENGE_SUPPORT" for f in result.warnings)

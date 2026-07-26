@@ -918,13 +918,12 @@ class LocalSynthesisService:
         using the ``ReportValidator`` and persists the result via
         ``ReportArtifactService``.  It does not call an LLM.
 
-        If the EvidencePacket cannot be loaded (e.g. in unit tests with
-        mocked dependencies), the stage is skipped.
+        **Production behavior.**  When the EvidencePacket cannot be loaded,
+        the stage **fails** — it does not skip.  Skipping was only ever a
+        safety net for unit tests with mocked dependencies; the correct fix
+        is for those tests to provide a proper EvidencePacket mock.
         """
-        from .report_artifact_service import (
-            ReportArtifactError,
-            ReportArtifactService,
-        )
+        from .report_artifact_service import ReportArtifactService
 
         # Read the citation_pass artifact from synthesis_stages.
         with uow_factory() as uow:
@@ -956,60 +955,43 @@ class LocalSynthesisService:
             "entailment_mismatches": report_artifact.get("entailment_mismatches", []),
         }
 
-        try:
-            # Validate the report.
-            artifact_service = ReportArtifactService(uow_factory, self.evidence)
-            validation_result = artifact_service.validate_report(run_id, report)
+        # Validate the report.
+        artifact_service = ReportArtifactService(uow_factory, self.evidence)
+        validation_result = artifact_service.validate_report(run_id, report)
 
-            # Persist the validation result.
-            artifact_service.persist_validation_result(
-                run_id, report, validation_result
-            )
+        # Persist the validation result.
+        artifact_service.persist_validation_result(run_id, report, validation_result)
 
-            # Update the validation stage record.
-            with uow_factory() as uow:
-                try:
-                    record = uow.get_synthesis_stage(run_id, "validation")
-                except KeyError:
-                    record = None
+        # Update the validation stage record.
+        with uow_factory() as uow:
+            try:
+                record = uow.get_synthesis_stage(run_id, "validation")
+            except KeyError:
+                record = None
 
-                if record is not None:
-                    self._update_stage(
-                        uow,
-                        record,
-                        status=(
-                            SynthesisStageStatus.COMPLETED.value
-                            if validation_result.is_valid
-                            else SynthesisStageStatus.FAILED.value
-                        ),
-                        artifact=validation_result.to_dict(),
-                        error=None
+            if record is not None:
+                self._update_stage(
+                    uow,
+                    record,
+                    status=(
+                        SynthesisStageStatus.COMPLETED.value
                         if validation_result.is_valid
-                        else validation_result.summary,
-                    )
+                        else SynthesisStageStatus.FAILED.value
+                    ),
+                    artifact=validation_result.to_dict(),
+                    error=None
+                    if validation_result.is_valid
+                    else validation_result.summary,
+                )
 
-            return {
-                "status": "completed" if validation_result.is_valid else "failed",
-                "report_hash": validation_result.report_hash,
-                "evidence_packet_revision": validation_result.packet_revision,
-                "stale_packet": validation_result.stale_packet,
-                "validation_status": (
-                    "valid" if validation_result.is_valid else "invalid"
-                ),
-                "claim_count": len(validation_result.claim_manifest),
-            }
-        except (ReportArtifactError, TypeError, AttributeError):
-            # EvidencePacket not available (e.g. in unit tests with mocked
-            # dependencies). Skip validation gracefully.
-            logger.info(
-                "validation stage skipped for run %s (EvidencePacket not available)",
-                run_id,
-            )
-            return {
-                "status": "skipped",
-                "reason": "EvidencePacket not available",
-                "evidence_packet_revision": packet.get("coverage_revision", 1),
-            }
+        return {
+            "status": "completed" if validation_result.is_valid else "failed",
+            "report_hash": validation_result.report_hash,
+            "evidence_packet_revision": validation_result.packet_revision,
+            "stale_packet": validation_result.stale_packet,
+            "validation_status": ("valid" if validation_result.is_valid else "invalid"),
+            "claim_count": len(validation_result.claim_manifest),
+        }
 
     # ------------------------------------------------------------------
     # Resume and status

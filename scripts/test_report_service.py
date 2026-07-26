@@ -106,12 +106,31 @@ def _make_mock_uow():
     mock_uow.synthesis_stages.update_synthesis_stage = _update_stage
     mock_uow.synthesis_stages.get_synthesis_stages = _get_stages
 
+    # Also set direct methods on the UOW (matching the real PostgresUnitOfWork).
+    mock_uow.get_synthesis_stage = _get_stage
+    mock_uow.insert_synthesis_stage = _insert_stage
+    mock_uow.get_synthesis_stages = _get_stages
+
+    # Evidence packet method for validation stage.
+    _packet_store: dict[str, int] = {}
+
+    def _get_evidence_packet(run_id, packet_revision=None):
+        key = str(run_id)
+        if key not in _packet_store:
+            return None
+        # Return a simple object-like mock with packet_revision attr.
+        result = MagicMock()
+        result.packet_revision = _packet_store[key]
+        return result
+
+    mock_uow.get_evidence_packet = _get_evidence_packet
+
     mock_ctx = MagicMock()
     mock_ctx.__enter__ = MagicMock(return_value=mock_uow)
     mock_ctx.__exit__ = MagicMock(return_value=False)
     mock_uow_factory = MagicMock(return_value=mock_ctx)
 
-    return mock_uow_factory, mock_uow, _records
+    return mock_uow_factory, mock_uow, _records, _packet_store
 
 
 def _make_service(
@@ -126,7 +145,12 @@ def _make_service(
 
     # Call _make_mock_uow ONCE so the factory and mock_uow share the same
     # _records dict used by the closure-based repository methods.
-    mock_uow_factory, mock_uow, _records = _make_mock_uow()
+    mock_uow_factory, mock_uow, _records, _packet_store = _make_mock_uow()
+
+    # Pre-populate the packet store so the validation stage can find the
+    # current packet revision.
+    run_id_str = str(packet.get("run_id", "00000000-0000-0000-0000-000000000401"))
+    _packet_store[run_id_str] = packet.get("coverage_revision", 1)
 
     mock_semantic = MagicMock()
     mock_semantic.uow_factory = mock_uow_factory
@@ -564,12 +588,16 @@ def test_synthesis_stage_delegates_to_report_service():
     from research_store.orchestrator import SynthesisStage
 
     mock_run_service = MagicMock()
-    mock_uow_factory, mock_uow, _records = _make_mock_uow()
+    mock_uow_factory, mock_uow, _records, _packet_store = _make_mock_uow()
     mock_run_service.uow_factory = mock_uow_factory
     mock_run_service.evidence_service = MagicMock()
     mock_run_service.evidence_service.export_packet.return_value = deepcopy(
         _VALID_PACKET
     )
+
+    # Pre-populate the packet store so the validation stage can find it.
+    run_id_str = str(_VALID_PACKET["run_id"])
+    _packet_store[run_id_str] = _VALID_PACKET.get("coverage_revision", 1)
 
     mock_config = MagicMock()
     mock_config.embedding_model = "test-model"

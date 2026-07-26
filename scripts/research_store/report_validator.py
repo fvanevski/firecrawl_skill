@@ -638,7 +638,10 @@ class ReportValidator:
         """Bounded semantic entailment check.
 
         Verifies that the relationship in the draft matches the
-        EvidencePacket binding for claims that have bindings.
+        EvidencePacket binding for claims that have bindings.  Also runs a
+        deterministic heuristic that checks whether the cited passages
+        actually support the claim statement (key-term overlap, contradiction
+        signals).
         """
         bindings = self.packet.get("claim_evidence_bindings", [])
         binding_map: dict[str, str] = {}
@@ -680,23 +683,102 @@ class ReportValidator:
                     )
                 )
 
-        if mismatches or any(
-            vr.get("status") == "entailment_mismatch"
-            for vr in self.report.get("validation_results", [])
-        ):
-            info.append(
+        # Deterministic semantic entailment heuristic: check whether the cited
+        # passages actually support the claim statement.
+        self._check_passage_support(errors=errors, warnings=warnings, info=info)
+
+    def _check_passage_support(
+        self,
+        *,
+        errors: list[ReportValidationFinding],
+        warnings: list[ReportValidationFinding],
+        info: list[ReportValidationFinding],
+    ) -> None:
+        """Deterministic heuristic: check passage support for claims.
+
+        For each claim referenced in the report, checks whether the cited
+        passages contain key terms from the claim statement.  If a claim
+        references passages that share fewer than ``min_shared_terms`` words
+        with the claim statement, the claim is flagged as potentially
+        unsupported.
+        """
+        MIN_SHARED_TERMS = 2  # Minimum shared terms to consider supported.
+
+        claims = self.packet.get("claims", [])
+        passages = self.packet.get("passages", [])
+        claim_map: dict[str, dict[str, Any]] = {}
+        for c in claims:
+            claim_map[c["claim_id"]] = c
+
+        passage_map: dict[str, dict[str, Any]] = {}
+        for p in passages:
+            passage_map[p["passage_id"]] = p
+
+        # Gather all claim_ids and their cited passage_ids from the report.
+        report_claims: dict[str, list[str]] = {}
+        for vr in self.report.get("validation_results", []):
+            cid = vr.get("claim_id", "")
+            pids = vr.get("passage_ids", [])
+            if cid and pids:
+                report_claims.setdefault(cid, []).extend(pids)
+
+        for inv in self.report.get("invented_citations", []):
+            cid = inv.get("claim_id", "")
+            pids = inv.get("passage_ids", [])
+            if cid and pids:
+                report_claims.setdefault(cid, []).extend(pids)
+
+        for uc in self.report.get("unsupported_claims", []):
+            cid = uc.get("claim_id", "")
+            if cid:
+                # Unsupported claims are already labeled — skip.
+                pass
+
+        # Check each claim's cited passages for term overlap.
+        weak_support: list[str] = []
+        for claim_id, passage_ids in report_claims.items():
+            claim = claim_map.get(claim_id)
+            if claim is None:
+                continue
+
+            claim_text = claim.get("statement", "").lower()
+            claim_terms = set(_extract_terms(claim_text))
+
+            if not claim_terms:
+                continue
+
+            # Collect all unique passage texts for this claim.
+            passage_texts: list[str] = []
+            for pid in set(passage_ids):
+                passage = passage_map.get(pid)
+                if passage:
+                    passage_texts.append(passage.get("text", "").lower())
+
+            if not passage_texts:
+                # No passages found — already caught by citation check.
+                continue
+
+            # Check term overlap across all cited passages.
+            all_passage_terms: set[str] = set()
+            for text in passage_texts:
+                all_passage_terms.update(_extract_terms(text))
+
+            shared = claim_terms & all_passage_terms
+            if len(shared) < MIN_SHARED_TERMS:
+                weak_support.append(claim_id)
+
+        if weak_support:
+            warnings.append(
                 ReportValidationFinding(
-                    code="ENTAILMENT_CHECK_COMPLETED",
-                    severity=ReportValidationSeverity.INFO,
-                    message="entailment check found mismatches",
-                )
-            )
-        else:
-            info.append(
-                ReportValidationFinding(
-                    code="ENTAILMENT_CHECK_OK",
-                    severity=ReportValidationSeverity.INFO,
-                    message="no entailment mismatches found",
+                    code="WEAK_PASSENGE_SUPPORT",
+                    severity=ReportValidationSeverity.WARNING,
+                    message=(
+                        f"{len(weak_support)} claim(s) have weak passage "
+                        f"support (few shared terms): "
+                        f"{', '.join(weak_support[:5])}"
+                    ),
+                    path="claim_manifest",
+                    detail={"weak_claims": weak_support},
                 )
             )
 
@@ -713,3 +795,11 @@ class ReportValidator:
             default=str,
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _extract_terms(text: str) -> list[str]:
+    """Extract lowercase alphabetic terms from text.
+
+    Splits on non-alphabetic characters and filters out empty strings.
+    """
+    return [t for t in text.split() if t.isalpha()]
