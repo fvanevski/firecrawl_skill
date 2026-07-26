@@ -1409,10 +1409,12 @@ class HandoffPayload:
     def __post_init__(self) -> None:
         if self.schema_version != self.SCHEMA_VERSION:
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
-        if self.evidence_packet_revision < 1:
-            raise ValueError("evidence_packet_revision must be >= 1")
-        if self.coverage_revision < 1:
-            raise ValueError("coverage_revision must be >= 1")
+        # evidence_packet_revision == 0 is allowed for degraded payloads
+        # where no evidence packet exists.
+        if self.evidence_packet_revision < 0:
+            raise ValueError("evidence_packet_revision must be >= 0")
+        if self.coverage_revision < 0:
+            raise ValueError("coverage_revision must be >= 0")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the payload to a JSON-compatible dictionary."""

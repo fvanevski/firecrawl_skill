@@ -204,13 +204,23 @@ class TestHandoffPayloadSchema:
         with pytest.raises(ValueError, match="unsupported schema_version"):
             _make_handoff_payload(schema_version="handoff-payload-v0")
 
-    def test_rejects_invalid_packet_revision(self):
-        with pytest.raises(ValueError, match="evidence_packet_revision must be >= 1"):
-            _make_handoff_payload(evidence_packet_revision=0)
+    def test_rejects_negative_packet_revision(self):
+        with pytest.raises(ValueError, match="evidence_packet_revision must be >= 0"):
+            _make_handoff_payload(evidence_packet_revision=-1)
 
-    def test_rejects_invalid_coverage_revision(self):
-        with pytest.raises(ValueError, match="coverage_revision must be >= 1"):
-            _make_handoff_payload(coverage_revision=0)
+    def test_rejects_negative_coverage_revision(self):
+        with pytest.raises(ValueError, match="coverage_revision must be >= 0"):
+            _make_handoff_payload(coverage_revision=-1)
+
+    def test_zero_packet_revision_allowed_for_degraded(self):
+        """Revision 0 is valid for degraded payloads."""
+        payload = _make_handoff_payload(evidence_packet_revision=0)
+        assert payload.evidence_packet_revision == 0
+
+    def test_zero_coverage_revision_allowed_for_degraded(self):
+        """Revision 0 is valid for degraded payloads."""
+        payload = _make_handoff_payload(coverage_revision=0)
+        assert payload.coverage_revision == 0
 
     def test_to_dict_round_trip(self):
         payload = _make_handoff_payload()
@@ -452,11 +462,13 @@ class TestOutlineGeneration:
 
 
 class TestHandoffBuilderFailurePaths:
-    """Tests for HandoffBuilder failure scenarios."""
+    """Tests for HandoffBuilder degraded-mode failure scenarios."""
 
-    def test_missing_evidence_packet_raises(self):
-        """Builder raises when evidence packet is missing."""
+    def test_missing_evidence_packet_produces_degraded_payload(self):
+        """Builder returns a degraded payload when evidence packet is missing."""
         from research_store.handoff import HandoffBuilder
+
+        run_id = uuid4()
 
         def uow_factory_missing():
             class MockUow:
@@ -489,12 +501,25 @@ class TestHandoffBuilderFailurePaths:
             return MockUow()
 
         builder = HandoffBuilder(uow_factory_missing)
-        with pytest.raises(ValueError, match="EvidencePacket not found"):
-            builder.build(uuid4())
+        payload = builder.build(run_id)
 
-    def test_missing_research_spec_raises(self):
-        """Builder raises when research spec is missing."""
+        assert isinstance(payload, HandoffPayload)
+        assert payload.evidence_packet.get("degraded") is True
+        assert payload.evidence_packet.get("reason") == "evidence_packet_missing"
+        assert payload.evidence_packet_revision == 0
+        # Degradation note should be in limitations
+        assert any("Evidence packet is missing" in l for l in payload.limitations)
+        # Citation-ready should be empty/degraded
+        assert payload.citation_ready["metadata"]["degraded"] is True
+        assert payload.citation_ready["metadata"]["reason"] == "evidence_packet_missing"
+        # Outline should be None (no claims to structure)
+        assert payload.outline is None
+
+    def test_missing_research_spec_produces_degraded_payload(self):
+        """Builder returns a degraded payload when research spec is missing."""
         from research_store.handoff import HandoffBuilder
+
+        run_id = uuid4()
 
         def uow_factory_no_spec():
             class MockUow:
@@ -542,8 +567,59 @@ class TestHandoffBuilderFailurePaths:
             return MockUow()
 
         builder = HandoffBuilder(uow_factory_no_spec)
-        with pytest.raises(ValueError, match="ResearchSpec not found"):
-            builder.build(uuid4())
+        payload = builder.build(run_id)
+
+        assert isinstance(payload, HandoffPayload)
+        assert payload.research_spec == {}
+        # Degradation note should be in limitations
+        assert any("ResearchSpec is missing" in l for l in payload.limitations)
+
+    def test_both_packet_and_spec_missing(self):
+        """Builder returns a degraded payload when both are missing."""
+        from research_store.handoff import HandoffBuilder
+
+        run_id = uuid4()
+
+        def uow_factory_both_missing():
+            class MockUow:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    pass
+
+                def get_evidence_packet(self, run_id):
+                    return None
+
+                def get_research_spec(self, run_id):
+                    return None
+
+                def get_coverage_summary(self, run_id):
+                    return _make_ledger_payload()
+
+                @property
+                def coverage(self):
+                    class MockCoverage:
+                        def get_current_revision(self, run_id):
+                            return 1
+
+                        def list_coverage_events(self, run_id, limit=100, offset=0):
+                            return []
+
+                    return MockCoverage()
+
+            return MockUow()
+
+        builder = HandoffBuilder(uow_factory_both_missing)
+        payload = builder.build(run_id)
+
+        assert isinstance(payload, HandoffPayload)
+        assert payload.evidence_packet.get("degraded") is True
+        assert payload.research_spec == {}
+        # Both degradation notes should be present
+        limitation_text = " ".join(payload.limitations)
+        assert "Evidence packet is missing" in limitation_text
+        assert "ResearchSpec is missing" in limitation_text
 
 
 # ---------------------------------------------------------------------------
@@ -628,6 +704,148 @@ class TestHandoffBuilderSuccess:
             "Single domain coverage",
         )
         assert len(payload.unresolved_items) == 1
+
+    def test_coverage_rebuild_degraded_when_truncated(self):
+        """Builder marks coverage as degraded when events are truncated."""
+        from research_store.handoff import HandoffBuilder
+
+        run_id = uuid4()
+
+        def uow_factory_no_coverage():
+            class MockUow:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    pass
+
+                def get_evidence_packet(self, run_id):
+                    class MockRecord:
+                        packet_revision = 1
+                        coverage_revision = 1
+
+                        def to_dict(self):
+                            return {
+                                "id": str(uuid4()),
+                                "run_id": str(run_id),
+                                "research_spec_id": str(uuid4()),
+                                "coverage_revision": 1,
+                                "packet_revision": 1,
+                                "payload": _make_packet_payload(),
+                                "created_at": datetime.now(timezone.utc),
+                            }
+
+                    return MockRecord()
+
+                def get_research_spec(self, run_id):
+                    return _make_spec_payload()
+
+                def get_coverage_summary(self, run_id):
+                    return None  # Force rebuild
+
+                @property
+                def coverage(self):
+                    class MockCoverage:
+                        def get_current_revision(self, run_id):
+                            return 1
+
+                        def list_coverage_events(self, run_id, limit=100, offset=0):
+                            # Return exactly ``limit`` events → triggers degradation
+                            return [
+                                {
+                                    "coverage_item_id": str(uuid4()),
+                                    "item_type": "question",
+                                    "status": "satisfied",
+                                    "freshness_status": "satisfied",
+                                }
+                                for _ in range(limit)
+                            ]
+
+                    return MockCoverage()
+
+            return MockUow()
+
+        builder = HandoffBuilder(uow_factory_no_coverage)
+        payload = builder.build(run_id)
+
+        assert isinstance(payload, HandoffPayload)
+        # Coverage summary should have degradation markers
+        assert payload.coverage_ledger.get("_degraded") is True
+        assert "event list truncated" in payload.coverage_ledger.get(
+            "_degradation_reason", ""
+        )
+        # Degradation note should be in limitations
+        limitation_text = " ".join(payload.limitations)
+        assert "Coverage summary was rebuilt from events" in limitation_text
+
+    def test_coverage_rebuild_not_degraded_when_under_limit(self):
+        """Builder does not mark coverage as degraded when events are under limit."""
+        from research_store.handoff import HandoffBuilder
+
+        run_id = uuid4()
+
+        def uow_factory_no_coverage_small():
+            class MockUow:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    pass
+
+                def get_evidence_packet(self, run_id):
+                    class MockRecord:
+                        packet_revision = 1
+                        coverage_revision = 1
+
+                        def to_dict(self):
+                            return {
+                                "id": str(uuid4()),
+                                "run_id": str(run_id),
+                                "research_spec_id": str(uuid4()),
+                                "coverage_revision": 1,
+                                "packet_revision": 1,
+                                "payload": _make_packet_payload(),
+                                "created_at": datetime.now(timezone.utc),
+                            }
+
+                    return MockRecord()
+
+                def get_research_spec(self, run_id):
+                    return _make_spec_payload()
+
+                def get_coverage_summary(self, run_id):
+                    return None  # Force rebuild
+
+                @property
+                def coverage(self):
+                    class MockCoverage:
+                        def get_current_revision(self, run_id):
+                            return 1
+
+                        def list_coverage_events(self, run_id, limit=100, offset=0):
+                            # Return fewer than limit events → no degradation
+                            return [
+                                {
+                                    "coverage_item_id": str(uuid4()),
+                                    "item_type": "question",
+                                    "status": "satisfied",
+                                    "freshness_status": "satisfied",
+                                }
+                                for _ in range(50)
+                            ]
+
+                    return MockCoverage()
+
+            return MockUow()
+
+        builder = HandoffBuilder(uow_factory_no_coverage_small)
+        payload = builder.build(run_id)
+
+        assert isinstance(payload, HandoffPayload)
+        # Coverage summary should NOT have degradation markers
+        assert "_degraded" not in payload.coverage_ledger
+        # No coverage degradation note in limitations
+        assert all("Coverage summary was rebuilt" not in l for l in payload.limitations)
 
 
 # ---------------------------------------------------------------------------
