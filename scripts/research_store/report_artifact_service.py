@@ -190,33 +190,9 @@ class ReportArtifactService:
             except KeyError:
                 return None
 
-    def get_report_by_hash(
-        self,
-        report_hash: str,
-    ) -> dict[str, Any] | None:
-        """Retrieve the validation result by its report hash.
-
-        Args:
-            report_hash: The SHA-256 report hash.
-
-        Returns:
-            The validation artifact dict, or ``None`` if not found.
-        """
-        with self._uow_factory() as uow:
-            try:
-                records = uow.get_synthesis_stages(
-                    run_id=UUID(report_hash[:16], version=4)
-                )
-                for record in records:
-                    artifact = record.get("artifact") or {}
-                    if artifact.get("report_hash") == report_hash:
-                        return artifact
-                return None
-            except (KeyError, ValueError, TypeError) as exc:
-                logger.warning(
-                    "failed to get validation by hash %s: %s", report_hash, exc
-                )
-                return None
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
 
     def _get_current_packet_revision(self, run_id: UUID) -> int:
         """Get the most recent EvidencePacket revision for a run."""

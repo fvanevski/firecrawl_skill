@@ -1393,13 +1393,17 @@ class SynthesisStageName(str, Enum):
 
     @property
     def schema_file(self) -> str:
-        """JSON schema file name for this stage's output."""
+        """JSON schema file name for this stage's output.
+
+        Returns an empty string for stages that do not produce an LLM schema
+        (e.g. ``validation`` — it is a deterministic, no-LLM stage).
+        """
         return {
             "outline": "synthesis-outline-v1.json",
             "binding": "claim-binding-v1.json",
             "draft": "synthesis-draft-v1.json",
             "citation_pass": "synthesis-citation-pass-v1.json",
-            "validation": "synthesis-validation-v1.json",
+            "validation": "",
         }[self.value]
 
 

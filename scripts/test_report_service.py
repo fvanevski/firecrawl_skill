@@ -289,6 +289,7 @@ def test_synthesis_stage_name_order():
     assert SynthesisStageName.BINDING.order == 2
     assert SynthesisStageName.DRAFT.order == 3
     assert SynthesisStageName.CITATION_PASS.order == 4
+    assert SynthesisStageName.VALIDATION.order == 5
 
 
 def test_synthesis_stage_name_schema_file():
@@ -299,6 +300,8 @@ def test_synthesis_stage_name_schema_file():
         SynthesisStageName.CITATION_PASS.schema_file
         == "synthesis-citation-pass-v1.json"
     )
+    # VALIDATION has no schema file — it does not call an LLM.
+    assert SynthesisStageName.VALIDATION.schema_file == ""
 
 
 def test_synthesis_stage_record_validation():
@@ -1411,3 +1414,96 @@ def test_run_synthesis_picks_up_new_packet_revision():
 
     prompt_data = json.loads(captured_prompts[0])
     assert len(prompt_data["claims"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Validation failure propagates to pipeline
+# ---------------------------------------------------------------------------
+
+
+def test_run_synthesis_fails_when_validation_fails():
+    """When the validation stage raises ReportServiceError, the pipeline
+    must set overall_status = "failed" and mark remaining stages failed.
+    """
+    service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Pre-populate outline, binding, draft, citation_pass as completed.
+    for stage_name in ("outline", "binding", "draft", "citation_pass"):
+        record = {
+            "id": str(uuid4()),
+            "run_id": str(run_id),
+            "stage_name": stage_name,
+            "stage_status": "completed",
+            "semantic_call_id": None,
+            "semantic_artifact_id": None,
+            "evidence_packet_revision": 1,
+            "model_name": "test-model",
+            "prompt_version": "v1",
+            "schema_version": 1,
+            "artifact": {"status": "completed"},
+            "error": None,
+            "attempts": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        mock_uow.synthesis_stages.update_synthesis_stage(record)
+
+    # Pre-populate citation_pass artifact with invented citations so
+    # the validator will fail.
+    citation_pass_record = {
+        "id": str(uuid4()),
+        "run_id": str(run_id),
+        "stage_name": "citation_pass",
+        "stage_status": "completed",
+        "semantic_call_id": None,
+        "semantic_artifact_id": None,
+        "evidence_packet_revision": 1,
+        "model_name": "test-model",
+        "prompt_version": "v1",
+        "schema_version": 1,
+        "artifact": {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 1,
+            "draft_revision": 1,
+            "pass_status": "failed",
+            "validation_results": [],
+            "invented_citations": [
+                {
+                    "section_id": "s1",
+                    "claim_id": _VALID_PACKET["claims"][0]["claim_id"],
+                    "passage_ids": [
+                        "00000000-0000-0000-0000-000000009999"
+                    ],  # unknown passage
+                }
+            ],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        },
+        "error": None,
+        "attempts": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    mock_uow.synthesis_stages.update_synthesis_stage(citation_pass_record)
+
+    # Pre-populate the citation_pass artifact with invented citations so
+    # the validator will fail.  The _packet_store is already pre-populated
+    # by _make_service with the coverage_revision, so the validation stage
+    # will find the current packet revision.
+
+    summary = service.run_synthesis(
+        run_id=run_id,
+        packet_revision=1,
+        model_name="test-model",
+    )
+
+    # All prior stages should be skipped.
+    for stage_key in ("outline", "binding", "draft", "citation_pass"):
+        assert summary["stages"][stage_key]["status"] == "skipped"
+
+    # Validation must fail and the pipeline must be marked failed.
+    assert summary["stages"]["validation"]["status"] == "failed"
+    assert summary["overall_status"] == "failed"
+    assert "report validation failed" in summary.get("error", "")

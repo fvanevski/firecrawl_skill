@@ -260,16 +260,18 @@ def test_no_invented_citations_passes():
 
 
 def test_invented_citation_in_validation_results():
-    """Invented citations flagged in validation_results should be caught."""
+    """Invented citations flagged in validation_results are also in the
+    top-level invented_citations array which is the authoritative source.
+    """
     report = _make_valid_report(with_invented=True)
     validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
     result = validator.validate()
 
-    # Should find the invented citation via validation_results.
+    # Should find the invented citation via the top-level invented_citations.
     assert any(
         f.code == "UNKNOWN_CITATION"
         for f in result.errors
-        if f.path and "validation_results" in f.path
+        if f.path and "invented_citations" in f.path
     )
 
 
@@ -952,7 +954,7 @@ def test_weak_passage_support_warning():
     result = validator.validate()
 
     # Should have a warning about weak passage support.
-    assert any(f.code == "WEAK_PASSENGE_SUPPORT" for f in result.warnings)
+    assert any(f.code == "WEAK_PASSAGE_SUPPORT" for f in result.warnings)
 
 
 def test_strong_passage_support_no_warning():
@@ -982,4 +984,4 @@ def test_strong_passage_support_no_warning():
 
     # The claim "The documented behavior is reproducible" shares terms with
     # the passage "The documented behavior is reproducible in test environments."
-    assert not any(f.code == "WEAK_PASSENGE_SUPPORT" for f in result.warnings)
+    assert not any(f.code == "WEAK_PASSAGE_SUPPORT" for f in result.warnings)

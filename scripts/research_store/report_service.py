@@ -984,12 +984,20 @@ class LocalSynthesisService:
                     else validation_result.summary,
                 )
 
+        # Raise so the pipeline loop marks overall_status = "failed" and
+        # marks all downstream stages as failed.  The stage record is already
+        # persisted above, so the failure is durable.
+        if not validation_result.is_valid:
+            raise ReportServiceError(
+                f"report validation failed: {validation_result.summary}"
+            )
+
         return {
-            "status": "completed" if validation_result.is_valid else "failed",
+            "status": "completed",
             "report_hash": validation_result.report_hash,
             "evidence_packet_revision": validation_result.packet_revision,
             "stale_packet": validation_result.stale_packet,
-            "validation_status": ("valid" if validation_result.is_valid else "invalid"),
+            "validation_status": "valid",
             "claim_count": len(validation_result.claim_manifest),
         }
 

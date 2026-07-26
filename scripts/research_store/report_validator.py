@@ -340,37 +340,9 @@ class ReportValidator:
         for p in self.packet.get("omitted_passages", []):
             passage_ids.add(p["passage_id"])
 
-        # Check validation_results from the citation_pass stage.
-        validation_results = self.report.get("validation_results", [])
-        invented_citations = []
-
-        for vr in validation_results:
-            status = vr.get("status", "")
-            if status == "invented":
-                invented_citations.append(vr)
-                for pid in vr.get("passage_ids", []):
-                    if pid not in passage_ids:
-                        errors.append(
-                            ReportValidationFinding(
-                                code="UNKNOWN_CITATION",
-                                severity=ReportValidationSeverity.ERROR,
-                                message=(
-                                    f"citation to unknown passage {pid} "
-                                    f"in section {vr.get('section_id', '?')}"
-                                ),
-                                path=(
-                                    f"validation_results/{vr.get('section_id', '?')}"
-                                ),
-                                detail={
-                                    "passage_id": pid,
-                                    "claim_id": vr.get("claim_id", ""),
-                                    "section_id": vr.get("section_id", ""),
-                                },
-                            )
-                        )
-
-        # Also check the top-level invented_citations array.
-        for inv in self.report.get("invented_citations", []):
+        # Check the top-level invented_citations array (authoritative source).
+        invented_citations = self.report.get("invented_citations", [])
+        for inv in invented_citations:
             for pid in inv.get("passage_ids", []):
                 if pid not in passage_ids:
                     errors.append(
@@ -390,8 +362,8 @@ class ReportValidator:
                         )
                     )
 
-        # Check that claim_ids in citations are known.
-        for vr in validation_results:
+        # Check that claim_ids in validation_results are known claims.
+        for vr in self.report.get("validation_results", []):
             cid = vr.get("claim_id", "")
             if cid and cid not in claim_ids:
                 errors.append(
@@ -412,10 +384,7 @@ class ReportValidator:
                 ReportValidationFinding(
                     code="INVENTED_CITATIONS_FOUND",
                     severity=ReportValidationSeverity.INFO,
-                    message=(
-                        f"found {len(invented_citations)} invented "
-                        f"citations in validation_results"
-                    ),
+                    message=(f"found {len(invented_citations)} invented citations"),
                 )
             )
 
@@ -770,7 +739,7 @@ class ReportValidator:
         if weak_support:
             warnings.append(
                 ReportValidationFinding(
-                    code="WEAK_PASSENGE_SUPPORT",
+                    code="WEAK_PASSAGE_SUPPORT",
                     severity=ReportValidationSeverity.WARNING,
                     message=(
                         f"{len(weak_support)} claim(s) have weak passage "
