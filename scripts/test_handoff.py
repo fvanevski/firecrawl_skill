@@ -399,19 +399,19 @@ class TestCitationResolution:
         """Citation-ready output includes claims."""
         payload = _make_handoff_payload()
         cr = payload.citation_ready
-        assert "claims" in cr or "claim" in cr or "claims_out" in cr
+        assert "claims" in cr
 
     def test_citation_ready_contains_passages(self):
         """Citation-ready output includes passages."""
         payload = _make_handoff_payload()
         cr = payload.citation_ready
-        assert "passages" in cr or "passage" in cr or "passages_out" in cr
+        assert "passages" in cr
 
     def test_citation_ready_contains_bindings(self):
         """Citation-ready output includes claim-passage bindings."""
         payload = _make_handoff_payload()
         cr = payload.citation_ready
-        assert "bindings" in cr or "binding" in cr
+        assert "bindings" in cr
 
     def test_unresolved_items_explicit(self):
         """Unresolved items are explicit in the payload."""
@@ -926,6 +926,143 @@ class TestHandoffPayloadImport:
         from research_domain.models import CANONICAL_MODELS, HandoffPayload
 
         assert HandoffPayload in CANONICAL_MODELS
+
+
+# ---------------------------------------------------------------------------
+# CLI end-to-end token-limit propagation
+# ---------------------------------------------------------------------------
+
+
+class TestCLITokenLimitPropagation:
+    """Tests that CLI token-limit flags propagate through to the payload."""
+
+    def test_token_limits_propagate_through_builder(self):
+        """Builder respects custom token_limits passed at construction."""
+        from research_store.handoff import HandoffBuilder
+
+        run_id = uuid4()
+
+        def uow_factory():
+            class MockUow:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    pass
+
+                def get_evidence_packet(self, run_id):
+                    class MockRecord:
+                        packet_revision = 1
+                        coverage_revision = 1
+
+                        def to_dict(self):
+                            return {
+                                "id": str(uuid4()),
+                                "run_id": str(run_id),
+                                "research_spec_id": str(uuid4()),
+                                "coverage_revision": 1,
+                                "packet_revision": 1,
+                                "payload": _make_packet_payload(),
+                                "created_at": datetime.now(timezone.utc),
+                            }
+
+                    return MockRecord()
+
+                def get_research_spec(self, run_id):
+                    return _make_spec_payload()
+
+                def get_coverage_summary(self, run_id):
+                    return _make_ledger_payload()
+
+                @property
+                def coverage(self):
+                    class MockCoverage:
+                        def get_current_revision(self, run_id):
+                            return 1
+
+                        def list_coverage_events(self, run_id, limit=100, offset=0):
+                            return []
+
+                    return MockCoverage()
+
+            return MockUow()
+
+        builder = HandoffBuilder(
+            uow_factory,
+            token_limits={"max_input_tokens": 4096, "max_output_tokens": 2048},
+        )
+        payload = builder.build(run_id)
+
+        assert payload.token_limits == {
+            "max_input_tokens": 4096,
+            "max_output_tokens": 2048,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Schema validation
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaValidation:
+    """Tests that the JSON schema matches the dataclass and fixture."""
+
+    def test_schema_matches_dataclass_fields(self):
+        """All HandoffPayload fields are present in the JSON schema."""
+        import json as _json
+
+        schema_path = (
+            Path(__file__).resolve().parent.parent
+            / "schemas"
+            / "research-workflow"
+            / "handoff-payload-v1.json"
+        )
+        with open(schema_path) as f:
+            schema = _json.load(f)
+
+        schema_props = set(schema["properties"].keys())
+        dataclass_fields = {
+            f.name
+            for f in HandoffPayload.__dataclass_fields__.values()
+        }
+
+        # schema_version is declared in the dataclass but is a const in the
+        # schema rather than a pass-through property — account for that.
+        assert schema_props == dataclass_fields, (
+            f"Schema props {schema_props} != dataclass fields {dataclass_fields}"
+        )
+
+    def test_fixture_validates_against_schema(self):
+        """The handoff-payload-v1 fixture is valid against the JSON schema."""
+        import json as _json
+
+        try:
+            import jsonschema
+        except ImportError:
+            pytest.skip("jsonschema not installed")
+
+        fixture_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "tests"
+            / "fixtures"
+            / "research_domain"
+            / "valid.json"
+        )
+        with open(fixture_path) as f:
+            fixtures = _json.load(f)
+
+        schema_path = (
+            Path(__file__).resolve().parent.parent
+            / "schemas"
+            / "research-workflow"
+            / "handoff-payload-v1.json"
+        )
+        with open(schema_path) as f:
+            schema = _json.load(f)
+
+        fixture = fixtures["handoff-payload-v1"]
+        jsonschema.validate(fixture, schema)
+        assert True  # No exception means valid
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from typing import Any
 from uuid import UUID
 
 from research_domain.models import HandoffPayload
+from research_domain.registry import load_model
 
 from research_store.packet_validator import bounded_citation_ready_output
 
@@ -173,6 +174,11 @@ class HandoffBuilder:
                 created_at=datetime.now(timezone.utc),
             )
 
+        # coverage_revision defaults to 0 when coverage_summary is None and
+        # _rebuild_coverage_summary returned revision 0 (no events).  The
+        # .get() fallback is therefore a safety net for the rebuild path —
+        # it never fires in practice but documents the degraded invariant.
+
         return payload
 
     # ------------------------------------------------------------------
@@ -185,8 +191,6 @@ class HandoffBuilder:
         Loads the packet dict as an ``EvidencePacket`` object and delegates
         to ``bounded_citation_ready_output`` to keep the logic DRY.
         """
-        from research_domain.registry import load_model
-
         packet = load_model(packet_payload)
         return bounded_citation_ready_output(
             packet,
@@ -206,9 +210,11 @@ class HandoffBuilder:
             return None
 
         sections: list[str] = []
+        counter = 1
 
         # Always include an evidence summary section.
-        sections.append("1. Evidence summary")
+        sections.append(f"{counter}. Evidence summary")
+        counter += 1
 
         # Group claims by semantic status for structured outline.
         supported = []
@@ -230,23 +236,27 @@ class HandoffBuilder:
 
         if supported:
             sections.append(
-                f"2. Supported findings ({len(supported)} claim{'s' if len(supported) != 1 else ''})"
+                f"{counter}. Supported findings ({len(supported)} claim{'s' if len(supported) != 1 else ''})"
             )
+            counter += 1
         if contradicted:
             sections.append(
-                f"3. Contradicted claims ({len(contradicted)} claim{'s' if len(contradicted) != 1 else ''})"
+                f"{counter}. Contradicted claims ({len(contradicted)} claim{'s' if len(contradicted) != 1 else ''})"
             )
+            counter += 1
         if qualified:
             sections.append(
-                f"4. Qualified findings ({len(qualified)} claim{'s' if len(qualified) != 1 else ''})"
+                f"{counter}. Qualified findings ({len(qualified)} claim{'s' if len(qualified) != 1 else ''})"
             )
+            counter += 1
         if unsupported:
             sections.append(
-                f"5. Unsupported claims ({len(unsupported)} claim{'s' if len(unsupported) != 1 else ''})"
+                f"{counter}. Unsupported claims ({len(unsupported)} claim{'s' if len(unsupported) != 1 else ''})"
             )
+            counter += 1
 
         # Always end with limitations and unresolved items.
-        sections.append("6. Limitations and unresolved items")
+        sections.append(f"{counter}. Limitations and unresolved items")
 
         return tuple(sections)
 
