@@ -165,6 +165,22 @@ def test_migration_0030_insert_and_query_duplicate_groups():
     run_id = uuid_mod.uuid4()
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        # Create a parent research_runs row so the FK constraint is satisfied
+        cur.execute(
+            """INSERT INTO research_runs (id, original_request, status, state, execution_mode, objective, metadata)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING""",
+            (
+                str(run_id),
+                "test request",
+                "running",
+                "created",
+                "agent_led",
+                "test objective",
+                "{}",
+            ),
+        )
+
         # Insert a duplicate_groups row
         cur.execute(
             """INSERT INTO duplicate_groups (id, run_id, rationale, created_at)
@@ -179,8 +195,9 @@ def test_migration_0030_insert_and_query_duplicate_groups():
         )
         row = cur.fetchone()
         assert row is not None
-        assert uuid_mod.UUID(row[0]) == group_id
-        assert uuid_mod.UUID(row[1]) == run_id
+        # row[0] and row[1] are already UUIDs from PostgreSQL
+        assert row[0] == group_id
+        assert row[1] == run_id
         assert row[2] == "test_rationale"
 
         # Query it back
@@ -191,4 +208,4 @@ def test_migration_0030_insert_and_query_duplicate_groups():
         )
         row = cur.fetchone()
         assert row is not None
-        assert uuid_mod.UUID(row[0]) == group_id
+        assert row[0] == group_id
