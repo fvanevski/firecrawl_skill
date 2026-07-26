@@ -1021,7 +1021,9 @@ class TestSchemaValidation:
             schema = _json.load(f)
 
         schema_props = set(schema["properties"].keys())
-        dataclass_fields = {f.name for f in HandoffPayload.__dataclass_fields__.values()}
+        dataclass_fields = {
+            f.name for f in HandoffPayload.__dataclass_fields__.values()
+        }
 
         # schema_version is declared in the dataclass but is a const in the
         # schema rather than a pass-through property — account for that.
