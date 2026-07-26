@@ -4,6 +4,7 @@ import json
 import math
 import os
 import signal
+from collections import defaultdict
 from threading import Event
 from time import monotonic
 from urllib.request import Request, urlopen
@@ -131,8 +132,6 @@ class IndexWorker:
 
         Returns a dict with ``complete``, ``failed``, and ``lease_lost`` counts.
         """
-        from collections import defaultdict
-
         groups: dict[str, list[dict]] = defaultdict(list)
         for job in jobs:
             key = job.get("fingerprint", "")
@@ -156,6 +155,10 @@ class IndexWorker:
             self._renew(job)
 
         # Resolve chunk texts for this group.
+        # All jobs in a fingerprint group originate from the same embedding
+        # manifest, so filtering by group[0]["manifest_id"] is safe. If a job
+        # in the group belongs to a different manifest its chunk will be
+        # silently excluded, causing that job to fail with "embedding failed".
         entity_ids = [job["entity_id"] for job in group]
         with self.uow_factory() as uow:
             records = uow.chunks.chunks_for_index(

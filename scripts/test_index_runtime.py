@@ -541,6 +541,73 @@ def test_lease_expiry_during_batch_stops_processing():
     assert not any(c[0] == "upsert" for c in _calls)
 
 
+def test_lease_expiry_multi_job_group_stops_processing():
+    """When lease is lost mid-group, no jobs are completed or failed —
+    only lease_lost is incremented and remaining jobs are skipped."""
+    state = _MicrobatchState()
+    chunk_a, chunk_b = uuid4(), uuid4()
+    manifest_a, manifest_b = uuid4(), uuid4()
+    state.jobs = [
+        state._make_job(chunk_a, manifest_a, fingerprint="fp"),
+        state._make_job(chunk_b, manifest_b, fingerprint="fp"),
+    ]
+    state.records = [state._make_record(chunk_a), state._make_record(chunk_b)]
+
+    renewal_count = [0]
+
+    class PartialLeaseRepo:
+        def claim_jobs(self, limit, **options):
+            state.claim_history.append({"limit": limit, **options})
+            taken = state.jobs[:limit]
+            state.jobs = state.jobs[limit:]
+            return taken
+
+        def renew_job(self, job_id, lease_token, lease_seconds):
+            renewal_count[0] += 1
+            # First renewal succeeds, second fails — simulates mid-batch loss
+            return renewal_count[0] == 1
+
+        def finish_job(self, job_id, lease_token, error, **options):
+            state.finishes.append((job_id, lease_token, error, options))
+            return True
+
+        def chunks_for_index(self, chunk_ids, manifest_id=None):
+            return [
+                r
+                for r in state.records
+                if chunk_ids is None
+                or any(str(r["chunk_id"]) == str(cid) for cid in chunk_ids)
+            ]
+
+        def heartbeat_worker(self, worker_id, metadata):
+            pass
+
+    repo = PartialLeaseRepo()
+
+    class Uow:
+        def __enter__(self):
+            self.index_jobs = self.chunks = repo
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    qdrant, _calls = _fake_qdrant(state)
+    worker = IndexWorker(
+        lambda: Uow(),
+        qdrant,
+        lambda _: [0.1, 0.2, 0.3],
+        worker_id="w-lease-multi",
+    )
+    result = worker.run_batch(2)
+
+    assert result["claimed"] == 2
+    assert result["lease_lost"] == 1
+    assert result["complete"] == 0
+    assert result["failed"] == 0
+    assert not any(c[0] == "upsert" for c in _calls)
+
+
 def test_dimension_mismatch_fails_individual_job():
     """Job with wrong dimension fails; compatible job succeeds."""
     state = _MicrobatchState()
