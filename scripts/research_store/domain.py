@@ -1378,11 +1378,18 @@ class SynthesisStageName(str, Enum):
     BINDING = "binding"
     DRAFT = "draft"
     CITATION_PASS = "citation_pass"
+    VALIDATION = "validation"
 
     @property
     def order(self) -> int:
         """Deterministic execution order (lower = earlier)."""
-        return {"outline": 1, "binding": 2, "draft": 3, "citation_pass": 4}[self.value]
+        return {
+            "outline": 1,
+            "binding": 2,
+            "draft": 3,
+            "citation_pass": 4,
+            "validation": 5,
+        }[self.value]
 
     @property
     def schema_file(self) -> str:
@@ -1392,6 +1399,7 @@ class SynthesisStageName(str, Enum):
             "binding": "claim-binding-v1.json",
             "draft": "synthesis-draft-v1.json",
             "citation_pass": "synthesis-citation-pass-v1.json",
+            "validation": "synthesis-validation-v1.json",
         }[self.value]
 
 

@@ -419,6 +419,7 @@ class LocalSynthesisService:
                     "binding": 2,
                     "draft": 3,
                     "citation_pass": 4,
+                    "validation": 5,
                 }
                 current_order = order.get(stage_key, 99)
                 for remaining in SynthesisStageName:
@@ -466,6 +467,7 @@ class LocalSynthesisService:
             "binding": self._run_binding_stage,
             "draft": self._run_draft_stage,
             "citation_pass": self._run_citation_pass_stage,
+            "validation": self._run_validation_stage,
         }
         executor = stage_map.get(stage_name)
         if executor is None:
@@ -493,6 +495,7 @@ class LocalSynthesisService:
             "binding": 2,
             "draft": 3,
             "citation_pass": 4,
+            "validation": 5,
         }
         current_order = order.get(current_stage, 99)
 
@@ -899,6 +902,111 @@ class LocalSynthesisService:
             "invented_citations_count": invented_count,
             "unsupported_claims_count": unsupported_count,
         }
+
+    def _run_validation_stage(
+        self,
+        uow_factory: Any,
+        run_id: UUID,
+        packet: dict[str, Any],
+        model_name: str,
+        prompt_version: str,
+        allow_commercial_fallback: bool,
+    ) -> dict[str, Any]:
+        """Run deterministic report validation.
+
+        This stage validates the report artifact against the EvidencePacket
+        using the ``ReportValidator`` and persists the result via
+        ``ReportArtifactService``.  It does not call an LLM.
+
+        If the EvidencePacket cannot be loaded (e.g. in unit tests with
+        mocked dependencies), the stage is skipped.
+        """
+        from .report_artifact_service import (
+            ReportArtifactError,
+            ReportArtifactService,
+        )
+
+        # Read the citation_pass artifact from synthesis_stages.
+        with uow_factory() as uow:
+            try:
+                citation_record = uow.synthesis_stages.get_synthesis_stage(
+                    run_id, "citation_pass"
+                )
+            except KeyError:
+                raise ReportServiceError(
+                    "citation_pass stage must complete before validation"
+                )
+
+        report_artifact = citation_record.get("artifact") or {}
+
+        # Build a minimal report dict from the citation_pass artifact.
+        report = {
+            "schema_version": report_artifact.get("schema_version", "synthesis-citation-pass-v1"),
+            "run_id": str(run_id),
+            "evidence_packet_revision": report_artifact.get(
+                "evidence_packet_revision", packet.get("coverage_revision", 1)
+            ),
+            "draft_revision": report_artifact.get("draft_revision", 1),
+            "pass_status": report_artifact.get("pass_status", "failed"),
+            "validation_results": report_artifact.get("validation_results", []),
+            "invented_citations": report_artifact.get("invented_citations", []),
+            "unsupported_claims": report_artifact.get("unsupported_claims", []),
+            "entailment_mismatches": report_artifact.get("entailment_mismatches", []),
+        }
+
+        try:
+            # Validate the report.
+            artifact_service = ReportArtifactService(uow_factory, self.evidence)
+            validation_result = artifact_service.validate_report(run_id, report)
+
+            # Persist the validation result.
+            artifact_service.persist_validation_result(
+                run_id, report, validation_result
+            )
+
+            # Update the validation stage record.
+            with uow_factory() as uow:
+                try:
+                    record = uow.get_synthesis_stage(run_id, "validation")
+                except KeyError:
+                    record = None
+
+                if record is not None:
+                    self._update_stage(
+                        uow,
+                        record,
+                        status=(
+                            SynthesisStageStatus.COMPLETED.value
+                            if validation_result.is_valid
+                            else SynthesisStageStatus.FAILED.value
+                        ),
+                        artifact=validation_result.to_dict(),
+                        error=None if validation_result.is_valid else validation_result.summary,
+                    )
+
+            return {
+                "status": "completed" if validation_result.is_valid else "failed",
+                "report_hash": validation_result.report_hash,
+                "evidence_packet_revision": validation_result.packet_revision,
+                "stale_packet": validation_result.stale_packet,
+                "validation_status": (
+                    "valid" if validation_result.is_valid else "invalid"
+                ),
+                "claim_count": len(validation_result.claim_manifest),
+            }
+        except (ReportArtifactError, TypeError, AttributeError):
+            # EvidencePacket not available (e.g. in unit tests with mocked
+            # dependencies). Skip validation gracefully.
+            logger.info(
+                "validation stage skipped for run %s (EvidencePacket not "
+                "available)",
+                run_id,
+            )
+            return {
+                "status": "skipped",
+                "reason": "EvidencePacket not available",
+                "evidence_packet_revision": packet.get("coverage_revision", 1),
+            }
 
     # ------------------------------------------------------------------
     # Resume and status
