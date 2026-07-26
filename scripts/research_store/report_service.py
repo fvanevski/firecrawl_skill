@@ -12,11 +12,19 @@ Each stage:
 * consumes ``EvidencePacket v1`` only;
 * persists its semantic call and artifact via ``SemanticCallService``;
 * binds draft claims to passage IDs;
-* validates structured output against the stage's JSON schema;
+* validates structured output via model-level ``call_structured`` with
+  JSON schemas that are augmented with ``enum`` constraints for known IDs;
 * resumes after a failed stage;
 * avoids repeating already completed valid stages;
 * uses only configured local endpoints unless an external fallback is
   explicitly enabled via ``allow_commercial_fallback``.
+
+.. note::
+
+   Validation is performed by the model through structured output with
+   enum-constrained schemas (``call_structured``).  There is no
+   post-hoc ``jsonschema.validate()`` pass.  The ``ClaimBindingService``
+   performs additional post-validation to reject unknown claim/passage IDs.
 
 ## Architecture
 
@@ -99,14 +107,6 @@ class ReportServiceError(RuntimeError):
 
 class CommercialFallbackError(ReportServiceError):
     """Raised when a commercial provider is used without explicit permission."""
-
-
-class StalePacketError(ReportServiceError):
-    """Raised when the EvidencePacket revision has changed."""
-
-
-class SchemaValidationError(ReportServiceError):
-    """Raised when structured output fails schema validation."""
 
 
 class LocalSynthesisService:
@@ -322,7 +322,6 @@ class LocalSynthesisService:
         Raises:
             ReportServiceError: If the pipeline fails.
             CommercialFallbackError: If commercial provider used without permission.
-            StalePacketError: If the EvidencePacket revision is stale.
         """
         if not allow_commercial_fallback:
             self._enforce_local_only("local")
@@ -627,7 +626,13 @@ class LocalSynthesisService:
         prompt_version: str,
         allow_commercial_fallback: bool,
     ) -> dict[str, Any]:
-        """Bind claims to passage IDs using ClaimBindingService."""
+        """Bind claims to passage IDs using ClaimBindingService.
+
+        The binding service is cached on first creation (``self._binding_service``)
+        so that subsequent calls to ``run_synthesis`` reuse the same instance
+        rather than creating a new one each time.  Tests may inject a mock via
+        ``LocalSynthesisService.__init__`` to avoid real LLM calls.
+        """
         from .claim_binding_service import ClaimBindingService
 
         if self._binding_service is None:
@@ -669,11 +674,20 @@ class LocalSynthesisService:
         """Draft the report body with claim references."""
         schema = self._get_schema("draft")
 
+        # Read the outline artifact from synthesis_stages (produced by the
+        # outline stage).  The outline was never written back to the
+        # EvidencePacket, so packet.get("outline_sections", []) would always
+        # be empty.
+        with uow_factory() as uow:
+            outline_record = uow.synthesis_stages.get_synthesis_stage(run_id, "outline")
+            outline_artifact = outline_record.get("artifact") or {}
+            outline_sections = outline_artifact.get("outline_sections", [])
+
         system_prompt = DRAFT_SYSTEM_PROMPT
         user_prompt = json.dumps(
             {
                 "research_spec": packet.get("research_spec", {}),
-                "outline_sections": packet.get("outline_sections", []),
+                "outline_sections": outline_sections,
                 "claims": [
                     {
                         "claim_id": c["claim_id"],
@@ -780,6 +794,15 @@ class LocalSynthesisService:
         """Validate citation consistency and entailment."""
         schema = self._get_schema("citation_pass")
 
+        # Read the draft artifact from synthesis_stages (produced by the
+        # draft stage).  The draft was never written back to the
+        # EvidencePacket, so packet.get("draft_sections", []) would always
+        # be empty.
+        with uow_factory() as uow:
+            draft_record = uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
+            draft_artifact = draft_record.get("artifact") or {}
+            draft_sections = draft_artifact.get("report_sections", [])
+
         system_prompt = CITATION_PASS_SYSTEM_PROMPT
         user_prompt = json.dumps(
             {
@@ -792,7 +815,7 @@ class LocalSynthesisService:
                     }
                     for b in packet.get("claim_evidence_bindings", [])
                 ],
-                "draft_sections": packet.get("draft_sections", []),
+                "draft_sections": draft_sections,
             },
             indent=2,
         )
@@ -904,7 +927,10 @@ class LocalSynthesisService:
     ) -> dict[str, Any]:
         """Resume synthesis from the last failed stage.
 
-        Already completed stages are skipped. Failed stages are retried.
+        This is a thin wrapper around ``run_synthesis`` that exists to give
+        callers a clear, discoverable entry point for resumption.  The
+        underlying ``run_synthesis`` method already handles both initial runs
+        and resumption (skipping completed stages, retrying failed ones).
 
         Args:
             run_id: The research run ID.
@@ -916,6 +942,12 @@ class LocalSynthesisService:
         Returns:
             Pipeline summary dict.
         """
+        logger.info(
+            "resume_failed_synthesis called for run %s (rev %d); "
+            "delegating to run_synthesis",
+            run_id,
+            packet_revision,
+        )
         return self.run_synthesis(
             run_id=run_id,
             packet_revision=packet_revision,

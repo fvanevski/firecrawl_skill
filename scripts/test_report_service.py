@@ -850,3 +850,363 @@ def test_binding_stage_creates_default_service():
     # Binding should have completed (it created its own ClaimBindingService).
     assert summary["stages"]["binding"]["status"] == "completed"
     assert service._binding_service is not None
+
+
+# ---------------------------------------------------------------------------
+# Citation-pass stage tests
+# ---------------------------------------------------------------------------
+
+
+def test_citation_pass_stage_exercises_full_pipeline():
+    """The citation_pass stage reads the draft artifact from synthesis_stages."""
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Pre-populate outline, binding, and draft as completed so only
+    # citation_pass runs.  The draft artifact must contain report_sections
+    # so the citation_pass stage can read them from synthesis_stages.
+    for sname in ("outline", "binding", "draft"):
+        mock_uow.synthesis_stages.update_synthesis_stage(
+            {
+                "id": str(uuid4()),
+                "run_id": str(run_id),
+                "stage_name": sname,
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "test-model",
+                "prompt_version": "v1",
+                "schema_version": 1,
+                "artifact": (
+                    {"report_sections": [{"section_id": "s1", "title": "Test"}]}
+                    if sname == "draft"
+                    else {}
+                ),
+                "error": None,
+                "attempts": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        )
+
+    mock_result = MagicMock()
+    mock_result.error = None
+    mock_result.value = {
+        "schema_version": "synthesis-citation-pass-v1",
+        "run_id": str(run_id),
+        "evidence_packet_revision": 2,
+        "draft_revision": 1,
+        "pass_status": "passed",
+        "validation_results": [],
+        "invented_citations": [],
+        "unsupported_claims": [],
+        "entailment_mismatches": [],
+    }
+    mock_result.semantic_call_id = str(uuid4())
+    mock_result.artifact_ids = [str(uuid4())]
+
+    with patch("model_gateway.call_structured", return_value=mock_result):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=2,
+            model_name="test-model",
+        )
+
+    assert summary["stages"]["citation_pass"]["status"] == "completed"
+    assert summary["overall_status"] == "completed"
+
+
+def test_citation_pass_stage_reads_draft_from_synthesis_stages():
+    """Citation_pass must read report_sections from synthesis_stages, not the packet."""
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Pre-populate outline, binding, and draft as completed.
+    for sname in ("outline", "binding", "draft"):
+        mock_uow.synthesis_stages.update_synthesis_stage(
+            {
+                "id": str(uuid4()),
+                "run_id": str(run_id),
+                "stage_name": sname,
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "test-model",
+                "prompt_version": "v1",
+                "schema_version": 1,
+                "artifact": (
+                    {"report_sections": [{"section_id": "s1", "title": "Test"}]}
+                    if sname == "draft"
+                    else {}
+                ),
+                "error": None,
+                "attempts": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        )
+
+    captured_user_prompt = None
+
+    def capture_call(*args, **kwargs):
+        nonlocal captured_user_prompt
+        captured_user_prompt = kwargs.get("user_prompt", "")
+        mock_result = MagicMock()
+        mock_result.error = None
+        mock_result.value = {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 2,
+            "draft_revision": 1,
+            "pass_status": "passed",
+            "validation_results": [],
+            "invented_citations": [],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        }
+        mock_result.semantic_call_id = str(uuid4())
+        mock_result.artifact_ids = [str(uuid4())]
+        return mock_result
+
+    with patch("model_gateway.call_structured", side_effect=capture_call):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=2,
+            model_name="test-model",
+        )
+
+    import json
+
+    prompt_data = json.loads(captured_user_prompt)
+    # The draft_sections in the prompt must come from the draft artifact in
+    # synthesis_stages, not from the EvidencePacket.
+    assert len(prompt_data["draft_sections"]) == 1
+    assert prompt_data["draft_sections"][0]["section_id"] == "s1"
+    assert summary["stages"]["citation_pass"]["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Draft stage data-flow tests
+# ---------------------------------------------------------------------------
+
+
+def test_draft_stage_reads_outline_from_synthesis_stages():
+    """Draft must read outline_sections from synthesis_stages, not the packet."""
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Pre-populate outline, binding, and citation_pass as completed so only
+    # draft runs.
+    mock_uow.synthesis_stages.update_synthesis_stage(
+        {
+            "id": str(uuid4()),
+            "run_id": str(run_id),
+            "stage_name": "outline",
+            "stage_status": "completed",
+            "semantic_call_id": None,
+            "semantic_artifact_id": None,
+            "evidence_packet_revision": 1,
+            "model_name": "test-model",
+            "prompt_version": "v1",
+            "schema_version": 1,
+            "artifact": {
+                "outline_sections": [
+                    {"section_id": "s1", "title": "Test Section", "claims": []}
+                ]
+            },
+            "error": None,
+            "attempts": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+    )
+    mock_uow.synthesis_stages.update_synthesis_stage(
+        {
+            "id": str(uuid4()),
+            "run_id": str(run_id),
+            "stage_name": "binding",
+            "stage_status": "completed",
+            "semantic_call_id": None,
+            "semantic_artifact_id": None,
+            "evidence_packet_revision": 1,
+            "model_name": "test-model",
+            "prompt_version": "v1",
+            "schema_version": 1,
+            "artifact": {},
+            "error": None,
+            "attempts": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+    )
+    mock_uow.synthesis_stages.update_synthesis_stage(
+        {
+            "id": str(uuid4()),
+            "run_id": str(run_id),
+            "stage_name": "citation_pass",
+            "stage_status": "completed",
+            "semantic_call_id": None,
+            "semantic_artifact_id": None,
+            "evidence_packet_revision": 1,
+            "model_name": "test-model",
+            "prompt_version": "v1",
+            "schema_version": 1,
+            "artifact": {},
+            "error": None,
+            "attempts": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+    )
+
+    captured_user_prompt = None
+
+    def capture_call(*args, **kwargs):
+        nonlocal captured_user_prompt
+        captured_user_prompt = kwargs.get("user_prompt", "")
+        mock_result = MagicMock()
+        mock_result.error = None
+        mock_result.value = {
+            "schema_version": "synthesis-draft-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 2,
+            "report_sections": [],
+            "unsupported_claims": [],
+            "limitations": [],
+        }
+        mock_result.semantic_call_id = str(uuid4())
+        mock_result.artifact_ids = [str(uuid4())]
+        return mock_result
+
+    with patch("model_gateway.call_structured", side_effect=capture_call):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=2,
+            model_name="test-model",
+        )
+
+    import json
+
+    prompt_data = json.loads(captured_user_prompt)
+    # The outline_sections in the prompt must come from the outline artifact
+    # in synthesis_stages, not from the EvidencePacket.
+    assert len(prompt_data["outline_sections"]) == 1
+    assert prompt_data["outline_sections"][0]["section_id"] == "s1"
+    assert summary["stages"]["draft"]["status"] == "completed"
+
+
+def test_draft_stage_handles_missing_outline_artifact():
+    """If the outline artifact is missing, draft should proceed with empty outline."""
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Pre-populate outline, binding, and citation_pass as completed but with
+    # no artifact.
+    mock_uow.synthesis_stages.update_synthesis_stage(
+        {
+            "id": str(uuid4()),
+            "run_id": str(run_id),
+            "stage_name": "outline",
+            "stage_status": "completed",
+            "semantic_call_id": None,
+            "semantic_artifact_id": None,
+            "evidence_packet_revision": 1,
+            "model_name": "test-model",
+            "prompt_version": "v1",
+            "schema_version": 1,
+            "artifact": None,
+            "error": None,
+            "attempts": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+    )
+    mock_uow.synthesis_stages.update_synthesis_stage(
+        {
+            "id": str(uuid4()),
+            "run_id": str(run_id),
+            "stage_name": "binding",
+            "stage_status": "completed",
+            "semantic_call_id": None,
+            "semantic_artifact_id": None,
+            "evidence_packet_revision": 1,
+            "model_name": "test-model",
+            "prompt_version": "v1",
+            "schema_version": 1,
+            "artifact": {},
+            "error": None,
+            "attempts": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+    )
+    mock_uow.synthesis_stages.update_synthesis_stage(
+        {
+            "id": str(uuid4()),
+            "run_id": str(run_id),
+            "stage_name": "citation_pass",
+            "stage_status": "completed",
+            "semantic_call_id": None,
+            "semantic_artifact_id": None,
+            "evidence_packet_revision": 1,
+            "model_name": "test-model",
+            "prompt_version": "v1",
+            "schema_version": 1,
+            "artifact": {},
+            "error": None,
+            "attempts": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+    )
+
+    mock_result = MagicMock()
+    mock_result.error = None
+    mock_result.value = {
+        "schema_version": "synthesis-draft-v1",
+        "run_id": str(run_id),
+        "evidence_packet_revision": 2,
+        "report_sections": [],
+        "unsupported_claims": [],
+        "limitations": [],
+    }
+    mock_result.semantic_call_id = str(uuid4())
+    mock_result.artifact_ids = [str(uuid4())]
+
+    with patch("model_gateway.call_structured", return_value=mock_result):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=2,
+            model_name="test-model",
+        )
+
+    # Should not raise — proceeds with empty outline_sections.
+    assert summary["stages"]["draft"]["status"] == "completed"
+
+
+def test_resume_failed_synthesis_logs_delegation():
+    """resume_failed_synthesis should log and delegate to run_synthesis."""
+    service, _, _, _ = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    with (
+        patch.object(
+            service, "run_synthesis", return_value={"overall_status": "completed"}
+        ) as mock_run,
+        patch("logging.Logger.info") as mock_info,
+    ):
+        service.resume_failed_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="test-model",
+        )
+
+    mock_run.assert_called_once()
+    mock_info.assert_called_once()
+    # call_args is ((args), {kwargs}).
+    # logger.info("resume ... %s (rev %d); ...", run_id, packet_revision)
+    # args[0] = format string, args[1] = run_id (UUID), args[2] = packet_revision (int)
+    assert isinstance(mock_info.call_args[0][2], int)
+    assert mock_info.call_args[0][2] == 1
