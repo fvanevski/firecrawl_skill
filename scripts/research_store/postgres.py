@@ -7268,7 +7268,7 @@ class PostgresUnitOfWork:
             if older_than_seconds is not None:
                 cur.execute(
                     """DELETE FROM semantic_cache
-                       WHERE created_at < (now() - (%s || 'seconds')::interval)
+                       WHERE created_at < (extract(epoch from now()) - %s)
                        RETURNING id""",
                     (older_than_seconds,),
                 )
@@ -7310,5 +7310,36 @@ class PostgresUnitOfWork:
                    WHERE id = %s AND status = 'valid'
                    RETURNING id""",
                 (str(entry_id),),
+            )
+            return cur.rowcount
+
+    def update_cache_entry(self, record: dict[str, Any]) -> int:
+        """Update an existing cache entry (e.g. revive an expired row).
+
+        Updates artifact, provenance, status, and ttl_seconds for the row
+        identified by key_hash.  Returns the number of rows updated (0 or 1).
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """UPDATE semantic_cache
+                   SET artifact = %s,
+                       provenance = %s,
+                       status = %s,
+                       ttl_seconds = %s,
+                       created_at = %s
+                   WHERE key_hash = %s
+                   RETURNING id""",
+                (
+                    json.dumps(record["artifact"], default=str)
+                    if record.get("artifact")
+                    else None,
+                    json.dumps(record["provenance"], default=str)
+                    if record.get("provenance")
+                    else None,
+                    record["status"],
+                    record["ttl_seconds"],
+                    record["created_at"],
+                    record["key_hash"],
+                ),
             )
             return cur.rowcount

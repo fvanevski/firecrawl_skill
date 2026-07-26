@@ -343,6 +343,10 @@ class LocalSynthesisService:
                 schema_version=schema_version,
                 input_hash=input_hash,
                 policy_version="budget-policy-v1",
+                configuration={
+                    "chunker_version": self.config.chunker_version,
+                    "parser_version": self.config.parser_version,
+                },
             )
         except Exception:  # noqa: BLE001
             # Cache unavailability is non-authoritative — fall through.

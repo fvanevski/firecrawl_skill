@@ -383,7 +383,7 @@ class SemanticCacheService:
             ).hexdigest()
 
         with self.uow_factory() as uow:
-            # Check for existing valid entry (idempotent insert).
+            # Check for existing entry.
             existing = uow.semantic_cache.get_cache_entry_by_key(key_hash)
             if existing is not None:
                 entry = self._row_to_entry(existing)
@@ -394,7 +394,74 @@ class SemanticCacheService:
                     )
                     return entry
 
-            # Insert new entry.
+                # Existing row has non-valid status (expired/pruned).
+                # Revive it by updating in place rather than inserting a
+                # duplicate key, which would violate the UNIQUE constraint.
+                logger.info(
+                    "semantic cache: reviving expired/pruned entry for key %s",
+                    key_hash[:12],
+                )
+                now = time.time()
+                update_record = {
+                    "key_hash": key_hash,
+                    "artifact": artifact,
+                    "provenance": provenance,
+                    "status": "valid",
+                    "ttl_seconds": self.ttl_seconds,
+                    "created_at": now,
+                }
+                uow.semantic_cache.update_cache_entry(update_record)
+                logger.debug(
+                    "semantic cache: updated entry for key %s",
+                    key_hash[:12],
+                )
+
+                # Populate Valkey on update.
+                valkey_client = self._get_valkey_client()
+                if valkey_client is not None:
+                    valkey_key = f"{_VALKEY_PREFIX}:{key_hash}"
+                    try:
+                        valkey_data = {
+                            "id": str(entry.id),
+                            "stage": stage,
+                            "model_fingerprint": f"{model_name}:{model_revision}:{endpoint_alias}",
+                            "input_hash": input_hash,
+                            "prompt_hash": prompt_hash,
+                            "prompt_version": prompt_version,
+                            "schema_version": schema_version,
+                            "policy_version": policy_version,
+                            "configuration_hash": config_hash,
+                            "artifact": artifact,
+                            "provenance": provenance,
+                            "created_at": now,
+                        }
+                        valkey_client.setex(
+                            valkey_key,
+                            self.ttl_seconds,
+                            json.dumps(valkey_data),
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.debug("semantic cache Valkey write on update failed")
+
+                return CacheEntry(
+                    id=entry.id,
+                    key_hash=key_hash,
+                    stage=stage,
+                    model_fingerprint=f"{model_name}:{model_revision}:{endpoint_alias}",
+                    input_hash=input_hash,
+                    prompt_hash=prompt_hash,
+                    prompt_version=prompt_version,
+                    schema_version=schema_version,
+                    policy_version=policy_version,
+                    configuration_hash=config_hash,
+                    artifact=artifact,
+                    provenance=provenance,
+                    status="valid",
+                    ttl_seconds=self.ttl_seconds,
+                    created_at=str(now),
+                )
+
+            # No existing entry — insert new.
             entry_id = uuid4()
             now = time.time()
             record = {
@@ -515,8 +582,9 @@ class SemanticCacheService:
             return UUID(value)
 
         created_at = row["created_at"]
+        # Keep created_at as a float for consistent TTL arithmetic.
         if isinstance(created_at, (int, float)):
-            created_at = str(created_at)
+            created_at = float(created_at)
 
         return CacheEntry(
             id=_to_uuid(row["id"]),

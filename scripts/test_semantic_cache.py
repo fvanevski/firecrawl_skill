@@ -143,11 +143,25 @@ def _make_cache_service(
                 return 1
         return 0
 
+    def _update(record):
+        """Update an existing cache entry by key_hash."""
+        key_hash = record["key_hash"]
+        if key_hash in _cache_store:
+            stored = _cache_store[key_hash]
+            stored["artifact"] = record.get("artifact", stored.get("artifact"))
+            stored["provenance"] = record.get("provenance", stored.get("provenance"))
+            stored["status"] = record.get("status", stored.get("status"))
+            stored["ttl_seconds"] = record.get("ttl_seconds", stored.get("ttl_seconds"))
+            stored["created_at"] = record.get("created_at", stored.get("created_at"))
+            return 1
+        return 0
+
     mock_uow.semantic_cache.get_cache_entry_by_key = _get_by_key
     mock_uow.semantic_cache.insert_cache_entry = _insert
     mock_uow.semantic_cache.prune_cache_entries = _prune
     mock_uow.semantic_cache.invalidate_cache_entry = _invalidate_by_key
     mock_uow.semantic_cache.invalidate_cache_entry_by_id = _invalidate_by_id
+    mock_uow.semantic_cache.update_cache_entry = _update
 
     mock_ctx = MagicMock()
     mock_ctx.__enter__ = MagicMock(return_value=mock_uow)
@@ -1172,3 +1186,248 @@ def test_cache_entry_fields():
     assert entry.status == "valid"
     assert entry.artifact == {"test": "artifact"}
     assert entry.provenance == {"provider": "local"}
+
+
+# ---------------------------------------------------------------------------
+# Configuration consistency (B1 regression test)
+# ---------------------------------------------------------------------------
+
+
+def test_write_and_check_use_same_configuration():
+    """_write_cache and _check_cache must produce matching cache keys.
+
+    This is a regression test for B1: if _check_cache() omits the
+    configuration dict that _write_cache() includes, the cache key
+    hashes will differ and no cache hits will occur.
+    """
+    service, _, _ = _make_cache_service()
+
+    config = {"chunker_version": "hierarchical", "parser_version": "markdown-v1"}
+
+    # Insert with configuration.
+    entry = service.insert(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=config,
+        artifact=_BASE_ARTIFACT,
+        provenance=_BASE_PROVENANCE,
+    )
+    assert entry is not None
+
+    # Lookup with the same configuration must hit.
+    result = service.lookup(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=config,
+    )
+    assert result is not None
+    assert result.key_hash == entry.key_hash
+
+    # Lookup without configuration (or with None) must miss because the
+    # canonical JSON differs when configuration is present vs absent.
+    result_no_config = service.lookup(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=None,
+    )
+    assert result_no_config is None
+
+
+# ---------------------------------------------------------------------------
+# Revive expired/pruned entries (N1 regression test)
+# ---------------------------------------------------------------------------
+
+
+def test_revive_expired_entry():
+    """Reviving an expired entry must succeed without unique-violation."""
+    # Use a short but non-zero TTL so that the revived entry is not
+    # immediately expired when the lookup runs a few microseconds later.
+    service, _, cache_store = _make_cache_service(ttl_seconds=1)
+
+    # Insert an entry that will expire after 1 second.
+    entry = service.insert(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=_BASE_CONFIG,
+        artifact=_BASE_ARTIFACT,
+        provenance=_BASE_PROVENANCE,
+    )
+    assert entry is not None
+
+    # Manually expire the entry by setting created_at far in the past.
+    stored = cache_store.get(entry.key_hash)
+    if stored:
+        stored["created_at"] = time.time() - 10  # 10 seconds ago
+
+    # Lookup should miss because the entry is expired.
+    result = service.lookup(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=_BASE_CONFIG,
+    )
+    assert result is None
+
+    # Re-insert with the same key should revive the expired entry.
+    new_artifact = dict(_BASE_ARTIFACT)
+    new_artifact["revived"] = True
+    entry2 = service.insert(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=_BASE_CONFIG,
+        artifact=new_artifact,
+        provenance=_BASE_PROVENANCE,
+    )
+    assert entry2 is not None
+
+    # Only one entry should exist in the store (no duplicate).
+    assert len(cache_store) == 1
+
+    # The revived entry should be returned on lookup.
+    result = service.lookup(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=_BASE_CONFIG,
+    )
+    assert result is not None
+    assert result.artifact.get("revived") is True
+
+
+def test_revive_pruned_entry():
+    """Reviving a pruned entry must succeed without unique-violation."""
+    service, _, cache_store = _make_cache_service()
+
+    # Insert and then prune the entry.
+    entry = service.insert(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=_BASE_CONFIG,
+        artifact=_BASE_ARTIFACT,
+        provenance=_BASE_PROVENANCE,
+    )
+    assert entry is not None
+    service.invalidate(key_hash=entry.key_hash)
+
+    # Lookup should miss because the entry is pruned.
+    result = service.lookup(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=_BASE_CONFIG,
+    )
+    assert result is None
+
+    # Re-insert should revive the pruned entry.
+    entry2 = service.insert(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=_BASE_CONFIG,
+        artifact=_BASE_ARTIFACT,
+        provenance=_BASE_PROVENANCE,
+    )
+    assert entry2 is not None
+
+    # Only one entry should exist in the store.
+    assert len(cache_store) == 1
+
+    # The revived entry should be valid.
+    stored = cache_store.get(entry.key_hash)
+    assert stored is not None
+    assert stored["status"] == "valid"
+
+
+# ---------------------------------------------------------------------------
+# created_at type consistency (N5 regression test)
+# ---------------------------------------------------------------------------
+
+
+def test_created_at_is_float():
+    """created_at must be a float for consistent TTL arithmetic."""
+    service, _, _ = _make_cache_service()
+
+    entry = service.insert(
+        stage="outline",
+        model_name=_BASE_MODEL_NAME,
+        model_revision=_BASE_MODEL_REVISION,
+        endpoint_alias=_BASE_ENDPOINT,
+        prompt_version=_BASE_PROMPT_VERSION,
+        prompt_hash="test-prompt-hash",
+        schema_version=_BASE_SCHEMA_VERSION,
+        input_hash="test-input-hash",
+        policy_version=_BASE_POLICY_VERSION,
+        configuration=_BASE_CONFIG,
+        artifact=_BASE_ARTIFACT,
+        provenance=_BASE_PROVENANCE,
+    )
+    assert entry is not None
+
+    # created_at should be a float (not a string).
+    assert isinstance(entry.created_at, float)
