@@ -707,3 +707,146 @@ def test_run_synthesis_packet_not_found():
             packet_revision=1,
             model_name="test-model",
         )
+
+
+def test_binding_stage_uses_injected_service():
+    """Binding stage should use an injected ClaimBindingService when provided."""
+    mock_binding = MagicMock()
+    mock_binding.evaluate_claims.return_value = 5
+
+    service, _, _, mock_uow = _make_service()
+    service._binding_service = mock_binding
+
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Pre-populate all stages as completed except binding (which should run).
+    for stage_name in SynthesisStageName:
+        if stage_name.value == "binding":
+            continue
+        record = {
+            "id": str(uuid4()),
+            "run_id": str(run_id),
+            "stage_name": stage_name.value,
+            "stage_status": "completed",
+            "semantic_call_id": None,
+            "semantic_artifact_id": None,
+            "evidence_packet_revision": 1,
+            "model_name": "test-model",
+            "prompt_version": "v1",
+            "schema_version": 1,
+            "artifact": None,
+            "error": None,
+            "attempts": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        mock_uow.synthesis_stages.update_synthesis_stage(record)
+
+    # Pre-populate binding as pending so it runs.
+    binding_record = {
+        "id": str(uuid4()),
+        "run_id": str(run_id),
+        "stage_name": "binding",
+        "stage_status": "pending",
+        "semantic_call_id": None,
+        "semantic_artifact_id": None,
+        "evidence_packet_revision": 1,
+        "model_name": "test-model",
+        "prompt_version": "v1",
+        "schema_version": 1,
+        "artifact": None,
+        "error": None,
+        "attempts": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    mock_uow.synthesis_stages.update_synthesis_stage(binding_record)
+
+    summary = service.run_synthesis(
+        run_id=run_id,
+        packet_revision=1,
+        model_name="test-model",
+    )
+
+    # The binding stage should have used the injected mock.
+    # Note: packet_revision comes from the EvidencePacket's coverage_revision
+    # which is 2 in _VALID_PACKET.
+    mock_binding.evaluate_claims.assert_called_once_with(
+        run_id=run_id,
+        packet_revision=2,
+        prompt_version="synthesis-v1",
+        model_name="test-model",
+        provider="local",
+    )
+    assert summary["stages"]["binding"]["status"] == "completed"
+    assert summary["stages"]["binding"]["evidence_packet_revision"] == 5
+
+
+def test_binding_stage_creates_default_service():
+    """When no binding service is injected, a new ClaimBindingService is created."""
+    service, _, _, _ = _make_service()
+
+    # No binding service injected — should create one internally.
+    assert service._binding_service is None
+
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Pre-populate all other stages as completed so only binding runs.
+    with service.semantic.uow_factory() as uow:
+        for stage_name in SynthesisStageName:
+            if stage_name.value == "binding":
+                continue
+            record = {
+                "id": str(uuid4()),
+                "run_id": str(run_id),
+                "stage_name": stage_name.value,
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "test-model",
+                "prompt_version": "v1",
+                "schema_version": 1,
+                "artifact": None,
+                "error": None,
+                "attempts": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+            uow.synthesis_stages.update_synthesis_stage(record)
+
+    # Mock call_structured to return a valid claim-binding result.
+    mock_result = MagicMock()
+    mock_result.error = None
+    mock_result.value = {
+        "evaluations": [
+            {
+                "claim_id": _VALID_PACKET["claims"][0]["claim_id"],
+                "semantic_status": "supported",
+                "bindings": [
+                    {
+                        "passage_ids": [_VALID_PACKET["passages"][0]["passage_id"]],
+                        "relationship": "supports",
+                        "confidence": 0.95,
+                        "uncertainty": "none",
+                    }
+                ],
+            }
+        ]
+    }
+    mock_result.semantic_call_id = str(uuid4())
+    mock_result.artifact_ids = [str(uuid4())]
+
+    with patch(
+        "research_store.claim_binding_service.call_structured",
+        return_value=mock_result,
+    ):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="test-model",
+        )
+
+    # Binding should have completed (it created its own ClaimBindingService).
+    assert summary["stages"]["binding"]["status"] == "completed"
+    assert service._binding_service is not None

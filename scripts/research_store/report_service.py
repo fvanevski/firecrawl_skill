@@ -116,6 +116,10 @@ class LocalSynthesisService:
         semantic_service: SemanticCallService for model call persistence.
         evidence_service: EvidenceService for EvidencePacket access.
         config: StoreConfig for local endpoint configuration.
+        binding_service: Optional ClaimBindingService for claim-to-passage
+            binding.  If not provided, a new instance is created internally.
+            Injecting a mock is useful for unit tests that avoid real LLM
+            calls.
     """
 
     def __init__(
@@ -123,11 +127,13 @@ class LocalSynthesisService:
         semantic_service: SemanticCallService,
         evidence_service: EvidenceService,
         config: StoreConfig,
+        binding_service: Any = None,
     ) -> None:
         self.semantic = semantic_service
         self.evidence = evidence_service
         self.config = config
         self._schemas: dict[str, dict[str, Any]] = {}
+        self._binding_service = binding_service
         self._load_schemas()
 
     # ------------------------------------------------------------------
@@ -624,10 +630,13 @@ class LocalSynthesisService:
         """Bind claims to passage IDs using ClaimBindingService."""
         from .claim_binding_service import ClaimBindingService
 
-        binding_service = ClaimBindingService(self.semantic, self.evidence)
+        if self._binding_service is None:
+            self._binding_service = ClaimBindingService(
+                self.semantic, self.evidence
+            )
 
         packet_revision = packet.get("coverage_revision", 1)
-        new_revision = binding_service.evaluate_claims(
+        new_revision = self._binding_service.evaluate_claims(
             run_id=run_id,
             packet_revision=packet_revision,
             prompt_version=prompt_version,
