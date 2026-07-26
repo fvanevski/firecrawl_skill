@@ -29,6 +29,23 @@ from research_store.packet_validator import bounded_citation_ready_output
 logger = logging.getLogger(__name__)
 
 
+def _plural_label(count: int, singular: str, plural: str | None = None) -> str:
+    """Return *singular* when *count* is 1, else *plural* (or *singular* + "s").
+
+    Examples::
+
+        >>> _plural_label(1, "claim")
+        'claim'
+        >>> _plural_label(2, "claim")
+        'claims'
+        >>> _plural_label(3, "finding", "findings")
+        'findings'
+    """
+    if plural is None:
+        plural = f"{singular}s"
+    return singular if count == 1 else plural
+
+
 class HandoffBuilder:
     """Construct a bounded ``HandoffPayload`` from database state.
 
@@ -235,23 +252,23 @@ class HandoffBuilder:
                 unsupported.append(statement)
 
         if supported:
-            sections.append(
-                f"{counter}. Supported findings ({len(supported)} claim{'s' if len(supported) != 1 else ''})"
-            )
+            label = _plural_label(len(supported), "claim")
+            sections.append(f"{counter}. Supported findings ({len(supported)} {label})")
             counter += 1
         if contradicted:
+            label = _plural_label(len(contradicted), "claim")
             sections.append(
-                f"{counter}. Contradicted claims ({len(contradicted)} claim{'s' if len(contradicted) != 1 else ''})"
+                f"{counter}. Contradicted claims ({len(contradicted)} {label})"
             )
             counter += 1
         if qualified:
-            sections.append(
-                f"{counter}. Qualified findings ({len(qualified)} claim{'s' if len(qualified) != 1 else ''})"
-            )
+            label = _plural_label(len(qualified), "claim")
+            sections.append(f"{counter}. Qualified findings ({len(qualified)} {label})")
             counter += 1
         if unsupported:
+            label = _plural_label(len(unsupported), "claim")
             sections.append(
-                f"{counter}. Unsupported claims ({len(unsupported)} claim{'s' if len(unsupported) != 1 else ''})"
+                f"{counter}. Unsupported claims ({len(unsupported)} {label})"
             )
             counter += 1
 
@@ -326,6 +343,9 @@ class HandoffBuilder:
         }
 
         if is_degraded:
+            # _degraded and _degradation_reason are internal implementation
+            # markers (underscore-prefixed) — they are NOT part of the
+            # coverage-ledger-v1 schema and should be ignored by consumers.
             summary["_degraded"] = True
             summary["_degradation_reason"] = (
                 "event list truncated at 100000 rows; "

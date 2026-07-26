@@ -1748,7 +1748,7 @@ def main(argv=None):
             conn.rollback()
         probe_path = renamed_path = None
         try:
-            with tempfile.NamedTemporaryFile(  # noqa: F823
+            with tempfile.NamedTemporaryFile(
                 dir=config.blob_root,
                 prefix=".firecrawl-ingest-ready-",
                 delete=False,
@@ -2314,8 +2314,6 @@ def main(argv=None):
         if output_file == "-":
             print(dumps(result))
         else:
-            import tempfile
-
             with tempfile.NamedTemporaryFile(
                 "w", suffix=".json", delete=False, dir=str(Path(output_file).parent)
             ) as f:
@@ -2981,18 +2979,20 @@ def main(argv=None):
         if args.output != "-":
             output_path = Path(args.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
+            fd, tmpfile = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
                     f.write(json.dumps(output_dict, indent=2, default=str))
-                os.replace(tmp_path, str(output_path))
+                os.replace(tmpfile, str(output_path))
                 result = {"exported_to": str(output_path)}
             except BaseException:
-                os.unlink(tmp_path)
+                os.unlink(tmpfile)
                 raise
         else:
             print(json.dumps(output_dict, indent=2, default=str))
             result = {}
+
+        return result
 
     # ------------------------------------------------------------------
     # Claim manifest commands (issue #32)

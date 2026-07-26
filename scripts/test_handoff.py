@@ -1000,6 +1000,174 @@ class TestCLITokenLimitPropagation:
 
 
 # ---------------------------------------------------------------------------
+# CLI end-to-end: handoff command execution path
+# ---------------------------------------------------------------------------
+
+
+class TestCLIHandoffExecution:
+    """Tests that exercise the full CLI → builder → payload path."""
+
+    def test_handoff_command_produces_valid_json(self, tmp_path, monkeypatch):
+        """The ``research-db handoff`` command produces valid JSON output."""
+
+        from research_store.cli import main
+
+        run_id = uuid4()
+
+        def uow_factory(*args, **kwargs):
+            class MockUow:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    pass
+
+                def get_evidence_packet(self, run_id):
+                    class MockRecord:
+                        packet_revision = 1
+                        coverage_revision = 1
+
+                        def to_dict(self):
+                            return {
+                                "id": str(uuid4()),
+                                "run_id": str(run_id),
+                                "research_spec_id": str(uuid4()),
+                                "coverage_revision": 1,
+                                "packet_revision": 1,
+                                "payload": _make_packet_payload(),
+                                "created_at": datetime.now(timezone.utc),
+                            }
+
+                    return MockRecord()
+
+                def get_research_spec(self, run_id):
+                    return _make_spec_payload()
+
+                def get_coverage_summary(self, run_id):
+                    return _make_ledger_payload()
+
+                @property
+                def coverage(self):
+                    class MockCoverage:
+                        def get_current_revision(self, run_id):
+                            return 1
+
+                        def list_coverage_events(self, run_id, limit=100, offset=0):
+                            return []
+
+                    return MockCoverage()
+
+            return MockUow()
+
+        # Set DATABASE_URL so StoreConfig.from_env() succeeds
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+
+        import research_store.cli as cli_mod
+
+        # Replace PostgresUnitOfWork in the CLI module so partial() uses our mock
+        monkeypatch.setattr(cli_mod, "PostgresUnitOfWork", uow_factory)
+
+        output_file = tmp_path / "handoff.json"
+        argv = [
+            "handoff",
+            str(run_id),
+            "--output",
+            str(output_file),
+        ]
+
+        result = main(argv)
+
+        assert result == {"exported_to": str(output_file)}
+        assert output_file.exists()
+        # Verify the output is valid JSON with expected structure
+        import json
+
+        data = json.loads(output_file.read_text())
+        assert data["schema_version"] == "handoff-payload-v1"
+        assert data["run_id"] == str(run_id)
+        assert "evidence_packet" in data
+        assert "coverage_ledger" in data
+        assert "citation_ready" in data
+        # coverage_ledger should have total_items (N3 fix)
+        assert "total_items" in data["coverage_ledger"]
+
+    def test_handoff_stdout_produces_valid_json(self, monkeypatch):
+        """The ``research-db handoff`` command writes valid JSON to stdout."""
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        from research_store.cli import main
+
+        run_id = uuid4()
+
+        def uow_factory(*args, **kwargs):
+            class MockUow:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    pass
+
+                def get_evidence_packet(self, run_id):
+                    class MockRecord:
+                        packet_revision = 1
+                        coverage_revision = 1
+
+                        def to_dict(self):
+                            return {
+                                "id": str(uuid4()),
+                                "run_id": str(run_id),
+                                "research_spec_id": str(uuid4()),
+                                "coverage_revision": 1,
+                                "packet_revision": 1,
+                                "payload": _make_packet_payload(),
+                                "created_at": datetime.now(timezone.utc),
+                            }
+
+                    return MockRecord()
+
+                def get_research_spec(self, run_id):
+                    return _make_spec_payload()
+
+                def get_coverage_summary(self, run_id):
+                    return _make_ledger_payload()
+
+                @property
+                def coverage(self):
+                    class MockCoverage:
+                        def get_current_revision(self, run_id):
+                            return 1
+
+                        def list_coverage_events(self, run_id, limit=100, offset=0):
+                            return []
+
+                    return MockCoverage()
+
+            return MockUow()
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+
+        import research_store.cli as cli_mod
+
+        monkeypatch.setattr(cli_mod, "PostgresUnitOfWork", uow_factory)
+
+        argv = ["handoff", str(run_id)]
+
+        f = StringIO()
+        with redirect_stdout(f):
+            result = main(argv)
+
+        assert result == {}
+        import json
+
+        data = json.loads(f.getvalue())
+        assert data["schema_version"] == "handoff-payload-v1"
+        assert data["run_id"] == str(run_id)
+        # coverage_ledger should have total_items (N3 fix)
+        assert "total_items" in data["coverage_ledger"]
+
+
+# ---------------------------------------------------------------------------
 # Schema validation
 # ---------------------------------------------------------------------------
 
@@ -1025,8 +1193,9 @@ class TestSchemaValidation:
             f.name for f in HandoffPayload.__dataclass_fields__.values()
         }
 
-        # schema_version is declared in the dataclass but is a const in the
-        # schema rather than a pass-through property — account for that.
+        # schema_version is declared in both the dataclass and the schema
+        # (as a const).  The assertion checks that every dataclass field has a
+        # corresponding schema property and vice-versa.
         assert schema_props == dataclass_fields, (
             f"Schema props {schema_props} != dataclass fields {dataclass_fields}"
         )
@@ -1041,7 +1210,7 @@ class TestSchemaValidation:
             pytest.skip("jsonschema not installed")
 
         fixture_path = (
-            Path(__file__).resolve().parent.parent.parent
+            Path(__file__).resolve().parent.parent
             / "tests"
             / "fixtures"
             / "research_domain"

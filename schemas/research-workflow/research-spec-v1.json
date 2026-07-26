@@ -1,130 +1,318 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "CompletionCriterion": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "mandatory": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "description",
+        "mandatory"
+      ],
+      "type": "object"
+    },
+    "EvidenceRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "required_independent_source_count": {
+          "type": "integer"
+        },
+        "requirement_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "description",
+        "required_independent_source_count"
+      ],
+      "type": "object"
+    },
+    "FreshnessRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "max_age_days": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requirement_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "description",
+        "max_age_days"
+      ],
+      "type": "object"
+    },
+    "ResearchClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "statement"
+      ],
+      "type": "object"
+    },
+    "ResearchQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "question_id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "SourceRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "minimum_count": {
+          "type": "integer"
+        },
+        "requirement_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "source_class": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "source_class",
+        "minimum_count"
+      ],
+      "type": "object"
+    },
+    "StructuredDataRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "required_fields": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "requirement_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "description",
+        "required_fields"
+      ],
+      "type": "object"
+    },
+    "TimeWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uncertainty": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "description",
+        "uncertainty"
+      ],
+      "type": "object"
+    }
+  },
   "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/research-spec-v1.json",
-  "title": "ResearchSpec",
-  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "schema_version": {
-      "type": "string",
-      "const": "research-spec-v1"
+    "ambiguities": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
-    "research_spec_id": {
-      "type": "string",
-      "format": "uuid"
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
-    "objective": {
-      "type": "string",
-      "minLength": 1
+    "claims_to_validate": {
+      "items": {
+        "$ref": "#/$defs/ResearchClaim"
+      },
+      "type": "array"
     },
-    "research_archetype": {
-      "type": "string",
-      "minLength": 1
+    "completion_criteria": {
+      "items": {
+        "$ref": "#/$defs/CompletionCriterion"
+      },
+      "minItems": 1,
+      "type": "array"
     },
-    "risk_level": {
-      "type": "string",
-      "enum": [
-        "low",
-        "medium",
-        "high"
-      ]
+    "contradiction_requirements": {
+      "items": {
+        "$ref": "#/$defs/EvidenceRequirement"
+      },
+      "type": "array"
+    },
+    "corroboration_requirements": {
+      "items": {
+        "$ref": "#/$defs/EvidenceRequirement"
+      },
+      "type": "array"
+    },
+    "entities": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "excluded_interpretations": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "execution_mode": {
-      "type": "string",
       "enum": [
         "agent_led",
         "autonomous_local",
         "deterministic_debug"
-      ]
+      ],
+      "type": "string"
+    },
+    "freshness_requirements": {
+      "items": {
+        "$ref": "#/$defs/FreshnessRequirement"
+      },
+      "type": "array"
+    },
+    "jurisdictions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "objective": {
+      "minLength": 1,
+      "type": "string"
     },
     "questions": {
-      "type": "array",
       "items": {
         "$ref": "#/$defs/ResearchQuestion"
       },
-      "minItems": 1
+      "minItems": 1,
+      "type": "array"
     },
-    "claims_to_validate": {
-      "type": "array",
+    "required_source_classes": {
       "items": {
-        "$ref": "#/$defs/ResearchClaim"
-      }
+        "$ref": "#/$defs/SourceRequirement"
+      },
+      "type": "array"
     },
-    "entities": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
+    "research_archetype": {
+      "minLength": 1,
+      "type": "string"
     },
-    "jurisdictions": {
-      "type": "array",
+    "research_spec_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "risk_level": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "research-spec-v1",
+      "type": "string"
+    },
+    "structured_data_requirements": {
       "items": {
-        "type": "string"
-      }
+        "$ref": "#/$defs/StructuredDataRequirement"
+      },
+      "type": "array"
     },
     "time_window": {
       "$ref": "#/$defs/TimeWindow"
     },
-    "freshness_requirements": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/FreshnessRequirement"
-      }
-    },
-    "required_source_classes": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/SourceRequirement"
-      }
-    },
-    "corroboration_requirements": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/EvidenceRequirement"
-      }
-    },
-    "contradiction_requirements": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/EvidenceRequirement"
-      }
-    },
-    "excluded_interpretations": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "structured_data_requirements": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/StructuredDataRequirement"
-      }
-    },
-    "completion_criteria": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/CompletionCriterion"
-      },
-      "minItems": 1
-    },
     "user_constraints": {
-      "type": "array",
       "items": {
         "type": "string"
-      }
-    },
-    "ambiguities": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "assumptions": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
+      },
+      "type": "array"
     }
   },
   "required": [
@@ -150,194 +338,6 @@
     "ambiguities",
     "assumptions"
   ],
-  "$defs": {
-    "CompletionCriterion": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "criterion_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "description": {
-          "type": "string"
-        },
-        "mandatory": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "criterion_id",
-        "description",
-        "mandatory"
-      ]
-    },
-    "EvidenceRequirement": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "requirement_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "description": {
-          "type": "string"
-        },
-        "required_independent_source_count": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "requirement_id",
-        "description",
-        "required_independent_source_count"
-      ]
-    },
-    "FreshnessRequirement": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "requirement_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "description": {
-          "type": "string"
-        },
-        "max_age_days": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "requirement_id",
-        "description",
-        "max_age_days"
-      ]
-    },
-    "ResearchClaim": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "claim_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "statement": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "claim_id",
-        "statement"
-      ]
-    },
-    "ResearchQuestion": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "question_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "question_id",
-        "text"
-      ]
-    },
-    "SourceRequirement": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "requirement_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "source_class": {
-          "type": "string"
-        },
-        "minimum_count": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "requirement_id",
-        "source_class",
-        "minimum_count"
-      ]
-    },
-    "StructuredDataRequirement": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "requirement_id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "description": {
-          "type": "string"
-        },
-        "required_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1
-        }
-      },
-      "required": [
-        "requirement_id",
-        "description",
-        "required_fields"
-      ]
-    },
-    "TimeWindow": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "start": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "end": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "description": {
-          "type": "string"
-        },
-        "uncertainty": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "start",
-        "end",
-        "description",
-        "uncertainty"
-      ]
-    }
-  }
+  "title": "ResearchSpec",
+  "type": "object"
 }

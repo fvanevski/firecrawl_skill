@@ -6999,7 +6999,10 @@ class PostgresUnitOfWork:
         """Return the latest coverage snapshot for *run_id*, or ``None``.
 
         Returns a dict compatible with the coverage summary schema
-        (schema version ``coverage-ledger-v1``).
+        (schema version ``coverage-ledger-v1``).  The dict includes
+        ``total_items`` derived from ``status_counts`` so that the
+        snapshot path and the rebuild path (``_rebuild_coverage_summary``)
+        produce compatible structures.
         """
         with self.connection.cursor() as cur:
             cur.execute(
@@ -7013,11 +7016,13 @@ class PostgresUnitOfWork:
             row = cur.fetchone()
         if row is None:
             return None
+        status_counts = row[3] or {}
         return {
             "schema_version": "coverage-ledger-v1",
             "run_id": str(run_id),
             "coverage_revision": row[2],
-            "status_counts": row[3] or {},
+            "total_items": sum(status_counts.values()),
+            "status_counts": status_counts,
             "type_counts": row[4] or {},
             "overall_status": row[5],
         }
