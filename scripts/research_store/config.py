@@ -43,6 +43,7 @@ class StoreConfig:
     max_index_attempts: int
     job_lease_seconds: int
     worker_poll_seconds: int
+    embedding_batch_size: int
 
     @classmethod
     def from_env(cls) -> StoreConfig:
@@ -83,6 +84,7 @@ class StoreConfig:
             max_index_attempts=_integer("MAX_INDEX_ATTEMPTS", 5),
             job_lease_seconds=_integer("INDEX_JOB_LEASE_SECONDS", 300),
             worker_poll_seconds=_integer("INDEX_WORKER_POLL_SECONDS", 5),
+            embedding_batch_size=_integer("EMBEDDING_BATCH_SIZE", 32),
         )
 
     @property
