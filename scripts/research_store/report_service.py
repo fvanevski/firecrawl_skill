@@ -334,6 +334,22 @@ class LocalSynthesisService:
         packet = self._get_packet(run_id, packet_revision)
         self._validate_packet(packet)
 
+        # ------------------------------------------------------------------
+        # UOW scope design
+        #
+        # _init_stages opens and closes its own UOW context, committing the
+        # INSERTs before the stage loop begins.  Each stage then opens its own
+        # UOW for its SELECT / UPDATE work.  This is intentional:
+        #
+        # 1. The UNIQUE constraint on (run_id, stage_name) prevents duplicate
+        #    rows even if two invocations race — the second invocation's
+        #    _init_stages will see rows already present and skip inserts.
+        # 2. Each stage is independently retriable; a UOW per stage means a
+        #    failure in one stage does not roll back another.
+        # 3. The EvidencePacket is read once at the top; stages that need
+        #    prior-stage outputs read from synthesis_stages artifacts, not
+        #    from the packet.
+        # ------------------------------------------------------------------
         with self.semantic.uow_factory() as uow:
             self._init_stages(
                 uow, run_id, packet_revision, model_name, prompt_version, 1

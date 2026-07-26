@@ -3221,6 +3221,10 @@ def main(argv=None):
         packet_revision = args.packet_revision or 1
         allow_commercial = args.commercial_fallback is not None
 
+        # NOTE: config.embedding_model is an embedding model name (e.g.
+        # "text-embedding-3-small") which is NOT a suitable synthesis model.
+        # The user is expected to pass --model explicitly; the fallback is
+        # provided only to avoid a complete failure when no model is given.
         try:
             summary = report_service.run_synthesis(
                 run_id=run_id,
@@ -3288,6 +3292,9 @@ def main(argv=None):
         packet_revision = args.packet_revision or 1
         allow_commercial = args.commercial_fallback is not None
 
+        # NOTE: config.embedding_model is an embedding model name (e.g.
+        # "text-embedding-3-small") which is NOT a suitable synthesis model.
+        # The user is expected to pass --model explicitly.
         try:
             summary = report_service.resume_failed_synthesis(
                 run_id=run_id,

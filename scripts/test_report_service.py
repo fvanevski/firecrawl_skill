@@ -1210,3 +1210,176 @@ def test_resume_failed_synthesis_logs_delegation():
     # args[0] = format string, args[1] = run_id (UUID), args[2] = packet_revision (int)
     assert isinstance(mock_info.call_args[0][2], int)
     assert mock_info.call_args[0][2] == 1
+
+
+# ---------------------------------------------------------------------------
+# Local endpoint outage and stale-packet-revision tests
+# ---------------------------------------------------------------------------
+
+
+def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
+    """A ConnectionError during outline should mark it failed; resume succeeds."""
+    service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Pre-populate outline as failed to simulate a prior outage.
+    record = {
+        "id": str(uuid4()),
+        "run_id": str(run_id),
+        "stage_name": "outline",
+        "stage_status": "failed",
+        "semantic_call_id": None,
+        "semantic_artifact_id": None,
+        "evidence_packet_revision": 1,
+        "model_name": "test-model",
+        "prompt_version": "v1",
+        "schema_version": 1,
+        "artifact": None,
+        "error": "ConnectionError: model endpoint unavailable",
+        "attempts": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    mock_uow.synthesis_stages.update_synthesis_stage(record)
+
+    # Pre-populate binding as completed so it's skipped on resume.
+    binding_record = {
+        "id": str(uuid4()),
+        "run_id": str(run_id),
+        "stage_name": "binding",
+        "stage_status": "completed",
+        "semantic_call_id": None,
+        "semantic_artifact_id": None,
+        "evidence_packet_revision": 1,
+        "model_name": "test-model",
+        "prompt_version": "v1",
+        "schema_version": 1,
+        "artifact": {"new_packet_revision": 2},
+        "error": None,
+        "attempts": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    mock_uow.synthesis_stages.update_synthesis_stage(binding_record)
+
+    # First call: simulate ConnectionError on outline retry.
+    mock_error = MagicMock()
+    mock_error.error = "ConnectionError: model endpoint unavailable"
+    mock_error.value = None
+    mock_error.semantic_call_id = None
+    mock_error.artifact_ids = []
+
+    with patch("model_gateway.call_structured", return_value=mock_error):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="test-model",
+        )
+
+    # Outline should be marked failed (attempt incremented).
+    assert summary["stages"]["outline"]["status"] == "failed"
+    assert summary["overall_status"] == "failed"
+
+    # Second call: simulate successful retry after endpoint recovers.
+    mock_result = MagicMock()
+    mock_result.error = None
+    mock_result.value = {
+        "schema_version": "synthesis-outline-v1",
+        "run_id": str(run_id),
+        "evidence_packet_revision": 2,
+        "outline_sections": [],
+        "unsupported_claims": [],
+    }
+    mock_result.semantic_call_id = str(uuid4())
+    mock_result.artifact_ids = [str(uuid4())]
+
+    with patch("model_gateway.call_structured", return_value=mock_result):
+        summary = service.resume_failed_synthesis(
+            run_id=run_id,
+            packet_revision=2,
+            model_name="test-model",
+        )
+
+    # Outline should now be completed (retried after recovery).
+    assert summary["stages"]["outline"]["status"] == "completed"
+    assert summary["stages"]["binding"]["status"] == "skipped"
+    assert summary["overall_status"] == "completed"
+
+
+def test_run_synthesis_picks_up_new_packet_revision():
+    """Changing EvidencePacket revision between calls is handled correctly."""
+    mock_binding = MagicMock()
+    mock_binding.evaluate_claims.return_value = 3
+
+    service, mock_evidence, _, _ = _make_service()
+    service._binding_service = mock_binding
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Create a second packet with more claims.
+    packet_v2 = deepcopy(_VALID_PACKET)
+    packet_v2["coverage_revision"] = 3
+    packet_v2["claims"].append(
+        {
+            "claim_id": "00000000-0000-0000-0000-000000000103",
+            "statement": "A second claim for revision 2.",
+            "semantic_status": "supported",
+            "uncertainty": "Independent replication is missing.",
+        }
+    )
+
+    mock_evidence.export_packet.return_value = packet_v2
+
+    # First call with revision 2 — should fail (model error) so we can test
+    # that the second call with revision 3 picks up the new packet.
+    mock_error = MagicMock()
+    mock_error.error = "model timeout"
+    mock_error.value = None
+    mock_error.semantic_call_id = None
+    mock_error.artifact_ids = []
+
+    with patch("model_gateway.call_structured", return_value=mock_error):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=2,
+            model_name="test-model",
+        )
+
+    assert summary["stages"]["outline"]["status"] == "failed"
+    assert summary["overall_status"] == "failed"
+
+    # Second call with revision 3 — should succeed and use the new packet.
+    mock_result = MagicMock()
+    mock_result.error = None
+    mock_result.value = {
+        "schema_version": "synthesis-outline-v1",
+        "run_id": str(run_id),
+        "evidence_packet_revision": 3,
+        "outline_sections": [],
+        "unsupported_claims": [],
+    }
+    mock_result.semantic_call_id = str(uuid4())
+    mock_result.artifact_ids = [str(uuid4())]
+
+    captured_prompts = []
+
+    def capture_call(*args, **kwargs):
+        nonlocal captured_prompts
+        captured_prompts.append(kwargs.get("user_prompt", ""))
+        return mock_result
+
+    with patch("model_gateway.call_structured", side_effect=capture_call):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=3,
+            model_name="test-model",
+        )
+
+    # Revision 3 should be picked up — outline should complete.
+    assert summary["stages"]["outline"]["status"] == "completed"
+    assert summary["stages"]["outline"]["evidence_packet_revision"] == 3
+    # The first call is the outline stage — it should contain 2 claims
+    # from the new packet (revision 3).
+    import json
+
+    prompt_data = json.loads(captured_prompts[0])
+    assert len(prompt_data["claims"]) == 2
