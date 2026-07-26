@@ -711,6 +711,37 @@ def parser():
     audit_staleness.add_argument("--target-hash", required=True)
 
     # ------------------------------------------------------------------
+    # Synthesis commands (issue #63)
+    # ------------------------------------------------------------------
+    synthesis_run = sub.add_parser("synthesis-run")
+    synthesis_run.add_argument("external_id")
+    synthesis_run.add_argument("--packet-revision", type=int, default=None)
+    synthesis_run.add_argument("--model")
+    synthesis_run.add_argument("--prompt-version", default="synthesis-v1")
+    synthesis_run.add_argument(
+        "--commercial-fallback",
+        choices=("openai", "gemini"),
+        default=None,
+        help="Allow commercial LLM fallback (not recommended for production).",
+    )
+
+    synthesis_status = sub.add_parser("synthesis-status")
+    synthesis_status.add_argument("external_id")
+    synthesis_status.add_argument("--stage", default=None, help="Filter by stage name")
+
+    synthesis_resume = sub.add_parser("synthesis-resume")
+    synthesis_resume.add_argument("external_id")
+    synthesis_resume.add_argument("--packet-revision", type=int, default=None)
+    synthesis_resume.add_argument("--model")
+    synthesis_resume.add_argument("--prompt-version", default="synthesis-v1")
+    synthesis_resume.add_argument(
+        "--commercial-fallback",
+        choices=("openai", "gemini"),
+        default=None,
+        help="Allow commercial LLM fallback (not recommended for production).",
+    )
+
+    # ------------------------------------------------------------------
     # Catalog import commands (issue #37)
     # ------------------------------------------------------------------
     catalog_import = sub.add_parser("catalog-import")
@@ -3162,6 +3193,124 @@ def main(argv=None):
         )
         result = {"run_id": str(run_id), "stale_assessments": stale}
         print(dumps(result))
+
+    # ------------------------------------------------------------------
+    # Synthesis commands (issue #63)
+    # ------------------------------------------------------------------
+    elif args.command == "synthesis-run":
+        config.require_database()
+        run_service = build_run_service(config)
+        run_id = _resolve_run_id(config, args.external_id)
+        if run_id is None:
+            raise SystemExit(f"research run not found: {args.external_id}")
+
+        from .report_service import (
+            CommercialFallbackError,
+            LocalSynthesisService,
+            ReportServiceError,
+        )
+        from .semantic_service import SemanticCallService
+
+        semantic_service = SemanticCallService(run_service.uow_factory)
+        report_service = LocalSynthesisService(
+            semantic_service=semantic_service,
+            evidence_service=run_service.evidence_service,
+            config=config,
+        )
+
+        packet_revision = args.packet_revision or 1
+        allow_commercial = args.commercial_fallback is not None
+
+        # NOTE: config.embedding_model is an embedding model name (e.g.
+        # "text-embedding-3-small") which is NOT a suitable synthesis model.
+        # The user is expected to pass --model explicitly; the fallback is
+        # provided only to avoid a complete failure when no model is given.
+        try:
+            summary = report_service.run_synthesis(
+                run_id=run_id,
+                packet_revision=packet_revision,
+                model_name=args.model or config.embedding_model,
+                prompt_version=args.prompt_version,
+                allow_commercial_fallback=allow_commercial,
+            )
+            print(dumps(summary))
+        except CommercialFallbackError:
+            raise SystemExit(
+                "commercial fallback not permitted. "
+                "Use --commercial-fallback to enable."
+            )
+        except ReportServiceError as exc:
+            raise SystemExit(f"synthesis failed: {exc}")
+
+    elif args.command == "synthesis-status":
+        config.require_database()
+        run_service = build_run_service(config)
+        run_id = _resolve_run_id(config, args.external_id)
+        if run_id is None:
+            raise SystemExit(f"research run not found: {args.external_id}")
+
+        from .semantic_service import SemanticCallService
+
+        semantic_service = SemanticCallService(run_service.uow_factory)
+        from .report_service import LocalSynthesisService
+
+        report_service = LocalSynthesisService(
+            semantic_service=semantic_service,
+            evidence_service=run_service.evidence_service,
+            config=config,
+        )
+
+        stages = report_service.get_stage_status(
+            uow_factory=run_service.uow_factory,
+            run_id=run_id,
+            stage_name=args.stage,
+        )
+        result = {"run_id": str(run_id), "stages": stages}
+        print(dumps(result))
+
+    elif args.command == "synthesis-resume":
+        config.require_database()
+        run_service = build_run_service(config)
+        run_id = _resolve_run_id(config, args.external_id)
+        if run_id is None:
+            raise SystemExit(f"research run not found: {args.external_id}")
+
+        from .report_service import (
+            CommercialFallbackError,
+            LocalSynthesisService,
+            ReportServiceError,
+        )
+        from .semantic_service import SemanticCallService
+
+        semantic_service = SemanticCallService(run_service.uow_factory)
+        report_service = LocalSynthesisService(
+            semantic_service=semantic_service,
+            evidence_service=run_service.evidence_service,
+            config=config,
+        )
+
+        packet_revision = args.packet_revision or 1
+        allow_commercial = args.commercial_fallback is not None
+
+        # NOTE: config.embedding_model is an embedding model name (e.g.
+        # "text-embedding-3-small") which is NOT a suitable synthesis model.
+        # The user is expected to pass --model explicitly.
+        try:
+            summary = report_service.resume_failed_synthesis(
+                run_id=run_id,
+                packet_revision=packet_revision,
+                model_name=args.model or config.embedding_model,
+                prompt_version=args.prompt_version,
+                allow_commercial_fallback=allow_commercial,
+            )
+            print(dumps(summary))
+        except CommercialFallbackError:
+            raise SystemExit(
+                "commercial fallback not permitted. "
+                "Use --commercial-fallback to enable."
+            )
+        except ReportServiceError as exc:
+            raise SystemExit(f"synthesis resume failed: {exc}")
 
     # ------------------------------------------------------------------
     # Catalog import commands (issue #37)

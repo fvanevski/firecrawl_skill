@@ -1281,9 +1281,15 @@ class NextActionStage:
 
 
 class SynthesisStage:
-    """Synthesize the final report or evidence packet.
+    """Execute bounded autonomous-local synthesis via ReportService.
 
-    Transitions: synthesizing -> validating -> completed/partial
+    Transitions: synthesizing -> validating -> completed/partial/failed
+
+    This replaces the previous no-op SynthesisStage.  The actual synthesis
+    work is delegated to ``ReportService.run_synthesis()`` which decomposes
+    the work into four bounded stages (outline, binding, draft, citation_pass).
+    Each stage persists its semantic call and artifact.  Failed stages can be
+    retried and completed stages are skipped on resume.
     """
 
     def __init__(
@@ -1308,24 +1314,80 @@ class SynthesisStage:
                 f"synthesis stage requires synthesizing state, got {run_state}",
             )
 
-        # Transition to validating
+        # Build the ReportService.
+        from .report_service import (
+            CommercialFallbackError,
+            LocalSynthesisService,
+            ReportServiceError,
+        )
+        from .semantic_service import SemanticCallService
+
+        semantic_service = SemanticCallService(self.run_service.uow_factory)
+        report_service = LocalSynthesisService(
+            semantic_service=semantic_service,
+            evidence_service=self.run_service.evidence_service,
+            config=self.config,
+        )
+
+        # Run the bounded synthesis pipeline.
+        packet_revision = coverage_revision or 1
         try:
-            self.run_service.transition(
-                run_id,
-                "validating",
-                expected_revision=run_revision,
-                idempotency_key=f"stage:synthesis_done:{run_id}:{uuid4()}",
-                actor_type="orchestrator",
-                actor_identifier="SynthesisStage",
-                triggering_event="run.validating",
-                reason="synthesis complete, entering validation",
+            summary = report_service.run_synthesis(
+                run_id=run_id,
+                packet_revision=packet_revision,
+                model_name=self.config.embedding_model,
             )
-        except (RunStateError, StaleRunRevisionError) as exc:
+        except CommercialFallbackError as exc:
+            return StageResult.failed("synthesis", str(exc))
+        except ReportServiceError as exc:
+            logger.error("synthesis pipeline failed: %s", exc)
             return StageResult.failed("synthesis", str(exc))
 
-        return StageResult.ok(
+        overall_status = summary.get("overall_status", "failed")
+        if overall_status == "completed":
+            # All stages completed successfully — transition to validating.
+            try:
+                self.run_service.transition(
+                    run_id,
+                    "validating",
+                    expected_revision=run_revision,
+                    idempotency_key=(f"stage:synthesis_done:{run_id}:{uuid4()}"),
+                    actor_type="orchestrator",
+                    actor_identifier="SynthesisStage",
+                    triggering_event="run.validating",
+                    reason="synthesis complete, entering validation",
+                )
+            except (RunStateError, StaleRunRevisionError) as exc:
+                return StageResult.failed("synthesis", str(exc))
+
+            return StageResult.ok(
+                "synthesis",
+                "synthesis complete, transitioned to validating",
+                details={
+                    ContextKeys.SYNTHESIS_ARTIFACT_ID: str(run_id),
+                    ContextKeys.REPORT_ID: str(run_id),
+                    "synthesis_summary": summary,
+                },
+            )
+
+        # Partial failure — some stages completed, some failed.
+        stage_results = summary.get("stages", {})
+        completed = sum(
+            1 for s in stage_results.values() if s.get("status") == "completed"
+        )
+        failed = sum(1 for s in stage_results.values() if s.get("status") == "failed")
+        summary_text = f"synthesis partial: {completed} completed, {failed} failed"
+        error = summary.get("error", "unknown")
+
+        return StageResult.degraded(
             "synthesis",
-            "synthesis complete, transitioned to validating",
+            summary_text,
+            details={
+                ContextKeys.SYNTHESIS_ARTIFACT_ID: str(run_id),
+                ContextKeys.REPORT_ID: str(run_id),
+                "synthesis_summary": summary,
+                "synthesis_error": error,
+            },
         )
 
 

@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "synthesis-draft-v1",
+  "title": "Synthesis Draft Output",
+  "description": "A structured draft report produced from the EvidencePacket. Every claim reference must resolve to a passage_id in the EvidencePacket. Unsupported claims are explicitly listed.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "synthesis-draft-v1",
+      "description": "Schema version identifier."
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The research run ID."
+    },
+    "evidence_packet_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The EvidencePacket revision used for this draft."
+    },
+    "report_sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section_id": {
+            "type": "string",
+            "description": "Unique identifier for this section."
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable section title."
+          },
+          "body": {
+            "type": "string",
+            "description": "The section body text."
+          },
+          "claim_references": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "claim_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Reference to a claim_id from the EvidencePacket."
+                },
+                "passage_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "minItems": 1,
+                  "description": "Passage IDs cited in this claim reference."
+                },
+                "relationship": {
+                  "type": "string",
+                  "enum": ["supports", "contradicts", "qualifies", "context"],
+                  "description": "The relationship of the cited passages to the claim."
+                }
+              },
+              "required": ["claim_id", "passage_ids", "relationship"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["section_id", "title", "body", "claim_references"],
+        "additionalProperties": false
+      }
+    },
+    "unsupported_claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The claim_id from the EvidencePacket."
+          },
+          "statement": {
+            "type": "string",
+            "description": "The unsupported claim statement."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this claim could not be supported."
+          }
+        },
+        "required": ["claim_id", "statement", "reason"],
+        "additionalProperties": false
+      },
+      "description": "Claims that could not be supported by any passage."
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Report-level limitations and uncertainties."
+    }
+  },
+  "required": ["schema_version", "run_id", "evidence_packet_revision", "report_sections", "unsupported_claims", "limitations"],
+  "additionalProperties": false
+}

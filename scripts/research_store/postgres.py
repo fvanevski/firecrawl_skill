@@ -7026,3 +7026,152 @@ class PostgresUnitOfWork:
             "type_counts": row[4] or {},
             "overall_status": row[5],
         }
+
+    # ------------------------------------------------------------------
+    # Synthesis stage repository methods (issue #63)
+    # ------------------------------------------------------------------
+
+    def get_synthesis_stages(self, run_id: UUID) -> list[dict[str, Any]]:
+        """Return all synthesis stage records for *run_id*."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, stage_name, stage_status,
+                          semantic_call_id, semantic_artifact_id,
+                          evidence_packet_revision, model_name,
+                          prompt_version, schema_version,
+                          artifact, error, attempts,
+                          created_at, updated_at
+                   FROM synthesis_stages
+                   WHERE run_id=%s
+                   ORDER BY stage_name""",
+                (str(run_id),),
+            )
+            rows = cur.fetchall()
+        if not rows:
+            return []
+        keys = (
+            "id",
+            "run_id",
+            "stage_name",
+            "stage_status",
+            "semantic_call_id",
+            "semantic_artifact_id",
+            "evidence_packet_revision",
+            "model_name",
+            "prompt_version",
+            "schema_version",
+            "artifact",
+            "error",
+            "attempts",
+            "created_at",
+            "updated_at",
+        )
+        return [dict(zip(keys, row)) for row in rows]
+
+    def get_synthesis_stage(self, run_id: UUID, stage_name: str) -> dict[str, Any]:
+        """Return a single synthesis stage record, or raise KeyError."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, run_id, stage_name, stage_status,
+                          semantic_call_id, semantic_artifact_id,
+                          evidence_packet_revision, model_name,
+                          prompt_version, schema_version,
+                          artifact, error, attempts,
+                          created_at, updated_at
+                   FROM synthesis_stages
+                   WHERE run_id=%s AND stage_name=%s""",
+                (str(run_id), stage_name),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise KeyError((run_id, stage_name))
+        keys = (
+            "id",
+            "run_id",
+            "stage_name",
+            "stage_status",
+            "semantic_call_id",
+            "semantic_artifact_id",
+            "evidence_packet_revision",
+            "model_name",
+            "prompt_version",
+            "schema_version",
+            "artifact",
+            "error",
+            "attempts",
+            "created_at",
+            "updated_at",
+        )
+        return dict(zip(keys, row))
+
+    def insert_synthesis_stage(self, record: dict[str, Any]) -> None:
+        """Insert a new synthesis stage record."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO synthesis_stages
+                   (id, run_id, stage_name, stage_status,
+                    semantic_call_id, semantic_artifact_id,
+                    evidence_packet_revision, model_name,
+                    prompt_version, schema_version,
+                    artifact, error, attempts,
+                    created_at, updated_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (
+                    str(record["id"]),
+                    str(record["run_id"]),
+                    record["stage_name"],
+                    record["stage_status"],
+                    str(record["semantic_call_id"])
+                    if record.get("semantic_call_id")
+                    else None,
+                    str(record["semantic_artifact_id"])
+                    if record.get("semantic_artifact_id")
+                    else None,
+                    record["evidence_packet_revision"],
+                    record["model_name"],
+                    record["prompt_version"],
+                    record["schema_version"],
+                    json.dumps(record["artifact"], default=str)
+                    if record.get("artifact")
+                    else None,
+                    record.get("error"),
+                    record["attempts"],
+                    record["created_at"],
+                    record["updated_at"],
+                ),
+            )
+
+    def update_synthesis_stage(self, record: dict[str, Any]) -> None:
+        """Update an existing synthesis stage record (UPSERT by run_id+stage_name)."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """UPDATE synthesis_stages SET
+                   stage_status=%s,
+                   semantic_call_id=COALESCE(%s, semantic_call_id),
+                   semantic_artifact_id=COALESCE(%s, semantic_artifact_id),
+                   artifact=COALESCE(%s, artifact),
+                   error=%s,
+                   attempts=GREATEST(attempts, %s),
+                   updated_at=now()
+                   WHERE run_id=%s AND stage_name=%s
+                   RETURNING id""",
+                (
+                    record["stage_status"],
+                    str(record["semantic_call_id"])
+                    if record.get("semantic_call_id")
+                    else None,
+                    str(record["semantic_artifact_id"])
+                    if record.get("semantic_artifact_id")
+                    else None,
+                    json.dumps(record["artifact"], default=str)
+                    if record.get("artifact")
+                    else None,
+                    record.get("error"),
+                    record["attempts"],
+                    str(record["run_id"]),
+                    record["stage_name"],
+                ),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise KeyError((record["run_id"], record["stage_name"]))
