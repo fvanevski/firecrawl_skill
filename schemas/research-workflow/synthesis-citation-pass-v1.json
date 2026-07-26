@@ -1,0 +1,148 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "synthesis-citation-pass-v1",
+  "title": "Synthesis Citation Pass Output",
+  "description": "Results of the citation and entailment consistency pass. Validates that every claim reference resolves to a valid passage, no invented citations exist, and unsupported claims are explicitly labeled.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "synthesis-citation-pass-v1",
+      "description": "Schema version identifier."
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The research run ID."
+    },
+    "evidence_packet_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The EvidencePacket revision used for this pass."
+    },
+    "draft_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The draft revision that was validated."
+    },
+    "pass_status": {
+      "type": "string",
+      "enum": ["passed", "degraded", "failed"],
+      "description": "Overall status of the citation pass."
+    },
+    "validation_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section_id": {
+            "type": "string",
+            "description": "The section that was validated."
+          },
+          "claim_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The claim being validated."
+          },
+          "passage_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Passage IDs checked."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["valid", "invented", "unsupported", "entailment_mismatch"],
+            "description": "Validation outcome for this claim reference."
+          },
+          "issue": {
+            "type": "string",
+            "description": "Description of any issue found."
+          }
+        },
+        "required": ["section_id", "claim_id", "passage_ids", "status"],
+        "additionalProperties": false
+      }
+    },
+    "invented_citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section_id": {
+            "type": "string",
+            "description": "The section containing the invented citation."
+          },
+          "claim_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The claim with the invented citation."
+          },
+          "passage_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The invented passage IDs."
+          }
+        },
+        "required": ["section_id", "claim_id", "passage_ids"],
+        "additionalProperties": false
+      },
+      "description": "Citations referencing passage IDs not in the EvidencePacket."
+    },
+    "unsupported_claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The claim_id from the EvidencePacket."
+          },
+          "statement": {
+            "type": "string",
+            "description": "The unsupported claim statement."
+          }
+        },
+        "required": ["claim_id", "statement"],
+        "additionalProperties": false
+      },
+      "description": "Claims with no supporting passage evidence."
+    },
+    "entailment_mismatches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section_id": {
+            "type": "string",
+            "description": "The section with the mismatch."
+          },
+          "claim_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The claim with the mismatch."
+          },
+          "expected_relationship": {
+            "type": "string",
+            "description": "The expected relationship from the EvidencePacket."
+          },
+          "cited_relationship": {
+            "type": "string",
+            "description": "The relationship used in the draft."
+          }
+        },
+        "required": ["section_id", "claim_id", "expected_relationship", "cited_relationship"],
+        "additionalProperties": false
+      },
+      "description": "Claims where the draft relationship does not match the EvidencePacket binding."
+    }
+  },
+  "required": ["schema_version", "run_id", "evidence_packet_revision", "draft_revision", "pass_status", "validation_results", "invented_citations", "unsupported_claims", "entailment_mismatches"],
+  "additionalProperties": false
+}

@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "synthesis-outline-v1",
+  "title": "Synthesis Outline Output",
+  "description": "Structured claim outline produced by the autonomous-local synthesis pipeline. Each claim must reference a valid claim_id from the input EvidencePacket and include at least one binding to a passage_id.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "synthesis-outline-v1",
+      "description": "Schema version identifier."
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The research run ID."
+    },
+    "evidence_packet_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The EvidencePacket revision this outline was produced against."
+    },
+    "outline_sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section_id": {
+            "type": "string",
+            "description": "Unique identifier for this outline section."
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable section title."
+          },
+          "claims": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "claim_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Reference to a claim_id from the EvidencePacket."
+                },
+                "statement": {
+                  "type": "string",
+                  "description": "The claim statement."
+                },
+                "section_role": {
+                  "type": "string",
+                  "enum": ["primary", "supporting", "context"],
+                  "description": "The role of this claim within the section."
+                },
+                "required_passage_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "minItems": 1,
+                  "description": "Passage IDs that must be cited for this claim."
+                }
+              },
+              "required": ["claim_id", "statement", "section_role", "required_passage_ids"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["section_id", "title", "claims"],
+        "additionalProperties": false
+      }
+    },
+    "unsupported_claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The claim_id from the EvidencePacket."
+          },
+          "statement": {
+            "type": "string",
+            "description": "The unsupported claim statement."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this claim is unsupported."
+          }
+        },
+        "required": ["claim_id", "statement", "reason"],
+        "additionalProperties": false
+      },
+      "description": "Claims that cannot be supported by any passage in the EvidencePacket."
+    }
+  },
+  "required": ["schema_version", "run_id", "evidence_packet_revision", "outline_sections", "unsupported_claims"],
+  "additionalProperties": false
+}

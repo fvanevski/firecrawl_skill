@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -1255,3 +1256,150 @@ class DerivationComparisonReport:
             },
             "has_changes": self.has_changes,
         }
+
+
+# ---------------------------------------------------------------------------
+# Synthesis stage domain models (issue #63)
+# ---------------------------------------------------------------------------
+
+_SYNTHESIS_STAGE_NAMES: frozenset[str] = frozenset(
+    {"outline", "binding", "draft", "citation_pass"}
+)
+
+_SYNTHESIS_STAGE_STATUSES: frozenset[str] = frozenset(
+    {"pending", "running", "completed", "failed", "skipped"}
+)
+
+
+@dataclass(frozen=True)
+class SynthesisStageRecord:
+    """A persisted synthesis stage record stored in ``synthesis_stages``.
+
+    This is the authoritative PostgreSQL representation of a bounded synthesis
+    stage.  Each run has at most one row per ``stage_name``; retries update the
+    same row.
+    """
+
+    id: UUID
+    run_id: UUID
+    stage_name: str
+    stage_status: str
+    semantic_call_id: UUID | None
+    semantic_artifact_id: UUID | None
+    evidence_packet_revision: int
+    model_name: str
+    prompt_version: str
+    schema_version: int
+    artifact: dict[str, Any] | None
+    error: str | None
+    attempts: int
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.stage_name not in _SYNTHESIS_STAGE_NAMES:
+            raise ValueError(
+                f"invalid stage_name: {self.stage_name}; "
+                f"expected one of {sorted(_SYNTHESIS_STAGE_NAMES)}"
+            )
+        if self.stage_status not in _SYNTHESIS_STAGE_STATUSES:
+            raise ValueError(
+                f"invalid stage_status: {self.stage_status}; "
+                f"expected one of {sorted(_SYNTHESIS_STAGE_STATUSES)}"
+            )
+        if self.evidence_packet_revision < 1:
+            raise ValueError("evidence_packet_revision must be >= 1")
+        if self.attempts < 1:
+            raise ValueError("attempts must be >= 1")
+
+    @classmethod
+    def from_mapping(cls, value: dict[str, Any]) -> SynthesisStageRecord:
+        def _uuid(v):
+            return UUID(v) if not isinstance(v, UUID) else v
+
+        return cls(
+            id=_uuid(value["id"]),
+            run_id=_uuid(value["run_id"]),
+            stage_name=value["stage_name"],
+            stage_status=value["stage_status"],
+            semantic_call_id=_uuid(value["semantic_call_id"])
+            if value.get("semantic_call_id")
+            else None,
+            semantic_artifact_id=_uuid(value["semantic_artifact_id"])
+            if value.get("semantic_artifact_id")
+            else None,
+            evidence_packet_revision=value["evidence_packet_revision"],
+            model_name=value["model_name"],
+            prompt_version=value["prompt_version"],
+            schema_version=value["schema_version"],
+            artifact=value.get("artifact"),
+            error=value.get("error"),
+            attempts=value["attempts"],
+            created_at=value["created_at"],
+            updated_at=value["updated_at"],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "run_id": str(self.run_id),
+            "stage_name": self.stage_name,
+            "stage_status": self.stage_status,
+            "semantic_call_id": str(self.semantic_call_id)
+            if self.semantic_call_id
+            else None,
+            "semantic_artifact_id": str(self.semantic_artifact_id)
+            if self.semantic_artifact_id
+            else None,
+            "evidence_packet_revision": self.evidence_packet_revision,
+            "model_name": self.model_name,
+            "prompt_version": self.prompt_version,
+            "schema_version": self.schema_version,
+            "artifact": self.artifact,
+            "error": self.error,
+            "attempts": self.attempts,
+            "created_at": (
+                self.created_at.isoformat()
+                if hasattr(self.created_at, "isoformat")
+                else str(self.created_at)
+            ),
+            "updated_at": (
+                self.updated_at.isoformat()
+                if hasattr(self.updated_at, "isoformat")
+                else str(self.updated_at)
+            ),
+        }
+
+
+class SynthesisStageName(str, Enum):
+    """Enumeration of bounded synthesis stage names."""
+
+    OUTLINE = "outline"
+    BINDING = "binding"
+    DRAFT = "draft"
+    CITATION_PASS = "citation_pass"
+
+    @property
+    def order(self) -> int:
+        """Deterministic execution order (lower = earlier)."""
+        return {"outline": 1, "binding": 2, "draft": 3, "citation_pass": 4}[self.value]
+
+    @property
+    def schema_file(self) -> str:
+        """JSON schema file name for this stage's output."""
+        return {
+            "outline": "synthesis-outline-v1.json",
+            "binding": "claim-binding-v1.json",
+            "draft": "synthesis-draft-v1.json",
+            "citation_pass": "synthesis-citation-pass-v1.json",
+        }[self.value]
+
+
+class SynthesisStageStatus(str, Enum):
+    """Enumeration of synthesis stage statuses."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"

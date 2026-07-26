@@ -121,6 +121,60 @@ class MockRunService:
         self.budget_snapshots: list[dict[str, Any]] = []
         self._external_id_map: dict[str, UUID] = {}
         self._internal_id: UUID = uuid4()
+        # Required by SynthesisStage (issue #63)
+        self._uow_factory = self._make_uow_factory()
+        self.evidence_service = MagicMock()
+        self.evidence_service.export_packet.return_value = {
+            "schema_version": "evidence-packet-v1",
+            "run_id": "00000000-0000-0000-0000-000000000401",
+            "research_spec_id": "00000000-0000-0000-0000-000000000100",
+            "coverage_revision": 2,
+            "claims": [
+                {
+                    "claim_id": "00000000-0000-0000-0000-000000000102",
+                    "statement": "Test claim.",
+                    "semantic_status": "qualified",
+                    "uncertainty": "low",
+                }
+            ],
+            "passages": [
+                {
+                    "passage_id": "00000000-0000-0000-0000-000000000601",
+                    "text": "Test passage.",
+                    "source_url": "https://example.com",
+                }
+            ],
+            "omitted_passages": [],
+            "claim_evidence_bindings": [],
+            "corroborating_groups": [],
+            "contradicting_groups": [],
+            "qualifying_groups": [],
+            "near_duplicate_groups": [],
+            "source_diversity_summary": {},
+            "freshness_summary": {},
+            "limitations": [],
+            "unresolved_items": [],
+            "independence_assessments": [],
+            "retrieval_provenance": [],
+        }
+
+    def _make_uow_factory(self):
+        """Build a mock UOW factory that returns a proper context."""
+        mock_uow = MagicMock()
+        mock_uow.runs.get_run_status.return_value = {
+            "lifecycle_revision": 1,
+            "execution_mode": "autonomous_local",
+            "state": "synthesizing",
+        }
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_uow)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        factory = MagicMock(return_value=mock_ctx)
+        return factory
+
+    @property
+    def uow_factory(self):
+        return self._uow_factory
 
     def create(self, objective, external_id, **kwargs):
         """Simulate run creation."""
@@ -315,6 +369,8 @@ class MockConfig:
         self.max_adaptive_cycles = 5
         self.database_url = "postgresql://localhost/test"
         self.blob_root = "/tmp/blob-root"
+        # Required by SynthesisStage (issue #63)
+        self.embedding_model = "test-model"
 
     def require_database(self) -> None:
         pass
