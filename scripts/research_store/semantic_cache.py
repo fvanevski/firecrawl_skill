@@ -26,6 +26,7 @@ for the computed key, the insert is a no-op.
 ## Architecture
 
 * PostgreSQL is the authoritative store for cache identity and provenance.
+* Valkey (when configured) accelerates lookups with an in-memory cache.
 * The cache service is stateless and uses the UOW factory for all DB access.
 * Cache lookups are read-only; inserts are write-only.
 * Cache pruning removes expired or explicitly removed entries.
@@ -53,6 +54,9 @@ logger = logging.getLogger(__name__)
 # Default TTL for cache entries (seconds).  Entries older than this are
 # considered expired and will not be returned on lookup.
 _DEFAULT_TTL_SECONDS = 3600  # 1 hour
+
+# Key prefix for Valkey cache entries.
+_VALKEY_PREFIX = "firecrawl:research:v1:semantic-cache"
 
 
 def _compute_cache_key(
@@ -153,20 +157,39 @@ class CacheEntry:
 
 
 class SemanticCacheService:
-    """PostgreSQL-backed semantic-result cache.
+    """PostgreSQL-backed semantic-result cache with optional Valkey acceleration.
 
     Args:
         uow_factory: A callable that returns a UOW context manager.
         ttl_seconds: Time-to-live for cache entries in seconds.
+        valkey_url: Optional Valkey URL for in-memory cache acceleration.
+            When provided, lookups first check Valkey before falling back
+            to PostgreSQL.
     """
 
     def __init__(
         self,
         uow_factory: Any,
         ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+        valkey_url: str = "",
     ) -> None:
         self.uow_factory = uow_factory
         self.ttl_seconds = ttl_seconds
+        self.valkey_url = valkey_url
+        self._valkey_client = None
+
+    def _get_valkey_client(self):
+        """Lazy-initialize the Valkey client."""
+        if self._valkey_client is None and self.valkey_url:
+            try:
+                import redis
+
+                self._valkey_client = redis.Redis.from_url(self.valkey_url)
+            except ImportError:
+                logger.debug("redis client not available; Valkey acceleration disabled")
+            except Exception:  # noqa: BLE001
+                logger.debug("failed to connect to Valkey; acceleration disabled")
+        return self._valkey_client
 
     # ------------------------------------------------------------------
     # Public API
@@ -192,6 +215,11 @@ class SemanticCacheService:
         Returns ``None`` if no entry matches or the entry is expired.
 
         The lookup is read-only and does not mutate any state.
+
+        **Valkey acceleration.** When a Valkey URL is configured, this
+        method first checks Valkey (in-memory) before falling back to
+        PostgreSQL.  A Valkey hit is returned immediately; a Valkey miss
+        triggers a PostgreSQL lookup and, on success, populates Valkey.
         """
         key_hash = _compute_cache_key(
             stage=stage,
@@ -206,6 +234,48 @@ class SemanticCacheService:
             configuration=configuration,
         )
 
+        # ------------------------------------------------------------------
+        # Valkey acceleration (fast path).
+        # ------------------------------------------------------------------
+        valkey_client = self._get_valkey_client()
+        if valkey_client is not None:
+            valkey_key = f"{_VALKEY_PREFIX}:{key_hash}"
+            try:
+                cached_bytes = valkey_client.get(valkey_key)
+                if cached_bytes is not None:
+                    cached_data = json.loads(cached_bytes)
+                    logger.debug(
+                        "semantic cache Valkey hit for stage %s (key %s...)",
+                        stage,
+                        key_hash[:12],
+                    )
+                    # Reconstruct the entry from Valkey data.
+                    return CacheEntry(
+                        id=UUID(cached_data["id"]),
+                        key_hash=key_hash,
+                        stage=cached_data["stage"],
+                        model_fingerprint=cached_data["model_fingerprint"],
+                        input_hash=cached_data["input_hash"],
+                        prompt_hash=cached_data["prompt_hash"],
+                        prompt_version=cached_data["prompt_version"],
+                        schema_version=int(cached_data["schema_version"]),
+                        policy_version=cached_data.get("policy_version"),
+                        configuration_hash=cached_data.get("configuration_hash"),
+                        artifact=cached_data["artifact"],
+                        provenance=cached_data["provenance"],
+                        status="valid",
+                        ttl_seconds=self.ttl_seconds,
+                        created_at=cached_data["created_at"],
+                    )
+            except Exception:  # noqa: BLE001
+                # Valkey unavailable — fall through to PostgreSQL.
+                logger.debug(
+                    "semantic cache Valkey lookup failed; falling through to PostgreSQL"
+                )
+
+        # ------------------------------------------------------------------
+        # PostgreSQL lookup (authoritative).
+        # ------------------------------------------------------------------
         with self.uow_factory() as uow:
             row = uow.semantic_cache.get_cache_entry_by_key(key_hash)
             if row is None:
@@ -219,6 +289,32 @@ class SemanticCacheService:
             if self._is_expired(entry):
                 self._mark_expired(uow, entry.id)
                 return None
+
+            # Populate Valkey on PostgreSQL hit.
+            if valkey_client is not None:
+                valkey_key = f"{_VALKEY_PREFIX}:{key_hash}"
+                try:
+                    valkey_data = {
+                        "id": str(entry.id),
+                        "stage": entry.stage,
+                        "model_fingerprint": entry.model_fingerprint,
+                        "input_hash": entry.input_hash,
+                        "prompt_hash": entry.prompt_hash,
+                        "prompt_version": entry.prompt_version,
+                        "schema_version": entry.schema_version,
+                        "policy_version": entry.policy_version,
+                        "configuration_hash": entry.configuration_hash,
+                        "artifact": entry.artifact,
+                        "provenance": entry.provenance,
+                        "created_at": entry.created_at,
+                    }
+                    valkey_client.setex(
+                        valkey_key,
+                        self.ttl_seconds,
+                        json.dumps(valkey_data),
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("semantic cache Valkey write failed")
 
             return entry
 
@@ -325,6 +421,34 @@ class SemanticCacheService:
                 stage,
                 key_hash[:12],
             )
+
+            # Populate Valkey on insert.
+            valkey_client = self._get_valkey_client()
+            if valkey_client is not None:
+                valkey_key = f"{_VALKEY_PREFIX}:{key_hash}"
+                try:
+                    valkey_data = {
+                        "id": str(entry_id),
+                        "stage": stage,
+                        "model_fingerprint": record["model_fingerprint"],
+                        "input_hash": input_hash,
+                        "prompt_hash": prompt_hash,
+                        "prompt_version": prompt_version,
+                        "schema_version": schema_version,
+                        "policy_version": policy_version,
+                        "configuration_hash": config_hash,
+                        "artifact": artifact,
+                        "provenance": provenance,
+                        "created_at": now,
+                    }
+                    valkey_client.setex(
+                        valkey_key,
+                        self.ttl_seconds,
+                        json.dumps(valkey_data),
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("semantic cache Valkey write on insert failed")
+
             return self._row_to_entry(record)
 
     def prune(self, *, older_than_seconds: int | None = None) -> int:
@@ -344,6 +468,13 @@ class SemanticCacheService:
             )
             if count:
                 logger.info("semantic cache: pruned %d entries", count)
+                # Clear Valkey cache on prune.
+                valkey_client = self._get_valkey_client()
+                if valkey_client is not None:
+                    try:
+                        valkey_client.delete(f"{_VALKEY_PREFIX}:*")
+                    except Exception:  # noqa: BLE001
+                        logger.debug("semantic cache Valkey prune failed")
             return count
 
     def invalidate(self, *, key_hash: str) -> bool:
@@ -359,6 +490,13 @@ class SemanticCacheService:
             count = uow.semantic_cache.invalidate_cache_entry(key_hash)
             if count:
                 logger.info("semantic cache: invalidated entry %s", key_hash[:12])
+                # Clear Valkey cache for this key.
+                valkey_client = self._get_valkey_client()
+                if valkey_client is not None:
+                    try:
+                        valkey_client.delete(f"{_VALKEY_PREFIX}:{key_hash}")
+                    except Exception:  # noqa: BLE001
+                        logger.debug("semantic cache Valkey invalidate failed")
             return count > 0
 
     # ------------------------------------------------------------------

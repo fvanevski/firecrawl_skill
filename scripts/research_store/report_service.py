@@ -147,6 +147,7 @@ class LocalSynthesisService:
             self._cache = SemanticCacheService(
                 uow_factory=self.semantic.uow_factory,
                 ttl_seconds=self._cache_ttl_seconds,
+                valkey_url=self.config.valkey_url,
             )
         return self._cache
 
@@ -865,6 +866,66 @@ class LocalSynthesisService:
             self._binding_service = ClaimBindingService(self.semantic, self.evidence)
 
         packet_revision = packet.get("coverage_revision", 1)
+
+        # ------------------------------------------------------------------
+        # Cache integration (issue #41): build input payload for cache key.
+        # ------------------------------------------------------------------
+        claims_data = [
+            {"claim_id": c["claim_id"], "statement": c["statement"]}
+            for c in packet.get("claims", [])
+        ]
+        passages_data = [
+            {"passage_id": p["passage_id"], "text": p["text"]}
+            for p in packet.get("passages", [])
+        ]
+        input_payload = {
+            "claims": claims_data,
+            "passages": passages_data,
+            "coverage_revision": packet_revision,
+        }
+        input_hash = self.cache.compute_input_hash(input_payload)
+        system_prompt = (
+            "You are a rigorous evidence evaluator. "
+            "Given a list of research claims and a list of passages, "
+            "determine if the passages support, contradict, qualify, or provide context for each claim. "
+            "Respond strictly using the JSON schema provided. "
+            "Do not invent IDs. Only use the provided claim_id and passage_id values."
+        )
+        user_prompt = json.dumps(
+            {"claims": claims_data, "passages": passages_data}, indent=2
+        )
+        prompt_hash = self.cache.compute_prompt_hash(system_prompt, user_prompt)
+
+        cached = self._check_cache(
+            stage="binding",
+            model_name=model_name,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            schema_version=1,
+            input_hash=input_hash,
+            run_id=run_id,
+            packet=packet,
+        )
+
+        if cached is not None:
+            # Cache hit — use the cached result directly.
+            new_revision = cached.get("new_packet_revision", packet_revision)
+            with uow_factory() as uow:
+                record = uow.synthesis_stages.get_synthesis_stage(run_id, "binding")
+                self._update_stage(
+                    uow,
+                    record,
+                    status=SynthesisStageStatus.COMPLETED.value,
+                    artifact={"new_packet_revision": new_revision},
+                )
+            return {
+                "status": "completed",
+                "evidence_packet_revision": new_revision,
+                "model_name": model_name,
+                "cache_hit": True,
+            }
+
+        # Cache miss or invalid — run the real LLM call.
         new_revision = self._binding_service.evaluate_claims(
             run_id=run_id,
             packet_revision=packet_revision,
@@ -882,10 +943,29 @@ class LocalSynthesisService:
                 artifact={"new_packet_revision": new_revision},
             )
 
+        # Write to cache after successful LLM call.
+        provenance = {
+            "provider": "local",
+            "requested_model": model_name,
+            "prompt_version": prompt_version,
+            "prompt_hash": prompt_hash,
+        }
+        self._write_cache(
+            stage="binding",
+            model_name=model_name,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            schema_version=1,
+            input_hash=input_hash,
+            artifact={"new_packet_revision": new_revision},
+            provenance=provenance,
+        )
+
         return {
             "status": "completed",
             "evidence_packet_revision": new_revision,
             "model_name": model_name,
+            "cache_hit": False,
         }
 
     def _run_draft_stage(
@@ -960,6 +1040,46 @@ class LocalSynthesisService:
             status = uow.runs.get_run_status(run_id)
             context["run_revision"] = status["lifecycle_revision"]
 
+        # ------------------------------------------------------------------
+        # Cache integration (issue #41): check cache before LLM call.
+        # ------------------------------------------------------------------
+        prompt_hash = self.cache.compute_prompt_hash(system_prompt, user_prompt)
+        input_hash = self.cache.compute_input_hash(
+            json.loads(user_prompt) if isinstance(user_prompt, str) else user_prompt
+        )
+
+        cached = self._check_cache(
+            stage="draft",
+            model_name=model_name,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            schema_version=1,
+            input_hash=input_hash,
+            run_id=run_id,
+            packet=packet,
+        )
+
+        if cached is not None:
+            # Cache hit — use the cached artifact directly.
+            with uow_factory() as uow:
+                record = uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
+                self._update_stage(
+                    uow,
+                    record,
+                    status=SynthesisStageStatus.COMPLETED.value,
+                    artifact=cached,
+                )
+            section_count = len(cached.get("report_sections", []))
+            unsupported_count = len(cached.get("unsupported_claims", []))
+            return {
+                "status": "completed",
+                "evidence_packet_revision": packet.get("coverage_revision", 1),
+                "model_name": model_name,
+                "section_count": section_count,
+                "unsupported_claims_count": unsupported_count,
+                "cache_hit": True,
+            }
+
         from model_gateway import call_structured
 
         result = call_structured(
@@ -997,6 +1117,25 @@ class LocalSynthesisService:
                 ),
             )
 
+        # Write to cache after successful LLM call.
+        provenance = {
+            "provider": "local",
+            "requested_model": model_name,
+            "prompt_version": prompt_version,
+            "prompt_hash": prompt_hash,
+            "attempt_count": len(result.attempts) if result.attempts else 1,
+        }
+        self._write_cache(
+            stage="draft",
+            model_name=model_name,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            schema_version=1,
+            input_hash=input_hash,
+            artifact=result.value,
+            provenance=provenance,
+        )
+
         section_count = len(result.value.get("report_sections", []))
         unsupported_count = len(result.value.get("unsupported_claims", []))
 
@@ -1006,6 +1145,7 @@ class LocalSynthesisService:
             "model_name": model_name,
             "section_count": section_count,
             "unsupported_claims_count": unsupported_count,
+            "cache_hit": False,
         }
 
     def _run_citation_pass_stage(
@@ -1061,6 +1201,49 @@ class LocalSynthesisService:
             status = uow.runs.get_run_status(run_id)
             context["run_revision"] = status["lifecycle_revision"]
 
+        # ------------------------------------------------------------------
+        # Cache integration (issue #41): check cache before LLM call.
+        # ------------------------------------------------------------------
+        prompt_hash = self.cache.compute_prompt_hash(system_prompt, user_prompt)
+        input_hash = self.cache.compute_input_hash(
+            json.loads(user_prompt) if isinstance(user_prompt, str) else user_prompt
+        )
+
+        cached = self._check_cache(
+            stage="citation_pass",
+            model_name=model_name,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            schema_version=1,
+            input_hash=input_hash,
+            run_id=run_id,
+            packet=packet,
+        )
+
+        if cached is not None:
+            # Cache hit — use the cached artifact directly.
+            with uow_factory() as uow:
+                record = uow.synthesis_stages.get_synthesis_stage(
+                    run_id, "citation_pass"
+                )
+                self._update_stage(
+                    uow,
+                    record,
+                    status=SynthesisStageStatus.COMPLETED.value,
+                    artifact=cached,
+                )
+            pass_status = cached.get("pass_status", "failed")
+            invented_count = len(cached.get("invented_citations", []))
+            unsupported_count = len(cached.get("unsupported_claims", []))
+            return {
+                "status": "completed",
+                "pass_status": pass_status,
+                "evidence_packet_revision": packet.get("coverage_revision", 1),
+                "invented_citations_count": invented_count,
+                "unsupported_claims_count": unsupported_count,
+                "cache_hit": True,
+            }
+
         from model_gateway import call_structured
 
         result = call_structured(
@@ -1098,6 +1281,25 @@ class LocalSynthesisService:
                 ),
             )
 
+        # Write to cache after successful LLM call.
+        provenance = {
+            "provider": "local",
+            "requested_model": model_name,
+            "prompt_version": prompt_version,
+            "prompt_hash": prompt_hash,
+            "attempt_count": len(result.attempts) if result.attempts else 1,
+        }
+        self._write_cache(
+            stage="citation_pass",
+            model_name=model_name,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            schema_version=1,
+            input_hash=input_hash,
+            artifact=result.value,
+            provenance=provenance,
+        )
+
         pass_status = result.value.get("pass_status", "failed")
         invented_count = len(result.value.get("invented_citations", []))
         unsupported_count = len(result.value.get("unsupported_claims", []))
@@ -1108,6 +1310,7 @@ class LocalSynthesisService:
             "evidence_packet_revision": packet.get("coverage_revision", 1),
             "invented_citations_count": invented_count,
             "unsupported_claims_count": unsupported_count,
+            "cache_hit": False,
         }
 
     def _run_validation_stage(
