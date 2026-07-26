@@ -131,13 +131,8 @@ class ReportValidationResult:
                 f"hash {self.report_hash[:8]}...)"
             )
         if self.is_valid:
-            return (
-                f"report is valid but incomplete "
-                f"({len(self.warnings)} warnings)"
-            )
-        return (
-            f"report is invalid ({len(self.errors)} errors)"
-        )
+            return f"report is valid but incomplete ({len(self.warnings)} warnings)"
+        return f"report is invalid ({len(self.errors)} errors)"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -243,14 +238,10 @@ class ReportValidator:
         info: list[ReportValidationFinding] = []
 
         # 1. Stale-packet check.
-        self._check_stale_packet(
-            errors=errors, warnings=warnings, info=info
-        )
+        self._check_stale_packet(errors=errors, warnings=warnings, info=info)
 
         # 2. Citation-ID validation.
-        self._check_citation_ids(
-            errors=errors, warnings=warnings, info=info
-        )
+        self._check_citation_ids(errors=errors, warnings=warnings, info=info)
 
         # 3. Deterministic claim coverage.
         claim_manifest = self._check_claim_coverage(
@@ -266,9 +257,7 @@ class ReportValidator:
         )
 
         # 5. Bounded semantic entailment.
-        self._check_entailment(
-            errors=errors, warnings=warnings, info=info
-        )
+        self._check_entailment(errors=errors, warnings=warnings, info=info)
 
         # Compute report hash.
         report_hash = self._compute_report_hash()
@@ -370,8 +359,7 @@ class ReportValidator:
                                     f"in section {vr.get('section_id', '?')}"
                                 ),
                                 path=(
-                                    f"validation_results/"
-                                    f"{vr.get('section_id', '?')}"
+                                    f"validation_results/{vr.get('section_id', '?')}"
                                 ),
                                 detail={
                                     "passage_id": pid,
@@ -490,8 +478,7 @@ class ReportValidator:
                         code="UNKNOWN_REPORT_CLAIM",
                         severity=ReportValidationSeverity.ERROR,
                         message=(
-                            f"report references claim {cid} "
-                            f"not found in EvidencePacket"
+                            f"report references claim {cid} not found in EvidencePacket"
                         ),
                         path="claim_manifest",
                         detail={"claim_id": cid},
@@ -577,9 +564,7 @@ class ReportValidator:
                     ReportValidationFinding(
                         code="CLAIM_NOT_IN_REPORT",
                         severity=ReportValidationSeverity.WARNING,
-                        message=(
-                            f"packet claim {cid} not referenced in report"
-                        ),
+                        message=(f"packet claim {cid} not referenced in report"),
                         path="claim_manifest",
                         detail={"claim_id": cid},
                     )
@@ -614,8 +599,7 @@ class ReportValidator:
         # Check that unsupported claims are present in the report's
         # unsupported_claims array.
         report_unsupported = {
-            uc.get("claim_id", "")
-            for uc in self.report.get("unsupported_claims", [])
+            uc.get("claim_id", "") for uc in self.report.get("unsupported_claims", [])
         }
 
         for cm in unsupported_in_manifest:

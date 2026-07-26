@@ -941,7 +941,9 @@ class LocalSynthesisService:
 
         # Build a minimal report dict from the citation_pass artifact.
         report = {
-            "schema_version": report_artifact.get("schema_version", "synthesis-citation-pass-v1"),
+            "schema_version": report_artifact.get(
+                "schema_version", "synthesis-citation-pass-v1"
+            ),
             "run_id": str(run_id),
             "evidence_packet_revision": report_artifact.get(
                 "evidence_packet_revision", packet.get("coverage_revision", 1)
@@ -981,7 +983,9 @@ class LocalSynthesisService:
                             else SynthesisStageStatus.FAILED.value
                         ),
                         artifact=validation_result.to_dict(),
-                        error=None if validation_result.is_valid else validation_result.summary,
+                        error=None
+                        if validation_result.is_valid
+                        else validation_result.summary,
                     )
 
             return {
@@ -998,8 +1002,7 @@ class LocalSynthesisService:
             # EvidencePacket not available (e.g. in unit tests with mocked
             # dependencies). Skip validation gracefully.
             logger.info(
-                "validation stage skipped for run %s (EvidencePacket not "
-                "available)",
+                "validation stage skipped for run %s (EvidencePacket not available)",
                 run_id,
             )
             return {

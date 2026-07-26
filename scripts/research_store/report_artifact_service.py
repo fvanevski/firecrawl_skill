@@ -78,8 +78,7 @@ class ReportArtifactService:
         packet = self._evidence.export_packet(run_id, packet_revision)
         if packet is None:
             raise ReportArtifactError(
-                f"EvidencePacket not found for run {run_id} "
-                f"revision {packet_revision}"
+                f"EvidencePacket not found for run {run_id} revision {packet_revision}"
             )
 
         # Get the current (most recent) packet revision.
@@ -205,7 +204,9 @@ class ReportArtifactService:
         """
         with self._uow_factory() as uow:
             try:
-                records = uow.get_synthesis_stages(run_id=UUID(report_hash[:16], version=4))
+                records = uow.get_synthesis_stages(
+                    run_id=UUID(report_hash[:16], version=4)
+                )
                 for record in records:
                     artifact = record.get("artifact") or {}
                     if artifact.get("report_hash") == report_hash:
