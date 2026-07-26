@@ -805,6 +805,7 @@ class TestServiceIntegration:
             max_index_attempts=5,
             job_lease_seconds=300,
             worker_poll_seconds=5,
+            embedding_batch_size=32,
         )
         assert config.chunker_max_tokens == 1000
         assert config.chunker_version == "hierarchical-v1"

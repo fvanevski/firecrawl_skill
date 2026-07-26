@@ -55,47 +55,261 @@ class IndexWorker:
             "failed": 0,
             "lease_lost": 0,
         }
-        for _ in range(limit):
+        if limit <= 1:
+            # Original single-job path for backward compatibility.
+            for _ in range(limit):
+                with self.uow_factory() as uow:
+                    jobs = uow.index_jobs.claim_jobs(
+                        1,
+                        lease_seconds=self.lease_seconds,
+                        worker_id=self.worker_id,
+                        max_attempts=self.max_attempts,
+                        fingerprint=getattr(self.embedder, "fingerprint", None),
+                    )
+                if not jobs:
+                    break
+                job = jobs[0]
+                result["claimed"] += 1
+                self._heartbeat({**result, "busy": True})
+                error = None
+                try:
+                    self._process_job(job)
+                except LeaseLost:
+                    result["lease_lost"] += 1
+                    continue
+                except (
+                    Exception  # noqa: BLE001
+                ) as exc:  # keep the durable worker alive per job
+                    error = f"{type(exc).__name__}: {exc}"
+
+                with self.uow_factory() as uow:
+                    owned = uow.index_jobs.finish_job(
+                        job["id"],
+                        job["lease_token"],
+                        error,
+                        max_attempts=self.max_attempts,
+                    )
+                if not owned:
+                    result["lease_lost"] += 1
+                elif error is None:
+                    result["complete"] += 1
+                else:
+                    result["failed"] += 1
+                self._heartbeat({**result, "busy": True})
+        else:
+            # Microbatch path: claim N jobs, group by fingerprint, batch embed.
             with self.uow_factory() as uow:
                 jobs = uow.index_jobs.claim_jobs(
-                    1,
+                    limit,
                     lease_seconds=self.lease_seconds,
                     worker_id=self.worker_id,
                     max_attempts=self.max_attempts,
                     fingerprint=getattr(self.embedder, "fingerprint", None),
                 )
             if not jobs:
-                break
-            job = jobs[0]
-            result["claimed"] += 1
+                self._heartbeat(result)
+                return result
+            result["claimed"] = len(jobs)
             self._heartbeat({**result, "busy": True})
-            error = None
             try:
-                self._process_job(job)
+                batch_result = self._process_microbatch(jobs)
+                result["complete"] += batch_result["complete"]
+                result["failed"] += batch_result["failed"]
+                result["lease_lost"] += batch_result["lease_lost"]
             except LeaseLost:
                 result["lease_lost"] += 1
-                continue
-            except (
-                Exception  # noqa: BLE001
-            ) as exc:  # keep the durable worker alive per job
-                error = f"{type(exc).__name__}: {exc}"
+            self._heartbeat({**result, "busy": True})
+        self._heartbeat(result)
+        return result
 
+    def _process_microbatch(self, jobs: list[dict]) -> dict:
+        """Process a batch of jobs with shared fingerprint.
+
+        Groups jobs by their output-affecting index parameters, batches
+        embedding calls, validates each vector, batches Qdrant upserts, and
+        completes or fails each job independently.
+
+        Returns a dict with ``complete``, ``failed``, and ``lease_lost`` counts.
+        """
+        from collections import defaultdict
+
+        groups: dict[str, list[dict]] = defaultdict(list)
+        for job in jobs:
+            key = job.get("fingerprint", "")
+            groups[key].append(job)
+
+        result = {"complete": 0, "failed": 0, "lease_lost": 0}
+
+        for group in groups.values():
+            self._process_microbatch_group(group, result)
+
+        return result
+
+    def _process_microbatch_group(self, group: list[dict], result: dict) -> None:
+        """Process one fingerprint group of jobs.
+
+        Raises ``LeaseLost`` when the lease cannot be renewed, allowing the
+        caller to skip remaining groups.
+        """
+        # Renew all leases before processing.
+        for job in group:
+            self._renew(job)
+
+        # Resolve chunk texts for this group.
+        entity_ids = [job["entity_id"] for job in group]
+        with self.uow_factory() as uow:
+            records = uow.chunks.chunks_for_index(
+                entity_ids, manifest_id=group[0]["manifest_id"]
+            )
+
+        # Build a map from entity_id to chunk record.
+        record_map: dict[str, dict] = {}
+        for rec in records:
+            record_map[str(rec["chunk_id"])] = rec
+
+        # Validate that every job resolved to a chunk.
+        texts: list[str | None] = []
+        for job in group:
+            eid = str(job["entity_id"])
+            if eid not in record_map:
+                # Cannot embed without text; mark job failed.
+                texts.append(None)  # sentinel
+            else:
+                texts.append(record_map[eid].get("text", ""))
+
+        # Batch-embed non-null texts; keep track of indices.
+        valid_indices = [i for i, t in enumerate(texts) if t is not None]
+        vectors: list[list[float] | None] = [None] * len(group)
+        try:
+            embedder = (
+                self.embedder.for_job(group[0])
+                if hasattr(self.embedder, "for_job")
+                else self.embedder
+            )
+        except ValueError as exc:
+            # Fingerprint mismatch — fail all jobs in this group.
+            for job in group:
+                self._fail_job(job, f"embedder config: {exc}")
+            result["failed"] += len(group)
+            return
+
+        if valid_indices:
+            valid_texts = [texts[i] for i in valid_indices]
+            if hasattr(embedder, "batch"):
+                try:
+                    batch_vectors = embedder.batch(valid_texts)
+                except ValueError as exc:
+                    # Batch endpoint failed — mark all jobs in this group
+                    # as failed (no partial results to fall back on).
+                    for job in group:
+                        self._fail_job(job, f"batch embed: {exc}")
+                    result["failed"] += len(group)
+                    return
+                for idx, vec in zip(valid_indices, batch_vectors):
+                    vectors[idx] = vec
+            else:
+                # Fallback: embed each text individually so that partial
+                # failures only affect the offending job.
+                for idx in valid_indices:
+                    try:
+                        vec = embedder(texts[idx])
+                        vectors[idx] = vec
+                    except ValueError as exc:
+                        job = group[idx]
+                        self._fail_job(job, f"embed: {exc}")
+                        result["failed"] += 1
+
+        # Validate dimensions BEFORE upsert — reject incompatible vectors
+        # so they never reach Qdrant.
+        valid_vectors: list[tuple[dict, list[float]]] = []
+        for i, job in enumerate(group):
+            if vectors[i] is None:
+                continue
+            expected_dimension = job.get("dimension")
+            if expected_dimension is not None and len(vectors[i]) != expected_dimension:
+                self._fail_job(
+                    job,
+                    f"embedding dimension {len(vectors[i])} does not match "
+                    f"index definition dimension {expected_dimension}",
+                )
+                result["failed"] += 1
+                continue
+            valid_vectors.append((job, vectors[i]))
+
+        # Build upsert points from validated vectors only.
+        upsert_points: list[dict] = []
+        for job, vector in valid_vectors:
+            point = self._build_point(
+                job, vector, record_map.get(str(job["entity_id"]))
+            )
+            if point:
+                upsert_points.append(point)
+
+        # Renew leases before upsert.
+        for job in group:
+            self._renew(job)
+
+        if upsert_points:
+            try:
+                collection = _required(group[0], "physical_collection")
+                dimension = group[0].get("dimension")
+                distance = group[0].get("distance_metric", "Cosine")
+                index = self.index.for_collection(collection, dimension, distance)
+                index.ensure_schema()
+                index.upsert(upsert_points)
+            except Exception as exc:  # noqa: BLE001
+                # Upsert failed — mark all jobs in this group as failed.
+                for job, _ in valid_vectors:
+                    self._fail_job(job, f"qdrant upsert: {exc}")
+                result["failed"] += len(valid_vectors)
+                # Also fail any jobs that had embedding errors.
+                for i, job in enumerate(group):
+                    if vectors[i] is None:
+                        self._fail_job(job, "embedding failed")
+                        result["failed"] += 1
+                return
+
+        # Complete each successfully upserted job.
+        for job, _ in valid_vectors:
+            self._renew(job)
             with self.uow_factory() as uow:
                 owned = uow.index_jobs.finish_job(
                     job["id"],
                     job["lease_token"],
-                    error,
+                    None,
                     max_attempts=self.max_attempts,
                 )
             if not owned:
                 result["lease_lost"] += 1
-            elif error is None:
-                result["complete"] += 1
             else:
-                result["failed"] += 1
-            self._heartbeat({**result, "busy": True})
-        self._heartbeat(result)
-        return result
+                result["complete"] += 1
+
+    def _build_point(
+        self, job: dict, vector: list[float], record: dict | None
+    ) -> dict | None:
+        """Build a Qdrant point for a single job."""
+        if record is None:
+            return None
+        return {
+            "id": str(job["entity_id"]),
+            "vector": {"dense": vector},
+            "payload": {
+                key: _json_value(value)
+                for key, value in record.items()
+                if key != "text"
+            },
+        }
+
+    def _fail_job(self, job: dict, error: str) -> None:
+        """Mark a job as failed in PostgreSQL."""
+        with self.uow_factory() as uow:
+            uow.index_jobs.finish_job(
+                job["id"],
+                job["lease_token"],
+                error,
+                max_attempts=self.max_attempts,
+            )
+        # Count doesn't matter for the result — caller aggregates.
 
     def _process_job(self, job: dict) -> None:
         self._renew(job)
@@ -247,6 +461,12 @@ def _json_value(value):
 
 
 class OpenAICompatibleEmbedder:
+    """Embedding client with single-text and microbatch support.
+
+    Single-text calls use ``__call__``.  Microbatch calls use ``batch`` and
+    return a list of vectors, one per input text, validated individually.
+    """
+
     def __init__(
         self,
         base_url: str,
@@ -262,6 +482,34 @@ class OpenAICompatibleEmbedder:
             dimension,
             fingerprint,
         )
+        # Throughput metrics
+        self._batch_count: int = 0
+        self._total_texts: int = 0
+        self._total_time: float = 0.0
+
+    @property
+    def throughput(self) -> dict:
+        """Return throughput metrics.
+
+        Returns:
+            A dict with keys ``batch_count``, ``total_texts``,
+            ``total_time``, and ``texts_per_second``.
+        """
+        tps = 0.0
+        if self._total_time > 0:
+            tps = round(self._total_texts / self._total_time, 3)
+        return {
+            "batch_count": self._batch_count,
+            "total_texts": self._total_texts,
+            "total_time": round(self._total_time, 3),
+            "texts_per_second": tps,
+        }
+
+    def reset_throughput(self) -> None:
+        """Reset throughput counters."""
+        self._batch_count = 0
+        self._total_texts = 0
+        self._total_time = 0.0
 
     def for_job(self, job: dict) -> OpenAICompatibleEmbedder:
         """Bind a claimed job to its immutable model definition."""
@@ -278,6 +526,7 @@ class OpenAICompatibleEmbedder:
         )
 
     def __call__(self, text: str) -> list[float]:
+        """Embed a single text, returning a normalised vector."""
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -298,6 +547,60 @@ class OpenAICompatibleEmbedder:
         if norm == 0:
             raise ValueError("embedding endpoint returned a zero vector")
         return [value / norm for value in vector]
+
+    def batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed multiple texts in a single request.
+
+        Args:
+            texts: A non-empty list of input strings.
+
+        Returns:
+            A list of normalised vectors, one per input text, validated
+            individually.  Each vector is checked for dimension match and
+            zero-norm; a failed vector raises ``ValueError`` and does not
+            silently succeed.
+
+        Raises:
+            ValueError: If ``texts`` is empty, a vector has the wrong
+                dimension, or the endpoint returns a zero vector.
+        """
+        if not texts:
+            raise ValueError("batch requires at least one text")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        request = Request(
+            self.url,
+            data=json.dumps({"model": self.model, "input": texts}).encode(),
+            headers=headers,
+            method="POST",
+        )
+        start = monotonic()
+        with urlopen(request, timeout=120) as response:
+            payload = json.load(response)
+        results = payload.get("data", [])
+        if len(results) != len(texts):
+            raise ValueError(
+                f"embedding endpoint returned {len(results)} vectors "
+                f"for {len(texts)} texts"
+            )
+        vectors: list[list[float]] = []
+        for item in results:
+            vector = [float(v) for v in item["embedding"]]
+            if self.dimension is not None and len(vector) != self.dimension:
+                raise ValueError(
+                    f"embedding dimension {len(vector)} does not match "
+                    f"configured {self.dimension}"
+                )
+            norm = math.sqrt(sum(v * v for v in vector))
+            if norm == 0:
+                raise ValueError("embedding endpoint returned a zero vector")
+            vectors.append([v / norm for v in vector])
+        elapsed = monotonic() - start
+        self._batch_count += 1
+        self._total_texts += len(texts)
+        self._total_time += elapsed
+        return vectors
 
 
 def _endpoint(value: str, suffix: str) -> str:
