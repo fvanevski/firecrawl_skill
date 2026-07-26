@@ -24,9 +24,30 @@ INTEGRATION_MARK = pytest.mark.skipif(
 )
 
 
+def _importlib_available(name: str) -> bool:
+    """Check whether a module is importable without side-effects."""
+    try:
+        import importlib
+
+        importlib.import_module(name)
+        return True
+    except ImportError:
+        return False
+
+
+# Migration import tests require alembic (the migration module imports from alembic).
+# These tests are skipped when alembic is not available (e.g. CI without
+# requirements-research-store.txt).
+_ALEMBIC_MARK = pytest.mark.skipif(
+    not _importlib_available("alembic"),
+    reason="alembic not installed; migration import tests require it",
+)
+
+
 class TestMigration0030:
     """Tests for migration 0030 schema and behavior."""
 
+    @_ALEMBIC_MARK
     def test_migration_file_exists(self):
         """The migration file should exist."""
         migration_path = (
@@ -38,6 +59,7 @@ class TestMigration0030:
         )
         assert migration_path.exists(), "Migration file 0030 should exist"
 
+    @_ALEMBIC_MARK
     def test_migration_downgrade_raises(self):
         """Downgrade should raise RuntimeError (forward-only)."""
         import importlib.util
@@ -59,6 +81,7 @@ class TestMigration0030:
         with pytest.raises(RuntimeError, match="forward-only"):
             mod.downgrade()
 
+    @_ALEMBIC_MARK
     def test_migration_sql_contains_expected_tables(self):
         """Migration upgrade SQL should create duplicate_groups."""
         import importlib.util
@@ -165,6 +188,22 @@ def test_migration_0030_insert_and_query_duplicate_groups():
     run_id = uuid_mod.uuid4()
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        # Create a parent research_runs row so the FK constraint is satisfied
+        cur.execute(
+            """INSERT INTO research_runs (id, original_request, status, state, execution_mode, objective, metadata)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING""",
+            (
+                str(run_id),
+                "test request",
+                "running",
+                "created",
+                "agent_led",
+                "test objective",
+                "{}",
+            ),
+        )
+
         # Insert a duplicate_groups row
         cur.execute(
             """INSERT INTO duplicate_groups (id, run_id, rationale, created_at)
@@ -179,8 +218,9 @@ def test_migration_0030_insert_and_query_duplicate_groups():
         )
         row = cur.fetchone()
         assert row is not None
-        assert uuid_mod.UUID(row[0]) == group_id
-        assert uuid_mod.UUID(row[1]) == run_id
+        # row[0] and row[1] are already UUIDs from PostgreSQL
+        assert row[0] == group_id
+        assert row[1] == run_id
         assert row[2] == "test_rationale"
 
         # Query it back
@@ -191,4 +231,4 @@ def test_migration_0030_insert_and_query_duplicate_groups():
         )
         row = cur.fetchone()
         assert row is not None
-        assert uuid_mod.UUID(row[0]) == group_id
+        assert row[0] == group_id

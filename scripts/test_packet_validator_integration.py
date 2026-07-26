@@ -9,6 +9,7 @@ Requires RESEARCH_STORE_TEST_DATABASE_URL to be set.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
 from pathlib import Path
@@ -39,6 +40,29 @@ INTEGRATION_MARK = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def ensure_run_exists(dsn, run_id):
+    """Create a research_runs row so FK constraints are satisfied."""
+    from research_store.postgres import connect
+
+    with connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs (id, original_request, query_plan, skill_version, llm_model, status, state, execution_mode, objective)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO NOTHING""",
+            (
+                str(run_id),
+                "test request",
+                "{}",
+                "1.0",
+                "test",
+                "running",
+                "created",
+                "agent_led",
+                "test request",
+            ),
+        )
 
 
 def _make_packet_dict(
@@ -256,14 +280,15 @@ class TestValidatorIntegration:
         from research_store.config import StoreConfig
         from research_store.container import build_evidence_service
 
-        config = StoreConfig.from_env()
-        config.database_url = TEST_DSN
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
 
         svc = build_evidence_service(config)
         run_id = uuid4()
 
-        # Build a valid packet
+        # Build a valid packet with retrieval_provenance
+        from research_domain.models import MechanicalStatus, RetrievalProvenance
+
         claim = _make_claim(semantic_status=SemanticStatus.SUPPORTED)
         passage = _make_passage()
         binding = _make_binding(
@@ -271,11 +296,21 @@ class TestValidatorIntegration:
             passage_ids=[passage.passage_id],
         )
 
+        provenance = RetrievalProvenance(
+            retrieval_event_id=uuid4(),
+            requested_mode="hybrid",
+            executed_mode="hybrid",
+            mechanical_status=MechanicalStatus.SUCCEEDED,
+            component_errors=(),
+            selected_passage_ids=(passage.passage_id,),
+        )
+
         packet_dict = _make_packet_dict(
             run_id=run_id,
             claims=[claim],
             passages=[passage],
             claim_evidence_bindings=[binding],
+            retrieval_provenance=[provenance],
             freshness_summary={
                 "most_recent": "2025-06-01T00:00:00Z",
                 "oldest": "2025-01-01T00:00:00Z",
@@ -283,6 +318,7 @@ class TestValidatorIntegration:
         )
 
         # Persist the packet
+        ensure_run_exists(TEST_DSN, run_id)
         from research_domain.registry import load_model
 
         packet = load_model(packet_dict)
@@ -292,17 +328,13 @@ class TestValidatorIntegration:
         exported = svc.export_packet(run_id, 1)
         assert exported is not None
 
-        packet_obj = load_model(exported)
+        packet_obj = load_model(exported["payload"])
         validator = EvidencePacketValidator()
         result = validator.validate(packet_obj)
 
         # The packet should be valid and complete
         assert result.is_valid is True
         assert result.is_complete is True
-
-        # Clean up
-        with svc.uow_factory() as uow:
-            uow.delete_run(run_id)
 
     @pytest.mark.skipif(
         not TEST_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL"
@@ -312,8 +344,7 @@ class TestValidatorIntegration:
         from research_store.config import StoreConfig
         from research_store.container import build_evidence_service
 
-        config = StoreConfig.from_env()
-        config.database_url = TEST_DSN
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
 
         svc = build_evidence_service(config)
@@ -341,22 +372,19 @@ class TestValidatorIntegration:
         from research_domain.registry import load_model
 
         packet = load_model(packet_dict)
+        ensure_run_exists(TEST_DSN, run_id)
         svc.persist_packet(packet)
 
         exported = svc.export_packet(run_id, 1)
         assert exported is not None
 
-        packet_obj = load_model(exported)
+        packet_obj = load_model(exported["payload"])
         validator = EvidencePacketValidator()
         result = validator.validate(packet_obj)
 
         # Should detect missing retrieval_provenance
         assert result.is_valid is False
         assert any(f.code == "MISSING_RETRIEVAL_PROVENANCE" for f in result.errors)
-
-        # Clean up
-        with svc.uow_factory() as uow:
-            uow.delete_run(run_id)
 
     @pytest.mark.skipif(
         not TEST_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL"
@@ -366,8 +394,7 @@ class TestValidatorIntegration:
         from research_store.config import StoreConfig
         from research_store.container import build_evidence_service
 
-        config = StoreConfig.from_env()
-        config.database_url = TEST_DSN
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
 
         svc = build_evidence_service(config)
@@ -396,12 +423,13 @@ class TestValidatorIntegration:
         from research_domain.registry import load_model
 
         packet = load_model(packet_dict)
+        ensure_run_exists(TEST_DSN, run_id)
         svc.persist_packet(packet)
 
         exported = svc.export_packet(run_id, 1)
         assert exported is not None
 
-        packet_obj = load_model(exported)
+        packet_obj = load_model(exported["payload"])
         validator = EvidencePacketValidator()
         # Validate with a different candidate_id set
         result = validator.validate(
@@ -413,10 +441,6 @@ class TestValidatorIntegration:
         assert result.is_valid is False
         assert any(f.code == "UNKNOWN_CANDIDATE_REF" for f in result.errors)
 
-        # Clean up
-        with svc.uow_factory() as uow:
-            uow.delete_run(run_id)
-
     @pytest.mark.skipif(
         not TEST_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL"
     )
@@ -425,8 +449,7 @@ class TestValidatorIntegration:
         from research_store.config import StoreConfig
         from research_store.container import build_evidence_service
 
-        config = StoreConfig.from_env()
-        config.database_url = TEST_DSN
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
 
         svc = build_evidence_service(config)
@@ -459,12 +482,13 @@ class TestValidatorIntegration:
         from research_domain.registry import load_model
 
         packet = load_model(packet_dict)
+        ensure_run_exists(TEST_DSN, run_id)
         svc.persist_packet(packet)
 
         exported = svc.export_packet(run_id, 1)
         assert exported is not None
 
-        packet_obj = load_model(exported)
+        packet_obj = load_model(exported["payload"])
         output = bounded_citation_ready_output(packet_obj, max_passages=3, max_claims=2)
 
         # Should be bounded
@@ -472,10 +496,6 @@ class TestValidatorIntegration:
         assert len(output["claims"]) == 2
         assert output["metadata"]["passage_count"] == 5
         assert output["metadata"]["claim_count"] == 5
-
-        # Clean up
-        with svc.uow_factory() as uow:
-            uow.delete_run(run_id)
 
     @pytest.mark.skipif(
         not TEST_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL"
@@ -485,8 +505,7 @@ class TestValidatorIntegration:
         from research_store.config import StoreConfig
         from research_store.container import build_evidence_service
 
-        config = StoreConfig.from_env()
-        config.database_url = TEST_DSN
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
 
         evidence_svc = build_evidence_service(config)
@@ -512,19 +531,16 @@ class TestValidatorIntegration:
         from research_domain.registry import load_model
 
         packet = load_model(packet_dict)
+        ensure_run_exists(TEST_DSN, run_id)
         evidence_svc.persist_packet(packet)
 
         # Validate before binding - should have warnings about unassessed claims
         exported = evidence_svc.export_packet(run_id, 1)
         assert exported is not None
 
-        packet_obj = load_model(exported)
+        packet_obj = load_model(exported["payload"])
         validator = EvidencePacketValidator()
         result = validator.validate(packet_obj)
 
         # Should have warnings about unassessed claims
         assert any(f.code == "UNASSESSED_CLAIM" for f in result.warnings)
-
-        # Clean up
-        with evidence_svc.uow_factory() as uow:
-            uow.delete_run(run_id)
