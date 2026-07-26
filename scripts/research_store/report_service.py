@@ -336,6 +336,10 @@ class LocalSynthesisService:
             entry = self.cache.lookup(
                 stage=stage,
                 model_name=model_name,
+                # TODO(p7-04): parameterize model_revision and endpoint_alias
+                # so that different model revisions or endpoints produce
+                # distinct cache keys.  Currently the fingerprint is always
+                # "{model_name}::local".
                 model_revision="",
                 endpoint_alias="local",
                 prompt_version=prompt_version,
@@ -444,6 +448,19 @@ class LocalSynthesisService:
         # Check unsupported_claims.
         for uc in artifact.get("unsupported_claims", []):
             cid = uc.get("claim_id", "")
+            if cid and cid not in claim_ids_in_packet:
+                return False
+
+        # Check draft-stage report_sections for claim references.
+        for section in artifact.get("report_sections", []):
+            for claim_ref in section.get("claims", []):
+                cid = claim_ref.get("claim_id", "")
+                if cid and cid not in claim_ids_in_packet:
+                    return False
+
+        # Check citation_pass invented_citations for claim references.
+        for ic in artifact.get("invented_citations", []):
+            cid = ic.get("claim_id", "")
             if cid and cid not in claim_ids_in_packet:
                 return False
 

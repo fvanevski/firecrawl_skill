@@ -31,7 +31,7 @@ Each entry is identified by a SHA-256 key hash derived from:
 * ``provenance`` — JSONB metadata about the original call
 * ``status`` — one of: valid, expired, pruned
 * ``ttl_seconds`` — time-to-live in seconds
-* ``created_at`` — timestamptz (Unix timestamp stored as float)
+* ``created_at`` — Unix timestamp stored as double precision (float)
 
 Constraints:
 * ``uk_semantic_cache_key`` — unique key_hash ensures no duplicate entries.

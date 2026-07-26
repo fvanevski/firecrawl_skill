@@ -148,7 +148,7 @@ class CacheEntry:
     provenance: dict[str, Any]
     status: str
     ttl_seconds: int
-    created_at: str
+    created_at: float
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +458,7 @@ class SemanticCacheService:
                     provenance=provenance,
                     status="valid",
                     ttl_seconds=self.ttl_seconds,
-                    created_at=str(now),
+                    created_at=now,
                 )
 
             # No existing entry — insert new.
@@ -539,7 +539,8 @@ class SemanticCacheService:
                 valkey_client = self._get_valkey_client()
                 if valkey_client is not None:
                     try:
-                        valkey_client.delete(f"{_VALKEY_PREFIX}:*")
+                        for key in valkey_client.scan_iter(f"{_VALKEY_PREFIX}:*"):
+                            valkey_client.delete(key)
                     except Exception:  # noqa: BLE001
                         logger.debug("semantic cache Valkey prune failed")
             return count
