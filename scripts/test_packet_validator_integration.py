@@ -287,8 +287,7 @@ class TestValidatorIntegration:
         run_id = uuid4()
 
         # Build a valid packet with retrieval_provenance
-        from research_domain.models import RetrievalProvenance
-        from research_domain.models import MechanicalStatus
+        from research_domain.models import MechanicalStatus, RetrievalProvenance
 
         claim = _make_claim(semantic_status=SemanticStatus.SUPPORTED)
         passage = _make_passage()
