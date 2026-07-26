@@ -106,12 +106,31 @@ def _make_mock_uow():
     mock_uow.synthesis_stages.update_synthesis_stage = _update_stage
     mock_uow.synthesis_stages.get_synthesis_stages = _get_stages
 
+    # Also set direct methods on the UOW (matching the real PostgresUnitOfWork).
+    mock_uow.get_synthesis_stage = _get_stage
+    mock_uow.insert_synthesis_stage = _insert_stage
+    mock_uow.get_synthesis_stages = _get_stages
+
+    # Evidence packet method for validation stage.
+    _packet_store: dict[str, int] = {}
+
+    def _get_evidence_packet(run_id, packet_revision=None):
+        key = str(run_id)
+        if key not in _packet_store:
+            return None
+        # Return a simple object-like mock with packet_revision attr.
+        result = MagicMock()
+        result.packet_revision = _packet_store[key]
+        return result
+
+    mock_uow.get_evidence_packet = _get_evidence_packet
+
     mock_ctx = MagicMock()
     mock_ctx.__enter__ = MagicMock(return_value=mock_uow)
     mock_ctx.__exit__ = MagicMock(return_value=False)
     mock_uow_factory = MagicMock(return_value=mock_ctx)
 
-    return mock_uow_factory, mock_uow, _records
+    return mock_uow_factory, mock_uow, _records, _packet_store
 
 
 def _make_service(
@@ -126,7 +145,12 @@ def _make_service(
 
     # Call _make_mock_uow ONCE so the factory and mock_uow share the same
     # _records dict used by the closure-based repository methods.
-    mock_uow_factory, mock_uow, _records = _make_mock_uow()
+    mock_uow_factory, mock_uow, _records, _packet_store = _make_mock_uow()
+
+    # Pre-populate the packet store so the validation stage can find the
+    # current packet revision.
+    run_id_str = str(packet.get("run_id", "00000000-0000-0000-0000-000000000401"))
+    _packet_store[run_id_str] = packet.get("coverage_revision", 1)
 
     mock_semantic = MagicMock()
     mock_semantic.uow_factory = mock_uow_factory
@@ -265,6 +289,7 @@ def test_synthesis_stage_name_order():
     assert SynthesisStageName.BINDING.order == 2
     assert SynthesisStageName.DRAFT.order == 3
     assert SynthesisStageName.CITATION_PASS.order == 4
+    assert SynthesisStageName.VALIDATION.order == 5
 
 
 def test_synthesis_stage_name_schema_file():
@@ -275,6 +300,8 @@ def test_synthesis_stage_name_schema_file():
         SynthesisStageName.CITATION_PASS.schema_file
         == "synthesis-citation-pass-v1.json"
     )
+    # VALIDATION has no schema file — it does not call an LLM.
+    assert SynthesisStageName.VALIDATION.schema_file == ""
 
 
 def test_synthesis_stage_record_validation():
@@ -564,12 +591,16 @@ def test_synthesis_stage_delegates_to_report_service():
     from research_store.orchestrator import SynthesisStage
 
     mock_run_service = MagicMock()
-    mock_uow_factory, mock_uow, _records = _make_mock_uow()
+    mock_uow_factory, mock_uow, _records, _packet_store = _make_mock_uow()
     mock_run_service.uow_factory = mock_uow_factory
     mock_run_service.evidence_service = MagicMock()
     mock_run_service.evidence_service.export_packet.return_value = deepcopy(
         _VALID_PACKET
     )
+
+    # Pre-populate the packet store so the validation stage can find it.
+    run_id_str = str(_VALID_PACKET["run_id"])
+    _packet_store[run_id_str] = _VALID_PACKET.get("coverage_revision", 1)
 
     mock_config = MagicMock()
     mock_config.embedding_model = "test-model"
@@ -1383,3 +1414,183 @@ def test_run_synthesis_picks_up_new_packet_revision():
 
     prompt_data = json.loads(captured_prompts[0])
     assert len(prompt_data["claims"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Validation failure propagates to pipeline
+# ---------------------------------------------------------------------------
+
+
+def test_run_synthesis_fails_when_validation_fails():
+    """When the validation stage raises ReportServiceError, the pipeline
+    must set overall_status = "failed" and mark remaining stages failed.
+    """
+    service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Pre-populate outline, binding, draft, citation_pass as completed.
+    for stage_name in ("outline", "binding", "draft", "citation_pass"):
+        record = {
+            "id": str(uuid4()),
+            "run_id": str(run_id),
+            "stage_name": stage_name,
+            "stage_status": "completed",
+            "semantic_call_id": None,
+            "semantic_artifact_id": None,
+            "evidence_packet_revision": 1,
+            "model_name": "test-model",
+            "prompt_version": "v1",
+            "schema_version": 1,
+            "artifact": {"status": "completed"},
+            "error": None,
+            "attempts": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        mock_uow.synthesis_stages.update_synthesis_stage(record)
+
+    # Pre-populate citation_pass artifact with invented citations so
+    # the validator will fail.
+    citation_pass_record = {
+        "id": str(uuid4()),
+        "run_id": str(run_id),
+        "stage_name": "citation_pass",
+        "stage_status": "completed",
+        "semantic_call_id": None,
+        "semantic_artifact_id": None,
+        "evidence_packet_revision": 1,
+        "model_name": "test-model",
+        "prompt_version": "v1",
+        "schema_version": 1,
+        "artifact": {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 1,
+            "draft_revision": 1,
+            "pass_status": "failed",
+            "validation_results": [],
+            "invented_citations": [
+                {
+                    "section_id": "s1",
+                    "claim_id": _VALID_PACKET["claims"][0]["claim_id"],
+                    "passage_ids": [
+                        "00000000-0000-0000-0000-000000009999"
+                    ],  # unknown passage
+                }
+            ],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        },
+        "error": None,
+        "attempts": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    mock_uow.synthesis_stages.update_synthesis_stage(citation_pass_record)
+
+    # Pre-populate the citation_pass artifact with invented citations so
+    # the validator will fail.  The _packet_store is already pre-populated
+    # by _make_service with the coverage_revision, so the validation stage
+    # will find the current packet revision.
+
+    summary = service.run_synthesis(
+        run_id=run_id,
+        packet_revision=1,
+        model_name="test-model",
+    )
+
+    # All prior stages should be skipped.
+    for stage_key in ("outline", "binding", "draft", "citation_pass"):
+        assert summary["stages"][stage_key]["status"] == "skipped"
+
+    # Validation must fail and the pipeline must be marked failed.
+    assert summary["stages"]["validation"]["status"] == "failed"
+    assert summary["overall_status"] == "failed"
+    assert "report validation failed" in summary.get("error", "")
+
+
+def test_run_synthesis_resumes_failed_validation_stage():
+    """A failed validation stage should be retried on resume."""
+    service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    claim_id = _VALID_PACKET["claims"][0]["claim_id"]
+
+    # Pre-populate outline, binding, draft, citation_pass as completed.
+    for sname in ("outline", "binding", "draft", "citation_pass"):
+        mock_uow.synthesis_stages.update_synthesis_stage(
+            {
+                "id": str(uuid4()),
+                "run_id": str(run_id),
+                "stage_name": sname,
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "test-model",
+                "prompt_version": "v1",
+                "schema_version": 1,
+                "artifact": (
+                    {
+                        "schema_version": "synthesis-citation-pass-v1",
+                        "run_id": str(run_id),
+                        "evidence_packet_revision": 2,
+                        "draft_revision": 1,
+                        "pass_status": "passed",
+                        "validation_results": [
+                            {
+                                "section_id": "s1",
+                                "claim_id": claim_id,
+                                "passage_ids": [
+                                    _VALID_PACKET["passages"][0]["passage_id"]
+                                ],
+                                "status": "valid",
+                                "issue": None,
+                            }
+                        ],
+                        "invented_citations": [],
+                        "unsupported_claims": [],
+                        "entailment_mismatches": [],
+                    }
+                    if sname == "citation_pass"
+                    else {}
+                ),
+                "error": None,
+                "attempts": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        )
+
+    # Pre-populate validation as failed so it gets retried.
+    validation_record = {
+        "id": str(uuid4()),
+        "run_id": str(run_id),
+        "stage_name": "validation",
+        "stage_status": "failed",
+        "semantic_call_id": None,
+        "semantic_artifact_id": None,
+        "evidence_packet_revision": 1,
+        "model_name": "test-model",
+        "prompt_version": "v1",
+        "schema_version": 1,
+        "artifact": None,
+        "error": "report validation failed: report is invalid (1 errors)",
+        "attempts": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    mock_uow.synthesis_stages.update_synthesis_stage(validation_record)
+
+    summary = service.run_synthesis(
+        run_id=run_id,
+        packet_revision=2,
+        model_name="test-model",
+    )
+
+    # All prior stages should be skipped.
+    for stage_key in ("outline", "binding", "draft", "citation_pass"):
+        assert summary["stages"][stage_key]["status"] == "skipped"
+
+    # Validation should have been retried and completed (valid report).
+    assert summary["stages"]["validation"]["status"] == "completed"
+    assert summary["overall_status"] == "completed"

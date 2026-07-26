@@ -1378,20 +1378,32 @@ class SynthesisStageName(str, Enum):
     BINDING = "binding"
     DRAFT = "draft"
     CITATION_PASS = "citation_pass"
+    VALIDATION = "validation"
 
     @property
     def order(self) -> int:
         """Deterministic execution order (lower = earlier)."""
-        return {"outline": 1, "binding": 2, "draft": 3, "citation_pass": 4}[self.value]
+        return {
+            "outline": 1,
+            "binding": 2,
+            "draft": 3,
+            "citation_pass": 4,
+            "validation": 5,
+        }[self.value]
 
     @property
     def schema_file(self) -> str:
-        """JSON schema file name for this stage's output."""
+        """JSON schema file name for this stage's output.
+
+        Returns an empty string for stages that do not produce an LLM schema
+        (e.g. ``validation`` — it is a deterministic, no-LLM stage).
+        """
         return {
             "outline": "synthesis-outline-v1.json",
             "binding": "claim-binding-v1.json",
             "draft": "synthesis-draft-v1.json",
             "citation_pass": "synthesis-citation-pass-v1.json",
+            "validation": "",
         }[self.value]
 
 
