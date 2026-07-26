@@ -129,6 +129,7 @@ class PostgresUnitOfWork:
             self.strategy_revisions
         ) = self.coverage = self.terminal_decisions = self.extraction_attempts = self
         self.derivations = self
+        self.semantic_cache = self
 
         return self
 
@@ -7175,3 +7176,139 @@ class PostgresUnitOfWork:
             row = cur.fetchone()
             if row is None:
                 raise KeyError((record["run_id"], record["stage_name"]))
+
+    # Semantic cache repository methods (issue #41)
+    # ------------------------------------------------------------------
+
+    def get_cache_entry_by_key(self, key_hash: str) -> dict[str, Any] | None:
+        """Return a cache entry by key hash, or None."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, key_hash, stage, model_fingerprint, input_hash,
+                          prompt_hash, prompt_version, schema_version,
+                          policy_version, configuration_hash,
+                          artifact, provenance, status, ttl_seconds,
+                          created_at
+                   FROM semantic_cache
+                   WHERE key_hash=%s""",
+                (key_hash,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        keys = (
+            "id",
+            "key_hash",
+            "stage",
+            "model_fingerprint",
+            "input_hash",
+            "prompt_hash",
+            "prompt_version",
+            "schema_version",
+            "policy_version",
+            "configuration_hash",
+            "artifact",
+            "provenance",
+            "status",
+            "ttl_seconds",
+            "created_at",
+        )
+        return dict(zip(keys, row))
+
+    def insert_cache_entry(self, record: dict[str, Any]) -> None:
+        """Insert a new semantic cache entry."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO semantic_cache
+                   (id, key_hash, stage, model_fingerprint, input_hash,
+                    prompt_hash, prompt_version, schema_version,
+                    policy_version, configuration_hash,
+                    artifact, provenance, status, ttl_seconds, created_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (
+                    str(record["id"]),
+                    record["key_hash"],
+                    record["stage"],
+                    record["model_fingerprint"],
+                    record["input_hash"],
+                    record["prompt_hash"],
+                    record["prompt_version"],
+                    record["schema_version"],
+                    record.get("policy_version"),
+                    record.get("configuration_hash"),
+                    json.dumps(record["artifact"], default=str)
+                    if record.get("artifact")
+                    else None,
+                    json.dumps(record["provenance"], default=str)
+                    if record.get("provenance")
+                    else None,
+                    record["status"],
+                    record["ttl_seconds"],
+                    record["created_at"],
+                ),
+            )
+
+    def prune_cache_entries(
+        self,
+        *,
+        older_than_seconds: int | None = None,
+        ttl_seconds: int = 3600,
+    ) -> int:
+        """Prune expired or stale cache entries.
+
+        Args:
+            older_than_seconds: If provided, only prune entries older than
+                this many seconds.  If ``None``, prunes all expired entries.
+            ttl_seconds: The TTL threshold for expiration.
+
+        Returns:
+            The number of entries pruned.
+        """
+        with self.connection.cursor() as cur:
+            if older_than_seconds is not None:
+                cur.execute(
+                    """DELETE FROM semantic_cache
+                       WHERE created_at < (now() - (%s || 'seconds')::interval)
+                       RETURNING id""",
+                    (older_than_seconds,),
+                )
+            else:
+                # Prune entries that have exceeded their per-row TTL.
+                cur.execute(
+                    """DELETE FROM semantic_cache
+                       WHERE status = 'valid'
+                         AND (extract(epoch from now()) - created_at) > ttl_seconds
+                       RETURNING id""",
+                )
+            count = cur.rowcount
+        return count
+
+    def invalidate_cache_entry(self, key_hash: str) -> int:
+        """Invalidate a cache entry by key hash.
+
+        Returns:
+            The number of entries invalidated (0 or 1).
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """UPDATE semantic_cache SET status = 'pruned'
+                   WHERE key_hash = %s AND status = 'valid'
+                   RETURNING id""",
+                (key_hash,),
+            )
+            return cur.rowcount
+
+    def invalidate_cache_entry_by_id(self, entry_id: UUID) -> int:
+        """Invalidate a cache entry by its UUID.
+
+        Returns:
+            The number of entries invalidated (0 or 1).
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """UPDATE semantic_cache SET status = 'pruned'
+                   WHERE id = %s AND status = 'valid'
+                   RETURNING id""",
+                (str(entry_id),),
+            )
+            return cur.rowcount
