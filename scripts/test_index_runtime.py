@@ -761,6 +761,7 @@ def test_batch_empty_input_raises():
 
 def test_batch_zero_vector_raises(monkeypatch):
     """A zero-norm vector in the batch response raises ValueError."""
+
     class Response:
         def __enter__(self):
             return self
@@ -781,6 +782,7 @@ def test_batch_zero_vector_raises(monkeypatch):
 
 def test_batch_dimension_mismatch_raises(monkeypatch):
     """A vector with the wrong dimension raises ValueError."""
+
     class Response:
         def __enter__(self):
             return self
@@ -801,6 +803,7 @@ def test_batch_dimension_mismatch_raises(monkeypatch):
 
 def test_batch_response_count_mismatch_raises(monkeypatch):
     """When the endpoint returns fewer vectors than requested, ValueError is raised."""
+
     class Response:
         def __enter__(self):
             return self
@@ -815,9 +818,7 @@ def test_batch_response_count_mismatch_raises(monkeypatch):
         indexing_module, "urlopen", lambda *_args, **_kwargs: Response()
     )
     embedder = OpenAICompatibleEmbedder("http://embed/v1", "model", dimension=3)
-    with pytest.raises(
-        ValueError, match="returned 1 vectors for 2 texts"
-    ):
+    with pytest.raises(ValueError, match="returned 1 vectors for 2 texts"):
         embedder.batch(["text-a", "text-b"])
 
 
@@ -988,9 +989,7 @@ def test_batch_groups_jobs_by_fingerprint_with_batch_path(monkeypatch):
         def read(self):
             return b'{"data":[{"embedding":[0.577,0.577,0.577]}]}'
 
-    monkeypatch.setattr(
-        indexing_module, "urlopen", lambda *a, **k: Response()
-    )
+    monkeypatch.setattr(indexing_module, "urlopen", lambda *a, **k: Response())
 
     qdrant, _calls = _fake_qdrant(state)
     worker = IndexWorker(
