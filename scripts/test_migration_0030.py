@@ -24,9 +24,30 @@ INTEGRATION_MARK = pytest.mark.skipif(
 )
 
 
+def _importlib_available(name: str) -> bool:
+    """Check whether a module is importable without side-effects."""
+    try:
+        import importlib
+
+        importlib.import_module(name)
+        return True
+    except ImportError:
+        return False
+
+
+# Migration import tests require alembic (the migration module imports from alembic).
+# These tests are skipped when alembic is not available (e.g. CI without
+# requirements-research-store.txt).
+_ALEMBIC_MARK = pytest.mark.skipif(
+    not _importlib_available("alembic"),
+    reason="alembic not installed; migration import tests require it",
+)
+
+
 class TestMigration0030:
     """Tests for migration 0030 schema and behavior."""
 
+    @_ALEMBIC_MARK
     def test_migration_file_exists(self):
         """The migration file should exist."""
         migration_path = (
@@ -38,6 +59,7 @@ class TestMigration0030:
         )
         assert migration_path.exists(), "Migration file 0030 should exist"
 
+    @_ALEMBIC_MARK
     def test_migration_downgrade_raises(self):
         """Downgrade should raise RuntimeError (forward-only)."""
         import importlib.util
@@ -59,6 +81,7 @@ class TestMigration0030:
         with pytest.raises(RuntimeError, match="forward-only"):
             mod.downgrade()
 
+    @_ALEMBIC_MARK
     def test_migration_sql_contains_expected_tables(self):
         """Migration upgrade SQL should create duplicate_groups."""
         import importlib.util

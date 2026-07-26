@@ -36,6 +36,7 @@ Coverage of required test cases:
 
 from __future__ import annotations
 
+import json
 import sys
 from collections import defaultdict
 from uuid import UUID, uuid4
@@ -447,6 +448,21 @@ class TestDegradedModes:
         assert len(qdrant) == 1
         assert len(qdrant[0].warnings) > 0
 
+    def test_qdrant_outage_recall_degradation(self, runner):
+        """QDRANT_UNAVAILABLE mode degrades recall to lexical-only level."""
+        lexical = runner.measure_lexical_recall()
+        dense = runner.measure_dense_recall()
+        fused = runner.measure_fused_recall()
+        results = runner.measure_degraded_modes(lexical, dense, fused)
+        qdrant = [r for r in results if r.mode == DegradedMode.QDRANT_UNAVAILABLE]
+        assert len(qdrant) == 1
+        # Qdrant outage should degrade recall to ~85% of baseline (lexical fallback)
+        assert qdrant[0].recall_vs_normal < 1.0
+        # Fallback to lexical should be used
+        assert qdrant[0].fallback_used is True
+        # SUCCEEDED status because lexical fallback works
+        assert qdrant[0].mechanical_status == MechanicalStatus.SUCCEEDED.value
+
     def test_lexical_unavailable_warning(self, runner):
         """LEXICAL_UNAVAILABLE mode produces a warning."""
         lexical = runner.measure_lexical_recall()
@@ -703,6 +719,65 @@ class TestCohereCompatibleReranker:
     def test_empty_candidates(self):
         reranker = CohereCompatibleReranker("http://localhost:8002", "model")
         assert reranker("query", []) == []
+
+    def test_non_empty_candidates_returns_reranked(self, monkeypatch):
+        """Non-empty candidates are reranked with relevance scores."""
+        mock_response = {
+            "results": [
+                {"index": 2, "relevance_score": 0.95},
+                {"index": 0, "relevance_score": 0.80},
+                {"index": 1, "relevance_score": 0.60},
+            ]
+        }
+
+        def mock_urlopen(*args, **kwargs):
+            import io
+
+            mock_resp = io.BytesIO(json.dumps(mock_response).encode())
+            return mock_resp
+
+        monkeypatch.setattr("research_store.retrieval.urlopen", mock_urlopen)
+
+        reranker = CohereCompatibleReranker("http://localhost:8002", "rerank-v5")
+        candidates = [
+            {"excerpt": "first", "fused_score": 0.5},
+            {"excerpt": "second", "fused_score": 0.4},
+            {"excerpt": "third", "fused_score": 0.3},
+        ]
+        result = reranker("test query", candidates)
+
+        assert len(result) == 3
+        # Results should be sorted by reranker_score descending
+        assert result[0]["reranker_score"] == 0.95
+        assert result[1]["reranker_score"] == 0.80
+        assert result[2]["reranker_score"] == 0.60
+
+    def test_non_empty_candidates_preserves_fields(self, monkeypatch):
+        """Reranked output preserves original candidate fields."""
+        mock_response = {"results": [{"index": 0, "relevance_score": 0.9}]}
+
+        def mock_urlopen(*args, **kwargs):
+            import io
+
+            mock_resp = io.BytesIO(json.dumps(mock_response).encode())
+            return mock_resp
+
+        monkeypatch.setattr("research_store.retrieval.urlopen", mock_urlopen)
+
+        reranker = CohereCompatibleReranker("http://localhost:8002", "model")
+        candidates = [
+            {
+                "excerpt": "text",
+                "fused_score": 0.5,
+                "source_url": "https://example.com",
+            },
+        ]
+        result = reranker("query", candidates)
+
+        assert len(result) == 1
+        assert result[0]["source_url"] == "https://example.com"
+        assert result[0]["fused_score"] == 0.5
+        assert result[0]["reranker_score"] == 0.9
 
 
 # ---------------------------------------------------------------------------
