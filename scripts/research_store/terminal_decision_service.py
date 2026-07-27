@@ -176,12 +176,14 @@ class TerminalDecisionService:
                 )
         except DuplicateTerminalDecisionError:
             raise
-        except Exception as exc:  # noqa: BLE001
-            # Non-blocking: a persistence failure should not prevent
-            # the orchestrator from acting on the terminal decision.
-            logger.warning(
-                "terminal decision persistence failed, "
-                "proceeding without audit record: %s",
+        except Exception as exc:
+            # Blocking: a terminal decision affects whether a run completes,
+            # fails, stops partial, or remains blocked. Losing that record
+            # must not be silently nonblocking.
+            logger.error(
+                "terminal decision persistence FAILED — aborting transition: %s",
                 exc,
             )
-            return None
+            raise TerminalDecisionError(
+                f"Failed to persist terminal decision for run {run_id}: {exc}"
+            ) from exc

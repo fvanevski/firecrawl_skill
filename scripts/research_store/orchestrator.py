@@ -2307,23 +2307,14 @@ class ResearchOrchestrator:
 
             # B5: Persist the terminal decision to the database
             if self._terminal_decision_service is not None:
-                try:
-                    idempotency_key = (
-                        f"terminal:{run_id}:r{run_revision}:c{coverage_revision}"
-                    )
-                    self._terminal_decision_service.record(
-                        run_id=run_id,
-                        decision=decision,
-                        idempotency_key=idempotency_key,
-                    )
-                except Exception as persist_exc:  # noqa: BLE001
-                    # Non-blocking: a persistence failure should not prevent
-                    # the orchestrator from acting on the terminal decision.
-                    logger.warning(
-                        "terminal decision persistence failed, "
-                        "proceeding without audit record: %s",
-                        persist_exc,
-                    )
+                idempotency_key = (
+                    f"terminal:{run_id}:r{run_revision}:c{coverage_revision}"
+                )
+                self._terminal_decision_service.record(
+                    run_id=run_id,
+                    decision=decision,
+                    idempotency_key=idempotency_key,
+                )
 
             return decision.outcome
         except Exception as exc:  # noqa: BLE001
