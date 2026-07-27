@@ -601,7 +601,7 @@ class WorkflowBenchmarkConfig:
 
     workflow_modes: tuple[str, ...] = ("agent_led", "autonomous_local")
     objective_ids: tuple[str, ...] | None = None
-    dry_run: bool = False
+    dry_run: bool = True
     integrity_checks: tuple[str, ...] = (
         "content_addressed_blob_integrity",
         "derivation_versioning",
