@@ -947,10 +947,9 @@ class TestSynthesisGovernorIntegration:
 
         service = MagicMock()
         service._resource_governor = governor
-        service.__class__._bounded_llm_call = (
-            __import__("research_store.report_service", fromlist=["LocalSynthesisService"])
-            .LocalSynthesisService._bounded_llm_call
-        )
+        service.__class__._bounded_llm_call = __import__(
+            "research_store.report_service", fromlist=["LocalSynthesisService"]
+        ).LocalSynthesisService._bounded_llm_call
 
         with pytest.raises(EndpointUnavailableError):
             service._bounded_llm_call(lambda: "should-not-run")
@@ -971,10 +970,9 @@ class TestSynthesisGovernorIntegration:
 
         service = MagicMock()
         service._resource_governor = governor
-        service.__class__._bounded_llm_call = (
-            __import__("research_store.report_service", fromlist=["LocalSynthesisService"])
-            .LocalSynthesisService._bounded_llm_call
-        )
+        service.__class__._bounded_llm_call = __import__(
+            "research_store.report_service", fromlist=["LocalSynthesisService"]
+        ).LocalSynthesisService._bounded_llm_call
 
         with pytest.raises(
             Exception, match="input tokens 2000 exceeds cap 1000"
@@ -997,10 +995,9 @@ class TestSynthesisGovernorIntegration:
 
         service = MagicMock()
         service._resource_governor = governor
-        service.__class__._bounded_llm_call = (
-            __import__("research_store.report_service", fromlist=["LocalSynthesisService"])
-            .LocalSynthesisService._bounded_llm_call
-        )
+        service.__class__._bounded_llm_call = __import__(
+            "research_store.report_service", fromlist=["LocalSynthesisService"]
+        ).LocalSynthesisService._bounded_llm_call
 
         with pytest.raises(Exception, match="batch size 5 exceeds cap 1"):
             service._bounded_llm_call(lambda: "should-not-run", batch_size=5)
@@ -1009,9 +1006,7 @@ class TestSynthesisGovernorIntegration:
         """_bounded_llm_call proceeds without gating when governor is None."""
         from unittest.mock import MagicMock, patch
 
-        with patch(
-            "research_store.report_service.LocalSynthesisService._load_schemas"
-        ):
+        with patch("research_store.report_service.LocalSynthesisService._load_schemas"):
             from research_store.report_service import LocalSynthesisService
 
             service = LocalSynthesisService(
@@ -1062,10 +1057,9 @@ class TestSynthesisGovernorIntegration:
 
         service = MagicMock()
         service._resource_governor = governor
-        service.__class__._bounded_llm_call = (
-            __import__("research_store.report_service", fromlist=["LocalSynthesisService"])
-            .LocalSynthesisService._bounded_llm_call
-        )
+        service.__class__._bounded_llm_call = __import__(
+            "research_store.report_service", fromlist=["LocalSynthesisService"]
+        ).LocalSynthesisService._bounded_llm_call
 
         with pytest.raises(ResourceLimitError) as exc_info:
             service._bounded_llm_call(lambda: "should-not-run")
