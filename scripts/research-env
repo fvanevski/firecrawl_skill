@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
 # Bash adapter sourced by the Firecrawl wrappers to bind dedicated services.
 # Values remain file-backed; no secret is copied into the repository.
+#
+# Priority: explicit env vars > .env file > defaults / container secrets.
 
 research_skill_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+# ── Source .env if present (allows local overrides) ──────────────────────
+if [[ -r "$research_skill_root/.env" ]]; then
+  # shellcheck source=/dev/null
+  set -a
+  # eslint-disable-next-line no-source-requests/disable-source
+  . "$research_skill_root/.env"
+  set +a
+fi
+
 if [[ -n "${FIRECRAWL_RESEARCH_PYTHON:-}" ]]; then
   research_python="$FIRECRAWL_RESEARCH_PYTHON"
   if [[ ! -x "$research_python" ]]; then
