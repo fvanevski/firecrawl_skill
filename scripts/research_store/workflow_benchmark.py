@@ -808,10 +808,11 @@ class WorkflowBenchmarkRunner:
         run_id: str | None = None
 
         try:
+            from uuid import uuid4
+
             from research_store.config import StoreConfig
             from research_store.container import build_orchestrator, build_run_service
             from research_store.orchestrator import OrchestratorConfig
-            from uuid import uuid4
 
             # Load configuration from environment
             config = StoreConfig.from_env()
@@ -947,7 +948,6 @@ class WorkflowBenchmarkRunner:
         # Extract metrics from the orchestrator result
         wave_count = getattr(orchestrator_result, "wave_count", 0)
         successful_urls = getattr(orchestrator_result, "successful_urls", 0)
-        final_state = getattr(orchestrator_result, "final_state", "unknown")
 
         # Compute quality metrics based on execution outcomes
         # These are conservative estimates — real metrics would require
@@ -988,7 +988,6 @@ class WorkflowBenchmarkRunner:
 
         # Extract metrics from the orchestrator result
         wave_count = getattr(orchestrator_result, "wave_count", 0)
-        successful_urls = getattr(orchestrator_result, "successful_urls", 0)
 
         # Estimate token usage and semantic calls based on execution
         # These are rough estimates — real metrics would require instrumentation

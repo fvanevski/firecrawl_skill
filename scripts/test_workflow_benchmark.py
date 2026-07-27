@@ -1765,7 +1765,7 @@ class TestSimulationPlaceholders:
 # ---------------------------------------------------------------------------
 
 
-class TestRealWorkflowExecution:
+class TestRealWorkflowExecutionMonkeypatch:
     """Tests for the real workflow execution path."""
 
     def test_execute_real_workflow_falls_back_on_failure(self, monkeypatch):
