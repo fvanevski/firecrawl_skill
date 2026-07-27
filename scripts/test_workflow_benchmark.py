@@ -1768,8 +1768,9 @@ class TestSimulationPlaceholders:
 class TestRealWorkflowExecutionMonkeypatch:
     """Tests for the real workflow execution path."""
 
-    def test_execute_real_workflow_falls_back_on_failure(self, monkeypatch):
-        """Real execution falls back to simulation when orchestrator fails."""
+    def test_execute_real_workflow_raises_on_failure(self, monkeypatch):
+        """Real execution raises when orchestrator fails — no simulation fallback."""
+        import pytest
         from research_store.workflow_benchmark import (
             BenchmarkDatasetLoader,
             WorkflowBenchmarkConfig,
@@ -1797,16 +1798,11 @@ class TestRealWorkflowExecutionMonkeypatch:
         )
         runner = WorkflowBenchmarkRunner(loader, config)
 
-        # Execute real workflow — should fall back to simulation
-        result = runner._execute_real_workflow("agent_led", objective)
+        # Execute real workflow — must raise, not fall back to simulation
+        with pytest.raises(RuntimeError) as ctx:
+            runner._execute_real_workflow("agent_led", objective)
 
-        # Should have fallen back to simulation
-        assert result.run_id is None
-        assert len(result.errors) > 0
-        assert "real execution failed" in result.errors[0]
-        # Quality and performance should be from simulation (not zero)
-        assert result.quality.candidate_recall > 0
-        assert result.performance.total_latency_ms > 0
+        assert "Simulation fallback is not permitted" in str(ctx.value)
 
     def test_compute_real_quality_from_execution(self):
         """_compute_real_quality produces metrics from orchestrator result."""

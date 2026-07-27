@@ -935,5 +935,52 @@ class TestTerminalDecisionIdempotency(unittest.TestCase):
         )
 
 
+# ===================================================================
+# Test: Service persistence is blocking (not fail-open)
+# ===================================================================
+
+
+class TestTerminalDecisionServiceBlocking(unittest.TestCase):
+    """Verify that terminal-decision persistence failure is blocking."""
+
+    def test_record_raises_on_db_failure(self):
+        """When the database is unavailable, record() must raise — not return None."""
+        from uuid import uuid4
+
+        from research_domain.models import (
+            TerminalDecision,
+            TerminalDecisionOutcome,
+        )
+        from research_store.terminal_decision_service import (
+            TerminalDecisionError,
+            TerminalDecisionService,
+        )
+
+        # UoW factory that always raises
+        def broken_uow_factory():
+            raise RuntimeError("database unavailable")
+
+        service = TerminalDecisionService(broken_uow_factory)
+        decision = TerminalDecision(
+            schema_version=TerminalDecision.SCHEMA_VERSION,
+            decision_id=uuid4(),
+            run_id=uuid4(),
+            run_revision=1,
+            coverage_revision=1,
+            outcome=TerminalDecisionOutcome.PARTIAL,
+            no_progress_signals=(),
+            unresolved_gap="insufficient coverage",
+            policy_version=TerminalDecision.POLICY_VERSION,
+            created_at=None,
+        )
+
+        with self.assertRaises(TerminalDecisionError):
+            service.record(
+                run_id=decision.run_id,
+                decision=decision,
+                idempotency_key="test:terminal",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

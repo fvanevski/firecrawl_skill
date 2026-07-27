@@ -63,7 +63,14 @@ jobs:
             scripts/test_claim_binding_service.py \
             scripts/test_shadow_comparison.py \
             scripts/test_uow_duplicate_methods.py \
-            scripts/test_workflow_benchmark.py
+            scripts/test_workflow_benchmark.py \
+            # Phase 7 release suites
+            scripts/test_handoff.py \
+            scripts/test_report_service.py \
+            scripts/test_report_validator.py \
+            scripts/test_semantic_cache.py \
+            scripts/test_resource_governor.py \
+            scripts/test_documentation.py
 
   lint:
     name: Ruff

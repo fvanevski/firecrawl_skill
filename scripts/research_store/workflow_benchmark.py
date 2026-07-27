@@ -910,27 +910,20 @@ class WorkflowBenchmarkRunner:
             )
 
         except Exception as exc:
-            logger.warning(
-                "real workflow execution failed for mode=%s objective=%s: %s",
+            logger.exception(
+                "real workflow execution FAILED for mode=%s objective=%s",
                 workflow_mode,
                 objective.id,
-                exc,
-                exc_info=True,
             )
             errors.append(f"real execution failed: {exc}")
 
-            # Fall back to simulation
-            result = self._simulate_workflow_run(workflow_mode, objective)
-            # Update the result with error info and real run_id if available
-            return WorkflowRunResult(
-                schema_version="workflow-run-result-v1",
-                workflow_mode=workflow_mode,
-                quality=result.quality,
-                performance=result.performance,
-                integrity_checks=result.integrity_checks,
-                run_id=run_id,
-                errors=tuple(errors),
-            )
+            # Blocking: when dry_run=False, simulation fallback is not
+            # permitted — the benchmark must fail if real execution cannot
+            # be exercised.
+            raise RuntimeError(
+                f"Benchmark real execution failed for mode={workflow_mode}: {exc}. "
+                "Simulation fallback is not permitted when dry_run=False."
+            ) from exc
 
     def _compute_real_quality(
         self,
