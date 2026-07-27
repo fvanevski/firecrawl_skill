@@ -851,14 +851,14 @@ class WorkflowBenchmarkRunner:
             )
             run_id = run_status.id
 
-            # Build the spec from the objective
-            spec = {
-                "schema_version": "research-spec-v1",
-                "research_spec_id": str(uuid4()),  # Required by PlanningStage
-                "objective": objective.objective,
-            }
+            # Build the spec from the objective using conservative_research_spec
+            from budget_policy import conservative_research_spec
+            from research_domain import serialize_model
 
-            # Build the search plan with a simple query
+            spec_model = conservative_research_spec(objective.objective, "general")
+            spec = serialize_model(spec_model)
+
+            # Build the search plan with a proper query
             search_plan = {
                 "schema_version": "search-plan-v1",
                 "research_spec_id": spec["research_spec_id"],
@@ -866,21 +866,14 @@ class WorkflowBenchmarkRunner:
                 "queries": [
                     {
                         "query_id": str(uuid4()),
-                        "query": objective.objective[:100],  # Use objective as query
+                        "query": objective.objective[:100],
                         "facet": "primary",
-                        "target_question_ids": [
-                            str(uuid4())
-                        ],  # Required by SearchQuery
+                        "target_question_ids": [spec["questions"][0]["question_id"]],
                         "target_claim_ids": [],
                         "intended_source_classes": [],
                         "expected_organizations": [],
-                        "freshness_requirement": {
-                            "start": None,
-                            "end": None,
-                            "description": "any time",
-                            "uncertainty": "none",
-                        },
-                        "expected_contribution": "any",
+                        "freshness_requirement": spec["time_window"],
+                        "expected_contribution": "answer",
                         "domain_restrictions": [],
                         "negative_terms": [],
                         "priority": 1,
