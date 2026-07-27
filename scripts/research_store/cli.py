@@ -184,6 +184,11 @@ def parser():
         help="Run with actual workflow execution (not simulation)",
     )
     bench_run.add_argument(
+        "--blob-root",
+        dest="benchmark_blob_root",
+        help="Path to content-addressed blob store root for integrity checks",
+    )
+    bench_run.add_argument(
         "--output",
         dest="benchmark_output",
         help="Path to write benchmark results JSON",
@@ -3683,9 +3688,11 @@ def main(argv=None):
 
             loader = load_benchmark_dataset(dataset_path)
             modes = tuple(args.benchmark_modes) if args.benchmark_modes else None
+            blob_root = args.benchmark_blob_root or str(config.blob_root)
             config = WorkflowBenchmarkConfig(
                 workflow_modes=modes or loader.dataset.workflow_modes,
                 dry_run=not args.benchmark_no_dry_run,
+                blob_root=blob_root,
             )
             runner = WorkflowBenchmarkRunner(loader, config)
             result = runner.run()
