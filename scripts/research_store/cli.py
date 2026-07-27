@@ -1792,20 +1792,19 @@ def _endpoint_health(config) -> dict:
             )
 
     # Generative endpoint probe (if configured).
-    generative_url = os.environ.get("GENERATIVE_URL", "")
-    if generative_url:
+    if config.generative_url:
         try:
             # Attempt a lightweight vLLM /models probe.
             import urllib.request
 
-            model_url = generative_url.rstrip("/") + "/models"
+            model_url = config.generative_url.rstrip("/") + "/models"
             req = urllib.request.Request(model_url, method="GET")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 if resp.status == 200:
                     result["endpoints"].append(
                         {
                             "endpoint_name": "generative",
-                            "url": generative_url,
+                            "url": config.generative_url,
                             "status": "healthy",
                             "live_probe": True,
                         }
@@ -1816,24 +1815,12 @@ def _endpoint_health(config) -> dict:
             result["endpoints"].append(
                 {
                     "endpoint_name": "generative",
-                    "url": generative_url,
+                    "url": config.generative_url,
                     "status": "unhealthy",
                     "error": str(exc),
                     "live_probe": True,
                 }
             )
-        else:
-            # Probe succeeded but didn't return 200 (e.g. network error caught
-            # above).  Fallback to unknown.
-            if not any(e["endpoint_name"] == "generative" for e in result["endpoints"]):
-                result["endpoints"].append(
-                    {
-                        "endpoint_name": "generative",
-                        "url": generative_url,
-                        "status": "unknown",
-                        "note": "probe succeeded but no 200 response",
-                    }
-                )
     else:
         result["endpoints"].append(
             {
@@ -1851,13 +1838,26 @@ def _resource_status(config) -> dict:
     """Return resource governance status summary."""
     status: dict[str, Any] = {
         "configuration": {
-            "generative_max_concurrent": config.generative_max_concurrent,
-            "generative_max_input_tokens": config.generative_max_input_tokens,
-            "generative_max_batch_size": config.generative_max_batch_size,
-            "embedding_max_concurrent": config.embedding_max_concurrent,
-            "embedding_max_batch_size": config.embedding_max_batch_size,
-            "reranker_max_concurrent": config.reranker_max_concurrent,
-            "reranker_max_batch_size": config.reranker_max_batch_size,
+            "generative": {
+                "max_concurrent": config.generative_max_concurrent,
+                "max_input_tokens": config.generative_max_input_tokens,
+                "max_batch_size": config.generative_max_batch_size,
+                "health_check_interval": config.generative_health_check_interval,
+                "backpressure_threshold": config.generative_backpressure_threshold,
+                "token_cap": config.generative_token_cap,
+            },
+            "embedding": {
+                "max_concurrent": config.embedding_max_concurrent,
+                "max_batch_size": config.embedding_max_batch_size,
+                "health_check_interval": config.embedding_health_check_interval,
+                "backpressure_threshold": config.embedding_backpressure_threshold,
+            },
+            "reranker": {
+                "max_concurrent": config.reranker_max_concurrent,
+                "max_batch_size": config.reranker_max_batch_size,
+                "health_check_interval": config.reranker_health_check_interval,
+                "backpressure_threshold": config.reranker_backpressure_threshold,
+            },
         },
         "endpoints": [],
     }

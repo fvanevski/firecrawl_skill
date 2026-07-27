@@ -764,9 +764,15 @@ class TestStoreConfigResourceGovernance:
                 "INDEX_JOB_LEASE_SECONDS": "300",
                 "INDEX_WORKER_POLL_SECONDS": "5",
                 "EMBEDDING_BATCH_SIZE": "32",
+                "GENERATIVE_URL": "http://localhost:8002",
+                "GENERATIVE_MODEL": "qwen",
+                "GENERATIVE_API_KEY": "test-key",
             },
         ):
             config = StoreConfig.from_env()
+            assert config.generative_url == "http://localhost:8002"
+            assert config.generative_model == "qwen"
+            assert config.generative_api_key == "test-key"
             assert config.generative_max_concurrent == 1
             assert config.generative_max_input_tokens == 0
             assert config.generative_max_batch_size == 1
@@ -797,12 +803,18 @@ class TestStoreConfigResourceGovernance:
                 "INDEX_JOB_LEASE_SECONDS": "300",
                 "INDEX_WORKER_POLL_SECONDS": "5",
                 "EMBEDDING_BATCH_SIZE": "32",
+                "GENERATIVE_URL": "http://localhost:9000",
+                "GENERATIVE_MODEL": "custom-model",
+                "GENERATIVE_API_KEY": "custom-key",
                 "GENERATIVE_MAX_CONCURRENT": "8",
                 "EMBEDDING_MAX_CONCURRENT": "16",
                 "RERANKER_MAX_CONCURRENT": "4",
             },
         ):
             config = StoreConfig.from_env()
+            assert config.generative_url == "http://localhost:9000"
+            assert config.generative_model == "custom-model"
+            assert config.generative_api_key == "custom-key"
             assert config.generative_max_concurrent == 8
             assert config.embedding_max_concurrent == 16
             assert config.reranker_max_concurrent == 4
@@ -903,3 +915,158 @@ class TestHealthStoreIntegration:
         # After first query, it should be cached in-memory.
         health2 = governor.get_health("generative")
         assert health2.status == EndpointStatus.DEGRADED
+
+
+# ---------------------------------------------------------------------------
+# Integration: synthesis pipeline + governor
+# ---------------------------------------------------------------------------
+
+
+class TestSynthesisGovernorIntegration:
+    """Tests for LocalSynthesisService._bounded_llm_call with governor."""
+
+    def test_unhealthy_endpoint_raises_in_bounded_call(self):
+        """_bounded_llm_call raises EndpointUnavailableError when generative is unhealthy."""
+        from research_store.resource_governor import (
+            EndpointStatus,
+            EndpointUnavailableError,
+            ResourceGovernor,
+        )
+
+        config = EndpointConfig(
+            name="generative",
+            url="http://localhost:8002",
+            max_concurrent=1,
+        )
+        governor = ResourceGovernor()
+        governor.register_endpoint(config)
+        governor.set_health("generative", EndpointStatus.UNHEALTHY, error="crash")
+
+        # Create a mock LocalSynthesisService with the governor.
+        from unittest.mock import MagicMock
+
+        service = MagicMock()
+        service._resource_governor = governor
+        service.__class__._bounded_llm_call = (
+            __import__("research_store.report_service", fromlist=["LocalSynthesisService"])
+            .LocalSynthesisService._bounded_llm_call
+        )
+
+        with pytest.raises(EndpointUnavailableError):
+            service._bounded_llm_call(lambda: "should-not-run")
+
+    def test_token_cap_enforced_in_bounded_call(self):
+        """_bounded_llm_call enforces token cap via acquire_sync."""
+        config = EndpointConfig(
+            name="generative",
+            url="http://localhost:8002",
+            max_concurrent=1,
+            max_input_tokens=1000,
+        )
+        governor = ResourceGovernor()
+        governor.register_endpoint(config)
+        governor.set_health("generative", EndpointStatus.HEALTHY)
+
+        from unittest.mock import MagicMock
+
+        service = MagicMock()
+        service._resource_governor = governor
+        service.__class__._bounded_llm_call = (
+            __import__("research_store.report_service", fromlist=["LocalSynthesisService"])
+            .LocalSynthesisService._bounded_llm_call
+        )
+
+        with pytest.raises(
+            Exception, match="input tokens 2000 exceeds cap 1000"
+        ):  # ResourceLimitError
+            service._bounded_llm_call(lambda: "should-not-run", input_tokens=2000)
+
+    def test_batch_cap_enforced_in_bounded_call(self):
+        """_bounded_llm_call enforces batch cap via acquire_sync."""
+        config = EndpointConfig(
+            name="generative",
+            url="http://localhost:8002",
+            max_concurrent=1,
+            max_batch_size=1,
+        )
+        governor = ResourceGovernor()
+        governor.register_endpoint(config)
+        governor.set_health("generative", EndpointStatus.HEALTHY)
+
+        from unittest.mock import MagicMock
+
+        service = MagicMock()
+        service._resource_governor = governor
+        service.__class__._bounded_llm_call = (
+            __import__("research_store.report_service", fromlist=["LocalSynthesisService"])
+            .LocalSynthesisService._bounded_llm_call
+        )
+
+        with pytest.raises(Exception, match="batch size 5 exceeds cap 1"):
+            service._bounded_llm_call(lambda: "should-not-run", batch_size=5)
+
+    def test_no_governor_bypasses_enforcement(self):
+        """_bounded_llm_call proceeds without gating when governor is None."""
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "research_store.report_service.LocalSynthesisService._load_schemas"
+        ):
+            from research_store.report_service import LocalSynthesisService
+
+            service = LocalSynthesisService(
+                semantic_service=MagicMock(),
+                evidence_service=MagicMock(),
+                config=MagicMock(),
+                resource_governor=None,
+            )
+
+        result = service._bounded_llm_call(lambda: "success")
+        assert result == "success"
+
+    def test_resource_limit_error_propagates_to_caller(self):
+        """ResourceLimitError from acquire_sync propagates through _bounded_llm_call."""
+        from research_store.resource_governor import (
+            ResourceLimit,
+            ResourceLimitError,
+        )
+
+        config = EndpointConfig(
+            name="generative",
+            url="http://localhost:8002",
+            max_concurrent=1,
+            backpressure_threshold=2,
+        )
+        governor = ResourceGovernor()
+        governor.register_endpoint(config)
+        governor.set_health("generative", EndpointStatus.HEALTHY)
+
+        # Manually set queued_requests to trigger backpressure.
+        with governor._lock:
+            existing = governor._health_states["generative"]
+            governor._health_states["generative"] = EndpointHealth(
+                endpoint_name=existing.endpoint_name,
+                url=existing.url,
+                status=existing.status,
+                last_check_at=existing.last_check_at,
+                last_error=existing.last_error,
+                concurrent_requests=existing.concurrent_requests,
+                queued_requests=3,
+                total_checks=existing.total_checks,
+                total_failures=existing.total_failures,
+                degraded_since=existing.degraded_since,
+                restart_count=existing.restart_count,
+            )
+
+        from unittest.mock import MagicMock
+
+        service = MagicMock()
+        service._resource_governor = governor
+        service.__class__._bounded_llm_call = (
+            __import__("research_store.report_service", fromlist=["LocalSynthesisService"])
+            .LocalSynthesisService._bounded_llm_call
+        )
+
+        with pytest.raises(ResourceLimitError) as exc_info:
+            service._bounded_llm_call(lambda: "should-not-run")
+        assert exc_info.value.limit == ResourceLimit.CONCURRENCY

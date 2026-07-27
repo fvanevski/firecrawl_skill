@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from functools import partial
 from typing import Any
 
@@ -302,12 +301,11 @@ def build_resource_governor(
     )
 
     # Register generative endpoint.
-    generative_url = os.environ.get("GENERATIVE_URL", "")
-    if generative_url:
+    if config.generative_url:
         governor.register_endpoint(
             EndpointConfig(
                 name="generative",
-                url=generative_url,
+                url=config.generative_url,
                 max_concurrent=config.generative_max_concurrent,
                 max_input_tokens=config.generative_max_input_tokens,
                 max_batch_size=config.generative_max_batch_size,

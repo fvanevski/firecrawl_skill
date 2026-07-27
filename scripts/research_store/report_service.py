@@ -161,7 +161,13 @@ class LocalSynthesisService:
     # Resource governance (P7-06)
     # ------------------------------------------------------------------
 
-    def _bounded_llm_call(self, call_fn) -> Any:
+    def _bounded_llm_call(
+        self,
+        call_fn,
+        *,
+        input_tokens: int = 0,
+        batch_size: int = 1,
+    ) -> Any:
         """Execute an LLM call through the resource governor.
 
         Wraps ``call_fn`` with ``acquire_sync`` / ``release_sync`` so that
@@ -170,6 +176,10 @@ class LocalSynthesisService:
 
         Args:
             call_fn: A zero-arity callable that performs the LLM call.
+            input_tokens: Estimated input token count for the request.
+                Passed to the governor for token-cap enforcement.
+            batch_size: Number of items in the batch.
+                Passed to the governor for batch-cap enforcement.
 
         Returns:
             Whatever ``call_fn`` returns.
@@ -184,7 +194,9 @@ class LocalSynthesisService:
 
         governor = self._resource_governor
         try:
-            governor.acquire_sync("generative")
+            governor.acquire_sync(
+                "generative", input_tokens=input_tokens, batch_size=batch_size
+            )
             return call_fn()
         finally:
             governor.release_sync("generative")
@@ -852,7 +864,11 @@ class LocalSynthesisService:
                 semantic_context=context,
             )
 
-        result = self._bounded_llm_call(_call)
+        result = self._bounded_llm_call(
+            _call,
+            input_tokens=0,  # TODO: estimate from prompt length
+            batch_size=1,
+        )
 
         with uow_factory() as uow:
             record = uow.synthesis_stages.get_synthesis_stage(run_id, "outline")
@@ -1156,7 +1172,11 @@ class LocalSynthesisService:
                 semantic_context=context,
             )
 
-        result = self._bounded_llm_call(_call)
+        result = self._bounded_llm_call(
+            _call,
+            input_tokens=0,  # TODO: estimate from prompt length
+            batch_size=1,
+        )
 
         with uow_factory() as uow:
             record = uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
@@ -1323,7 +1343,11 @@ class LocalSynthesisService:
                 semantic_context=context,
             )
 
-        result = self._bounded_llm_call(_call)
+        result = self._bounded_llm_call(
+            _call,
+            input_tokens=0,  # TODO: estimate from prompt length
+            batch_size=1,
+        )
 
         with uow_factory() as uow:
             record = uow.synthesis_stages.get_synthesis_stage(run_id, "citation_pass")
