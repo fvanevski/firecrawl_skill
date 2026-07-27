@@ -54,6 +54,7 @@ from .terminal_decision import (
     TerminalDecisionConfig,
     TerminalDecisionOutcome,
     TerminalDecisionPolicy,
+    TerminalDecisionPolicyError,
 )
 from .terminal_decision_service import TerminalDecisionService
 
@@ -2269,6 +2270,18 @@ class ResearchOrchestrator:
 
         Returns the terminal outcome if a terminal decision is reached,
         or None if the run should continue.
+
+        Exception handling:
+
+        * ``TerminalDecisionPolicyError`` (policy evaluation failure) is
+          non-fatal — the orchestrator falls back to the budget check.
+        * ``TerminalDecisionError`` (persistence failure) is **blocking** —
+          it propagates to the orchestration caller and prevents the lifecycle
+          transition.
+
+        Context is only updated after persistence succeeds so that a failed
+        attempt does not leave a committed-looking terminal outcome in
+        reusable context.
         """
         try:
             policy = TerminalDecisionPolicy(self._terminal_config)
@@ -2297,32 +2310,32 @@ class ResearchOrchestrator:
                 unresolved_gap=context.get("_unresolved_gap", ""),
                 unsatisfiable_source=context.get("_unsatisfiable_source", False),
             )
-
-            # Store signals in context for observability
-            context["_terminal_signals"] = [
-                s.value for s in decision.no_progress_signals
-            ]
-            context["_terminal_outcome"] = decision.outcome.value
-            context["_terminal_reason"] = decision.unresolved_gap
-
-            # B5: Persist the terminal decision to the database
-            if self._terminal_decision_service is not None:
-                idempotency_key = (
-                    f"terminal:{run_id}:r{run_revision}:c{coverage_revision}"
-                )
-                self._terminal_decision_service.record(
-                    run_id=run_id,
-                    decision=decision,
-                    idempotency_key=idempotency_key,
-                )
-
-            return decision.outcome
-        except Exception as exc:  # noqa: BLE001
+        except TerminalDecisionPolicyError as exc:
+            # Policy evaluation errors are non-fatal — fall back to budget check.
             logger.warning(
-                "terminal decision evaluation failed, falling back to budget check: %s",
+                "terminal decision policy evaluation failed, falling back to "
+                "budget check: %s",
                 exc,
             )
             return None
+
+        # Persist the terminal decision to the database BEFORE updating context.
+        # This ensures that a failed persistence attempt does not leave a
+        # committed-looking terminal outcome in reusable context.
+        if self._terminal_decision_service is not None:
+            idempotency_key = f"terminal:{run_id}:r{run_revision}:c{coverage_revision}"
+            self._terminal_decision_service.record(
+                run_id=run_id,
+                decision=decision,
+                idempotency_key=idempotency_key,
+            )
+
+        # Only update context after persistence succeeds.
+        context["_terminal_signals"] = [s.value for s in decision.no_progress_signals]
+        context["_terminal_outcome"] = decision.outcome.value
+        context["_terminal_reason"] = decision.unresolved_gap
+
+        return decision.outcome
 
     def _failed_result(self, run_id: UUID, error: str) -> OrchestratorResult:
         """Create a failed orchestrator result."""
