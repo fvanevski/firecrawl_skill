@@ -23,7 +23,9 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-SCRIPT_DIR = os.environ.get("FIRECRAWL_SKILL_SCRIPT_DIR") or os.path.dirname(os.path.realpath(__file__))
+SCRIPT_DIR = os.environ.get("FIRECRAWL_SKILL_SCRIPT_DIR") or os.path.dirname(
+    os.path.realpath(__file__)
+)
 sys.path.insert(0, SCRIPT_DIR)
 import invocation_catalog as catalog
 import research_workflow as workflow
@@ -70,19 +72,67 @@ RESET = "\033[0m"
 # Legacy compatibility helpers (retained for tests and orchestrator compat)
 # ---------------------------------------------------------------------------
 
+
 def extract_keywords(topic: str) -> list[str]:
     """Extract search-relevant keywords from a topic string."""
     words = []
     for w in topic.lower().split():
         clean_w = "".join(c for c in w if c.isalnum() or c in "-_")
         if clean_w and clean_w not in {
-            "the", "a", "an", "is", "of", "on", "for", "with", "in", "to",
-            "how", "what", "why", "run", "setup", "get", "using", "by",
-            "from", "and", "or", "about", "at", "but", "if", "not", "out",
-            "up", "some", "any", "now", "focus", "vs", "versus", "difference",
-            "between", "compare", "comparing", "pipeline", "related", "ongoing",
-            "current", "package", "command", "aspect", "use", "where", "which",
-            "who", "whom", "this", "that", "these", "those",
+            "the",
+            "a",
+            "an",
+            "is",
+            "of",
+            "on",
+            "for",
+            "with",
+            "in",
+            "to",
+            "how",
+            "what",
+            "why",
+            "run",
+            "setup",
+            "get",
+            "using",
+            "by",
+            "from",
+            "and",
+            "or",
+            "about",
+            "at",
+            "but",
+            "if",
+            "not",
+            "out",
+            "up",
+            "some",
+            "any",
+            "now",
+            "focus",
+            "vs",
+            "versus",
+            "difference",
+            "between",
+            "compare",
+            "comparing",
+            "pipeline",
+            "related",
+            "ongoing",
+            "current",
+            "package",
+            "command",
+            "aspect",
+            "use",
+            "where",
+            "which",
+            "who",
+            "whom",
+            "this",
+            "that",
+            "these",
+            "those",
         }:
             words.append(clean_w)
     return words
@@ -92,7 +142,15 @@ def canonical_url(url: str) -> str:
     """Normalize a URL for deduplication."""
     try:
         parts = urlsplit(url)
-        return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query, ""))
+        return urlunsplit(
+            (
+                parts.scheme.lower(),
+                parts.netloc.lower(),
+                parts.path.rstrip("/"),
+                parts.query,
+                "",
+            )
+        )
     except Exception:  # noqa: BLE001
         return url
 
@@ -113,7 +171,9 @@ def select_candidates(
             key = canonical_url(candidate.get("url", ""))
             if not key:
                 continue
-            record = by_url.setdefault(key, dict(candidate, branches=[], facets=[], occurrences=[]))
+            record = by_url.setdefault(
+                key, dict(candidate, branches=[], facets=[], occurrences=[])
+            )
             branch = result["query_index"]
             rank = candidate.get("rank", 999)
             if branch not in record["branches"]:
@@ -133,7 +193,13 @@ def select_candidates(
         )
         record["best_rank"] = min(ranks)
 
-    candidates.sort(key=lambda item: (-item["selection_score"], item["best_rank"], item.get("url", "")))
+    candidates.sort(
+        key=lambda item: (
+            -item["selection_score"],
+            item["best_rank"],
+            item.get("url", ""),
+        )
+    )
     if total_scrapes == 0:
         return candidates, []
     domain_cap = per_domain_cap or max(2, (total_scrapes + 5) // 6)
@@ -163,6 +229,7 @@ def select_candidates(
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -176,7 +243,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Legacy / compatibility flags (no-op, retained for backward compatibility)
     parser.add_argument(
-        "-c", "--complexity",
+        "-c",
+        "--complexity",
         choices=["simple", "moderate", "complex", "auto"],
         default="auto",
         help=argparse.SUPPRESS,  # Hidden; no longer selects resources.
@@ -202,7 +270,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fallback-model", help=argparse.SUPPRESS)
     parser.add_argument(
         "--research-profile",
-        choices=["auto", "general", "breaking_news", "legislative_legal", "technical_docs"],
+        choices=[
+            "auto",
+            "general",
+            "breaking_news",
+            "legislative_legal",
+            "technical_docs",
+        ],
         default="auto",
         help=argparse.SUPPRESS,
     )
@@ -226,7 +300,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-searches", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--max-scrapes", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--max-iterations", type=int, help=argparse.SUPPRESS)
-    parser.add_argument("--max-successful-extractions", type=int, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--max-successful-extractions", type=int, help=argparse.SUPPRESS
+    )
     parser.add_argument("--results-per-query", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--total-scrapes", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--per-domain-cap", type=int, help=argparse.SUPPRESS)
@@ -257,7 +333,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--profile",
-        choices=["ecommerce", "forum", "news_article", "media_release", "academic_debate"],
+        choices=[
+            "ecommerce",
+            "forum",
+            "news_article",
+            "media_release",
+            "academic_debate",
+        ],
         help=argparse.SUPPRESS,
     )
     return parser
@@ -267,7 +349,10 @@ def build_parser() -> argparse.ArgumentParser:
 # Spec loading
 # ---------------------------------------------------------------------------
 
-def load_spec(args: argparse.Namespace, topic: str, research_env: dict[str, str]) -> tuple[ResearchSpec, str]:
+
+def load_spec(
+    args: argparse.Namespace, topic: str, research_env: dict[str, str]
+) -> tuple[ResearchSpec, str]:
     """Load a ResearchSpec from --research-spec or generate a conservative fallback."""
     if args.research_spec:
         spec = load_model(
@@ -288,6 +373,7 @@ def load_spec(args: argparse.Namespace, topic: str, research_env: dict[str, str]
 # Search-plan generation
 # ---------------------------------------------------------------------------
 
+
 def generate_search_plan(
     topic: str,
     llm_provider: str = "local",
@@ -304,24 +390,31 @@ def generate_search_plan(
     brief_provenance = {"status": "not_run", "provider": "deterministic"}
 
     search_plan, planner_provenance = workflow.plan_queries(
-        topic, research_brief, 3, llm_provider, llm_model,
-        commercial_fallback, fallback_model,
+        topic,
+        research_brief,
+        3,
+        llm_provider,
+        llm_model,
+        commercial_fallback,
+        fallback_model,
     )
 
     if search_plan:
         return search_plan, planner_provenance, brief_provenance
 
     # Degraded: single exact-objective query.
-    search_plan = [{
-        "query": topic,
-        "facet": "degraded_exact_objective",
-        "subquestion": topic,
-        "intended_source_class": "unspecified",
-        "expected_organizations": [],
-        "freshness_requirement": research_brief.get("time_window", "as stated"),
-        "domain_neutral": True,
-        "expected_contribution": "direct results for the exact objective",
-    }]
+    search_plan = [
+        {
+            "query": topic,
+            "facet": "degraded_exact_objective",
+            "subquestion": topic,
+            "intended_source_class": "unspecified",
+            "expected_organizations": [],
+            "freshness_requirement": research_brief.get("time_window", "as stated"),
+            "domain_neutral": True,
+            "expected_contribution": "direct results for the exact objective",
+        }
+    ]
     planner_provenance = {
         **planner_provenance,
         "status": "degraded",
@@ -333,6 +426,7 @@ def generate_search_plan(
 # ---------------------------------------------------------------------------
 # Research-run creation (when --research-run-id is not provided)
 # ---------------------------------------------------------------------------
+
 
 def ensure_research_run(
     run_id: str,
@@ -365,6 +459,7 @@ def ensure_research_run(
 # ---------------------------------------------------------------------------
 # Scratch-file compatibility output
 # ---------------------------------------------------------------------------
+
 
 def write_scratch_compat(
     invocation_id: str,
@@ -417,6 +512,7 @@ def write_scratch_compat(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -465,15 +561,106 @@ def main(argv=None) -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         parser.error(f"invalid ResearchSpec: {exc}")
 
-    # Generate search plan via LLM planning.
-    llm_provider = args.llm  # no-op, kept for compatibility
-    llm_model = args.model  # no-op, kept for compatibility
-    commercial_fallback = args.commercial_fallback  # no-op
-    fallback_model = args.fallback_model  # no-op
+    # ---------------------------------------------------------------------------
+    # DRY-RUN: check BEFORE any LLM calls or subprocess invocations.
+    # ---------------------------------------------------------------------------
+    if args.dry_run:
+        research_brief = workflow.conservative_brief(topic, "general")
+        search_plan = [
+            {
+                "query": topic,
+                "facet": "degraded_exact_objective",
+                "subquestion": topic,
+                "intended_source_class": "unspecified",
+                "expected_organizations": [],
+                "freshness_requirement": research_brief.get("time_window", "as stated"),
+                "domain_neutral": True,
+                "expected_contribution": "direct results for the exact objective",
+            }
+        ]
+        planner_provenance = {"status": "degraded", "fallback": "exact_objective_only"}
+        brief_provenance = {"status": "not_run", "provider": "deterministic"}
 
-    search_plan, planner_provenance, brief_provenance = generate_search_plan(
-        topic, llm_provider, llm_model, commercial_fallback, fallback_model,
-    )
+        try:
+            budget_snapshot = DEFAULT_POLICY.evaluate(
+                spec,
+                spec_revision=1,
+                run_revision=0,
+                user_limits={},
+            )
+            budget_dict = budget_snapshot.to_dict()
+        except Exception:  # noqa: BLE001
+            budget_dict = {
+                "policy_version": DEFAULT_POLICY.version,
+                "selected_tier": "standard",
+                "effective_caps": {
+                    "max_search_branches": 3,
+                    "results_per_branch": 25,
+                    "max_extraction_attempts": 12,
+                    "max_successful_extractions": 6,
+                    "max_adaptive_cycles": 10,
+                },
+            }
+
+        tmp_base = os.environ.get("TMPDIR") or tempfile.gettempdir()
+        invocation_dir = os.path.join(tmp_base, "firecrawl_scratch", invocation_id)
+        base_dir = os.path.join(invocation_dir, "smart")
+        master_meta_path = write_scratch_compat(
+            invocation_id,
+            base_dir,
+            spec,
+            budget_dict,
+            search_plan,
+            planner_provenance,
+            brief_provenance,
+        )
+        with open(master_meta_path) as fh:
+            meta = json.load(fh)
+        meta["topic"] = topic
+        meta["research_brief"] = brief_provenance.get("brief", {})
+        with open(master_meta_path, "w") as fh:
+            json.dump(meta, fh, indent=2)
+
+        print(
+            json.dumps(
+                {
+                    "topic": topic,
+                    "invocation_id": invocation_id,
+                    "research_spec": serialize_model(spec),
+                    "budget_snapshot": budget_dict,
+                    "planner": "orchestrator",
+                    "planner_provenance": planner_provenance,
+                    "research_brief": brief_provenance,
+                    "brief_provenance": brief_provenance,
+                    "strategy": {
+                        "acquisition_mode": "coverage_led_orchestrator",
+                    },
+                    "queries": search_plan,
+                },
+                indent=2,
+            )
+        )
+        catalog.begin(
+            invocation_id,
+            "smart_search",
+            {
+                "topic": topic,
+                "planner": "orchestrator",
+                "budget_policy_version": budget_dict.get("policy_version", ""),
+                "budget_snapshot": budget_dict,
+                "orchestrator": True,
+            },
+            None,
+        )
+        catalog.complete(invocation_id, "completed", master_meta_path)
+        return 0
+
+    # ---------------------------------------------------------------------------
+    # Normal execution path (LLM calls and subprocess invocations follow).
+    # ---------------------------------------------------------------------------
+
+    # Generate search plan via LLM planning.
+    search_plan, planner_provenance, brief_provenance = generate_search_plan(topic)
 
     # Budget evaluation is handled by the orchestrator internally.
     # We still evaluate it here for scratch-file compatibility output.
@@ -510,13 +697,18 @@ def main(argv=None) -> int:
         run_id = ""
 
     # Catalog begin.
-    catalog.begin(invocation_id, "smart_search", {
-        "topic": topic,
-        "planner": "orchestrator",
-        "budget_policy_version": budget_dict.get("policy_version", ""),
-        "budget_snapshot": budget_dict,
-        "orchestrator": True,
-    }, run_id or None)
+    catalog.begin(
+        invocation_id,
+        "smart_search",
+        {
+            "topic": topic,
+            "planner": "orchestrator",
+            "budget_policy_version": budget_dict.get("policy_version", ""),
+            "budget_snapshot": budget_dict,
+            "orchestrator": True,
+        },
+        run_id or None,
+    )
 
     # Print header.
     print(f"{CYAN}=== Smart Search Orchestrator ==={RESET}")
@@ -524,50 +716,19 @@ def main(argv=None) -> int:
     print(f"{BOLD}Invocation:{RESET}  {invocation_id}")
     if run_id:
         print(f"{BOLD}Run ID:{RESET}      {run_id}")
-    print(f"{BOLD}Budget:{RESET}      {budget_dict.get('policy_version', 'unknown')} / {budget_dict.get('selected_tier', 'unknown')} ({spec_provenance})")
+    print(
+        f"{BOLD}Budget:{RESET}      {budget_dict.get('policy_version', 'unknown')} / {budget_dict.get('selected_tier', 'unknown')} ({spec_provenance})"
+    )
     print(f"{BOLD}Strategy:{RESET}    coverage-led orchestrator")
     print()
 
     # Print search plan.
     print(f"{BOLD}Generated Search Plan:{RESET}")
     for idx, entry in enumerate(search_plan, 1):
-        print(f"  {idx}. {CYAN}{entry.get('query', '')}{RESET} [{entry.get('facet', '')}]")
-    print()
-
-    # Dry-run: write scratch files and exit.
-    if args.dry_run:
-        tmp_base = os.environ.get("TMPDIR") or tempfile.gettempdir()
-        invocation_dir = os.path.join(tmp_base, "firecrawl_scratch", invocation_id)
-        base_dir = os.path.join(invocation_dir, "smart")
-        master_meta_path = write_scratch_compat(
-            invocation_id, base_dir, spec, budget_dict,
-            search_plan, planner_provenance, brief_provenance,
+        print(
+            f"  {idx}. {CYAN}{entry.get('query', '')}{RESET} [{entry.get('facet', '')}]"
         )
-        # Update master meta with topic and brief.
-        with open(master_meta_path) as fh:
-            meta = json.load(fh)
-        meta["topic"] = topic
-        meta["research_brief"] = brief_provenance.get("brief", {})
-        with open(master_meta_path, "w") as fh:
-            json.dump(meta, fh, indent=2)
-
-        print(json.dumps({
-            "topic": topic,
-            "invocation_id": invocation_id,
-            "run_id": run_id,
-            "research_spec": serialize_model(spec),
-            "budget_snapshot": budget_dict,
-            "planner": "orchestrator",
-            "planner_provenance": planner_provenance,
-            "research_brief": brief_provenance,
-            "brief_provenance": brief_provenance,
-            "strategy": {
-                "acquisition_mode": "coverage_led_orchestrator",
-            },
-            "queries": search_plan,
-        }, indent=2))
-        catalog.complete(invocation_id, "completed", master_meta_path)
-        return 0
+    print()
 
     # --- Orchestrator execution (default and only path) ----------------
     if not run_id:
@@ -576,8 +737,13 @@ def main(argv=None) -> int:
         invocation_dir = os.path.join(tmp_base, "firecrawl_scratch", invocation_id)
         base_dir = os.path.join(invocation_dir, "smart")
         master_meta_path = write_scratch_compat(
-            invocation_id, base_dir, spec, budget_dict,
-            search_plan, planner_provenance, brief_provenance,
+            invocation_id,
+            base_dir,
+            spec,
+            budget_dict,
+            search_plan,
+            planner_provenance,
+            brief_provenance,
         )
         with open(master_meta_path) as fh:
             meta = json.load(fh)
@@ -586,8 +752,10 @@ def main(argv=None) -> int:
         with open(master_meta_path, "w") as fh:
             json.dump(meta, fh, indent=2)
 
-        print(f"{YELLOW}WARNING: orchestrator unavailable (no research run); scratch-only output.{RESET}")
-        print(f"✔ Master index generated at: {GREEN}{os.path.join(base_dir, '_index.md')}{RESET}")
+        print(
+            f"{YELLOW}WARNING: orchestrator unavailable (no research run); scratch-only output.{RESET}"
+        )
+        print(f"✔ Scratch-compatible metadata generated at: {GREEN}{base_dir}{RESET}")
         print(f"✔ Unified JSON meta generated at: {GREEN}{master_meta_path}{RESET}")
         catalog.complete(invocation_id, "completed", master_meta_path)
         return 0
@@ -601,7 +769,9 @@ def main(argv=None) -> int:
 
         orchestrator_config = OrchestratorConfig(
             execution_mode="autonomous_local",
-            budget_policy_version=budget_dict.get("policy_version", DEFAULT_POLICY.version),
+            budget_policy_version=budget_dict.get(
+                "policy_version", DEFAULT_POLICY.version
+            ),
             max_adaptive_cycles=(
                 args.orchestrator_max_cycles
                 if args.orchestrator_max_cycles is not None
