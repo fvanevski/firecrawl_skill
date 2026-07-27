@@ -21,19 +21,16 @@ SKILL_ROOT = SCRIPT_DIR.parent
 BENCHMARKS = {
     "simple": {
         "topic": "current Firecrawl CLI npm package and installation command",
-        "complexity": "simple",
         "facets": ["firecrawl", "npm", "install"],
         "min_domains": 2,
     },
     "academic": {
         "topic": "methodological naturalism cosmology burden of proof evidence objections",
-        "complexity": "moderate",
         "facets": ["naturalism", "cosmology", "burden", "evidence", "objection"],
         "min_domains": 3,
     },
     "termux": {
         "topic": "Android Termux Vulkan Turnip Mesa Zink acceleration compatibility and failure modes",
-        "complexity": "complex",
         "facets": ["termux", "vulkan", "turnip", "mesa", "zink", "failure"],
         "min_domains": 4,
     },
@@ -214,35 +211,24 @@ class Campaign:
             return 2
 
         self.run(
-            "smart_dry_run_heuristic",
+            "smart_dry_run",
             [
                 str(SCRIPT_DIR / "fsearch_smart"),
                 BENCHMARKS["academic"]["topic"],
-                "--complexity",
-                "moderate",
-                "--planner",
-                "heuristic",
                 "--dry-run",
             ],
             timeout=60,
         )
-        if self.args.planner in ("local", "both"):
-            self.run(
-                "smart_dry_run_local",
-                [
-                    str(SCRIPT_DIR / "fsearch_smart"),
-                    BENCHMARKS["academic"]["topic"],
-                    "--complexity",
-                    "moderate",
-                    "--planner",
-                    "auto",
-                    "--llm",
-                    "local",
-                    "--dry-run",
-                ],
-                timeout=180,
-                required=False,
-            )
+        self.run(
+            "smart_dry_run_local",
+            [
+                str(SCRIPT_DIR / "fsearch_smart"),
+                BENCHMARKS["academic"]["topic"],
+                "--dry-run",
+            ],
+            timeout=180,
+            required=False,
+        )
 
         if self.args.profile != "focused":
             self.run(
@@ -337,21 +323,11 @@ class Campaign:
             selected = ["simple", "academic", "termux"]
         for key in selected:
             benchmark = BENCHMARKS[key]
-            planner = (
-                "heuristic"
-                if self.args.profile == "termux"
-                else ("auto" if self.args.planner in ("local", "both") else "heuristic")
-            )
             self.run(
-                f"smart_{key}_{planner}",
+                f"smart_{key}",
                 [
                     str(SCRIPT_DIR / "fsearch_smart"),
                     benchmark["topic"],
-                    "--complexity",
-                    benchmark["complexity"],
-                    "--planner",
-                    planner,
-                    *(["--llm", "local"] if planner == "auto" else []),
                 ],
                 timeout=1800,
             )
@@ -465,7 +441,6 @@ class Campaign:
             "run_id": self.run_id,
             "api_url": self.args.api_url,
             "profile": self.args.profile,
-            "planner": self.args.planner,
             "skill_root": str(SKILL_ROOT),
             "python": sys.version.split()[0],
             "platform": sys.platform,
@@ -530,9 +505,6 @@ def parse_args():
     parser.add_argument("--max-operations", type=int, default=125)
     parser.add_argument("--artifact-root")
     parser.add_argument("--run-id")
-    parser.add_argument(
-        "--planner", choices=["heuristic", "local", "both"], default="both"
-    )
     parser.add_argument(
         "--profile", choices=["full", "focused", "termux"], default="full"
     )
