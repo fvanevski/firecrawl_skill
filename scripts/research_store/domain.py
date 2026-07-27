@@ -1263,7 +1263,7 @@ class DerivationComparisonReport:
 # ---------------------------------------------------------------------------
 
 _SYNTHESIS_STAGE_NAMES: frozenset[str] = frozenset(
-    {"outline", "binding", "draft", "citation_pass"}
+    {"outline", "binding", "draft", "citation_pass", "validation"}
 )
 
 _SYNTHESIS_STAGE_STATUSES: frozenset[str] = frozenset(

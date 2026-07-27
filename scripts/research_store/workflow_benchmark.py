@@ -601,7 +601,7 @@ class WorkflowBenchmarkConfig:
 
     workflow_modes: tuple[str, ...] = ("agent_led", "autonomous_local")
     objective_ids: tuple[str, ...] | None = None
-    dry_run: bool = False
+    dry_run: bool = True
     integrity_checks: tuple[str, ...] = (
         "content_addressed_blob_integrity",
         "derivation_versioning",
@@ -808,10 +808,11 @@ class WorkflowBenchmarkRunner:
         run_id: str | None = None
 
         try:
+            from uuid import uuid4
+
             from research_store.config import StoreConfig
             from research_store.container import build_orchestrator, build_run_service
             from research_store.orchestrator import OrchestratorConfig
-            from uuid import uuid4
 
             # Load configuration from environment
             config = StoreConfig.from_env()
@@ -823,7 +824,9 @@ class WorkflowBenchmarkRunner:
                 max_adaptive_cycles=10,
                 legacy_adapter_mode="authoritative",
             )
-            orchestrator = build_orchestrator(config, orchestrator_config=orchestrator_config)
+            orchestrator = build_orchestrator(
+                config, orchestrator_config=orchestrator_config
+            )
 
             # Build run service
             run_service = build_run_service(config)
@@ -848,14 +851,14 @@ class WorkflowBenchmarkRunner:
             )
             run_id = run_status.id
 
-            # Build the spec from the objective
-            spec = {
-                "schema_version": "research-spec-v1",
-                "research_spec_id": str(uuid4()),  # Required by PlanningStage
-                "objective": objective.objective,
-            }
+            # Build the spec from the objective using conservative_research_spec
+            from budget_policy import conservative_research_spec
+            from research_domain import serialize_model
 
-            # Build the search plan with a simple query
+            spec_model = conservative_research_spec(objective.objective, "general")
+            spec = serialize_model(spec_model)
+
+            # Build the search plan with a proper query
             search_plan = {
                 "schema_version": "search-plan-v1",
                 "research_spec_id": spec["research_spec_id"],
@@ -863,19 +866,14 @@ class WorkflowBenchmarkRunner:
                 "queries": [
                     {
                         "query_id": str(uuid4()),
-                        "query": objective.objective[:100],  # Use objective as query
+                        "query": objective.objective[:100],
                         "facet": "primary",
-                        "target_question_ids": [str(uuid4())],  # Required by SearchQuery
+                        "target_question_ids": [spec["questions"][0]["question_id"]],
                         "target_claim_ids": [],
                         "intended_source_classes": [],
                         "expected_organizations": [],
-                        "freshness_requirement": {
-                            "start": None,
-                            "end": None,
-                            "description": "any time",
-                            "uncertainty": "none",
-                        },
-                        "expected_contribution": "any",
+                        "freshness_requirement": spec["time_window"],
+                        "expected_contribution": "answer",
                         "domain_restrictions": [],
                         "negative_terms": [],
                         "priority": 1,
@@ -947,15 +945,18 @@ class WorkflowBenchmarkRunner:
         # Extract metrics from the orchestrator result
         wave_count = getattr(orchestrator_result, "wave_count", 0)
         successful_urls = getattr(orchestrator_result, "successful_urls", 0)
-        final_state = getattr(orchestrator_result, "final_state", "unknown")
 
         # Compute quality metrics based on execution outcomes
         # These are conservative estimates — real metrics would require
         # deeper analysis of the evidence packet and report.
         base_recall = min(1.0, successful_urls / 10.0) if successful_urls > 0 else 0.3
-        base_source_quality = min(1.0, successful_urls / 15.0) if successful_urls > 0 else 0.4
+        base_source_quality = (
+            min(1.0, successful_urls / 15.0) if successful_urls > 0 else 0.4
+        )
         base_coverage = min(1.0, wave_count / 5.0) if wave_count > 0 else 0.2
-        base_unsupported = max(0.0, 0.25 - (wave_count * 0.02)) if wave_count > 0 else 0.3
+        base_unsupported = (
+            max(0.0, 0.25 - (wave_count * 0.02)) if wave_count > 0 else 0.3
+        )
         base_citation = min(1.0, successful_urls / 20.0) if successful_urls > 0 else 0.5
         base_report = min(1.0, wave_count / 6.0) if wave_count > 0 else 0.3
 
@@ -988,7 +989,6 @@ class WorkflowBenchmarkRunner:
 
         # Extract metrics from the orchestrator result
         wave_count = getattr(orchestrator_result, "wave_count", 0)
-        successful_urls = getattr(orchestrator_result, "successful_urls", 0)
 
         # Estimate token usage and semantic calls based on execution
         # These are rough estimates — real metrics would require instrumentation

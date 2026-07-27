@@ -3688,7 +3688,7 @@ def main(argv=None):
 
             loader = load_benchmark_dataset(dataset_path)
             modes = tuple(args.benchmark_modes) if args.benchmark_modes else None
-            blob_root = args.benchmark_blob_root or config.BLOB_ROOT
+            blob_root = args.benchmark_blob_root or str(config.blob_root)
             config = WorkflowBenchmarkConfig(
                 workflow_modes=modes or loader.dataset.workflow_modes,
                 dry_run=not args.benchmark_no_dry_run,
