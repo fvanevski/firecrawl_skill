@@ -8,8 +8,8 @@
 #   The monolithic legacy loop has been retired. The coverage-led
 #   ResearchOrchestrator is now the default and only execution path.
 #   Legacy flags (--planner, --llm, --complexity, --research-profile,
-#   --commercial-fallback, --fallback-model, --no-llm-triage) are
-#   accepted for CLI compatibility but have no effect.
+#   --commercial-fallback, --fallback-model, --no-llm-triage, --orchestrator)
+#   are accepted for CLI compatibility but have no effect.
 #
 
 from __future__ import annotations
@@ -163,6 +163,9 @@ def select_candidates(
     """Select a diverse global scrape set from already-acquired branch ledgers.
 
     Retained for test compatibility and orchestrator fallback paths.
+
+    Deprecated: This function is a legacy compatibility helper. New code should
+    not import it; it may be removed in a future release.
     """
     by_url: dict[str, dict] = {}
     for result in master_results:
@@ -380,11 +383,16 @@ def generate_search_plan(
     llm_model: str | None = None,
     commercial_fallback: str | None = None,
     fallback_model: str | None = None,
+    max_queries: int = 3,
 ) -> tuple[list[dict[str, str]], dict[str, str], dict[str, str]]:
     """Generate a structured search plan via LLM planning.
 
     Returns (search_plan, planner_provenance, brief_provenance).
     Falls back to a single conservative query when LLM planning is unavailable.
+
+    Note: This is a scratch-compatibility helper. Budget enforcement is the
+    orchestrator's responsibility; max_queries here only affects the scratch
+    output and --dry-run plan preview.
     """
     research_brief = workflow.conservative_brief(topic, "general")
     brief_provenance = {"status": "not_run", "provider": "deterministic"}
@@ -392,7 +400,7 @@ def generate_search_plan(
     search_plan, planner_provenance = workflow.plan_queries(
         topic,
         research_brief,
-        3,
+        max_queries,
         llm_provider,
         llm_model,
         commercial_fallback,
@@ -630,7 +638,7 @@ def main(argv=None) -> int:
                     "budget_snapshot": budget_dict,
                     "planner": "orchestrator",
                     "planner_provenance": planner_provenance,
-                    "research_brief": brief_provenance,
+                    "research_brief": research_brief,
                     "brief_provenance": brief_provenance,
                     "strategy": {
                         "acquisition_mode": "coverage_led_orchestrator",
@@ -660,7 +668,10 @@ def main(argv=None) -> int:
     # ---------------------------------------------------------------------------
 
     # Generate search plan via LLM planning.
-    search_plan, planner_provenance, brief_provenance = generate_search_plan(topic)
+    search_plan, planner_provenance, brief_provenance = generate_search_plan(
+        topic,
+        max_queries=budget_dict.get("effective_caps", {}).get("max_search_branches", 3),
+    )
 
     # Budget evaluation is handled by the orchestrator internally.
     # We still evaluate it here for scratch-file compatibility output.
@@ -694,6 +705,10 @@ def main(argv=None) -> int:
         raise
     except Exception:  # noqa: BLE001
         # If frun start fails (no database), fall back to scratch-only mode.
+        print(
+            f"{YELLOW}WARNING: failed to create research run; falling back to scratch-only mode.{RESET}",
+            file=sys.stderr,
+        )
         run_id = ""
 
     # Catalog begin.
@@ -775,7 +790,9 @@ def main(argv=None) -> int:
             max_adaptive_cycles=(
                 args.orchestrator_max_cycles
                 if args.orchestrator_max_cycles is not None
-                else 10
+                else budget_dict.get("effective_caps", {}).get(
+                    "max_adaptive_cycles", 10
+                )
             ),
             legacy_adapter_mode=adapter_mode,
         )
