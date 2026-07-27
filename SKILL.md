@@ -153,6 +153,8 @@ Initialize with `research-db migrate`, then use `research-db ingest-ready` for t
 
 Read `references/research-store-architecture.md` for boundaries and consistency rules. Read `references/research-store-operations.md` before deploying the worker, changing an embedding definition, migrating, restoring, rebuilding, pruning, or running live fixtures. Read `references/workflow-state-schema.md` for the authoritative workflow tables and `references/budget-policy.md` for deterministic caps, rejection rules, persisted budget snapshots, and v7 repair.
 
+For operations, deployment, backup/restore, Qdrant rebuild, Valkey loss, endpoint restart, interrupted-run recovery, benchmarking, destructive commands, and the complete configuration variable reference, read `references/operations-runbook.md`. For migration procedures, forward-repair, and the full migration catalog, read `references/migration-guide.md`. For coding-agent guidance on architecture, execution modes, budget policy, state machine, retrieval, evidence, synthesis, cache, and resource governance, read `references/coding-agent-guide.md`.
+
 ## Scripts
 
 | Script                  | Purpose                                                                                                       | Output files                                                                                                         |
