@@ -196,6 +196,22 @@ class DeterministicIntegrityChecker:
     verifications (rehashing blobs, validating state machine transitions,
     checking evidence packet bindings).  When no blob store is available
     (e.g. in CI), the checker falls back to simulation.
+
+    Structural-invariant checks (always pass in simulation):
+
+    * ``derivation_versioning`` — code-level invariant
+    * ``lease_safety`` — code-level invariant
+    * ``cache_key_identity`` — code-level invariant
+    * ``idempotent_replay`` — code-level invariant
+    * ``content_addressed_blob_integrity`` — real when ``blob_root`` is
+      provided; simulation otherwise
+
+    Data-driven checks (perform real validation when injected data is
+    provided):
+
+    * ``evidence_packet_validation`` — validates claim/passage bindings
+    * ``citation_binding_integrity`` — validates citation references
+    * ``state_machine_transitions`` — validates run state transitions
     """
 
     CHECKS = (
@@ -631,6 +647,20 @@ class WorkflowBenchmarkRunner:
         integrity_checker: Deterministic integrity checker.
     """
 
+    # Placeholder simulation constants for quality and performance metrics.
+    #
+    # These values are UNVERIFIED placeholders — they do not represent
+    # measured workflow behavior.  Per PRD Section 21.8: "All quality
+    # targets remain UNVERIFIED until benchmark baselines are collected."
+    #
+    # TODO(P7-07): Replace with measured baselines before the release gate.
+    # When baselines are collected, update these dicts and remove the
+    # PLACEHOLDER annotations.  The test suite (TestSimulationPlaceholders)
+    # asserts that every quality/performance base value carries a
+    # PLACEHOLDER annotation so that stale constants cannot silently
+    # become unverified claims.
+    PLACEHOLDER = True
+
     def __init__(
         self,
         loader: BenchmarkDatasetLoader,
@@ -767,38 +797,47 @@ class WorkflowBenchmarkRunner:
 
         Produces deterministic results based on workflow mode. Agent-led
         and autonomous-local modes produce higher quality than legacy.
+
+        PLACEHOLDER: These base values are UNVERIFIED simulation constants.
+        They must be replaced with measured baselines before the release
+        gate (see PLACEHOLDER annotation on WorkflowBenchmarkRunner).
         """
         # Base quality depends on workflow mode
         if workflow_mode == "legacy":
-            base_recall = 0.45
-            base_source_quality = 0.55
-            base_coverage = 0.35
-            base_unsupported = 0.25
-            base_citation = 0.60
-            base_report = 0.50
+            base_recall = 0.45  # PLACEHOLDER: unverified
+            base_source_quality = 0.55  # PLACEHOLDER: unverified
+            base_coverage = 0.35  # PLACEHOLDER: unverified
+            base_unsupported = 0.25  # PLACEHOLDER: unverified
+            base_citation = 0.60  # PLACEHOLDER: unverified
+            base_report = 0.50  # PLACEHOLDER: unverified
         elif workflow_mode == "agent_led":
-            base_recall = 0.75
-            base_source_quality = 0.80
-            base_coverage = 0.70
-            base_unsupported = 0.08
-            base_citation = 0.88
-            base_report = 0.78
+            base_recall = 0.75  # PLACEHOLDER: unverified
+            base_source_quality = 0.80  # PLACEHOLDER: unverified
+            base_coverage = 0.70  # PLACEHOLDER: unverified
+            base_unsupported = 0.08  # PLACEHOLDER: unverified
+            base_citation = 0.88  # PLACEHOLDER: unverified
+            base_report = 0.78  # PLACEHOLDER: unverified
         elif workflow_mode == "autonomous_local":
-            base_recall = 0.70
-            base_source_quality = 0.75
-            base_coverage = 0.65
-            base_unsupported = 0.10
-            base_citation = 0.85
-            base_report = 0.72
+            base_recall = 0.70  # PLACEHOLDER: unverified
+            base_source_quality = 0.75  # PLACEHOLDER: unverified
+            base_coverage = 0.65  # PLACEHOLDER: unverified
+            base_unsupported = 0.10  # PLACEHOLDER: unverified
+            base_citation = 0.85  # PLACEHOLDER: unverified
+            base_report = 0.72  # PLACEHOLDER: unverified
         else:  # deterministic_debug — no semantic judgment, unassessed coverage
-            base_recall = 0.30
-            base_source_quality = 0.40
-            base_coverage = 0.20
-            base_unsupported = 0.30
-            base_citation = 0.50
-            base_report = 0.40
+            base_recall = 0.30  # PLACEHOLDER: unverified
+            base_source_quality = 0.40  # PLACEHOLDER: unverified
+            base_coverage = 0.20  # PLACEHOLDER: unverified
+            base_unsupported = 0.30  # PLACEHOLDER: unverified
+            base_citation = 0.50  # PLACEHOLDER: unverified
+            base_report = 0.40  # PLACEHOLDER: unverified
 
-        # Objective-specific adjustments (deterministic hash-based)
+        # Objective-specific adjustments (deterministic hash-based).
+        # The adjustment range is [0.0, 0.099] — a small delta that ensures
+        # the same objective always produces the same result while allowing
+        # different objectives to vary slightly.  This range is narrow by
+        # design: the base values carry the meaningful signal, and the
+        # adjustment prevents identical results across all objectives.
         obj_hash = int(hashlib.md5(objective.id.encode()).hexdigest(), 16)
         adjustment = (obj_hash % 100) / 1000.0  # 0.0–0.099
 
@@ -822,41 +861,48 @@ class WorkflowBenchmarkRunner:
         Produces deterministic results based on workflow mode. Legacy
         is faster but less efficient. Agent-led and autonomous-local
         use more semantic calls.
-        """
-        if workflow_mode == "legacy":
-            base_latency = 5000.0
-            base_tokens = 5000
-            base_semantic = 2
-            base_cache = 0.1
-            base_throughput = 100.0
-            base_gpu = 0.0
-            base_cpu = 30.0
-        elif workflow_mode == "agent_led":
-            base_latency = 15000.0
-            base_tokens = 15000
-            base_semantic = 8
-            base_cache = 0.3
-            base_throughput = 50.0
-            base_gpu = 4096.0
-            base_cpu = 60.0
-        elif workflow_mode == "autonomous_local":
-            base_latency = 20000.0
-            base_tokens = 20000
-            base_semantic = 12
-            base_cache = 0.25
-            base_throughput = 30.0
-            base_gpu = 8192.0
-            base_cpu = 70.0
-        else:  # deterministic_debug — no semantic calls, minimal resources
-            base_latency = 2000.0
-            base_tokens = 1000
-            base_semantic = 0
-            base_cache = 0.0
-            base_throughput = 200.0
-            base_gpu = 0.0
-            base_cpu = 15.0
 
-        # Objective-specific adjustments
+        PLACEHOLDER: These base values are UNVERIFIED simulation constants.
+        They must be replaced with measured baselines before the release
+        gate (see PLACEHOLDER annotation on WorkflowBenchmarkRunner).
+        """
+        # Base performance depends on workflow mode
+        if workflow_mode == "legacy":
+            base_latency = 5000.0  # PLACEHOLDER: unverified
+            base_tokens = 5000  # PLACEHOLDER: unverified
+            base_semantic = 2  # PLACEHOLDER: unverified
+            base_cache = 0.1  # PLACEHOLDER: unverified
+            base_throughput = 100.0  # PLACEHOLDER: unverified
+            base_gpu = 0.0  # PLACEHOLDER: unverified
+            base_cpu = 30.0  # PLACEHOLDER: unverified
+        elif workflow_mode == "agent_led":
+            base_latency = 15000.0  # PLACEHOLDER: unverified
+            base_tokens = 15000  # PLACEHOLDER: unverified
+            base_semantic = 8  # PLACEHOLDER: unverified
+            base_cache = 0.3  # PLACEHOLDER: unverified
+            base_throughput = 50.0  # PLACEHOLDER: unverified
+            base_gpu = 4096.0  # PLACEHOLDER: unverified
+            base_cpu = 60.0  # PLACEHOLDER: unverified
+        elif workflow_mode == "autonomous_local":
+            base_latency = 20000.0  # PLACEHOLDER: unverified
+            base_tokens = 20000  # PLACEHOLDER: unverified
+            base_semantic = 12  # PLACEHOLDER: unverified
+            base_cache = 0.25  # PLACEHOLDER: unverified
+            base_throughput = 30.0  # PLACEHOLDER: unverified
+            base_gpu = 8192.0  # PLACEHOLDER: unverified
+            base_cpu = 70.0  # PLACEHOLDER: unverified
+        else:  # deterministic_debug — no semantic calls, minimal resources
+            base_latency = 2000.0  # PLACEHOLDER: unverified
+            base_tokens = 1000  # PLACEHOLDER: unverified
+            base_semantic = 0  # PLACEHOLDER: unverified
+            base_cache = 0.0  # PLACEHOLDER: unverified
+            base_throughput = 200.0  # PLACEHOLDER: unverified
+            base_gpu = 0.0  # PLACEHOLDER: unverified
+            base_cpu = 15.0  # PLACEHOLDER: unverified
+
+        # Objective-specific adjustments (deterministic hash-based).
+        # Adjustment range is [0.0, 0.49] — larger than quality because
+        # performance metrics (latency, tokens) have wider variance.
         obj_hash = int(hashlib.md5(objective.id.encode()).hexdigest(), 16)
         adjustment = (obj_hash % 50) / 100.0
 
@@ -876,13 +922,22 @@ class WorkflowBenchmarkRunner:
         results: list[WorkflowRunResult],
         integrity_checks: tuple[DeterministicIntegrityCheck, ...],
     ) -> WorkflowComparison:
-        """Build a workflow comparison from results."""
+        """Build a workflow comparison from results.
+
+        Baseline: ``legacy`` is the reference mode.  When legacy is absent
+        from the results, ``quality_vs_baseline`` and ``performance_vs_baseline``
+        default to ``1.0`` for all modes — this means "no baseline available"
+        rather than "equal to baseline".  Consumers should check whether
+        ``"legacy"`` is present in the results to determine if the ratios are
+        meaningful.
+        """
         # Group results by workflow mode
         mode_results: dict[str, list[WorkflowRunResult]] = {}
         for r in results:
             mode_results.setdefault(r.workflow_mode, []).append(r)
 
-        # Compute quality vs baseline (legacy is baseline)
+        # Compute quality vs baseline (legacy is baseline).
+        # When legacy is absent, defaults to 1.0 (no baseline available).
         baseline_quality = self._avg_quality(mode_results.get("legacy", []))
         quality_vs_baseline: dict[str, float] = {}
         for mode, qual_results in mode_results.items():
@@ -896,7 +951,8 @@ class WorkflowBenchmarkRunner:
             else:
                 quality_vs_baseline[mode] = 1.0
 
-        # Compute performance vs baseline
+        # Compute performance vs baseline.
+        # When legacy is absent, defaults to 1.0 (no baseline available).
         baseline_perf = self._avg_performance(mode_results.get("legacy", []))
         performance_vs_baseline: dict[str, float] = {}
         for mode, perf_results in mode_results.items():

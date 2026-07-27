@@ -1686,3 +1686,75 @@ class TestBenchmarkCLI:
         report_text = "\n".join(lines)
         assert "agent_led" in report_text
         assert "RELEASE BENCHMARK REPORT" in report_text
+
+
+# ---------------------------------------------------------------------------
+# Placeholder annotation tests
+# ---------------------------------------------------------------------------
+
+
+class TestSimulationPlaceholders:
+    """Verify that simulation constants are explicitly documented as placeholders.
+
+    Per PRD Section 21.8: "All quality targets remain UNVERIFIED until
+    benchmark baselines are collected."  These tests ensure that every
+    quality/performance base value carries a PLACEHOLDER annotation so
+    that stale constants cannot silently become unverified claims.
+    """
+
+    def test_runner_has_placeholder_annotation(self):
+        """WorkflowBenchmarkRunner carries a PLACEHOLDER = True annotation."""
+        from research_store.workflow_benchmark import WorkflowBenchmarkRunner
+
+        assert hasattr(WorkflowBenchmarkRunner, "PLACEHOLDER")
+        assert WorkflowBenchmarkRunner.PLACEHOLDER is True
+
+    def test_quality_simulation_docstring_mentions_placeholder(self):
+        """_simulate_quality docstring explicitly labels values as PLACEHOLDER."""
+        from research_store.workflow_benchmark import WorkflowBenchmarkRunner
+
+        doc = WorkflowBenchmarkRunner._simulate_quality.__doc__
+        assert doc is not None
+        assert "PLACEHOLDER" in doc
+        assert "UNVERIFIED" in doc
+
+    def test_performance_simulation_docstring_mentions_placeholder(self):
+        """_simulate_performance docstring explicitly labels values as PLACEHOLDER."""
+        from research_store.workflow_benchmark import WorkflowBenchmarkRunner
+
+        doc = WorkflowBenchmarkRunner._simulate_performance.__doc__
+        assert doc is not None
+        assert "PLACEHOLDER" in doc
+        assert "UNVERIFIED" in doc
+
+    def test_quality_constants_have_placeholder_comments(self):
+        """Every quality base value carries a PLACEHOLDER comment."""
+        import inspect
+
+        from research_store.workflow_benchmark import WorkflowBenchmarkRunner
+
+        source = inspect.getsource(WorkflowBenchmarkRunner._simulate_quality)
+        # Each base_* assignment should have a PLACEHOLDER comment
+        import re
+
+        assignments = re.findall(r"base_\w+\s*=\s*[\d.]+", source)
+        placeholder_comments = re.findall(r"#\s*PLACEHOLDER", source)
+        assert len(placeholder_comments) >= len(assignments), (
+            f"Expected at least {len(assignments)} PLACEHOLDER comments "
+            f"for {len(assignments)} base assignments, got {len(placeholder_comments)}"
+        )
+
+    def test_performance_constants_have_placeholder_comments(self):
+        """Every performance base value carries a PLACEHOLDER comment."""
+        import inspect
+        import re
+
+        from research_store.workflow_benchmark import WorkflowBenchmarkRunner
+
+        source = inspect.getsource(WorkflowBenchmarkRunner._simulate_performance)
+        assignments = re.findall(r"base_\w+\s*=\s*[\d.]+", source)
+        placeholder_comments = re.findall(r"#\s*PLACEHOLDER", source)
+        assert len(placeholder_comments) >= len(assignments), (
+            f"Expected at least {len(assignments)} PLACEHOLDER comments "
+            f"for {len(assignments)} base assignments, got {len(placeholder_comments)}"
+        )

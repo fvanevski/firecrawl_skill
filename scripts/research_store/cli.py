@@ -154,7 +154,17 @@ def parser():
     bench_sub = bench.add_subparsers(dest="benchmark_subcommand", required=True)
 
     # benchmark run
-    bench_run = bench_sub.add_parser("run", help="Run benchmark against fixed dataset")
+    bench_run = bench_sub.add_parser(
+        "run",
+        help=(
+            "Run benchmark against fixed dataset. "
+            "Exit code: 0 = go or go_with_conditions (both are successes), "
+            "2 = no_go (failure). "
+            "(P7-07: exit code changed from 0=go/1=go_with_conditions/2=no_go "
+            "to 0=go_or_go_with_conditions/2=no_go; parse the JSON 'outcome' "
+            "field to distinguish between go and go_with_conditions.)"
+        ),
+    )
     bench_run.add_argument(
         "--dataset",
         dest="benchmark_dataset",

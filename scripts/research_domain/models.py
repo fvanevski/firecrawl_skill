@@ -1634,7 +1634,12 @@ class PerformanceMeasurement:
         total_tokens: Total tokens consumed.
         semantic_calls: Number of semantic (LLM) calls made.
         cache_hit_rate: Fraction of cache hits (0.0–1.0).
-        cache_miss_rate: Fraction of cache misses (1.0 - cache_hit_rate).
+        cache_miss_rate: Fraction of cache misses.  The dataclass accepts
+            ``None`` as the default and auto-computes
+            ``cache_miss_rate = 1.0 - cache_hit_rate`` in ``__post_init__``.
+            Callers only need to set ``cache_hit_rate`` — the miss rate is
+            derived deterministically.  After construction the value is
+            always a number (never ``None``).
         embedding_throughput: Embeddings per second.
         gpu_memory_mb: Peak GPU memory in MB (0 if CPU-only).
         cpu_percent: Peak CPU usage (0.0–100.0).
