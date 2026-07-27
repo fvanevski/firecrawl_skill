@@ -671,6 +671,7 @@
     "total_tokens": 15000,
     "semantic_calls": 8,
     "cache_hit_rate": 0.3,
+    "cache_miss_rate": 0.7,
     "embedding_throughput": 50.0,
     "gpu_memory_mb": 4096.0,
     "cpu_percent": 60.0
@@ -699,6 +700,7 @@
       "total_tokens": 15000,
       "semantic_calls": 8,
       "cache_hit_rate": 0.3,
+      "cache_miss_rate": 0.7,
       "embedding_throughput": 50.0,
       "gpu_memory_mb": 4096.0,
       "cpu_percent": 60.0
@@ -736,6 +738,7 @@
           "total_tokens": 5000,
           "semantic_calls": 2,
           "cache_hit_rate": 0.1,
+          "cache_miss_rate": 0.9,
           "embedding_throughput": 100.0,
           "gpu_memory_mb": 0.0,
           "cpu_percent": 30.0
@@ -762,6 +765,7 @@
           "total_tokens": 15000,
           "semantic_calls": 8,
           "cache_hit_rate": 0.3,
+          "cache_miss_rate": 0.7,
           "embedding_throughput": 50.0,
           "gpu_memory_mb": 4096.0,
           "cpu_percent": 60.0
@@ -805,6 +809,7 @@
             "total_tokens": 5000,
             "semantic_calls": 2,
             "cache_hit_rate": 0.1,
+            "cache_miss_rate": 0.9,
             "embedding_throughput": 100.0,
             "gpu_memory_mb": 0.0,
             "cpu_percent": 30.0
@@ -831,6 +836,7 @@
             "total_tokens": 15000,
             "semantic_calls": 8,
             "cache_hit_rate": 0.3,
+            "cache_miss_rate": 0.7,
             "embedding_throughput": 50.0,
             "gpu_memory_mb": 4096.0,
             "cpu_percent": 60.0
@@ -856,6 +862,6 @@
       "CPU latency"
     ],
     "conditions": [],
-    "p0_regresions": []
+    "p0_regressions": []
   }
 }

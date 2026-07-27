@@ -22,7 +22,7 @@
       ],
       "known_relevant_sources": [
         "scripts/research_store/benchmark.py",
-        "scripts/research_domain/models.py (BenchmarkConfig, RecallMeasurement)",
+        "scripts/research_domain/models.py",
         "references/research-store-architecture.md",
         "scripts/test_retrieval_benchmark.py"
       ],
@@ -93,9 +93,9 @@
       ],
       "known_relevant_sources": [
         "scripts/research_store/evidence.py",
-        "scripts/research_store/packet_validator.py",
         "scripts/research_store/report_validator.py",
-        "scripts/research_store/claim_binding_service.py"
+        "scripts/research_store/claim_binding_service.py",
+        "scripts/research_store/evidence_grouping.py"
       ],
       "known_distractor_sources": [
         "scripts/research_store/derivation_service.py",
@@ -189,7 +189,12 @@
     "max_token_ratio_vs_baseline": 2.0,
     "no_p0_deterministic_integrity_regression": true
   },
-  "workflow_modes": ["legacy", "agent_led", "autonomous_local"],
+  "workflow_modes": [
+    "legacy",
+    "agent_led",
+    "autonomous_local",
+    "deterministic_debug"
+  ],
   "deterministic_integrity_checks": [
     "content_addressed_blob_integrity",
     "derivation_versioning",

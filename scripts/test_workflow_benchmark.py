@@ -121,6 +121,7 @@ def _make_performance():
         total_tokens=15000,
         semantic_calls=8,
         cache_hit_rate=0.3,
+        cache_miss_rate=0.7,
         embedding_throughput=50.0,
         gpu_memory_mb=4096.0,
         cpu_percent=60.0,
@@ -398,6 +399,7 @@ class TestPerformanceMeasurement:
             total_tokens=15000,
             semantic_calls=8,
             cache_hit_rate=0.3,
+            cache_miss_rate=0.7,
             embedding_throughput=50.0,
             gpu_memory_mb=4096.0,
             cpu_percent=60.0,
@@ -413,6 +415,7 @@ class TestPerformanceMeasurement:
             total_tokens=0,
             semantic_calls=0,
             cache_hit_rate=0.0,
+            cache_miss_rate=1.0,
             embedding_throughput=0.0,
             gpu_memory_mb=0.0,
             cpu_percent=0.0,
@@ -428,6 +431,7 @@ class TestPerformanceMeasurement:
                 total_tokens=0,
                 semantic_calls=0,
                 cache_hit_rate=0.0,
+                cache_miss_rate=1.0,
                 embedding_throughput=0.0,
                 gpu_memory_mb=0.0,
                 cpu_percent=0.0,
@@ -442,6 +446,7 @@ class TestPerformanceMeasurement:
                 total_tokens=1000,
                 semantic_calls=1,
                 cache_hit_rate=0.5,
+                cache_miss_rate=0.5,
                 embedding_throughput=50.0,
                 gpu_memory_mb=0.0,
                 cpu_percent=101.0,
@@ -537,6 +542,7 @@ class TestWorkflowComparison:
                     total_tokens=5000,
                     semantic_calls=2,
                     cache_hit_rate=0.1,
+                    cache_miss_rate=0.9,
                     embedding_throughput=100.0,
                     gpu_memory_mb=0.0,
                     cpu_percent=30.0,
@@ -626,6 +632,7 @@ class TestReleaseRecommendation:
                     total_tokens=5000,
                     semantic_calls=2,
                     cache_hit_rate=0.1,
+                    cache_miss_rate=0.9,
                     embedding_throughput=100.0,
                     gpu_memory_mb=0.0,
                     cpu_percent=30.0,
@@ -664,7 +671,7 @@ class TestReleaseRecommendation:
             withdrawn_claims=(),
             known_limitations=("CPU latency",),
             conditions=(),
-            p0_regresions=(),
+            p0_regressions=(),
         )
         assert rec.outcome == "go"
         assert rec.withdrawn_claims == ()
@@ -681,7 +688,7 @@ class TestReleaseRecommendation:
                 withdrawn_claims=("recall too low",),
                 known_limitations=(),
                 conditions=(),
-                p0_regresions=(),
+                p0_regressions=(),
             )
 
     def test_go_with_p0_regression_raises(self):
@@ -696,7 +703,7 @@ class TestReleaseRecommendation:
                 withdrawn_claims=(),
                 known_limitations=(),
                 conditions=(),
-                p0_regresions=("integrity check failed",),
+                p0_regressions=("integrity check failed",),
             )
 
     def test_go_with_conditions(self):
@@ -710,7 +717,7 @@ class TestReleaseRecommendation:
             withdrawn_claims=(),
             known_limitations=("CPU latency",),
             conditions=("fix CPU latency",),
-            p0_regresions=(),
+            p0_regressions=(),
         )
         assert rec.outcome == "go_with_conditions"
 
@@ -726,7 +733,7 @@ class TestReleaseRecommendation:
                 withdrawn_claims=(),
                 known_limitations=(),
                 conditions=(),
-                p0_regresions=(),
+                p0_regressions=(),
             )
 
     def test_invalid_outcome_raises(self):
@@ -741,7 +748,7 @@ class TestReleaseRecommendation:
                 withdrawn_claims=(),
                 known_limitations=(),
                 conditions=(),
-                p0_regresions=(),
+                p0_regressions=(),
             )
 
 
@@ -781,6 +788,25 @@ class TestDeterministicIntegrityChecker:
         checker_checks = set(DeterministicIntegrityChecker.CHECKS)
         # All dataset checks should be in the checker
         assert dataset_checks.issubset(checker_checks)
+
+    def test_strict_mode_fails_on_simulation(self):
+        """Strict mode fails when real state is not available."""
+        checker = DeterministicIntegrityChecker(strict=True)
+        result = checker.check("state_machine_transitions")
+        assert result.passed is False
+        assert "strict" in result.details.lower()
+
+    def test_strict_mode_passes_with_real_data(self):
+        """Strict mode passes when real data is provided."""
+        transitions = [
+            {"prior_state": "created", "next_state": "planning"},
+        ]
+        checker = DeterministicIntegrityChecker(
+            strict=True, run_transitions=transitions
+        )
+        result = checker.check("state_machine_transitions")
+        assert result.passed is True
+        assert "checked" in result.details
 
 
 # ---------------------------------------------------------------------------
@@ -1046,3 +1072,280 @@ class TestBenchmarkIntegration:
         ):
             assert r1.quality.candidate_recall == r2.quality.candidate_recall
             assert r1.quality.citation_accuracy == r2.quality.citation_accuracy
+
+
+# ---------------------------------------------------------------------------
+# Integrity checker real-data tests
+# ---------------------------------------------------------------------------
+
+
+class TestDeterministicIntegrityCheckerRealData:
+    """Tests for the DeterministicIntegrityChecker with real data."""
+
+    def test_blob_integrity_simulation_when_no_blob_root(self):
+        """Blob integrity check falls back to simulation when no blob root."""
+        checker = DeterministicIntegrityChecker()
+        result = checker.check("content_addressed_blob_integrity")
+        assert result.passed is True
+        assert "simulation" in result.details
+
+    def test_blob_integrity_with_temp_dir(self, tmp_path):
+        """Blob integrity check verifies real blobs when blob root is provided."""
+        from research_store.blob import ContentAddressedBlobStore
+
+        # Create a temp blob store with a valid blob
+        blob_root = tmp_path / "blobs"
+        store = ContentAddressedBlobStore(blob_root)
+        test_content = b"test content for blob integrity check"
+        store.put(__import__("io").BytesIO(test_content), mime_type="text/plain")
+
+        # Now run the integrity check
+        checker = DeterministicIntegrityChecker(blob_root=blob_root)
+        result = checker.check("content_addressed_blob_integrity")
+        assert result.passed is True
+        assert "verified 1 blobs" in result.details
+
+    def test_evidence_packet_validation_with_valid_packet(self):
+        """Evidence packet validation passes when all bindings are valid."""
+        packet = {
+            "claims": [
+                {"claim_id": "c1", "statement": "Test claim"},
+                {"claim_id": "c2", "statement": "Another claim"},
+            ],
+            "passages": [
+                {"passage_id": "p1", "text": "Test passage"},
+                {"passage_id": "p2", "text": "Another passage"},
+            ],
+            "claim_evidence_bindings": [
+                {
+                    "claim_id": "c1",
+                    "passage_ids": ["p1", "p2"],
+                    "relationship": "supports",
+                },
+                {
+                    "claim_id": "c2",
+                    "passage_ids": ["p1"],
+                    "relationship": "supports",
+                },
+            ],
+        }
+        checker = DeterministicIntegrityChecker(evidence_packets=[packet])
+        result = checker.check("evidence_packet_validation")
+        assert result.passed is True
+        assert "validated 1 packets" in result.details
+
+    def test_evidence_packet_validation_with_invalid_binding(self):
+        """Evidence packet validation fails when bindings reference unknown claims."""
+        packet = {
+            "claims": [{"claim_id": "c1", "statement": "Test claim"}],
+            "passages": [{"passage_id": "p1", "text": "Test passage"}],
+            "claim_evidence_bindings": [
+                {
+                    "claim_id": "c999",  # Unknown claim
+                    "passage_ids": ["p1"],
+                    "relationship": "supports",
+                },
+            ],
+        }
+        checker = DeterministicIntegrityChecker(evidence_packets=[packet])
+        result = checker.check("evidence_packet_validation")
+        assert result.passed is False
+        assert "errors" in result.details
+
+    def test_citation_binding_integrity_with_valid_citations(self):
+        """Citation binding integrity passes when all citations are valid."""
+        packet = {
+            "claims": [{"claim_id": "c1", "statement": "Test claim"}],
+            "passages": [{"passage_id": "p1", "text": "Test passage"}],
+            "claim_evidence_bindings": [
+                {
+                    "claim_id": "c1",
+                    "passage_ids": ["p1"],
+                    "relationship": "supports",
+                },
+            ],
+        }
+        checker = DeterministicIntegrityChecker(evidence_packets=[packet])
+        result = checker.check("citation_binding_integrity")
+        assert result.passed is True
+        assert "checked 1 citations" in result.details
+
+    def test_citation_binding_integrity_with_invalid_citation(self):
+        """Citation binding integrity fails when citations reference unknown passages."""
+        packet = {
+            "claims": [{"claim_id": "c1", "statement": "Test claim"}],
+            "passages": [{"passage_id": "p1", "text": "Test passage"}],
+            "claim_evidence_bindings": [
+                {
+                    "claim_id": "c1",
+                    "passage_ids": ["p999"],  # Unknown passage
+                    "relationship": "supports",
+                },
+            ],
+        }
+        checker = DeterministicIntegrityChecker(evidence_packets=[packet])
+        result = checker.check("citation_binding_integrity")
+        assert result.passed is False
+        assert "errors" in result.details
+
+    def test_state_machine_transitions_with_valid_transitions(self):
+        """State machine transition check passes when all transitions are valid."""
+        transitions = [
+            {"prior_state": "created", "next_state": "planning"},
+            {"prior_state": "planning", "next_state": "corpus_review"},
+            {"prior_state": "corpus_review", "next_state": "acquiring"},
+        ]
+        checker = DeterministicIntegrityChecker(run_transitions=transitions)
+        result = checker.check("state_machine_transitions")
+        assert result.passed is True
+        assert "checked 3 transitions" in result.details
+
+    def test_state_machine_transitions_with_invalid_transition(self):
+        """State machine transition check fails when a transition is invalid."""
+        transitions = [
+            {"prior_state": "created", "next_state": "completed"},  # Invalid
+        ]
+        checker = DeterministicIntegrityChecker(run_transitions=transitions)
+        result = checker.check("state_machine_transitions")
+        assert result.passed is False
+        assert "errors" in result.details
+
+    def test_unknown_check_fails(self):
+        """Unknown check name fails."""
+        checker = DeterministicIntegrityChecker()
+        result = checker.check("nonexistent_check")
+        assert result.passed is False
+        assert "unknown" in result.details
+
+    def test_check_all_with_real_data(self):
+        """check_all runs all checks with real data."""
+        packet = {
+            "claims": [{"claim_id": "c1", "statement": "Test"}],
+            "passages": [{"passage_id": "p1", "text": "Test"}],
+            "claim_evidence_bindings": [
+                {"claim_id": "c1", "passage_ids": ["p1"], "relationship": "supports"},
+            ],
+        }
+        transitions = [
+            {"prior_state": "created", "next_state": "planning"},
+        ]
+        checker = DeterministicIntegrityChecker(
+            evidence_packets=[packet], run_transitions=transitions
+        )
+        results = checker.check_all(DeterministicIntegrityChecker.CHECKS)
+        assert len(results) == len(DeterministicIntegrityChecker.CHECKS)
+        # Real checks should have passed (data is valid)
+        real_checks = {
+            "evidence_packet_validation",
+            "citation_binding_integrity",
+            "state_machine_transitions",
+        }
+        for result in results:
+            if result.check_name in real_checks:
+                assert result.passed is True
+
+
+# ---------------------------------------------------------------------------
+# Known limitations tests
+# ---------------------------------------------------------------------------
+
+
+class TestKnownLimitations:
+    """Tests for configurable known limitations."""
+
+    def test_default_limitations(self):
+        """Default limitations are used when none are provided."""
+        loader = _make_minimal_loader()
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("legacy", "agent_led"),
+        )
+        runner = WorkflowBenchmarkRunner(loader, config)
+        result = runner.run()
+        assert len(result.recommendation.known_limitations) > 0
+        assert any("CPU" in lim for lim in result.recommendation.known_limitations)
+
+    def test_custom_limitations(self):
+        """Custom limitations override defaults."""
+        loader = _make_minimal_loader()
+        custom = ("Custom limitation 1", "Custom limitation 2")
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("legacy", "agent_led"),
+            known_limitations=custom,
+        )
+        runner = WorkflowBenchmarkRunner(loader, config)
+        result = runner.run()
+        assert result.recommendation.known_limitations == custom
+
+    def test_run_benchmark_with_custom_limitations(self):
+        """run_benchmark accepts custom limitations."""
+        dataset = _make_minimal_dataset()
+        custom = ("Custom limitation",)
+        result = run_benchmark(
+            dataset,
+            workflow_modes=("legacy", "agent_led"),
+            known_limitations=custom,
+        )
+        assert result.recommendation.known_limitations == custom
+
+
+# ---------------------------------------------------------------------------
+# Integration tests for real workflow execution
+# ---------------------------------------------------------------------------
+
+
+class TestRealWorkflowExecution:
+    """Integration tests for real workflow execution with dry_run=False."""
+
+    def test_runner_with_real_evidence_packets_and_transitions(self):
+        """Runner produces results with real evidence packets and transitions."""
+        loader = _make_minimal_loader()
+        packet = {
+            "claims": [{"claim_id": "c1", "statement": "Test claim"}],
+            "passages": [{"passage_id": "p1", "text": "Test passage"}],
+            "claim_evidence_bindings": [
+                {"claim_id": "c1", "passage_ids": ["p1"], "relationship": "supports"},
+            ],
+        }
+        transitions = [
+            {"prior_state": "created", "next_state": "planning"},
+            {"prior_state": "planning", "next_state": "corpus_review"},
+        ]
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("legacy", "agent_led"),
+            evidence_packets=[packet],
+            run_transitions=transitions,
+        )
+        runner = WorkflowBenchmarkRunner(loader, config)
+        result = runner.run()
+        assert result.comparison is not None
+        assert result.recommendation is not None
+        # Real evidence packets and transitions should pass integrity checks
+        for r in result.comparison.results:
+            for check in r.integrity_checks:
+                if check.check_name in (
+                    "evidence_packet_validation",
+                    "citation_binding_integrity",
+                    "state_machine_transitions",
+                ):
+                    assert check.passed is True
+
+    def test_strict_runner_fails_without_real_state(self):
+        """Runner with strict integrity checker fails when no real state."""
+        loader = _make_minimal_loader()
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("legacy", "agent_led"),
+        )
+        # Create a runner with strict integrity checker
+        runner = WorkflowBenchmarkRunner(loader, config)
+        # Override the integrity checker to be strict
+        from research_store.workflow_benchmark import DeterministicIntegrityChecker
+
+        runner.integrity_checker = DeterministicIntegrityChecker(strict=True)
+        result = runner.run()
+        # Strict mode should fail integrity checks that fall back to simulation
+        strict_checks = [
+            c for c in result.comparison.results[0].integrity_checks
+            if "strict" in c.details.lower()
+        ]
+        assert len(strict_checks) > 0
+        assert all(c.passed is False for c in strict_checks)

@@ -31,6 +31,9 @@
         "cache_hit_rate": {
           "type": "number"
         },
+        "cache_miss_rate": {
+          "type": "number"
+        },
         "cpu_percent": {
           "type": "number"
         },
@@ -60,6 +63,7 @@
         "total_tokens",
         "semantic_calls",
         "cache_hit_rate",
+        "cache_miss_rate",
         "embedding_throughput",
         "gpu_memory_mb",
         "cpu_percent"
@@ -222,7 +226,7 @@
     "outcome": {
       "type": "string"
     },
-    "p0_regresions": {
+    "p0_regressions": {
       "items": {
         "type": "string"
       },
@@ -254,7 +258,7 @@
     "withdrawn_claims",
     "known_limitations",
     "conditions",
-    "p0_regresions"
+    "p0_regressions"
   ],
   "title": "ReleaseRecommendation",
   "type": "object"

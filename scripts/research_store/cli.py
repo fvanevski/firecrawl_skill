@@ -3704,6 +3704,7 @@ def main(argv=None):
                                 "total_tokens": r.performance.total_tokens,
                                 "semantic_calls": r.performance.semantic_calls,
                                 "cache_hit_rate": r.performance.cache_hit_rate,
+                                "cache_miss_rate": r.performance.cache_miss_rate,
                                 "embedding_throughput": r.performance.embedding_throughput,
                                 "gpu_memory_mb": r.performance.gpu_memory_mb,
                                 "cpu_percent": r.performance.cpu_percent,
@@ -3727,7 +3728,7 @@ def main(argv=None):
                     "withdrawn_claims": list(result.recommendation.withdrawn_claims),
                     "known_limitations": list(result.recommendation.known_limitations),
                     "conditions": list(result.recommendation.conditions),
-                    "p0_regresions": list(result.recommendation.p0_regresions),
+                    "p0_regressions": list(result.recommendation.p0_regressions),
                 },
             }
 
@@ -3748,12 +3749,21 @@ def main(argv=None):
             else:
                 print(dumps(output))
 
-            # Exit code: 0 = go, 1 = go_with_conditions, 2 = no_go
+            # Migration note (P7-07 / #67): Exit code changed from
+            #   0 = go, 1 = go_with_conditions, 2 = no_go
+            # to:
+            #   0 = go or go_with_conditions (both are successes),
+            #   2 = no_go (failure).
+            # Automation that previously checked for exit code 1 to
+            # distinguish "GO_WITH_CONDITIONS" from "GO" must now parse
+            # the JSON output's "outcome" field instead.
+            # Exit code: 0 = go or go_with_conditions (both are successes),
+            #           2 = no_go (failure).
+            # The JSON output includes the "outcome" field so automation can
+            # distinguish between "go" and "go_with_conditions" when needed.
             outcome = result.recommendation.outcome
-            if outcome == "go":
+            if outcome == "go" or outcome == "go_with_conditions":
                 return 0
-            elif outcome == "go_with_conditions":
-                return 1
             else:
                 return 2
 
@@ -3818,9 +3828,9 @@ def main(argv=None):
                 lines.append("Known limitations:")
                 for limit in rec["known_limitations"]:
                     lines.append(f"  • {limit}")
-            if rec.get("p0_regresions"):
+            if rec.get("p0_regressions"):
                 lines.append("P0 regressions:")
-                for reg in rec["p0_regresions"]:
+                for reg in rec["p0_regressions"]:
                     lines.append(f"  ! {reg}")
             lines.append("")
 

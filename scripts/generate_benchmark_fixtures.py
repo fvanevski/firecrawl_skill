@@ -88,6 +88,7 @@ VALID_FIXTURES = {
         "total_tokens": 15000,
         "semantic_calls": 8,
         "cache_hit_rate": 0.3,
+        "cache_miss_rate": 0.7,
         "embedding_throughput": 50.0,
         "gpu_memory_mb": 4096.0,
         "cpu_percent": 60.0,
@@ -116,6 +117,7 @@ VALID_FIXTURES = {
             "total_tokens": 15000,
             "semantic_calls": 8,
             "cache_hit_rate": 0.3,
+            "cache_miss_rate": 0.7,
             "embedding_throughput": 50.0,
             "gpu_memory_mb": 4096.0,
             "cpu_percent": 60.0,
@@ -153,6 +155,7 @@ VALID_FIXTURES = {
                     "total_tokens": 5000,
                     "semantic_calls": 2,
                     "cache_hit_rate": 0.1,
+                    "cache_miss_rate": 0.9,
                     "embedding_throughput": 100.0,
                     "gpu_memory_mb": 0.0,
                     "cpu_percent": 30.0,
@@ -179,6 +182,7 @@ VALID_FIXTURES = {
                     "total_tokens": 15000,
                     "semantic_calls": 8,
                     "cache_hit_rate": 0.3,
+                    "cache_miss_rate": 0.7,
                     "embedding_throughput": 50.0,
                     "gpu_memory_mb": 4096.0,
                     "cpu_percent": 60.0,
@@ -218,6 +222,7 @@ VALID_FIXTURES = {
                         "total_tokens": 5000,
                         "semantic_calls": 2,
                         "cache_hit_rate": 0.1,
+                        "cache_miss_rate": 0.9,
                         "embedding_throughput": 100.0,
                         "gpu_memory_mb": 0.0,
                         "cpu_percent": 30.0,
@@ -244,6 +249,7 @@ VALID_FIXTURES = {
                         "total_tokens": 15000,
                         "semantic_calls": 8,
                         "cache_hit_rate": 0.3,
+                        "cache_miss_rate": 0.7,
                         "embedding_throughput": 50.0,
                         "gpu_memory_mb": 4096.0,
                         "cpu_percent": 60.0,
@@ -261,13 +267,14 @@ VALID_FIXTURES = {
         "withdrawn_claims": [],
         "known_limitations": ["CPU latency"],
         "conditions": [],
-        "p0_regresions": [],
+        "p0_regressions": [],
     },
 }
 
-# Load existing valid.json and merge
+# Load existing valid.json and merge — preserve fixtures not in VALID_FIXTURES
 existing_valid = json.loads((fixtures_dir / "valid.json").read_text())
-existing_valid.update(VALID_FIXTURES)
+for key, value in VALID_FIXTURES.items():
+    existing_valid[key] = value
 (fixtures_dir / "valid.json").write_text(
     json.dumps(existing_valid, indent=2, default=str) + "\n"
 )
@@ -308,7 +315,8 @@ INVALID_FIXTURES = {
 }
 
 existing_invalid = json.loads((fixtures_dir / "invalid.json").read_text())
-existing_invalid.update(INVALID_FIXTURES)
+for key, value in INVALID_FIXTURES.items():
+    existing_invalid[key] = value
 (fixtures_dir / "invalid.json").write_text(
     json.dumps(existing_invalid, indent=2, default=str) + "\n"
 )

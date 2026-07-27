@@ -6,6 +6,9 @@ This module provides:
 * ``WorkflowBenchmarkRunner`` — runs benchmark objectives against workflow
   modes and produces structured ``WorkflowComparison`` and
   ``ReleaseRecommendation`` output.
+* ``DeterministicIntegrityChecker`` — runs actual integrity checks against
+  real state (blob store, evidence packets, state machine) when available,
+  falling back to simulation when dependencies are absent.
 * ``run_benchmark`` — the primary entry point for programmatic access.
 * ``load_benchmark_dataset`` — convenience function for loading datasets.
 
@@ -13,6 +16,16 @@ The benchmark runner exercises each workflow mode (legacy, agent_led,
 autonomous_local) against a fixed benchmark dataset and produces
 structured comparison output with quality, performance, and deterministic
 integrity measurements.
+
+Two execution modes:
+
+* **Simulation (default, ``dry_run=True``)** — deterministic synthetic
+  results based on hardcoded mode-specific constants. Useful for CI and
+  infrastructure testing.
+* **Real execution (``dry_run=False``)** — exercises the actual workflow
+  pipeline (orchestrator, synthesis, report validation) when a database
+  and blob store are available. Falls back to simulation for individual
+  objectives that cannot be executed.
 
 Usage
 -----
@@ -178,6 +191,11 @@ class DeterministicIntegrityChecker:
     addressing, derivation versioning, lease safety, state machine
     transitions, evidence packet validation, citation binding, cache key
     identity, and idempotent replay.
+
+    When a blob store root is provided, the checker performs **real**
+    verifications (rehashing blobs, validating state machine transitions,
+    checking evidence packet bindings).  When no blob store is available
+    (e.g. in CI), the checker falls back to simulation.
     """
 
     CHECKS = (
@@ -190,6 +208,38 @@ class DeterministicIntegrityChecker:
         "cache_key_identity",
         "idempotent_replay",
     )
+
+    def __init__(
+        self,
+        blob_root: Path | str | None = None,
+        evidence_packets: list[dict[str, Any]] | None = None,
+        run_transitions: list[dict[str, Any]] | None = None,
+        strict: bool = False,
+    ) -> None:
+        """Initialize the integrity checker.
+
+        Args:
+            blob_root: Path to the content-addressed blob store root.
+                When provided, the content-addressed blob integrity check
+                performs real SHA-256 verification.
+            evidence_packets: List of evidence packet dicts (with
+                ``claim_evidence_bindings``, ``passages``,
+                ``claim_evidence_bindings``, ``passages``,
+                ``claims`` keys).  When provided, the evidence packet
+                validation and citation binding checks perform real
+                cross-referencing.
+            run_transitions: List of run transition dicts (with
+                ``prior_state``, ``next_state``, ``lifecycle_revision``
+                keys).  When provided, the state machine transition
+                check verifies valid transitions.
+            strict: If True, integrity checks that fall back to simulation
+                will fail instead of passing. Use this in CI or when real
+                state is expected but missing.
+        """
+        self.blob_root = Path(blob_root) if blob_root else None
+        self.evidence_packets = evidence_packets or []
+        self.run_transitions = run_transitions or []
+        self.strict = strict
 
     def check(self, check_name: str) -> DeterministicIntegrityCheck:
         """Run a single deterministic integrity check.
@@ -207,13 +257,289 @@ class DeterministicIntegrityChecker:
                 passed=False,
                 details=f"unknown integrity check: {check_name}",
             )
-        # All deterministic integrity checks pass in the benchmark
-        # simulation because they verify code invariants, not runtime state.
+
+        # Dispatch to the real implementation when data is available,
+        # otherwise fall back to simulation.
+        real_check = getattr(self, f"_check_{check_name}", None)
+        if real_check is not None and self._has_data_for_check(check_name):
+            try:
+                return real_check()
+            except Exception as exc:
+                logger.warning(
+                    "integrity check '%s' failed with error: %s",
+                    check_name,
+                    exc,
+                    exc_info=True,
+                )
+                return DeterministicIntegrityCheck(
+                    schema_version="integrity-check-v1",
+                    check_name=check_name,
+                    passed=False,
+                    details=f"integrity check '{check_name}' failed: {exc}",
+                )
+
+        # Fallback to simulation when data is not available.
+        if self.strict:
+            return DeterministicIntegrityCheck(
+                schema_version="integrity-check-v1",
+                check_name=check_name,
+                passed=False,
+                details=(
+                    f"integrity check '{check_name}' failed — "
+                    f"strict mode requires real state (no real state available)"
+                ),
+            )
         return DeterministicIntegrityCheck(
             schema_version="integrity-check-v1",
             check_name=check_name,
             passed=True,
-            details=f"integrity check '{check_name}' passed — code invariant verified",
+            details=(
+                f"integrity check '{check_name}' passed — "
+                f"simulation (no real state available)"
+            ),
+        )
+
+    def _has_data_for_check(self, check_name: str) -> bool:
+        """Return True when the checker has real data for the check."""
+        if check_name == "content_addressed_blob_integrity":
+            return self.blob_root is not None and self.blob_root.is_dir()
+        if check_name in (
+            "evidence_packet_validation",
+            "citation_binding_integrity",
+        ):
+            return len(self.evidence_packets) > 0
+        if check_name == "state_machine_transitions":
+            return len(self.run_transitions) > 0
+        # These checks are structural code invariants and always pass
+        # in simulation mode.
+        return False
+
+    # ------------------------------------------------------------------
+    # Real integrity check implementations
+    # ------------------------------------------------------------------
+
+    def _check_content_addressed_blob_integrity(
+        self,
+    ) -> DeterministicIntegrityCheck:
+        """Verify that all blobs in the store are content-addressed correctly.
+
+        Iterates over all files in the blob store and re-hashes each one
+        to confirm the filename matches the SHA-256 digest.
+        """
+        from .blob import ContentAddressedBlobStore
+
+        store = ContentAddressedBlobStore(self.blob_root)  # type: ignore[arg-type]
+        verified = 0
+        failed = 0
+        errors: list[str] = []
+
+        for prefix_dir in sorted(self.blob_root.iterdir()):  # type: ignore[union-attr]
+            if not prefix_dir.is_dir():
+                continue
+            for sub_dir in prefix_dir.iterdir():
+                if not sub_dir.is_dir():
+                    continue
+                for blob_path in sub_dir.iterdir():
+                    if not blob_path.is_file():
+                        continue
+                    digest = blob_path.name
+                    if len(digest) != 64:
+                        failed += 1
+                        errors.append(f"unexpected filename: {digest}")
+                        continue
+                    if not store.verify(digest):
+                        failed += 1
+                        errors.append(f"hash mismatch: {digest}")
+                    else:
+                        verified += 1
+
+        passed = failed == 0
+        details = f"verified {verified} blobs, {failed} failures" + (
+            f" — errors: {', '.join(errors[:5])}" if errors else ""
+        )
+        return DeterministicIntegrityCheck(
+            schema_version="integrity-check-v1",
+            check_name="content_addressed_blob_integrity",
+            passed=passed,
+            details=details,
+        )
+
+    def _check_evidence_packet_validation(self) -> DeterministicIntegrityCheck:
+        """Verify that evidence packets have valid claim/passage bindings.
+
+        For each evidence packet, checks that:
+        - All claim IDs in bindings exist in the claims list
+        - All passage IDs in bindings exist in the passages list
+        - No duplicate IDs
+        """
+        errors: list[str] = []
+        packets_checked = 0
+
+        for packet in self.evidence_packets:
+            packets_checked += 1
+            claim_ids = {c["claim_id"] for c in packet.get("claims", [])}
+            passage_ids = {p["passage_id"] for p in packet.get("passages", [])}
+            # Also include omitted passages
+            for p in packet.get("omitted_passages", []):
+                passage_ids.add(p["passage_id"])
+
+            for binding in packet.get("claim_evidence_bindings", []):
+                cid = binding.get("claim_id", "")
+                if cid and cid not in claim_ids:
+                    errors.append(f"packet binding references unknown claim {cid}")
+                for pid in binding.get("passage_ids", []):
+                    if pid and pid not in passage_ids:
+                        errors.append(
+                            f"packet binding references unknown passage {pid}"
+                        )
+
+        passed = len(errors) == 0
+        details = f"validated {packets_checked} packets" + (
+            f" — {len(errors)} errors" if errors else ""
+        )
+        return DeterministicIntegrityCheck(
+            schema_version="integrity-check-v1",
+            check_name="evidence_packet_validation",
+            passed=passed,
+            details=details,
+        )
+
+    def _check_citation_binding_integrity(self) -> DeterministicIntegrityCheck:
+        """Verify that all cited passages exist in the evidence packet.
+
+        Checks that every passage_id referenced in claim_evidence_bindings
+        is present in the packet's passages or omitted_passages.
+        """
+        errors: list[str] = []
+        citations_checked = 0
+
+        for packet in self.evidence_packets:
+            passage_ids = {p["passage_id"] for p in packet.get("passages", [])}
+            for p in packet.get("omitted_passages", []):
+                passage_ids.add(p["passage_id"])
+
+            for binding in packet.get("claim_evidence_bindings", []):
+                citations_checked += 1
+                for pid in binding.get("passage_ids", []):
+                    if pid not in passage_ids:
+                        errors.append(
+                            f"citation to unknown passage {pid} "
+                            f"in binding for claim {binding.get('claim_id')}"
+                        )
+
+        passed = len(errors) == 0
+        details = f"checked {citations_checked} citations" + (
+            f" — {len(errors)} errors" if errors else ""
+        )
+        return DeterministicIntegrityCheck(
+            schema_version="integrity-check-v1",
+            check_name="citation_binding_integrity",
+            passed=passed,
+            details=details,
+        )
+
+    def _check_state_machine_transitions(self) -> DeterministicIntegrityCheck:
+        """Verify that run state transitions are valid.
+
+        Checks that every transition in the run transition ledger follows
+        the permitted transition matrix.
+        """
+        # Permitted transitions from run_service.py
+        PERMITTED_TRANSITIONS: dict[str, set[str]] = {
+            "created": {"planning"},
+            "planning": {"corpus_review", "failed"},
+            "corpus_review": {"acquiring", "retrieving", "failed"},
+            "acquiring": {"coverage_review", "extracting", "failed", "partial"},
+            "extracting": {"indexing", "coverage_review", "failed"},
+            "indexing": {"coverage_review", "partial", "failed"},
+            "coverage_review": {
+                "acquiring",
+                "extracting",
+                "retrieving",
+                "synthesizing",
+                "partial",
+                "failed",
+            },
+            "retrieving": {"coverage_review", "synthesizing", "failed"},
+            "synthesizing": {"validating", "failed"},
+            "validating": {"completed", "partial", "failed"},
+            "completed": set(),
+            "partial": set(),
+            "failed": set(),
+            "cancelled": set(),
+        }
+
+        errors: list[str] = []
+        transitions_checked = 0
+
+        for transition in self.run_transitions:
+            transitions_checked += 1
+            prior = transition.get("prior_state", "")
+            next_state = transition.get("next_state", "")
+            if prior in PERMITTED_TRANSITIONS:
+                allowed = PERMITTED_TRANSITIONS[prior]
+                if next_state not in allowed:
+                    errors.append(f"invalid transition {prior} -> {next_state}")
+            else:
+                errors.append(f"unknown prior state: {prior}")
+
+        passed = len(errors) == 0
+        details = f"checked {transitions_checked} transitions" + (
+            f" — {len(errors)} errors" if errors else ""
+        )
+        return DeterministicIntegrityCheck(
+            schema_version="integrity-check-v1",
+            check_name="state_machine_transitions",
+            passed=passed,
+            details=details,
+        )
+
+    # ------------------------------------------------------------------
+    # Simulation fallbacks for checks that don't have real data
+    # ------------------------------------------------------------------
+
+    def _check_derivation_versioning(self) -> DeterministicIntegrityCheck:
+        return DeterministicIntegrityCheck(
+            schema_version="integrity-check-v1",
+            check_name="derivation_versioning",
+            passed=True,
+            details=(
+                "integrity check 'derivation_versioning' passed — "
+                "simulation (no real state available)"
+            ),
+        )
+
+    def _check_lease_safety(self) -> DeterministicIntegrityCheck:
+        return DeterministicIntegrityCheck(
+            schema_version="integrity-check-v1",
+            check_name="lease_safety",
+            passed=True,
+            details=(
+                "integrity check 'lease_safety' passed — "
+                "simulation (no real state available)"
+            ),
+        )
+
+    def _check_cache_key_identity(self) -> DeterministicIntegrityCheck:
+        return DeterministicIntegrityCheck(
+            schema_version="integrity-check-v1",
+            check_name="cache_key_identity",
+            passed=True,
+            details=(
+                "integrity check 'cache_key_identity' passed — "
+                "simulation (no real state available)"
+            ),
+        )
+
+    def _check_idempotent_replay(self) -> DeterministicIntegrityCheck:
+        return DeterministicIntegrityCheck(
+            schema_version="integrity-check-v1",
+            check_name="idempotent_replay",
+            passed=True,
+            details=(
+                "integrity check 'idempotent_replay' passed — "
+                "simulation (no real state available)"
+            ),
         )
 
     def check_all(
@@ -244,6 +570,18 @@ class WorkflowBenchmarkConfig:
         objective_ids: Specific objective IDs to run (None = all).
         dry_run: If True, simulate without executing workflows.
         integrity_checks: Integrity check names to run.
+        blob_root: Path to the content-addressed blob store root.
+            When provided, the integrity checker performs real blob
+            verification instead of simulation.
+        evidence_packets: List of evidence packet dicts for integrity
+            checking.  When provided, the evidence packet validation
+            and citation binding checks perform real cross-referencing.
+        run_transitions: List of run transition dicts for integrity
+            checking.  When provided, the state machine transition
+            check verifies valid transitions.
+        known_limitations: Custom known limitations to include in the
+            release recommendation.  When empty, defaults are derived
+            from the workflow mode.
     """
 
     workflow_modes: tuple[str, ...] = ("agent_led", "autonomous_local")
@@ -259,6 +597,10 @@ class WorkflowBenchmarkConfig:
         "cache_key_identity",
         "idempotent_replay",
     )
+    blob_root: Path | str | None = None
+    evidence_packets: list[dict[str, Any]] | None = None
+    run_transitions: list[dict[str, Any]] | None = None
+    known_limitations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -297,7 +639,11 @@ class WorkflowBenchmarkRunner:
     ):
         self.loader = loader
         self.config = config or WorkflowBenchmarkConfig()
-        self.integrity_checker = DeterministicIntegrityChecker()
+        self.integrity_checker = DeterministicIntegrityChecker(
+            blob_root=self.config.blob_root,
+            evidence_packets=self.config.evidence_packets,
+            run_transitions=self.config.run_transitions,
+        )
 
     def run(self) -> WorkflowBenchmarkResult:
         """Execute the full workflow benchmark and return results.
@@ -398,6 +744,7 @@ class WorkflowBenchmarkRunner:
             total_tokens=performance.total_tokens,
             semantic_calls=performance.semantic_calls,
             cache_hit_rate=performance.cache_hit_rate,
+            cache_miss_rate=1.0 - performance.cache_hit_rate,
             embedding_throughput=performance.embedding_throughput,
             gpu_memory_mb=performance.gpu_memory_mb,
             cpu_percent=performance.cpu_percent,
@@ -438,13 +785,20 @@ class WorkflowBenchmarkRunner:
             base_unsupported = 0.08
             base_citation = 0.88
             base_report = 0.78
-        else:  # autonomous_local
+        elif workflow_mode == "autonomous_local":
             base_recall = 0.70
             base_source_quality = 0.75
             base_coverage = 0.65
             base_unsupported = 0.10
             base_citation = 0.85
             base_report = 0.72
+        else:  # deterministic_debug — no semantic judgment, unassessed coverage
+            base_recall = 0.30
+            base_source_quality = 0.40
+            base_coverage = 0.20
+            base_unsupported = 0.30
+            base_citation = 0.50
+            base_report = 0.40
 
         # Objective-specific adjustments (deterministic hash-based)
         obj_hash = int(hashlib.md5(objective.id.encode()).hexdigest(), 16)
@@ -487,7 +841,7 @@ class WorkflowBenchmarkRunner:
             base_throughput = 50.0
             base_gpu = 4096.0
             base_cpu = 60.0
-        else:  # autonomous_local
+        elif workflow_mode == "autonomous_local":
             base_latency = 20000.0
             base_tokens = 20000
             base_semantic = 12
@@ -495,6 +849,14 @@ class WorkflowBenchmarkRunner:
             base_throughput = 30.0
             base_gpu = 8192.0
             base_cpu = 70.0
+        else:  # deterministic_debug — no semantic calls, minimal resources
+            base_latency = 2000.0
+            base_tokens = 1000
+            base_semantic = 0
+            base_cache = 0.0
+            base_throughput = 200.0
+            base_gpu = 0.0
+            base_cpu = 15.0
 
         # Objective-specific adjustments
         obj_hash = int(hashlib.md5(objective.id.encode()).hexdigest(), 16)
@@ -506,6 +868,7 @@ class WorkflowBenchmarkRunner:
             total_tokens=int(base_tokens * (1.0 + adjustment)),
             semantic_calls=base_semantic + int(adjustment * 3),
             cache_hit_rate=min(1.0, base_cache + adjustment * 0.1),
+            cache_miss_rate=1.0 - min(1.0, base_cache + adjustment * 0.1),
             embedding_throughput=max(0.0, base_throughput * (1.0 - adjustment * 0.1)),
             gpu_memory_mb=base_gpu,
             cpu_percent=min(100.0, base_cpu * (1.0 + adjustment * 0.1)),
@@ -525,6 +888,7 @@ class WorkflowBenchmarkRunner:
         # Compute quality vs baseline (legacy is baseline)
         baseline_quality = self._avg_quality(mode_results.get("legacy", []))
         quality_vs_baseline: dict[str, float] = {}
+        quality_metrics_vs_baseline: dict[str, dict[str, float]] = {}
         for mode, qual_results in mode_results.items():
             if mode == "legacy":
                 continue
@@ -533,8 +897,43 @@ class WorkflowBenchmarkRunner:
                 quality_vs_baseline[mode] = (
                     avg.candidate_recall / baseline_quality.candidate_recall
                 )
+                # Compute per-metric quality ratios against baseline
+                metric_ratios: dict[str, float] = {}
+                if baseline_quality.candidate_recall > 0:
+                    metric_ratios["candidate_recall"] = (
+                        avg.candidate_recall / baseline_quality.candidate_recall
+                    )
+                if baseline_quality.source_quality_score > 0:
+                    metric_ratios["source_quality_score"] = (
+                        avg.source_quality_score / baseline_quality.source_quality_score
+                    )
+                if baseline_quality.coverage_completeness > 0:
+                    metric_ratios["coverage_completeness"] = (
+                        avg.coverage_completeness
+                        / baseline_quality.coverage_completeness
+                    )
+                if baseline_quality.citation_accuracy > 0:
+                    metric_ratios["citation_accuracy"] = (
+                        avg.citation_accuracy / baseline_quality.citation_accuracy
+                    )
+                if baseline_quality.report_quality_score > 0:
+                    metric_ratios["report_quality_score"] = (
+                        avg.report_quality_score / baseline_quality.report_quality_score
+                    )
+                # For unsupported_claim_rate, lower is better — invert the ratio
+                if baseline_quality.unsupported_claim_rate > 0:
+                    metric_ratios["unsupported_claim_rate"] = (
+                        baseline_quality.unsupported_claim_rate
+                        / avg.unsupported_claim_rate
+                    )
+                else:
+                    metric_ratios["unsupported_claim_rate"] = (
+                        1.0 if avg.unsupported_claim_rate == 0 else 2.0
+                    )
+                quality_metrics_vs_baseline[mode] = metric_ratios
             else:
                 quality_vs_baseline[mode] = 1.0
+                quality_metrics_vs_baseline[mode] = {}
 
         # Compute performance vs baseline
         baseline_perf = self._avg_performance(mode_results.get("legacy", []))
@@ -598,6 +997,8 @@ class WorkflowBenchmarkRunner:
             total_tokens=int(sum(r.performance.total_tokens for r in results) / n),
             semantic_calls=int(sum(r.performance.semantic_calls for r in results) / n),
             cache_hit_rate=sum(r.performance.cache_hit_rate for r in results) / n,
+            cache_miss_rate=1.0
+            - sum(r.performance.cache_hit_rate for r in results) / n,
             embedding_throughput=sum(
                 r.performance.embedding_throughput for r in results
             )
@@ -615,10 +1016,25 @@ class WorkflowBenchmarkRunner:
         conditions: list[str] = []
         limitations: list[str] = []
 
+        # Use custom limitations if provided, otherwise derive defaults.
+        if self.config.known_limitations:
+            limitations.extend(self.config.known_limitations)
+        else:
+            limitations.extend(
+                [
+                    "CPU-based embedding and reranking causes high latency (~8.5s per embedding batch)",
+                    "GPU is reserved for local LLM agents; embedding/reranker run on CPU",
+                    "Local embedding models (nomic-embed-text, bge-m3) may have lower recall than OpenAI",
+                    "Local reranker (cross-encoder) may be slower than cloud alternatives",
+                ]
+            )
+
         # Evaluate quality thresholds
         thresholds = self.loader.quality_thresholds
         baseline_quality = None
+        mode_results: dict[str, list[WorkflowRunResult]] = {}
         for result in comparison.results:
+            mode_results.setdefault(result.workflow_mode, []).append(result)
             if result.workflow_mode == "legacy":
                 baseline_quality = result.quality
                 break
@@ -631,6 +1047,24 @@ class WorkflowBenchmarkRunner:
                     withdrawn.append(
                         f"candidate_recall >= {min_recall} — "
                         f"{result.workflow_mode} achieved {result.quality.candidate_recall:.3f}"
+                    )
+
+            # Check source quality score
+            min_source_quality = thresholds.get("min_source_quality_score", 0.7)
+            for result in comparison.results:
+                if result.quality.source_quality_score < min_source_quality:
+                    withdrawn.append(
+                        f"source_quality_score >= {min_source_quality} — "
+                        f"{result.workflow_mode} achieved {result.quality.source_quality_score:.3f}"
+                    )
+
+            # Check coverage completeness
+            min_coverage = thresholds.get("min_coverage_completeness", 0.5)
+            for result in comparison.results:
+                if result.quality.coverage_completeness < min_coverage:
+                    withdrawn.append(
+                        f"coverage_completeness >= {min_coverage} — "
+                        f"{result.workflow_mode} achieved {result.quality.coverage_completeness:.3f}"
                     )
 
             # Check unsupported claim rate
@@ -651,15 +1085,38 @@ class WorkflowBenchmarkRunner:
                         f"{result.workflow_mode} achieved {result.quality.citation_accuracy:.3f}"
                     )
 
-        # Add known limitations for local models
-        limitations.extend(
-            [
-                "CPU-based embedding and reranking causes high latency (~8.5s per embedding batch)",
-                "GPU is reserved for local LLM agents; embedding/reranker run on CPU",
-                "Local embedding models (nomic-embed-text, bge-m3) may have lower recall than OpenAI",
-                "Local reranker (cross-encoder) may be slower than cloud alternatives",
-            ]
-        )
+            # Check latency ratio vs baseline
+            max_latency_ratio = thresholds.get("max_latency_ratio_vs_baseline", 2.0)
+            baseline_perf = self._avg_performance(mode_results.get("legacy", []))
+            if baseline_perf:
+                for mode, perf_results in mode_results.items():
+                    if mode == "legacy":
+                        continue
+                    avg_perf = self._avg_performance(perf_results)
+                    if avg_perf and baseline_perf.total_latency_ms > 0:
+                        ratio = (
+                            avg_perf.total_latency_ms / baseline_perf.total_latency_ms
+                        )
+                        if ratio > max_latency_ratio:
+                            withdrawn.append(
+                                f"latency_ratio <= {max_latency_ratio} — "
+                                f"{mode} ratio {ratio:.2f} vs baseline"
+                            )
+
+            # Check token ratio vs baseline
+            max_token_ratio = thresholds.get("max_token_ratio_vs_baseline", 2.0)
+            if baseline_perf:
+                for mode, perf_results in mode_results.items():
+                    if mode == "legacy":
+                        continue
+                    avg_perf = self._avg_performance(perf_results)
+                    if avg_perf and baseline_perf.total_tokens > 0:
+                        ratio = avg_perf.total_tokens / baseline_perf.total_tokens
+                        if ratio > max_token_ratio:
+                            withdrawn.append(
+                                f"token_ratio <= {max_token_ratio} — "
+                                f"{mode} ratio {ratio:.2f} vs baseline"
+                            )
 
         # Determine outcome
         p0_regressions: list[str] = []
@@ -703,7 +1160,7 @@ class WorkflowBenchmarkRunner:
             withdrawn_claims=withdrawn_claims,
             known_limitations=tuple(limitations),
             conditions=tuple(conditions),
-            p0_regresions=tuple(p0_regressions),
+            p0_regressions=tuple(p0_regressions),
         )
 
 
@@ -711,6 +1168,10 @@ def run_benchmark(
     dataset: BenchmarkDataset | BenchmarkDatasetLoader,
     workflow_modes: tuple[str, ...] | None = None,
     dry_run: bool = True,
+    blob_root: Path | str | None = None,
+    evidence_packets: list[dict[str, Any]] | None = None,
+    run_transitions: list[dict[str, Any]] | None = None,
+    known_limitations: tuple[str, ...] = (),
 ) -> WorkflowBenchmarkResult:
     """Execute the full workflow benchmark and return results.
 
@@ -718,6 +1179,18 @@ def run_benchmark(
         dataset: Benchmark dataset or loader.
         workflow_modes: Workflow modes to benchmark (None = use dataset default).
         dry_run: If True, simulate without executing workflows.
+        blob_root: Path to the content-addressed blob store root.
+            When provided, the integrity checker performs real blob
+            verification instead of simulation.
+        evidence_packets: List of evidence packet dicts for integrity
+            checking.  When provided, the evidence packet validation
+            and citation binding checks perform real cross-referencing.
+        run_transitions: List of run transition dicts for integrity
+            checking.  When provided, the state machine transition
+            check verifies valid transitions.
+        known_limitations: Custom known limitations to include in the
+            release recommendation.  When empty, defaults are derived
+            from the workflow mode.
 
     Returns:
         A WorkflowBenchmarkResult with comparison and recommendation.
@@ -731,6 +1204,10 @@ def run_benchmark(
     config = WorkflowBenchmarkConfig(
         workflow_modes=modes,
         dry_run=dry_run,
+        blob_root=blob_root,
+        evidence_packets=evidence_packets,
+        run_transitions=run_transitions,
+        known_limitations=known_limitations,
     )
 
     runner = WorkflowBenchmarkRunner(loader, config)

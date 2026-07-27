@@ -1571,10 +1571,15 @@ class BenchmarkDataset:
         if not self.objectives:
             raise ValueError("benchmark_dataset.objectives must not be empty")
         for mode in self.workflow_modes:
-            if mode not in ("legacy", "agent_led", "autonomous_local"):
+            if mode not in (
+                "legacy",
+                "agent_led",
+                "autonomous_local",
+                "deterministic_debug",
+            ):
                 raise ValueError(
                     f"workflow_modes must be one of legacy, agent_led, "
-                    f"autonomous_local; got: {mode}"
+                    f"autonomous_local, deterministic_debug; got: {mode}"
                 )
 
 
@@ -1629,6 +1634,7 @@ class PerformanceMeasurement:
         total_tokens: Total tokens consumed.
         semantic_calls: Number of semantic (LLM) calls made.
         cache_hit_rate: Fraction of cache hits (0.0–1.0).
+        cache_miss_rate: Fraction of cache misses (1.0 - cache_hit_rate).
         embedding_throughput: Embeddings per second.
         gpu_memory_mb: Peak GPU memory in MB (0 if CPU-only).
         cpu_percent: Peak CPU usage (0.0–100.0).
@@ -1639,6 +1645,7 @@ class PerformanceMeasurement:
     total_tokens: int
     semantic_calls: int
     cache_hit_rate: float
+    cache_miss_rate: float
     embedding_throughput: float
     gpu_memory_mb: float
     cpu_percent: float
@@ -1656,6 +1663,12 @@ class PerformanceMeasurement:
             raise ValueError("semantic_calls must be >= 0")
         if not (0.0 <= self.cache_hit_rate <= 1.0):
             raise ValueError("cache_hit_rate must be between 0.0 and 1.0")
+        # Auto-compute cache_miss_rate from cache_hit_rate if it differs.
+        # This ensures callers only need to set cache_hit_rate and the
+        # miss rate is derived deterministically.
+        expected_miss = 1.0 - self.cache_hit_rate
+        if abs(self.cache_miss_rate - expected_miss) > 1e-9:
+            object.__setattr__(self, "cache_miss_rate", expected_miss)
         if self.embedding_throughput < 0:
             raise ValueError("embedding_throughput must be >= 0")
         if self.gpu_memory_mb < 0:
@@ -1720,10 +1733,11 @@ class WorkflowRunResult:
             "legacy",
             "agent_led",
             "autonomous_local",
+            "deterministic_debug",
         ):
             raise ValueError(
                 f"workflow_mode must be one of legacy, agent_led, "
-                f"autonomous_local; got: {self.workflow_mode}"
+                f"autonomous_local, deterministic_debug; got: {self.workflow_mode}"
             )
 
 
@@ -1774,7 +1788,7 @@ class ReleaseRecommendation:
         withdrawn_claims: Claims that the benchmark does not support.
         known_limitations: Documented local-model and infrastructure limitations.
         conditions: Conditions for GO_WITH_CONDITIONS.
-        p0_regresions: Any P0 deterministic-integrity regressions found.
+        p0_regressions: Any P0 deterministic-integrity regressions found.
     """
 
     schema_version: str
@@ -1785,7 +1799,7 @@ class ReleaseRecommendation:
     withdrawn_claims: tuple[str, ...]
     known_limitations: tuple[str, ...]
     conditions: tuple[str, ...]
-    p0_regresions: tuple[str, ...]
+    p0_regressions: tuple[str, ...]
 
     SCHEMA_VERSION = "release-recommendation-v1"
 
@@ -1798,7 +1812,7 @@ class ReleaseRecommendation:
             )
         if self.outcome == "go" and self.withdrawn_claims:
             raise ValueError("outcome cannot be 'go' when there are withdrawn claims")
-        if self.outcome == "go" and self.p0_regresions:
+        if self.outcome == "go" and self.p0_regressions:
             raise ValueError("outcome cannot be 'go' when there are P0 regressions")
         if self.outcome == "go_with_conditions" and not self.conditions:
             raise ValueError("outcome is 'go_with_conditions' but conditions is empty")
