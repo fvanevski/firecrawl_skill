@@ -1758,3 +1758,203 @@ class TestSimulationPlaceholders:
             f"Expected at least {len(assignments)} PLACEHOLDER comments "
             f"for {len(assignments)} base assignments, got {len(placeholder_comments)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Real workflow execution tests
+# ---------------------------------------------------------------------------
+
+
+class TestRealWorkflowExecution:
+    """Tests for the real workflow execution path."""
+
+    def test_execute_real_workflow_falls_back_on_failure(self, monkeypatch):
+        """Real execution falls back to simulation when orchestrator fails."""
+        from research_store.workflow_benchmark import (
+            BenchmarkDatasetLoader,
+            WorkflowBenchmarkConfig,
+            WorkflowBenchmarkRunner,
+        )
+
+        # Load a simple dataset
+        loader = BenchmarkDatasetLoader.from_file(
+            "tests/fixtures/benchmark/benchmark-v1.json"
+        )
+        objective = loader.objectives[0]
+
+        # Patch build_orchestrator in the container module to raise an exception
+        def mock_build_orchestrator(*args, **kwargs):
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(
+            "research_store.container.build_orchestrator",
+            mock_build_orchestrator,
+        )
+
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("agent_led",),
+            dry_run=False,  # Enable real execution
+        )
+        runner = WorkflowBenchmarkRunner(loader, config)
+
+        # Execute real workflow — should fall back to simulation
+        result = runner._execute_real_workflow("agent_led", objective)
+
+        # Should have fallen back to simulation
+        assert result.run_id is None
+        assert len(result.errors) > 0
+        assert "real execution failed" in result.errors[0]
+        # Quality and performance should be from simulation (not zero)
+        assert result.quality.candidate_recall > 0
+        assert result.performance.total_latency_ms > 0
+
+    def test_compute_real_quality_from_execution(self):
+        """_compute_real_quality produces metrics from orchestrator result."""
+        from research_store.workflow_benchmark import (
+            BenchmarkDatasetLoader,
+            WorkflowBenchmarkConfig,
+            WorkflowBenchmarkRunner,
+        )
+
+        # Create a mock orchestrator result
+        class MockResult:
+            wave_count = 3
+            successful_urls = 15
+            final_state = "completed"
+
+        loader = BenchmarkDatasetLoader.from_file(
+            "tests/fixtures/benchmark/benchmark-v1.json"
+        )
+        objective = loader.objectives[0]
+
+        runner = WorkflowBenchmarkRunner(loader, WorkflowBenchmarkConfig())
+        quality = runner._compute_real_quality(MockResult(), objective)
+
+        # Verify metrics are computed (not zero)
+        assert quality.candidate_recall > 0
+        assert quality.source_quality_score > 0
+        assert quality.coverage_completeness > 0
+        assert quality.unsupported_claim_rate >= 0
+        assert quality.citation_accuracy > 0
+        assert quality.report_quality_score > 0
+
+    def test_compute_real_performance_from_execution(self):
+        """_compute_real_performance captures wall-clock latency."""
+        import time
+
+        from research_store.workflow_benchmark import (
+            BenchmarkDatasetLoader,
+            WorkflowBenchmarkConfig,
+            WorkflowBenchmarkRunner,
+        )
+
+        # Create a mock orchestrator result
+        class MockResult:
+            wave_count = 3
+            successful_urls = 15
+
+        loader = BenchmarkDatasetLoader.from_file(
+            "tests/fixtures/benchmark/benchmark-v1.json"
+        )
+        runner = WorkflowBenchmarkRunner(loader, WorkflowBenchmarkConfig())
+
+        start = time.monotonic()
+        time.sleep(0.01)  # Small delay to ensure measurable latency
+        performance = runner._compute_real_performance(MockResult(), start)
+
+        # Verify latency is captured (should be > 0)
+        assert performance.total_latency_ms > 0
+        assert performance.total_tokens > 0
+        assert performance.semantic_calls >= 0
+
+    def test_dry_run_false_wires_real_execution(self, monkeypatch):
+        """When dry_run=False, _run_workflow_mode calls _execute_real_workflow."""
+        from research_store.workflow_benchmark import (
+            BenchmarkDatasetLoader,
+            WorkflowBenchmarkConfig,
+            WorkflowBenchmarkRunner,
+        )
+
+        loader = BenchmarkDatasetLoader.from_file(
+            "tests/fixtures/benchmark/benchmark-v1.json"
+        )
+        objective = loader.objectives[0]
+
+        # Track if _execute_real_workflow is called
+        execute_called = []
+
+        def mock_execute_real_workflow(self, workflow_mode, objective):
+            execute_called.append(True)
+            from research_domain.models import WorkflowRunResult
+
+            return WorkflowRunResult(
+                schema_version="workflow-run-result-v1",
+                workflow_mode=workflow_mode,
+                quality=None,  # type: ignore
+                performance=None,  # type: ignore
+                integrity_checks=(),
+                run_id="test_run",
+                errors=(),
+            )
+
+        monkeypatch.setattr(
+            WorkflowBenchmarkRunner,
+            "_execute_real_workflow",
+            mock_execute_real_workflow,
+        )
+
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("agent_led",),
+            dry_run=False,  # Enable real execution
+        )
+        runner = WorkflowBenchmarkRunner(loader, config)
+        runner._run_workflow_mode("agent_led", [objective])
+
+        # _execute_real_workflow should be called
+        assert len(execute_called) == 1
+
+    def test_dry_run_true_keeps_simulation(self, monkeypatch):
+        """When dry_run=True, _run_workflow_mode calls _simulate_workflow_run."""
+        from research_store.workflow_benchmark import (
+            BenchmarkDatasetLoader,
+            WorkflowBenchmarkConfig,
+            WorkflowBenchmarkRunner,
+        )
+
+        loader = BenchmarkDatasetLoader.from_file(
+            "tests/fixtures/benchmark/benchmark-v1.json"
+        )
+        objective = loader.objectives[0]
+
+        # Track if _simulate_workflow_run is called
+        simulate_called = []
+
+        def mock_simulate_workflow_run(self, workflow_mode, objective):
+            simulate_called.append(True)
+            from research_domain.models import WorkflowRunResult
+
+            return WorkflowRunResult(
+                schema_version="workflow-run-result-v1",
+                workflow_mode=workflow_mode,
+                quality=None,  # type: ignore
+                performance=None,  # type: ignore
+                integrity_checks=(),
+                run_id=None,
+                errors=(),
+            )
+
+        monkeypatch.setattr(
+            WorkflowBenchmarkRunner,
+            "_simulate_workflow_run",
+            mock_simulate_workflow_run,
+        )
+
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("agent_led",),
+            dry_run=True,  # Keep simulation
+        )
+        runner = WorkflowBenchmarkRunner(loader, config)
+        runner._run_workflow_mode("agent_led", [objective])
+
+        # _simulate_workflow_run should be called
+        assert len(simulate_called) == 1
