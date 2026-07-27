@@ -3,6 +3,8 @@ name: firecrawl
 description: "Acquire, retain, retrieve, and audit web research with Firecrawl. Use when Codex needs to search or scrape the web, query or inspect the authoritative PostgreSQL research corpus, run hybrid lexical/vector retrieval, fetch bounded citation passages, preserve scratch artifacts, diagnose ingestion or indexing, or manage research provenance and recovery."
 ---
 
+<!-- @format -->
+
 # Firecrawl Research Corpus and Acquisition
 
 PostgreSQL is the sole authority for research workflow state, claims, audits, and retrieval indices. Catalog v5 and scratch directories are derived compatibility artifacts — generated after database commits, never read to determine current state. Use the database first for retained research. Use Firecrawl acquisition wrappers when the corpus lacks current evidence, then retrieve through compact database manifests and bounded passages.
@@ -153,38 +155,37 @@ Read `references/research-store-architecture.md` for boundaries and consistency 
 
 ## Scripts
 
-| Script | Purpose | Output files |
-| --- | --- | --- |
-| `scripts/fsearch_smart` | Recommended LLM-planned, metadata-first, adaptively scraped research orchestrator | `fc_<uuid>/smart/` with branch directories, consolidated metadata, and `_evidence.json` |
-| `scripts/fsearch` | Search Firecrawl, preserve all candidates, and scrape a bounded subset | `_search.json`, `_index.md`, `_context.json`, `_candidates.json`, `_meta.json`, `result_NNN.md` or `result_NNN.json` |
-| `scripts/fscrape` | Scrape arbitrary URLs to scratch files | `_index.md`, `_meta.json`, `url_NNN.md` or `url_NNN.json` |
-| `scripts/fread` | Read scratch files, list history, walk directories, and grep results | Console output only |
-| `scripts/research-db` | Migrate, import, inspect, retrieve, rederive, index, reconcile, export, and diagnose the authoritative corpus | JSON manifests and bounded passages |
+| Script                  | Purpose                                                                                                       | Output files                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `scripts/fsearch_smart` | Coverage-led research orchestrator via `ResearchOrchestrator`                                                 | `fc_<uuid>/smart/` with consolidated metadata and scratch compatibility files                                        |
+| `scripts/fsearch`       | Search Firecrawl, preserve all candidates, and scrape a bounded subset                                        | `_search.json`, `_index.md`, `_context.json`, `_candidates.json`, `_meta.json`, `result_NNN.md` or `result_NNN.json` |
+| `scripts/fscrape`       | Scrape arbitrary URLs to scratch files                                                                        | `_index.md`, `_meta.json`, `url_NNN.md` or `url_NNN.json`                                                            |
+| `scripts/fread`         | Read scratch files, list history, walk directories, and grep results                                          | Console output only                                                                                                  |
+| `scripts/research-db`   | Migrate, import, inspect, retrieve, rederive, index, reconcile, export, and diagnose the authoritative corpus | JSON manifests and bounded passages                                                                                  |
 
 ## Procedure
 
 ### 1. Apply the Budget Policy
 
-`fsearch_smart` maps a validated `ResearchSpec` to `budget-policy-v1`. If no spec file is supplied, it creates a narrow deterministic fallback that preserves the exact objective as one question and marks unresolved semantics. Word count, topic length, and the legacy complexity label do not select budgets.
+`fsearch_smart` maps a validated `ResearchSpec` to `budget-policy-v1`. If no spec file is supplied, it creates a narrow deterministic fallback that preserves the exact objective as one question and marks unresolved semantics. Word count, topic length, and the legacy complexity label do not select budgets. The monolithic legacy loop was retired in P7-08 / #68; the coverage-led `ResearchOrchestrator` is now the default and only execution path.
 
-| Policy tier | Semantic floor | Search and extraction caps |
-| --- | --- | --- |
-| `focused` | Low-risk, narrow semantic scope | 2 x 15 candidates; 8 attempts; 6 successes |
-| `standard` | Medium risk, freshness, corroboration, or multipart scope | 3 x 25 candidates; 18 attempts; 12 successes |
+| Policy tier | Semantic floor                                                              | Search and extraction caps                   |
+| ----------- | --------------------------------------------------------------------------- | -------------------------------------------- |
+| `focused`   | Low-risk, narrow semantic scope                                             | 2 x 15 candidates; 8 attempts; 6 successes   |
+| `standard`  | Medium risk, freshness, corroboration, or multipart scope                   | 3 x 25 candidates; 18 attempts; 12 successes |
 | `intensive` | High risk, expected disagreement, broad source requirements, or large scope | 5 x 40 candidates; 36 attempts; 25 successes |
 
 ```bash
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-spec spec.json
-rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-profile technical_docs --tbs qdr:w
-rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --planner heuristic --dry-run
-rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --max-searches 2 --max-scrapes 6 --max-successful-extractions 4
+rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-run-id "$RUN_ID"
+rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --dry-run
 ```
 
-Use the default `auto` planner with the local model. It first produces a structured research brief and then a complementary query plan. If planning fails, the workflow runs only the exact objective as a degraded query; it does not silently broaden through deterministic facets. Use `--planner heuristic` only for reproducible legacy diagnostics. Commercial planning or fallback requires explicit provider and model options.
+The orchestrator generates a structured research brief and query plan via LLM planning (through `model_gateway`), then executes coverage-led acquisition. If planning degrades to a single exact-objective query, the orchestrator proceeds conservatively. Direct Gemini planner access, keyword-complexity classification, and first-match profile selection are retired (P7-08 / #68).
 
-Treat search, extraction attempts, and successful extractions as separate hard budgets. `fsearch_smart` issues each search once, saves every raw response, deduplicates candidates, asks the selected LLM to triage compact candidate cards, and scrapes in bounded waves. Internal branches force corpus persistence off; the completed parent consolidates their successful results and persists exactly one reconstructable `smart_search` batch. Failed extractions advance to replacement candidates and emit pivot events.
+Treat search, extraction attempts, and successful extractions as separate hard budgets. The orchestrator evaluates budget policy, creates coverage items before acquisition, and evaluates coverage after each meaningful wave. Failed extractions advance to replacement candidates and emit pivot events.
 
-Use `--max-searches`, `--results-per-query`, `--max-scrapes`, `--max-successful-extractions`, and `--max-iterations` only to tighten policy caps. A looser value is rejected with a machine-readable rule ID. `_budget.json` records the exact authorization boundary. Use `--no-llm-triage` only to diagnose model-independent acquisition. Read `_evidence.json` after `_context.json`; it contains the research brief, candidate decisions, scrape-wave provenance, source dossiers, coverage placeholders, and limitations for answer composition.
+Use `--max-searches`, `--results-per-query`, `--max-scrapes`, `--max-successful-extractions`, and `--max-iterations` only to tighten policy caps. A looser value is rejected with a machine-readable rule ID. `_budget.json` records the exact authorization boundary. Read `_meta.json` after execution; it contains the research brief, planner provenance, and strategy metadata.
 
 ### 2. Run Single-Query Search When Needed
 
@@ -291,7 +292,7 @@ Run the explicit, operation-capped self-hosted campaign only when live API use i
 ```bash
 rtk proxy "<skill-root>/scripts/live_validate.py" \
   --api-url "${FIRECRAWL_API_URL:-http://localhost:3002}" \
-  --max-operations 125 --planner both
+  --max-operations 125
 ```
 
 Inspect the generated `report.md` and `manifest.json` below the printed platform-temporary artifact directory. Never treat backend reachability failures as query-quality failures.

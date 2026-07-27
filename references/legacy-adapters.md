@@ -1,3 +1,5 @@
+<!-- @format -->
+
 # Legacy entry-point adapters
 
 Issue `P1-08` adds a compatibility boundary; it does not implement the later
@@ -33,13 +35,16 @@ rtk proxy "<skill-root>/scripts/research-db" legacy-comparisons \
 
 ## Deprecation map
 
-| Legacy path | Current adapter operation | Compatibility status | Later owner (not implemented here) |
-| --- | --- | --- | --- |
-| `frun` lifecycle commands | `research_run.lifecycle` | Retained; existing `ResearchRunService` routing remains authoritative when persistence is active | consolidated `research run` CLI |
-| `fsearch_smart` | `research_workflow.orchestrate` | Retained; only the completed legacy decision is compared/routed | planning, acquisition, coverage, and extraction services |
-| `fsearch` | `acquisition.single_query` | Retained; Firecrawl execution and flags are unchanged | `AcquisitionService` |
-| `fscrape` | `extraction.batch` | Retained; Firecrawl execution and flags are unchanged | `ExtractionService` |
-| `research-db` | unchanged | Not deprecated in Phase 1 | future consolidated administration CLI |
+| Legacy path                                 | Current adapter operation                                             | Compatibility status                                                                             | Later owner (not implemented here)     |
+| ------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| `frun` lifecycle commands                   | `research_run.lifecycle`                                              | Retained; existing `ResearchRunService` routing remains authoritative when persistence is active | consolidated `research run` CLI        |
+| `fsearch_smart` (monolithic loop)           | **RETIRED** (P7-08 / #68) — replaced by `ResearchOrchestrator`        | Removed; orchestrator is the default and only path                                               | —                                      |
+| `fsearch_smart` → Gemini planner            | **RETIRED** (P7-08 / #68) — direct Gemini API call removed            | Removed; LLM planning via `model_gateway`                                                        | —                                      |
+| `fsearch_smart` → complexity classification | **RETIRED** (P7-08 / #68) — keyword-complexity authority removed      | Removed; budget policy is authoritative                                                          | —                                      |
+| `fsearch_smart` → first-match profile       | **RETIRED** (P7-08 / #68) — `catalog.detect_profile` fallback removed | Removed; `ResearchSpec` is authoritative                                                         | —                                      |
+| `fsearch`                                   | `acquisition.single_query`                                            | Retained; Firecrawl execution and flags are unchanged                                            | `AcquisitionService`                   |
+| `fscrape`                                   | `extraction.batch`                                                    | Retained; Firecrawl execution and flags are unchanged                                            | `ExtractionService`                    |
+| `research-db`                               | unchanged                                                             | Not deprecated in Phase 1                                                                        | future consolidated administration CLI |
 
 The operation names are routing contracts, not substitute implementations of
 the later services.

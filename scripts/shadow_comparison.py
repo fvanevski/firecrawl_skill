@@ -329,48 +329,30 @@ class ComparisonResult:
 # ---------------------------------------------------------------------------
 
 
-def _get_fsearch_smart_path() -> Path:
-    candidates = [
-        Path(__file__).resolve().parent / "fsearch_smart",
-        Path.cwd() / "scripts" / "fsearch_smart",
-        Path.cwd() / "fsearch_smart",
-    ]
-    for c in candidates:
-        if c.exists() and c.is_file():
-            return c
-    raise FileNotFoundError("Could not locate fsearch_smart script file")
-
-
 def fsearch_smart_legacy_policy(objective: BenchmarkObjective) -> LegacyResult:
-    """Live policy adapter executing the legacy fsearch_smart control policy."""
-    import importlib.machinery
+    """Mock legacy policy for benchmark comparison.
 
-    script_path = _get_fsearch_smart_path()
-    loader = importlib.machinery.SourceFileLoader("fsearch_smart", str(script_path))
-    fsearch_smart = loader.load_module()
-
-    keywords = fsearch_smart.extract_keywords(objective.objective)
-    complexity, _ = fsearch_smart.classify_complexity(objective.objective, keywords)
-
-    num_queries = (
-        2 if complexity == "simple" else (3 if complexity == "moderate" else 5)
-    )
-    selected = fsearch_smart.subject_keywords(keywords, complexity)
-    base_phrase = " ".join(selected) if selected else objective.objective
+    This replaces the live fsearch_smart heuristic path which was retired
+    in P7-08 (#68). The mock produces deterministic results that simulate
+    the legacy keyword-complexity path for comparison purposes.
+    """
+    # Simulate legacy complexity-based query generation.
+    complexity_map = {"simple": 2, "moderate": 3, "complex": 5}
+    num_queries = complexity_map.get(objective.expected_complexity, 3)
 
     query_plan = [
-        {"query": f"{base_phrase} overview", "facet": "broad_overview"},
-        {"query": f"{base_phrase} details", "facet": "primary_sources"},
+        {"query": f"{objective.objective} overview", "facet": "broad_overview"},
+        {"query": f"{objective.objective} details", "facet": "primary_sources"},
     ]
     if num_queries >= 3:
         query_plan.append(
-            {"query": f"{base_phrase} developments", "facet": "recent_updates"}
+            {"query": f"{objective.objective} developments", "facet": "recent_updates"}
         )
     if num_queries >= 5:
         query_plan.extend(
             [
-                {"query": f"{base_phrase} analysis", "facet": "evidence"},
-                {"query": f"{base_phrase} challenges", "facet": "limitations"},
+                {"query": f"{objective.objective} analysis", "facet": "evidence"},
+                {"query": f"{objective.objective} challenges", "facet": "limitations"},
             ]
         )
 

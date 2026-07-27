@@ -1,3 +1,5 @@
+<!-- @format -->
+
 # Versioned deterministic budget policy
 
 `scripts/budget_policy.py` implements `budget-policy-v1`, whose checked-in
@@ -46,10 +48,11 @@ same local artifacts without creating PostgreSQL state.
 
 ## Compatibility and repair
 
-`--complexity` remains accepted as diagnostic metadata for migration but no
-longer selects resource limits. Existing numeric flags are stricter user caps;
-they cannot increase policy allowances. This is an intentional compatibility
-change required by FR-004.
+`--complexity` was accepted as diagnostic metadata for migration but no
+longer selects resource limits and has been fully retired as a CLI flag
+in `fsearch_smart` (P7-08 / #68). Existing numeric flags are stricter user
+caps; they cannot increase policy allowances. This is an intentional
+compatibility change required by FR-004.
 
 Revision 0007 is additive and does not rewrite corpus, snapshot, derivation,
 index, job, lease, or provenance rows. Before production, capture the normal
