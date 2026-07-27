@@ -664,8 +664,7 @@ def process_chunk(
     chunk_id: UUID,
     content: bytes,
     index_definition: IndexDefinition,
-) -> EmbeddingResult:
-    ...
+) -> EmbeddingResult: ...
 ```
 
 ### 14.2 Thin shell entry points

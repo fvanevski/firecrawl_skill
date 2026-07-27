@@ -219,6 +219,7 @@ from alembic import op
 revision = "0034_repair_event_index"
 down_revision = "0033_resource_governance"
 
+
 def upgrade():
     op.execute(
         """
@@ -237,6 +238,7 @@ def upgrade():
     op.execute(
         "INSERT INTO schema_migrations(version) VALUES (34) ON CONFLICT DO NOTHING"
     )
+
 
 def downgrade():
     raise RuntimeError("Forward-only repair migration")
