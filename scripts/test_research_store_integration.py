@@ -3648,3 +3648,104 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     assert trace[2]["rejection_reason"] is None
     assert trace[3]["selected"] is False
     assert trace[3]["rejection_reason"] == "below_candidate_limit"
+
+
+def test_validation_stage_persistence(service):
+    """Verify that the ``validation`` synthesis stage can be persisted in PostgreSQL.
+
+    This is the regression test for the P0 defect identified in the Phase 7
+    release gate evaluation (issue #70): migration 0031 created the
+    ``synthesis_stages`` table with a CHECK constraint that only allowed
+    ``("outline", "binding", "draft", "citation_pass")``, which meant the
+    fifth deterministic ``validation`` stage could never be persisted.
+
+    This test inserts a ``validation`` stage record directly through the
+    unit-of-work to confirm the database constraint and the Python domain
+    model both accept it.
+    """
+    from uuid import uuid4
+
+    from research_store.domain import SynthesisStageRecord
+
+    now = _utcnow()
+    run_id = uuid4()
+    stage_id = uuid4()
+
+    # --- Domain model validation ---
+    # The frozenset _SYNTHESIS_STAGE_NAMES must include "validation".
+    record = SynthesisStageRecord(
+        id=stage_id,
+        run_id=run_id,
+        stage_name="validation",
+        stage_status="completed",
+        semantic_call_id=None,
+        semantic_artifact_id=None,
+        evidence_packet_revision=1,
+        model_name="local",
+        prompt_version="synthesis-v1",
+        schema_version=1,
+        artifact={
+            "report_hash": "abc123",
+            "current_packet_revision": 1,
+            "stale_packet": False,
+            "validation_status": "valid",
+            "is_complete": True,
+            "claim_manifest": [],
+            "validation_errors_count": 0,
+            "validation_warnings_count": 0,
+            "summary": "All claims supported.",
+        },
+        error=None,
+        attempts=1,
+        created_at=now,
+        updated_at=now,
+    )
+    # __post_init__ should not raise
+    assert record.stage_name == "validation"
+
+    # --- Database CHECK constraint ---
+    with service.uow_factory() as uow:
+        # Insert via the raw dict path (what ReportArtifactService uses).
+        uow.insert_synthesis_stage(
+            {
+                "id": stage_id,
+                "run_id": run_id,
+                "stage_name": "validation",
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "local",
+                "prompt_version": "synthesis-v1",
+                "schema_version": 1,
+                "artifact": {
+                    "report_hash": "abc123",
+                    "current_packet_revision": 1,
+                    "stale_packet": False,
+                    "validation_status": "valid",
+                    "is_complete": True,
+                    "claim_manifest": [],
+                    "validation_errors_count": 0,
+                    "validation_warnings_count": 0,
+                    "summary": "All claims supported.",
+                },
+                "error": None,
+                "attempts": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+        # Retrieve the record back.
+        retrieved = uow.get_synthesis_stage(run_id, "validation")
+        assert retrieved is not None
+        assert retrieved["stage_name"] == "validation"
+        assert retrieved["stage_status"] == "completed"
+        assert retrieved["artifact"]["report_hash"] == "abc123"
+
+
+def _utcnow():
+    """Return a timezone-aware UTC datetime."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc)
