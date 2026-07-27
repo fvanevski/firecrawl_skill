@@ -207,9 +207,36 @@ def build_orchestrator(
 
     This is a convenience wrapper around ``ResearchOrchestrator.build``
     that uses the same configuration pattern as the other ``build_*``
-    functions.
+    functions.  When no explicit ``orchestrator_config`` is supplied, a
+    ResourceGovernor is built and attached so that synthesis LLM calls are
+    bounded through the governor.
     """
-    from .orchestrator import ResearchOrchestrator
+    from .orchestrator import OrchestratorConfig, ResearchOrchestrator
+
+    config = config or StoreConfig.from_env()
+    if orchestrator_config is None:
+        governor = build_resource_governor(config)
+        orchestrator_config = OrchestratorConfig(
+            resource_governor=governor,
+        )
+    elif getattr(orchestrator_config, "resource_governor", None) is None:
+        # Existing config was passed but no governor — attach one.
+        governor = build_resource_governor(config)
+        # Rebuild with the governor attached.
+        orchestrator_config = OrchestratorConfig(
+            execution_mode=getattr(
+                orchestrator_config, "execution_mode", "autonomous_local"
+            ),
+            budget_policy_version=getattr(
+                orchestrator_config, "budget_policy_version", "budget-policy-v1"
+            ),
+            max_adaptive_cycles=getattr(orchestrator_config, "max_adaptive_cycles", 10),
+            resume_on_conflict=getattr(orchestrator_config, "resume_on_conflict", True),
+            legacy_adapter_mode=getattr(
+                orchestrator_config, "legacy_adapter_mode", "authoritative"
+            ),
+            resource_governor=governor,
+        )
 
     return ResearchOrchestrator.build(config, orchestrator_config=orchestrator_config)
 

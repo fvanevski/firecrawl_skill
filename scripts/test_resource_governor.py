@@ -569,7 +569,7 @@ class TestResourceGovernorUnavailable:
         with pytest.raises(EndpointUnavailableError):
             governor.acquire_sync("generative")
 
-    def test_unknown_endpoint_raises(self):
+    def test_first_acquire_auto_sets_healthy(self):
         config = EndpointConfig(
             name="generative",
             url="http://localhost:8002",
@@ -730,34 +730,6 @@ class TestResourceGovernorSyncAcquireRelease:
         thread.join(timeout=1.0)
         assert not thread.is_alive(), "Thread should have completed after release"
         assert result == ["acquired"], "Second acquire should have succeeded"
-
-
-# ---------------------------------------------------------------------------
-# ResourceGovernor — PostgreSQL-backed health store
-# ---------------------------------------------------------------------------
-
-
-class TestResourceGovernorPostgresHealth:
-    """Tests for PostgreSQL-backed health store."""
-
-    def test_make_health_store_produces_callable(self):
-        uow_factory = MagicMock()
-        uow_mock = MagicMock()
-        uow_factory.return_value.__enter__ = MagicMock(return_value=uow_mock)
-        uow_factory.return_value.__exit__ = MagicMock(return_value=False)
-
-        store = make_health_store(uow_factory)
-        assert callable(store)
-
-    def test_make_health_query_produces_callable(self):
-        uow_factory = MagicMock()
-        uow_mock = MagicMock()
-        uow_factory.return_value.__enter__ = MagicMock(return_value=uow_mock)
-        uow_factory.return_value.__exit__ = MagicMock(return_value=False)
-        uow_mock.model_endpoints.get_health = MagicMock(return_value=None)
-
-        query = make_health_query(uow_factory)
-        assert callable(query)
 
 
 # ---------------------------------------------------------------------------

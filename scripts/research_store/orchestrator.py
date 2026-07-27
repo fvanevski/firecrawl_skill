@@ -74,6 +74,9 @@ class OrchestratorConfig:
         max_adaptive_cycles: Maximum number of coverage-review cycles.
         resume_on_conflict: If True, resume an existing run instead of failing.
         legacy_adapter_mode: Compatibility wrapper mode.
+        resource_governor: Optional ResourceGovernor for bounded concurrent
+            generative calls.  When provided, synthesis LLM calls are gated
+            through the governor.
     """
 
     execution_mode: str = "autonomous_local"
@@ -81,6 +84,7 @@ class OrchestratorConfig:
     max_adaptive_cycles: int = 10
     resume_on_conflict: bool = True
     legacy_adapter_mode: str = "authoritative"
+    resource_governor: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -1298,9 +1302,11 @@ class SynthesisStage:
         self,
         run_service: ResearchRunService,
         config: StoreConfig,
+        resource_governor: Any = None,
     ) -> None:
         self.run_service = run_service
         self.config = config
+        self._resource_governor = resource_governor
 
     def execute(
         self,
@@ -1329,6 +1335,7 @@ class SynthesisStage:
             semantic_service=semantic_service,
             evidence_service=self.run_service.evidence_service,
             config=self.config,
+            resource_governor=self._resource_governor,
         )
 
         # Run the bounded synthesis pipeline.
@@ -1542,7 +1549,9 @@ class ResearchOrchestrator:
             run_service, coverage_service, strategy_service, config
         )
         self._next_action = NextActionStage(run_service, strategy_service)
-        self._synthesis = SynthesisStage(run_service, config)
+        self._synthesis = SynthesisStage(
+            run_service, config, resource_governor=orchestrator_config.resource_governor
+        )
         self._terminal = TerminalStage(run_service)
 
         # Stage registry

@@ -18,6 +18,7 @@ from .config import StoreConfig
 from .container import (
     build_audit_service,
     build_catalog_export_service,
+    build_resource_governor,
     build_run_service,
     build_service,
 )
@@ -1793,12 +1794,53 @@ def _endpoint_health(config) -> dict:
     # Generative endpoint probe (if configured).
     generative_url = os.environ.get("GENERATIVE_URL", "")
     if generative_url:
+        try:
+            # Attempt a lightweight vLLM /models probe.
+            import urllib.request
+
+            model_url = generative_url.rstrip("/") + "/models"
+            req = urllib.request.Request(model_url, method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    result["endpoints"].append(
+                        {
+                            "endpoint_name": "generative",
+                            "url": generative_url,
+                            "status": "healthy",
+                            "live_probe": True,
+                        }
+                    )
+                else:
+                    raise RuntimeError(f"unexpected status {resp.status}")
+        except Exception as exc:  # noqa: BLE001
+            result["endpoints"].append(
+                {
+                    "endpoint_name": "generative",
+                    "url": generative_url,
+                    "status": "unhealthy",
+                    "error": str(exc),
+                    "live_probe": True,
+                }
+            )
+        else:
+            # Probe succeeded but didn't return 200 (e.g. network error caught
+            # above).  Fallback to unknown.
+            if not any(e["endpoint_name"] == "generative" for e in result["endpoints"]):
+                result["endpoints"].append(
+                    {
+                        "endpoint_name": "generative",
+                        "url": generative_url,
+                        "status": "unknown",
+                        "note": "probe succeeded but no 200 response",
+                    }
+                )
+    else:
         result["endpoints"].append(
             {
                 "endpoint_name": "generative",
-                "url": generative_url,
+                "url": "",
                 "status": "unknown",
-                "note": "no live probe configured; use GENERATIVE_URL to enable",
+                "note": "GENERATIVE_URL not configured",
             }
         )
 
@@ -3371,11 +3413,18 @@ def main(argv=None):
         )
         from .semantic_service import SemanticCallService
 
+        # Build resource governor for bounded LLM calls (P7-06).
+        try:
+            governor = build_resource_governor(config)
+        except Exception:  # noqa: BLE001
+            governor = None
+
         semantic_service = SemanticCallService(run_service.uow_factory)
         report_service = LocalSynthesisService(
             semantic_service=semantic_service,
             evidence_service=run_service.evidence_service,
             config=config,
+            resource_governor=governor,
         )
 
         packet_revision = args.packet_revision or 1

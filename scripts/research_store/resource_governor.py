@@ -144,7 +144,12 @@ class EndpointConfig:
         max_input_tokens: Maximum input tokens per request.
         max_batch_size: Maximum batch size for batch endpoints.
         health_check_interval: Seconds between health checks.
+            **Reserved for future scheduled health-checkers.**  Currently
+            unused — health checks are triggered on-demand (via CLI or
+            explicit calls).  Do not remove; future background checkers
+            will use this value.
         health_check_timeout: Seconds to wait for a health check response.
+            **Reserved for future use.**
         backpressure_threshold: Number of queued requests before backpressure.
         token_cap: Maximum tokens per batch (0 = unlimited).
     """
@@ -673,21 +678,40 @@ class ResourceGovernor:
     # ------------------------------------------------------------------
 
     def summary(self) -> dict[str, Any]:
-        """Return a summary of all endpoint health states."""
+        """Return a summary of all endpoint health states.
+
+        Includes both endpoints with known health state and registered
+        endpoints that have not yet been checked (shown with ``"unknown"``
+        status).
+        """
         with self._lock:
-            return {
-                name: {
-                    "status": health.status.value,
-                    "url": health.url,
-                    "concurrent_requests": health.concurrent_requests,
-                    "queued_requests": health.queued_requests,
-                    "total_checks": health.total_checks,
-                    "total_failures": health.total_failures,
-                    "restart_count": health.restart_count,
-                    "last_error": health.last_error,
-                }
-                for name, health in self._health_states.items()
-            }
+            result: dict[str, Any] = {}
+            for name, config in self._configs.items():
+                health = self._health_states.get(name)
+                if health is not None:
+                    result[name] = {
+                        "status": health.status.value,
+                        "url": health.url,
+                        "concurrent_requests": health.concurrent_requests,
+                        "queued_requests": health.queued_requests,
+                        "total_checks": health.total_checks,
+                        "total_failures": health.total_failures,
+                        "restart_count": health.restart_count,
+                        "last_error": health.last_error,
+                    }
+                else:
+                    # Registered but never checked — show as unknown.
+                    result[name] = {
+                        "status": "unknown",
+                        "url": config.url,
+                        "concurrent_requests": 0,
+                        "queued_requests": 0,
+                        "total_checks": 0,
+                        "total_failures": 0,
+                        "restart_count": 0,
+                        "last_error": None,
+                    }
+            return result
 
     def reset_health(self, endpoint_name: str) -> None:
         """Reset health state for an endpoint to unknown.
