@@ -130,6 +130,7 @@ class PostgresUnitOfWork:
         ) = self.coverage = self.terminal_decisions = self.extraction_attempts = self
         self.derivations = self
         self.semantic_cache = self
+        self.model_endpoints = self
 
         return self
 
@@ -7341,5 +7342,132 @@ class PostgresUnitOfWork:
                     record["created_at"],
                     record["key_hash"],
                 ),
+            )
+            return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # Model endpoints (resource governance, P7-06)
+    # ------------------------------------------------------------------
+
+    def upsert_health(
+        self,
+        endpoint_name: str,
+        *,
+        url: str,
+        status: str,
+        last_check_at: float | None,
+        last_error: str | None,
+        concurrent_requests: int,
+        queued_requests: int,
+        total_checks: int,
+        total_failures: int,
+        degraded_since: float | None,
+        restart_count: int,
+    ) -> None:
+        """Upsert health state for a model endpoint.
+
+        This is an upsert — if the row exists it is updated; otherwise
+        a new row is inserted.
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO model_endpoints
+                     (endpoint_name, url, status, last_check_at, last_error,
+                      concurrent_requests, queued_requests, total_checks,
+                      total_failures, degraded_since, restart_count)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (endpoint_name) DO UPDATE SET
+                     url = EXCLUDED.url,
+                     status = EXCLUDED.status,
+                     last_check_at = EXCLUDED.last_check_at,
+                     last_error = EXCLUDED.last_error,
+                     concurrent_requests = EXCLUDED.concurrent_requests,
+                     queued_requests = EXCLUDED.queued_requests,
+                     total_checks = EXCLUDED.total_checks,
+                     total_failures = EXCLUDED.total_failures,
+                     degraded_since = EXCLUDED.degraded_since,
+                     restart_count = EXCLUDED.restart_count""",
+                (
+                    endpoint_name,
+                    url,
+                    status,
+                    last_check_at,
+                    last_error,
+                    concurrent_requests,
+                    queued_requests,
+                    total_checks,
+                    total_failures,
+                    degraded_since,
+                    restart_count,
+                ),
+            )
+
+    def get_health(self, endpoint_name: str) -> dict[str, Any] | None:
+        """Return health state for an endpoint, or None."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT endpoint_name, url, status, last_check_at,
+                          last_error, concurrent_requests, queued_requests,
+                          total_checks, total_failures, degraded_since,
+                          restart_count
+                   FROM model_endpoints
+                   WHERE endpoint_name = %s""",
+                (endpoint_name,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "endpoint_name": row[0],
+            "url": row[1],
+            "status": row[2],
+            "last_check_at": row[3],
+            "last_error": row[4],
+            "concurrent_requests": row[5],
+            "queued_requests": row[6],
+            "total_checks": row[7],
+            "total_failures": row[8],
+            "degraded_since": row[9],
+            "restart_count": row[10],
+        }
+
+    def list_endpoints(self) -> list[dict[str, Any]]:
+        """Return health state for all registered endpoints."""
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT endpoint_name, url, status, last_check_at,
+                          last_error, concurrent_requests, queued_requests,
+                          total_checks, total_failures, degraded_since,
+                          restart_count
+                   FROM model_endpoints
+                   ORDER BY endpoint_name"""
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "endpoint_name": r[0],
+                "url": r[1],
+                "status": r[2],
+                "last_check_at": r[3],
+                "last_error": r[4],
+                "concurrent_requests": r[5],
+                "queued_requests": r[6],
+                "total_checks": r[7],
+                "total_failures": r[8],
+                "degraded_since": r[9],
+                "restart_count": r[10],
+            }
+            for r in rows
+        ]
+
+    def clear_endpoint_health(self, endpoint_name: str) -> int:
+        """Reset health state for an endpoint to defaults.
+
+        Returns the number of rows cleared (0 or 1).
+        """
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """DELETE FROM model_endpoints WHERE endpoint_name = %s""",
+                (endpoint_name,),
             )
             return cur.rowcount

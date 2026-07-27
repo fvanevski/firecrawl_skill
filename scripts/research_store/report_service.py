@@ -121,6 +121,10 @@ class LocalSynthesisService:
             binding.  If not provided, a new instance is created internally.
             Injecting a mock is useful for unit tests that avoid real LLM
             calls.
+        resource_governor: Optional ResourceGovernor for bounded concurrent
+            generative calls.  When provided, every LLM call is wrapped with
+            acquire/release so that concurrency, token, and batch caps are
+            enforced.
     """
 
     def __init__(
@@ -130,6 +134,7 @@ class LocalSynthesisService:
         config: StoreConfig,
         binding_service: Any = None,
         cache_ttl_seconds: int = 3600,
+        resource_governor: Any = None,
     ) -> None:
         self.semantic = semantic_service
         self.evidence = evidence_service
@@ -138,6 +143,7 @@ class LocalSynthesisService:
         self._binding_service = binding_service
         self._cache_ttl_seconds = cache_ttl_seconds
         self._cache: SemanticCacheService | None = None
+        self._resource_governor = resource_governor
         self._load_schemas()
 
     @property
@@ -150,6 +156,50 @@ class LocalSynthesisService:
                 valkey_url=self.config.valkey_url,
             )
         return self._cache
+
+    # ------------------------------------------------------------------
+    # Resource governance (P7-06)
+    # ------------------------------------------------------------------
+
+    def _bounded_llm_call(
+        self,
+        call_fn,
+        *,
+        input_tokens: int = 0,
+        batch_size: int = 1,
+    ) -> Any:
+        """Execute an LLM call through the resource governor.
+
+        Wraps ``call_fn`` with ``acquire_sync`` / ``release_sync`` so that
+        concurrency, token, and batch caps are enforced.  If no governor is
+        configured the call proceeds without gating.
+
+        Args:
+            call_fn: A zero-arity callable that performs the LLM call.
+            input_tokens: Estimated input token count for the request.
+                Passed to the governor for token-cap enforcement.
+            batch_size: Number of items in the batch.
+                Passed to the governor for batch-cap enforcement.
+
+        Returns:
+            Whatever ``call_fn`` returns.
+
+        Raises:
+            ResourceLimitError / EndpointUnavailableError when a governor
+            limit is exceeded.  These are re-raised after release so the
+            caller can handle them (e.g. record the error for resume).
+        """
+        if self._resource_governor is None:
+            return call_fn()
+
+        governor = self._resource_governor
+        try:
+            governor.acquire_sync(
+                "generative", input_tokens=input_tokens, batch_size=batch_size
+            )
+            return call_fn()
+        finally:
+            governor.release_sync("generative")
 
     # ------------------------------------------------------------------
     # Schema loading
@@ -802,15 +852,22 @@ class LocalSynthesisService:
 
         from model_gateway import call_structured
 
-        result = call_structured(
-            provider="local",
-            model=model_name,
-            schema=schema,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            prompt_version=prompt_version,
-            semantic_persistence=self.semantic,
-            semantic_context=context,
+        def _call():
+            return call_structured(
+                provider="local",
+                model=model_name,
+                schema=schema,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                prompt_version=prompt_version,
+                semantic_persistence=self.semantic,
+                semantic_context=context,
+            )
+
+        result = self._bounded_llm_call(
+            _call,
+            input_tokens=0,  # TODO: estimate from prompt length
+            batch_size=1,
         )
 
         with uow_factory() as uow:
@@ -1103,15 +1160,22 @@ class LocalSynthesisService:
 
         from model_gateway import call_structured
 
-        result = call_structured(
-            provider="local",
-            model=model_name,
-            schema=schema,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            prompt_version=prompt_version,
-            semantic_persistence=self.semantic,
-            semantic_context=context,
+        def _call():
+            return call_structured(
+                provider="local",
+                model=model_name,
+                schema=schema,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                prompt_version=prompt_version,
+                semantic_persistence=self.semantic,
+                semantic_context=context,
+            )
+
+        result = self._bounded_llm_call(
+            _call,
+            input_tokens=0,  # TODO: estimate from prompt length
+            batch_size=1,
         )
 
         with uow_factory() as uow:
@@ -1267,15 +1331,22 @@ class LocalSynthesisService:
 
         from model_gateway import call_structured
 
-        result = call_structured(
-            provider="local",
-            model=model_name,
-            schema=schema,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            prompt_version=prompt_version,
-            semantic_persistence=self.semantic,
-            semantic_context=context,
+        def _call():
+            return call_structured(
+                provider="local",
+                model=model_name,
+                schema=schema,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                prompt_version=prompt_version,
+                semantic_persistence=self.semantic,
+                semantic_context=context,
+            )
+
+        result = self._bounded_llm_call(
+            _call,
+            input_tokens=0,  # TODO: estimate from prompt length
+            batch_size=1,
         )
 
         with uow_factory() as uow:

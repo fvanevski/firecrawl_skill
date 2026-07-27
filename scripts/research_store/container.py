@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
+from typing import Any
 
 from .acquisition_service import AcquisitionService
 from .blob import ContentAddressedBlobStore
@@ -205,9 +206,36 @@ def build_orchestrator(
 
     This is a convenience wrapper around ``ResearchOrchestrator.build``
     that uses the same configuration pattern as the other ``build_*``
-    functions.
+    functions.  When no explicit ``orchestrator_config`` is supplied, a
+    ResourceGovernor is built and attached so that synthesis LLM calls are
+    bounded through the governor.
     """
-    from .orchestrator import ResearchOrchestrator
+    from .orchestrator import OrchestratorConfig, ResearchOrchestrator
+
+    config = config or StoreConfig.from_env()
+    if orchestrator_config is None:
+        governor = build_resource_governor(config)
+        orchestrator_config = OrchestratorConfig(
+            resource_governor=governor,
+        )
+    elif getattr(orchestrator_config, "resource_governor", None) is None:
+        # Existing config was passed but no governor — attach one.
+        governor = build_resource_governor(config)
+        # Rebuild with the governor attached.
+        orchestrator_config = OrchestratorConfig(
+            execution_mode=getattr(
+                orchestrator_config, "execution_mode", "autonomous_local"
+            ),
+            budget_policy_version=getattr(
+                orchestrator_config, "budget_policy_version", "budget-policy-v1"
+            ),
+            max_adaptive_cycles=getattr(orchestrator_config, "max_adaptive_cycles", 10),
+            resume_on_conflict=getattr(orchestrator_config, "resume_on_conflict", True),
+            legacy_adapter_mode=getattr(
+                orchestrator_config, "legacy_adapter_mode", "authoritative"
+            ),
+            resource_governor=governor,
+        )
 
     return ResearchOrchestrator.build(config, orchestrator_config=orchestrator_config)
 
@@ -231,6 +259,89 @@ def build_claim_service(config: StoreConfig | None = None):
             config.chunker_version,
         )
     )
+
+
+def build_resource_governor(
+    config: StoreConfig | None = None,
+) -> Any:
+    """Build a ResourceGovernor wired to the PostgreSQL database.
+
+    Args:
+        config: Store config. Uses ``StoreConfig.from_env()`` when
+            ``None``.
+
+    Returns:
+        A ``ResourceGovernor`` instance with PostgreSQL-backed health
+        persistence and all endpoint configurations registered.
+    """
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    from .resource_governor import (
+        EndpointConfig,
+        ResourceGovernor,
+        make_health_query,
+        make_health_store,
+    )
+
+    uow_factory = partial(
+        PostgresUnitOfWork,
+        config.database_url,
+        config.physical_collection,
+        config.embedding_model,
+        config.embedding_revision,
+        config.embedding_dimension,
+        config.parser_version,
+        config.normalization_version,
+        config.chunker_version,
+    )
+
+    governor = ResourceGovernor(
+        health_store=make_health_store(uow_factory),
+        health_query=make_health_query(uow_factory),
+    )
+
+    # Register generative endpoint.
+    if config.generative_url:
+        governor.register_endpoint(
+            EndpointConfig(
+                name="generative",
+                url=config.generative_url,
+                max_concurrent=config.generative_max_concurrent,
+                max_input_tokens=config.generative_max_input_tokens,
+                max_batch_size=config.generative_max_batch_size,
+                health_check_interval=config.generative_health_check_interval,
+                backpressure_threshold=config.generative_backpressure_threshold,
+                token_cap=config.generative_token_cap,
+            )
+        )
+
+    # Register embedding endpoint.
+    if config.embedding_url:
+        governor.register_endpoint(
+            EndpointConfig(
+                name="embedding",
+                url=config.embedding_url,
+                max_concurrent=config.embedding_max_concurrent,
+                max_batch_size=config.embedding_max_batch_size,
+                health_check_interval=config.embedding_health_check_interval,
+                backpressure_threshold=config.embedding_backpressure_threshold,
+            )
+        )
+
+    # Register reranker endpoint.
+    if config.reranker_url:
+        governor.register_endpoint(
+            EndpointConfig(
+                name="reranker",
+                url=config.reranker_url,
+                max_concurrent=config.reranker_max_concurrent,
+                max_batch_size=config.reranker_max_batch_size,
+                health_check_interval=config.reranker_health_check_interval,
+                backpressure_threshold=config.reranker_backpressure_threshold,
+            )
+        )
+
+    return governor
 
 
 def build_audit_service(config: StoreConfig | None = None):

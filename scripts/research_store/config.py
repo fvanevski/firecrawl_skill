@@ -14,6 +14,14 @@ def _integer(name: str, default: int) -> int:
     return value
 
 
+def _non_negative_integer(name: str, default: int) -> int:
+    """Read an integer env var that may be zero (zero means "unlimited")."""
+    value = int(os.environ.get(name, default))
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
+
+
 @dataclass(frozen=True)
 class StoreConfig:
     database_url: str
@@ -44,6 +52,24 @@ class StoreConfig:
     job_lease_seconds: int
     worker_poll_seconds: int
     embedding_batch_size: int
+    # Resource governance (P7-06)
+    generative_url: str
+    generative_model: str
+    generative_api_key: str
+    generative_max_concurrent: int
+    generative_max_input_tokens: int
+    generative_max_batch_size: int
+    generative_health_check_interval: int
+    generative_backpressure_threshold: int
+    generative_token_cap: int
+    embedding_max_concurrent: int
+    embedding_max_batch_size: int
+    embedding_health_check_interval: int
+    embedding_backpressure_threshold: int
+    reranker_max_concurrent: int
+    reranker_max_batch_size: int
+    reranker_health_check_interval: int
+    reranker_backpressure_threshold: int
 
     @classmethod
     def from_env(cls) -> StoreConfig:
@@ -85,6 +111,42 @@ class StoreConfig:
             job_lease_seconds=_integer("INDEX_JOB_LEASE_SECONDS", 300),
             worker_poll_seconds=_integer("INDEX_WORKER_POLL_SECONDS", 5),
             embedding_batch_size=_integer("EMBEDDING_BATCH_SIZE", 32),
+            # Resource governance (P7-06)
+            generative_url=os.environ.get("GENERATIVE_URL", ""),
+            generative_model=os.environ.get("GENERATIVE_MODEL", "llm"),
+            generative_api_key=os.environ.get("GENERATIVE_API_KEY", ""),
+            generative_max_concurrent=_integer("GENERATIVE_MAX_CONCURRENT", 1),
+            generative_max_input_tokens=_non_negative_integer(
+                "GENERATIVE_MAX_INPUT_TOKENS", 0
+            ),
+            generative_max_batch_size=_non_negative_integer(
+                "GENERATIVE_MAX_BATCH_SIZE", 1
+            ),
+            generative_health_check_interval=_non_negative_integer(
+                "GENERATIVE_HEALTH_CHECK_INTERVAL", 30
+            ),
+            generative_backpressure_threshold=_non_negative_integer(
+                "GENERATIVE_BACKPRESSURE_THRESHOLD", 0
+            ),
+            generative_token_cap=_non_negative_integer("GENERATIVE_TOKEN_CAP", 0),
+            embedding_max_concurrent=_integer("EMBEDDING_MAX_CONCURRENT", 4),
+            embedding_max_batch_size=_non_negative_integer(
+                "EMBEDDING_MAX_BATCH_SIZE", 0
+            ),
+            embedding_health_check_interval=_non_negative_integer(
+                "EMBEDDING_HEALTH_CHECK_INTERVAL", 30
+            ),
+            embedding_backpressure_threshold=_non_negative_integer(
+                "EMBEDDING_BACKPRESSURE_THRESHOLD", 0
+            ),
+            reranker_max_concurrent=_integer("RERANKER_MAX_CONCURRENT", 2),
+            reranker_max_batch_size=_non_negative_integer("RERANKER_MAX_BATCH_SIZE", 0),
+            reranker_health_check_interval=_non_negative_integer(
+                "RERANKER_HEALTH_CHECK_INTERVAL", 30
+            ),
+            reranker_backpressure_threshold=_non_negative_integer(
+                "RERANKER_BACKPRESSURE_THRESHOLD", 0
+            ),
         )
 
     @property
