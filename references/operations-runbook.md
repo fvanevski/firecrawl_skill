@@ -732,13 +732,13 @@ Every destructive command is documented with its scope, safeguards, and recovery
 
 ### 13.2 `migrate --from N --to M --apply`
 
-| Aspect           | Detail                                                                                                 |
-| ---------------- | ------------------------------------------------------------------------------------------------------ |
-| **What it does** | Discards the entire old Catalog v5 schema and initializes an empty catalog at the new schema           |
-| **Scope**        | One catalog root                                                                                       |
-| **Safeguard**    | Dry run by default; `--apply` required to execute                                                      |
-| **Recovery**     | No automatic recovery. Restore from a prior catalog backup if available. Database state is unaffected. |
-| **Before use**   | Ensure the database is in a consistent state; stop all ingestion.                                      |
+| Aspect           | Detail                                                                                                                                                                                   |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **What it does** | Discards the entire old Catalog v5 filesystem schema and initializes an empty catalog at the new schema. This is the Catalog v5 filesystem migration, not an Alembic database migration. |
+| **Scope**        | One catalog root                                                                                                                                                                         |
+| **Safeguard**    | Dry run by default; `--apply` required to execute                                                                                                                                        |
+| **Recovery**     | No automatic recovery. Restore from a prior catalog backup if available. Database state is unaffected.                                                                                   |
+| **Before use**   | Ensure the database is in a consistent state; stop all ingestion.                                                                                                                        |
 
 ### 13.3 `purge --force` (no filter)
 

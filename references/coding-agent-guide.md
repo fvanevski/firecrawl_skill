@@ -53,18 +53,18 @@ Research Orchestrator (fsearch_smart)
 
 ### 1.2 Key components
 
-| Component | Location | Role |
-|-----------|----------|------|
-| `ResearchOrchestrator` | `scripts/fsearch_smart` | Coverage-led research orchestration |
-| `AcquisitionService` | `scripts/research_store/service.py` | Search and scrape execution |
-| `ResearchRunService` | `scripts/research_store/service.py` | Workflow state machine, transitions |
-| `BudgetPolicy` | `scripts/budget_policy.py` | Deterministic resource caps |
-| `PostgresUnitOfWork` | `scripts/research_store/postgres.py` | Database transactions, idempotency |
-| `IndexWorker` | `scripts/research_store/indexing.py` | Embedding and Qdrant projection |
-| `RetrievalService` | `scripts/research_store/retrieval.py` | Hybrid retrieval (FTS + dense + rerank) |
-| `EvidencePacketService` | `scripts/research_store/evidence.py` | Evidence packet construction |
-| `SemanticCallService` | `scripts/research_store/service.py` | Model call provenance and artifacts |
-| `CatalogService` | `scripts/catalog_v5.py` | Catalog v5 compatibility exports |
+| Component               | Location                              | Role                                    |
+| ----------------------- | ------------------------------------- | --------------------------------------- |
+| `ResearchOrchestrator`  | `scripts/fsearch_smart`               | Coverage-led research orchestration     |
+| `AcquisitionService`    | `scripts/research_store/service.py`   | Search and scrape execution             |
+| `ResearchRunService`    | `scripts/research_store/service.py`   | Workflow state machine, transitions     |
+| `BudgetPolicy`          | `scripts/budget_policy.py`            | Deterministic resource caps             |
+| `PostgresUnitOfWork`    | `scripts/research_store/postgres.py`  | Database transactions, idempotency      |
+| `IndexWorker`           | `scripts/research_store/indexing.py`  | Embedding and Qdrant projection         |
+| `RetrievalService`      | `scripts/research_store/retrieval.py` | Hybrid retrieval (FTS + dense + rerank) |
+| `EvidencePacketService` | `scripts/research_store/evidence.py`  | Evidence packet construction            |
+| `SemanticCallService`   | `scripts/research_store/service.py`   | Model call provenance and artifacts     |
+| `CatalogService`        | `scripts/catalog_v5.py`               | Catalog v5 compatibility exports        |
 
 ### 1.3 Directory structure
 
@@ -111,13 +111,13 @@ scripts/
 
 ### 2.1 What is authoritative
 
-| Layer | Authority | Recovery |
-|-------|-----------|----------|
-| **PostgreSQL** | Workflow state, corpus, events, budgets, audits, semantic provenance | Restore first; never infer from other layers |
-| **Blob root** | Immutable payload bytes | Restore with PostgreSQL; verify hashes |
-| **Qdrant** | Dense-retrieval projection | Rebuild from PostgreSQL chunks |
-| **Valkey** | Transient wakeups | Loss is safe; worker polls PostgreSQL |
-| **Scratch / Catalog** | Derived artifacts | Regenerate from PostgreSQL + blobs |
+| Layer                 | Authority                                                            | Recovery                                     |
+| --------------------- | -------------------------------------------------------------------- | -------------------------------------------- |
+| **PostgreSQL**        | Workflow state, corpus, events, budgets, audits, semantic provenance | Restore first; never infer from other layers |
+| **Blob root**         | Immutable payload bytes                                              | Restore with PostgreSQL; verify hashes       |
+| **Qdrant**            | Dense-retrieval projection                                           | Rebuild from PostgreSQL chunks               |
+| **Valkey**            | Transient wakeups                                                    | Loss is safe; worker polls PostgreSQL        |
+| **Scratch / Catalog** | Derived artifacts                                                    | Regenerate from PostgreSQL + blobs           |
 
 ### 2.2 Deterministic versus semantic authority
 
@@ -159,11 +159,11 @@ Retried commands must reuse their original idempotency key. After a stale-revisi
 
 ### 3.1 Mode selection
 
-| Mode | Semantic authority | Inner LLM calls | Default source |
-|------|-------------------|-----------------|----------------|
-| `agent_led` | Host agent | Absent when host decision exists | Host-facing service |
-| `autonomous_local` | Local LLM | Each stage independently retryable | Standalone CLI |
-| `deterministic_debug` | Deterministic fixtures | None | Tests |
+| Mode                  | Semantic authority     | Inner LLM calls                    | Default source      |
+| --------------------- | ---------------------- | ---------------------------------- | ------------------- |
+| `agent_led`           | Host agent             | Absent when host decision exists   | Host-facing service |
+| `autonomous_local`    | Local LLM              | Each stage independently retryable | Standalone CLI      |
+| `deterministic_debug` | Deterministic fixtures | None                               | Tests               |
 
 ### 3.2 Mode changes
 
@@ -204,11 +204,11 @@ Terminal runs must be reopened before changing mode. Changes invalidate prior va
 
 `BudgetPolicy` (in `scripts/budget_policy.py`) maps a validated `ResearchSpec` to deterministic resource caps:
 
-| Tier | Risk | Search branches | Results/branch | Extraction attempts | Successes required |
-|------|------|-----------------|----------------|---------------------|-------------------|
-| `focused` | Low | 2 | 15 | 8 | 6 |
-| `standard` | Medium | 3 | 25 | 18 | 12 |
-| `intensive` | High | 5 | 40 | 36 | 25 |
+| Tier        | Risk   | Search branches | Results/branch | Extraction attempts | Successes required |
+| ----------- | ------ | --------------- | -------------- | ------------------- | ------------------ |
+| `focused`   | Low    | 2               | 15             | 8                   | 6                  |
+| `standard`  | Medium | 3               | 25             | 18                  | 12                 |
+| `intensive` | High   | 5               | 40             | 36                  | 25                 |
 
 ### 4.2 Policy inputs
 
@@ -322,18 +322,18 @@ cancelled (from any non-terminal state)
 
 **Permitted transitions:**
 
-| From | To |
-|------|-----|
-| `created` | `planning`, `failed` |
-| `planning` | `corpus_review`, `failed` |
-| `corpus_review` | `acquiring`, `retrieving`, `failed` |
-| `acquiring` | `coverage_review`, `extracting`, `failed` |
-| `extracting` | `indexing`, `coverage_review`, `failed` |
-| `indexing` | `coverage_review`, `partial`, `failed` |
+| From              | To                                                                           |
+| ----------------- | ---------------------------------------------------------------------------- |
+| `created`         | `planning`, `failed`                                                         |
+| `planning`        | `corpus_review`, `failed`                                                    |
+| `corpus_review`   | `acquiring`, `retrieving`, `failed`                                          |
+| `acquiring`       | `coverage_review`, `extracting`, `failed`                                    |
+| `extracting`      | `indexing`, `coverage_review`, `failed`                                      |
+| `indexing`        | `coverage_review`, `partial`, `failed`                                       |
 | `coverage_review` | `acquiring`, `extracting`, `retrieving`, `synthesizing`, `partial`, `failed` |
-| `retrieving` | `coverage_review`, `synthesizing`, `failed` |
-| `synthesizing` | `validating`, `failed` |
-| `validating` | `completed`, `partial`, `failed` |
+| `retrieving`      | `coverage_review`, `synthesizing`, `failed`                                  |
+| `synthesizing`    | `validating`, `failed`                                                       |
+| `validating`      | `completed`, `partial`, `failed`                                             |
 
 **Terminal states** (`completed`, `partial`, `failed`, `cancelled`) reject all ordinary transitions.
 
@@ -479,11 +479,11 @@ Evidence packets are the exclusive evidence input for report synthesis:
 
 Autonomous-local synthesis proceeds through bounded stages:
 
-| Stage | Purpose |
-|-------|---------|
-| `outline` | Generate report outline from evidence |
-| `binding` | Map claims to evidence passages |
-| `draft` | Draft report content |
+| Stage           | Purpose                                    |
+| --------------- | ------------------------------------------ |
+| `outline`       | Generate report outline from evidence      |
+| `binding`       | Map claims to evidence passages            |
+| `draft`         | Draft report content                       |
 | `citation_pass` | Validate all citations resolve to passages |
 
 Each stage is independently retryable and resumable.
@@ -593,14 +593,14 @@ If the embedding dimension changes:
 
 The `model_endpoints` table tracks health for each endpoint:
 
-| Field | Purpose |
-|-------|---------|
-| `endpoint_name` | `generative`, `embedding`, or `reranker` |
-| `status` | `healthy`, `degraded`, `unhealthy`, `unknown` |
-| `concurrent_requests` | Active request count |
-| `queued_requests` | Pending request count |
-| `degraded_since` | When degradation began |
-| `restart_count` | Number of restarts detected |
+| Field                 | Purpose                                       |
+| --------------------- | --------------------------------------------- |
+| `endpoint_name`       | `generative`, `embedding`, or `reranker`      |
+| `status`              | `healthy`, `degraded`, `unhealthy`, `unknown` |
+| `concurrent_requests` | Active request count                          |
+| `queued_requests`     | Pending request count                         |
+| `degraded_since`      | When degradation began                        |
+| `restart_count`       | Number of restarts detected                   |
 
 ### 12.2 Backpressure
 
@@ -637,19 +637,19 @@ See `operations-runbook.md#5-configuration-variables` for the complete list of a
 
 Key variables for coding agents:
 
-| Variable | Default | Effect |
-|----------|---------|--------|
-| `FIRECRAWL_RESEARCH_PERSIST` | `auto` | Persistence mode |
-| `DATABASE_URL` | Derived | PostgreSQL connection |
-| `BLOB_ROOT` | `$HOME/.local/share/firecrawl/blobs` | Blob storage root |
-| `QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant endpoint |
-| `VALKEY_URL` | Derived | Valkey endpoint |
-| `FIRECRAWL_LLM_LOCAL_BASE_URL` | `http://192.168.4.115:8002/v1` | Local LLM |
-| `EMBEDDING_URL` | Derived | Embedding endpoint |
-| `RERANKER_URL` | Derived | Reranker endpoint |
-| `FIRECRAWL_CATALOG_DISABLED` | unset | Disable catalog |
-| `FIRECRAWL_AUDIT_AUTO_SEMANTIC` | `1` | Auto LLM audits |
-| `FIRECRAWL_LEGACY_ADAPTER_MODE` | `compatibility` | Legacy adapter mode |
+| Variable                        | Default                              | Effect                |
+| ------------------------------- | ------------------------------------ | --------------------- |
+| `FIRECRAWL_RESEARCH_PERSIST`    | `auto`                               | Persistence mode      |
+| `DATABASE_URL`                  | Derived                              | PostgreSQL connection |
+| `BLOB_ROOT`                     | `$HOME/.local/share/firecrawl/blobs` | Blob storage root     |
+| `QDRANT_URL`                    | `http://127.0.0.1:6333`              | Qdrant endpoint       |
+| `VALKEY_URL`                    | Derived                              | Valkey endpoint       |
+| `FIRECRAWL_LLM_LOCAL_BASE_URL`  | `http://192.168.4.115:8002/v1`       | Local LLM             |
+| `EMBEDDING_URL`                 | Derived                              | Embedding endpoint    |
+| `RERANKER_URL`                  | Derived                              | Reranker endpoint     |
+| `FIRECRAWL_CATALOG_DISABLED`    | unset                                | Disable catalog       |
+| `FIRECRAWL_AUDIT_AUTO_SEMANTIC` | `1`                                  | Auto LLM audits       |
+| `FIRECRAWL_LEGACY_ADAPTER_MODE` | `compatibility`                      | Legacy adapter mode   |
 
 ---
 
@@ -765,6 +765,11 @@ pytest -q -p no:cacheprovider "<skill-root>/scripts/test_research_store_integrat
 22. **Compatibility-only legacy paths** — shadow mode does not mutate state.
 23. **Recovery documentation commands** — all CLI commands are documented and runnable.
 
+> **Note:** Items 22–23 are verified by separate test suites, not by the generic
+> unit test suite in Section 15.1: item 22 is covered by
+> `test_workflow.py` (legacy adapter compatibility tests) and item 23 is covered
+> by `test_documentation.py` (documentation command verification).
+
 ### 15.4 Migration tests
 
 For every migration:
@@ -778,4 +783,4 @@ For every migration:
 
 ---
 
-*Cross-reference `operations-runbook.md` for operational procedures, `migration-guide.md` for migration procedures, `research-store-architecture.md` for authority boundaries, `workflow-state-schema.md` for the state machine, and `budget-policy.md` for budget details.*
+_Cross-reference `operations-runbook.md` for operational procedures, `migration-guide.md` for migration procedures, `research-store-architecture.md` for authority boundaries, `workflow-state-schema.md` for the state machine, and `budget-policy.md` for budget details._
