@@ -151,6 +151,19 @@ class PostgresUnitOfWork:
         """Return a nested transaction context managed as a PostgreSQL savepoint."""
         return self.connection.transaction()
 
+    def execute(self, sql, params=None):
+        """Execute SQL (typically a RETURNING query) and return self for chaining."""
+        self._cursor = self.connection.cursor()
+        self._cursor.execute(sql, params)
+        return self
+
+    def fetchone(self):
+        """Fetch one row from the most recent execute() cursor."""
+        if not hasattr(self, "_cursor"):
+            raise RuntimeError("fetchone() called without a prior execute()")
+        row = self._cursor.fetchone()
+        return row
+
     def persist_ingest(
         self,
         request: IngestRequest,

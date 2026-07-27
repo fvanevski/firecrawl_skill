@@ -26,10 +26,13 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 from uuid import UUID
 
 from research_domain.models import (
@@ -136,51 +139,49 @@ class TerminalDecisionService:
             DuplicateTerminalDecisionError: If the idempotency key already
                 exists for this run.
         """
-        uow = self.uow_factory()
         try:
             created_at = utcnow()
 
-            uow.execute(
-                """INSERT INTO terminal_decisions (
-                    run_id, decision_id, run_revision, coverage_revision,
-                    outcome, no_progress_signals, unresolved_gap,
-                    policy_version, idempotency_key, created_at
-                ) VALUES (
-                    :run_id, :decision_id, :run_revision, :coverage_revision,
-                    :outcome, :signals, :unresolved_gap,
-                    :policy_version, :idempotency_key, :created_at
-                ) RETURNING id, created_at""",
-                {
-                    "run_id": str(run_id),
-                    "decision_id": str(decision.decision_id),
-                    "run_revision": decision.run_revision,
-                    "coverage_revision": decision.coverage_revision,
-                    "outcome": decision.outcome.value,
-                    "signals": tuple(s.value for s in decision.no_progress_signals),
-                    "unresolved_gap": decision.unresolved_gap,
-                    "policy_version": decision.policy_version,
-                    "idempotency_key": idempotency_key,
-                    "created_at": created_at,
-                },
-            )
-            row = uow.fetchone()
-            uow.commit()
+            with self.uow_factory() as uow:
+                uow.execute(
+                    """INSERT INTO terminal_decisions (
+                        run_id, decision_id, run_revision, coverage_revision,
+                        outcome, no_progress_signals, unresolved_gap,
+                        policy_version, idempotency_key, created_at
+                    ) VALUES (
+                        :run_id, :decision_id, :run_revision, :coverage_revision,
+                        :outcome, :signals, :unresolved_gap,
+                        :policy_version, :idempotency_key, :created_at
+                    ) RETURNING id, created_at""",
+                    {
+                        "run_id": str(run_id),
+                        "decision_id": str(decision.decision_id),
+                        "run_revision": decision.run_revision,
+                        "coverage_revision": decision.coverage_revision,
+                        "outcome": decision.outcome.value,
+                        "signals": tuple(s.value for s in decision.no_progress_signals),
+                        "unresolved_gap": decision.unresolved_gap,
+                        "policy_version": decision.policy_version,
+                        "idempotency_key": idempotency_key,
+                        "created_at": created_at,
+                    },
+                )
+                row = uow.fetchone()
 
-            return TerminalDecisionRecord.from_decision(
-                id=row[0],
-                decision=decision,
-                idempotency_key=idempotency_key,
-                created_at=row[1],
-            )
-        except Exception as exc:
-            uow.rollback()
-            # Check for unique violation (duplicate idempotency key)
-            detail = str(exc)
-            if (
-                "uk_terminal_decisions_idempotency" in detail
-                or "duplicate" in detail.lower()
-            ):
-                raise DuplicateTerminalDecisionError(
-                    f"terminal decision already recorded for run {run_id}"
-                ) from exc
+                return TerminalDecisionRecord.from_decision(
+                    id=row[0],
+                    decision=decision,
+                    idempotency_key=idempotency_key,
+                    created_at=row[1],
+                )
+        except DuplicateTerminalDecisionError:
             raise
+        except Exception as exc:  # noqa: BLE001
+            # Non-blocking: a persistence failure should not prevent
+            # the orchestrator from acting on the terminal decision.
+            logger.warning(
+                "terminal decision persistence failed, "
+                "proceeding without audit record: %s",
+                exc,
+            )
+            return None

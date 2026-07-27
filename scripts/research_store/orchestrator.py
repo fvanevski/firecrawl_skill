@@ -433,17 +433,19 @@ class AcquisitionStage:
                 continue
 
             try:
-                result = self.acquisition_service.execute_query(
+                result = self.acquisition_service.execute_search(
                     run_id,
                     query_text,
                     idempotency_key=f"acquire:{run_id}:{query_text}",
                 )
-                response_ids.append(result.get("response_id"))
-                candidate_count += result.get("candidate_count", 0)
-                successful_urls += result.get("successful_urls", 0)
+                response_ids.append(str(result.search_response_id))
+                candidate_count += result.candidate_count
+                successful_urls += len(result.candidates)
                 # Collect candidate IDs for coverage events
-                for cid in result.get("candidate_ids", []):
-                    candidate_ids.append(cid)  # noqa: PERF402
+                for cand in result.candidates[:5]:
+                    cid = cand.get("id") or cand.get("candidate_id")
+                    if cid:
+                        candidate_ids.append(cid)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("acquisition query failed: %s — %s", query_text, exc)
 
@@ -1152,8 +1154,12 @@ class CoverageReviewStage:
         """Generate targeted search queries for unresolved coverage gaps using LLM or gap heuristics."""
         queries: list[dict[str, str]] = []
 
+        if not unresolved_items:
+            return queries
+
+        # Try Google API first (Vertex/Gemini format)
         api_key = os.environ.get("GOOGLE_API_KEY")
-        if api_key and unresolved_items:
+        if api_key:
             try:
                 import json
                 import urllib.request
@@ -1206,7 +1212,49 @@ class CoverageReviewStage:
                             queries.append({"query": q.strip(), "facet": "adaptive"})
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "LLM query planning failed, falling back to gap heuristic: %s", exc
+                    "Google query planning failed, trying local vLLM: %s", exc
+                )
+
+        # Fall back to local vLLM (OpenAI-compatible) when Google API is unavailable
+        if not queries:
+            _gen_url = os.environ.get("GENERATIVE_URL") or os.environ.get(
+                "FIRECRAWL_GENERATIVE_URL"
+            )
+            generative_url = (_gen_url or "http://127.0.0.1:8004/v1").rstrip("/")
+            try:
+                import json
+                import urllib.request
+
+                prompt = (
+                    f"Objective: {objective}\n"
+                    f"Unresolved coverage gaps: {[getattr(item, 'subject_id', '') for item in unresolved_items]}\n\n"
+                    f"Generate up to 5 complementary natural-language search queries to resolve these coverage gaps. "
+                    f"Return ONLY a JSON object with a 'queries' key containing an array of strings. No other text."
+                )
+                payload = json.dumps(
+                    {
+                        "model": "chat",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "response_format": {"type": "json_object"},
+                    }
+                ).encode()
+                req = urllib.request.Request(
+                    f"{generative_url}/chat/completions",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    res_data = json.loads(response.read().decode("utf-8"))
+                    text = res_data["choices"][0]["message"]["content"]
+                    parsed = json.loads(text)
+                    for q in parsed.get("queries", []):
+                        if isinstance(q, str) and q.strip():
+                            queries.append({"query": q.strip(), "facet": "adaptive"})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Local vLLM query planning failed, falling back to gap heuristic: %s",
+                    exc,
                 )
 
         if not queries and unresolved_items:
