@@ -1,0 +1,31 @@
+{
+  "version": "ground-truth-v1",
+  "description": "Ground truth mappings for retrieval benchmark. Maps queries to expected candidate IDs.",
+  "queries": [
+    {
+      "query": "how does the benchmark runner measure recall",
+      "relevant_topics": ["benchmark", "recall", "retrieval"],
+      "expected_relevant_keywords": ["recall", "measure", "lexical", "dense", "fused"]
+    },
+    {
+      "query": "coverage-led research completion decision",
+      "relevant_topics": ["coverage", "orchestrator", "terminal decision"],
+      "expected_relevant_keywords": ["coverage", "complete", "stop", "page count", "ledger"]
+    },
+    {
+      "query": "evidence packet citation binding validator",
+      "relevant_topics": ["evidence", "packet", "citation", "validator"],
+      "expected_relevant_keywords": ["evidence", "packet", "citation", "claim", "binding", "validator"]
+    },
+    {
+      "query": "resource governor endpoint health backpressure",
+      "relevant_topics": ["resource", "governor", "health", "backpressure"],
+      "expected_relevant_keywords": ["governor", "health", "endpoint", "backpressure", "concurrency"]
+    },
+    {
+      "query": "embedding microbatching lease safety indexing",
+      "relevant_topics": ["embedding", "microbatch", "lease", "indexing"],
+      "expected_relevant_keywords": ["microbatch", "lease", "index", "job", "batch"]
+    }
+  ]
+}

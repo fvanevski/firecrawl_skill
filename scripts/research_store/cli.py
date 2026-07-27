@@ -148,6 +148,75 @@ def parser():
     sub.add_parser("resource-status")
 
     # ------------------------------------------------------------------
+    # Release benchmark (P7-07)
+    # ------------------------------------------------------------------
+    bench = sub.add_parser("benchmark", help="Run release benchmark campaign")
+    bench_sub = bench.add_subparsers(dest="benchmark_subcommand", required=True)
+
+    # benchmark run
+    bench_run = bench_sub.add_parser(
+        "run",
+        help=(
+            "Run benchmark against fixed dataset. "
+            "Exit code: 0 = go or go_with_conditions (both are successes), "
+            "2 = no_go (failure). "
+            "(P7-07: exit code changed from 0=go/1=go_with_conditions/2=no_go "
+            "to 0=go_or_go_with_conditions/2=no_go; parse the JSON 'outcome' "
+            "field to distinguish between go and go_with_conditions.)"
+        ),
+    )
+    bench_run.add_argument(
+        "--dataset",
+        dest="benchmark_dataset",
+        required=True,
+        help="Path to benchmark dataset JSON file",
+    )
+    bench_run.add_argument(
+        "--modes",
+        dest="benchmark_modes",
+        nargs="+",
+        help="Workflow modes to benchmark (default: from dataset)",
+    )
+    bench_run.add_argument(
+        "--no-dry-run",
+        dest="benchmark_no_dry_run",
+        action="store_true",
+        help="Run with actual workflow execution (not simulation)",
+    )
+    bench_run.add_argument(
+        "--output",
+        dest="benchmark_output",
+        help="Path to write benchmark results JSON",
+    )
+
+    # benchmark results
+    bench_results = bench_sub.add_parser(
+        "results", help="Display saved benchmark results"
+    )
+    bench_results.add_argument(
+        "--results-path",
+        dest="benchmark_results_path",
+        required=True,
+        help="Path to saved benchmark results JSON",
+    )
+
+    # benchmark report
+    bench_report = bench_sub.add_parser(
+        "report", help="Generate human-readable benchmark report"
+    )
+    bench_report.add_argument(
+        "--results-path",
+        dest="benchmark_report_path",
+        required=True,
+        help="Path to benchmark results JSON",
+    )
+    bench_report.add_argument(
+        "--output",
+        dest="benchmark_report_output",
+        help="Path to write report text file",
+    )
+
+    # ------------------------------------------------------------------
     # Parser info (issue #44)
     # ------------------------------------------------------------------
     sub.add_parser("parser-info", help="Show parser registry information")
@@ -3601,6 +3670,229 @@ def main(argv=None):
         else:
             print(dumps(report_dict))
         return 0
+
+    elif args.command == "benchmark":
+        if args.benchmark_subcommand == "run":
+            # Load benchmark dataset
+            dataset_path = Path(args.benchmark_dataset)
+            from .workflow_benchmark import (
+                WorkflowBenchmarkConfig,
+                WorkflowBenchmarkRunner,
+                load_benchmark_dataset,
+            )
+
+            loader = load_benchmark_dataset(dataset_path)
+            modes = tuple(args.benchmark_modes) if args.benchmark_modes else None
+            config = WorkflowBenchmarkConfig(
+                workflow_modes=modes or loader.dataset.workflow_modes,
+                dry_run=not args.benchmark_no_dry_run,
+            )
+            runner = WorkflowBenchmarkRunner(loader, config)
+            result = runner.run()
+
+            output: dict[str, Any] = {
+                "dataset_version": result.dataset_version,
+                "total_duration_ms": result.total_duration_ms,
+                "comparison": {
+                    "dataset_version": result.comparison.dataset_version,
+                    "integrity_regression": result.comparison.integrity_regression,
+                    "quality_vs_baseline": result.comparison.quality_vs_baseline,
+                    "performance_vs_baseline": result.comparison.performance_vs_baseline,
+                    "results": [
+                        {
+                            "workflow_mode": r.workflow_mode,
+                            "quality": {
+                                "candidate_recall": r.quality.candidate_recall,
+                                "source_quality_score": r.quality.source_quality_score,
+                                "coverage_completeness": r.quality.coverage_completeness,
+                                "unsupported_claim_rate": r.quality.unsupported_claim_rate,
+                                "citation_accuracy": r.quality.citation_accuracy,
+                                "report_quality_score": r.quality.report_quality_score,
+                            },
+                            "performance": {
+                                "total_latency_ms": r.performance.total_latency_ms,
+                                "total_tokens": r.performance.total_tokens,
+                                "semantic_calls": r.performance.semantic_calls,
+                                "cache_hit_rate": r.performance.cache_hit_rate,
+                                "cache_miss_rate": r.performance.cache_miss_rate,
+                                "embedding_throughput": r.performance.embedding_throughput,
+                                "gpu_memory_mb": r.performance.gpu_memory_mb,
+                                "cpu_percent": r.performance.cpu_percent,
+                            },
+                            "integrity_checks": [
+                                {
+                                    "check_name": c.check_name,
+                                    "passed": c.passed,
+                                    "details": c.details,
+                                }
+                                for c in r.integrity_checks
+                            ],
+                        }
+                        for r in result.comparison.results
+                    ],
+                },
+                "recommendation": {
+                    "outcome": result.recommendation.outcome,
+                    "dataset_version": result.recommendation.dataset_version,
+                    "supported_claims": list(result.recommendation.supported_claims),
+                    "withdrawn_claims": list(result.recommendation.withdrawn_claims),
+                    "known_limitations": list(result.recommendation.known_limitations),
+                    "conditions": list(result.recommendation.conditions),
+                    "p0_regressions": list(result.recommendation.p0_regressions),
+                },
+            }
+
+            if args.benchmark_output:
+                output_path = Path(args.benchmark_output)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=str(output_path.parent), suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(fd, "w") as f:
+                        json.dump(output, f, indent=2, default=str)
+                    os.replace(tmp_path, str(output_path))
+                    print(f"Results written to {output_path}")
+                except BaseException:
+                    os.unlink(tmp_path)
+                    raise
+            else:
+                print(dumps(output))
+
+            # Migration note (P7-07 / #67): Exit code changed from
+            #   0 = go, 1 = go_with_conditions, 2 = no_go
+            # to:
+            #   0 = go or go_with_conditions (both are successes),
+            #   2 = no_go (failure).
+            # Automation that previously checked for exit code 1 to
+            # distinguish "GO_WITH_CONDITIONS" from "GO" must now parse
+            # the JSON output's "outcome" field instead.
+            # Exit code: 0 = go or go_with_conditions (both are successes),
+            #           2 = no_go (failure).
+            # The JSON output includes the "outcome" field so automation can
+            # distinguish between "go" and "go_with_conditions" when needed.
+            outcome = result.recommendation.outcome
+            if outcome == "go" or outcome == "go_with_conditions":
+                return 0
+            else:
+                return 2
+
+        elif args.benchmark_subcommand == "results":
+            # Display saved benchmark results
+            if not args.benchmark_results_path:
+                print(
+                    "ERROR: --results-path is required for 'results' subcommand",
+                    file=sys.stderr,
+                )
+                return 2
+            results_path = Path(args.benchmark_results_path)
+            if not results_path.exists():
+                print(f"ERROR: results file not found: {results_path}", file=sys.stderr)
+                return 2
+            with open(results_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if args.benchmark_results_path:
+                print(dumps(data))
+            return 0
+
+        elif args.benchmark_subcommand == "report":
+            # Generate human-readable report from benchmark results
+            if not args.benchmark_report_path:
+                print(
+                    "ERROR: --results-path is required for 'report' subcommand",
+                    file=sys.stderr,
+                )
+                return 2
+            report_path = Path(args.benchmark_report_path)
+            if not report_path.exists():
+                print(f"ERROR: results file not found: {report_path}", file=sys.stderr)
+                return 2
+            with open(report_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            lines: list[str] = []
+            lines.append("=" * 60)
+            lines.append("RELEASE BENCHMARK REPORT")
+            lines.append("=" * 60)
+            lines.append("")
+
+            # Dataset info
+            lines.append(f"Dataset version: {data.get('dataset_version', 'unknown')}")
+            lines.append(f"Duration: {data.get('total_duration_ms', 0):.1f}ms")
+            lines.append("")
+
+            # Recommendation
+            rec = data.get("recommendation", {})
+            lines.append(
+                f"Recommendation: {rec.get('outcome', 'unknown').replace('_', ' ').upper()}"
+            )
+            if rec.get("supported_claims"):
+                lines.append("Supported claims:")
+                for claim in rec["supported_claims"]:
+                    lines.append(f"  ✓ {claim}")
+            if rec.get("withdrawn_claims"):
+                lines.append("Withdrawn claims:")
+                for claim in rec["withdrawn_claims"]:
+                    lines.append(f"  ✗ {claim}")
+            if rec.get("known_limitations"):
+                lines.append("Known limitations:")
+                for limit in rec["known_limitations"]:
+                    lines.append(f"  • {limit}")
+            if rec.get("p0_regressions"):
+                lines.append("P0 regressions:")
+                for reg in rec["p0_regressions"]:
+                    lines.append(f"  ! {reg}")
+            lines.append("")
+
+            # Comparison
+            comp = data.get("comparison", {})
+            lines.append("Workflow comparison:")
+            lines.append("-" * 40)
+            for r in comp.get("results", []):
+                mode = r.get("workflow_mode", "unknown")
+                qual = r.get("quality", {})
+                perf = r.get("performance", {})
+                lines.append(f"  {mode}:")
+                lines.append(f"    Recall: {qual.get('candidate_recall', 0):.3f}")
+                lines.append(
+                    f"    Source quality: {qual.get('source_quality_score', 0):.3f}"
+                )
+                lines.append(
+                    f"    Coverage: {qual.get('coverage_completeness', 0):.3f}"
+                )
+                lines.append(
+                    f"    Unsupported claims: {qual.get('unsupported_claim_rate', 0):.3f}"
+                )
+                lines.append(
+                    f"    Citation accuracy: {qual.get('citation_accuracy', 0):.3f}"
+                )
+                lines.append(f"    Latency: {perf.get('total_latency_ms', 0):.0f}ms")
+                lines.append(f"    Tokens: {perf.get('total_tokens', 0)}")
+                lines.append(f"    Semantic calls: {perf.get('semantic_calls', 0)}")
+                lines.append("")
+
+            # Integrity
+            integrity = comp.get("integrity_regression", False)
+            lines.append(f"Integrity regression: {'YES' if integrity else 'NO'}")
+            lines.append("")
+
+            report_text = "\n".join(lines)
+            print(report_text)
+
+            if args.benchmark_report_output:
+                output_path = Path(args.benchmark_report_output)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(report_text, encoding="utf-8")
+                print(f"Report written to {output_path}")
+
+            return 0
+
+        else:
+            print(
+                f"ERROR: unknown benchmark subcommand: {args.benchmark_subcommand}",
+                file=sys.stderr,
+            )
+            return 2
 
     else:
         raise AssertionError(args.command)

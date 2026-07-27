@@ -1,11 +1,167 @@
 {
   "research-spec-v1": [
-    {"path": ["risk_level"], "value": "critical", "reason": "unsupported risk enum"},
-    {"path": ["time_window", "start"], "value": "not-a-date", "reason": "invalid time-window syntax"}
+    {
+      "path": [
+        "risk_level"
+      ],
+      "value": "critical",
+      "reason": "unsupported risk enum"
+    },
+    {
+      "path": [
+        "time_window",
+        "start"
+      ],
+      "value": "not-a-date",
+      "reason": "invalid time-window syntax"
+    }
   ],
-  "search-plan-v1": [{"path": ["queries", 0, "query"], "value": "", "reason": "empty query"}],
-  "candidate-assessment-v1": [{"path": ["relevance"], "value": "maybe", "reason": "unsupported relevance enum"}],
-  "coverage-ledger-v1": [{"path": ["items", 0, "status"], "value": "failed", "reason": "mechanical failure is not semantic coverage"}],
-  "strategy-revision-v1": [{"path": ["run_revision"], "value": 0, "reason": "invalid run revision"}],
-  "evidence-packet-v1": [{"path": ["retrieval_provenance", 0, "mechanical_status"], "value": "uncertain", "reason": "semantic uncertainty is not mechanical status"}]
+  "search-plan-v1": [
+    {
+      "path": [
+        "queries",
+        0,
+        "query"
+      ],
+      "value": "",
+      "reason": "empty query"
+    }
+  ],
+  "candidate-assessment-v1": [
+    {
+      "path": [
+        "relevance"
+      ],
+      "value": "maybe",
+      "reason": "unsupported relevance enum"
+    }
+  ],
+  "coverage-ledger-v1": [
+    {
+      "path": [
+        "items",
+        0,
+        "status"
+      ],
+      "value": "failed",
+      "reason": "mechanical failure is not semantic coverage"
+    }
+  ],
+  "strategy-revision-v1": [
+    {
+      "path": [
+        "run_revision"
+      ],
+      "value": 0,
+      "reason": "invalid run revision"
+    }
+  ],
+  "evidence-packet-v1": [
+    {
+      "path": [
+        "retrieval_provenance",
+        0,
+        "mechanical_status"
+      ],
+      "value": "uncertain",
+      "reason": "semantic uncertainty is not mechanical status"
+    }
+  ],
+  "benchmark-source-v1": [
+    {
+      "path": [
+        "role"
+      ],
+      "value": "invalid"
+    }
+  ],
+  "benchmark-objective-v1": [
+    {
+      "path": [
+        "id"
+      ],
+      "value": ""
+    },
+    {
+      "path": [
+        "questions"
+      ],
+      "value": []
+    }
+  ],
+  "benchmark-dataset-v1": [
+    {
+      "path": [
+        "objectives"
+      ],
+      "value": []
+    },
+    {
+      "path": [
+        "workflow_modes",
+        0
+      ],
+      "value": "invalid_mode"
+    }
+  ],
+  "quality-measurement-v1": [
+    {
+      "path": [
+        "candidate_recall"
+      ],
+      "value": -0.1
+    },
+    {
+      "path": [
+        "source_quality_score"
+      ],
+      "value": 1.1
+    }
+  ],
+  "performance-measurement-v1": [
+    {
+      "path": [
+        "total_latency_ms"
+      ],
+      "value": -1.0
+    },
+    {
+      "path": [
+        "cpu_percent"
+      ],
+      "value": 101.0
+    }
+  ],
+  "integrity-check-v1": [
+    {
+      "path": [
+        "check_name"
+      ],
+      "value": ""
+    }
+  ],
+  "workflow-run-result-v1": [
+    {
+      "path": [
+        "workflow_mode"
+      ],
+      "value": "invalid_mode"
+    }
+  ],
+  "workflow-comparison-v1": [
+    {
+      "path": [
+        "results"
+      ],
+      "value": []
+    }
+  ],
+  "release-recommendation-v1": [
+    {
+      "path": [
+        "outcome"
+      ],
+      "value": "invalid"
+    }
+  ]
 }

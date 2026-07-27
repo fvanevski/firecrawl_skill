@@ -1,0 +1,208 @@
+{
+  "version": "benchmark-v1",
+  "description": "Fixed benchmark dataset for release campaign. Compares legacy, agent-led, and autonomous-local workflows across quality, performance, and deterministic-integrity metrics.",
+  "created": "2026-07-26",
+  "evaluation_set": true,
+  "evaluation_set_note": "This dataset is the evaluation set. Do not tune workflow parameters against it without preserving a separate held-out set.",
+  "objectives": [
+    {
+      "id": "obj-001",
+      "title": "Local LLM embedding model comparison",
+      "objective": "Compare the quality and performance of ONNX embedding models (nomic-embed-text, bge-m3) versus OpenAI embeddings for semantic retrieval in the firecrawl_skill codebase.",
+      "questions": [
+        "Which ONNX embedding model achieves the best recall on the firecrawl_skill retrieval corpus?",
+        "What is the latency difference between ONNX and OpenAI embeddings on CPU?",
+        "Does embedding dimension mismatch cause Qdrant index failures?"
+      ],
+      "expected_source_classes": [
+        "GitHub issues and PRs",
+        "Architecture documentation",
+        "Benchmark test code",
+        "Model gateway implementation"
+      ],
+      "known_relevant_sources": [
+        "scripts/research_store/benchmark.py",
+        "scripts/research_domain/models.py",
+        "references/research-store-architecture.md",
+        "scripts/test_retrieval_benchmark.py"
+      ],
+      "known_distractor_sources": [
+        "scripts/cleanup.py",
+        "scripts/catalog_v5.py",
+        "references/cli-script-disambiguation.md"
+      ],
+      "expected_unresolved_controversies": [
+        "ONNX model quality may be adequate for retrieval but inferior to OpenAI for semantic reasoning"
+      ],
+      "citation_support_labels": {
+        "obj-001-q1": "SUPPORTED",
+        "obj-001-q2": "SUPPORTED",
+        "obj-001-q3": "SUPPORTED"
+      }
+    },
+    {
+      "id": "obj-002",
+      "title": "Coverage-led vs page-count research completion",
+      "objective": "Evaluate whether coverage-led research completion (issue #67's predecessor work) correctly identifies when research is sufficient versus relying on successful page counts.",
+      "questions": [
+        "Does the orchestrator stop when coverage is complete even if page targets are not met?",
+        "Does the orchestrator prevent completion when coverage is incomplete even if page targets are exceeded?",
+        "Are adaptive cycles properly authorized by coverage gaps?"
+      ],
+      "expected_source_classes": [
+        "Orchestrator implementation",
+        "Coverage service",
+        "Terminal decision service",
+        "Strategy revision service"
+      ],
+      "known_relevant_sources": [
+        "scripts/research_store/orchestrator.py",
+        "scripts/research_store/coverage_service.py",
+        "scripts/research_store/terminal_decision_service.py",
+        "scripts/research_store/strategy_service.py",
+        "scripts/research_store/stages.py"
+      ],
+      "known_distractor_sources": [
+        "scripts/fsearch.py",
+        "scripts/fscrape.py",
+        "scripts/research_store/qdrant.py"
+      ],
+      "expected_unresolved_controversies": [
+        "Coverage gaps may not capture all semantic dimensions of the research objective"
+      ],
+      "citation_support_labels": {
+        "obj-002-q1": "SUPPORTED",
+        "obj-002-q2": "SUPPORTED",
+        "obj-002-q3": "SUPPORTED"
+      }
+    },
+    {
+      "id": "obj-003",
+      "title": "EvidencePacket v1 citation binding",
+      "objective": "Verify that EvidencePacket v1 correctly binds claims to evidence passages, supports corroboration/contradiction groups, and prevents invented citations.",
+      "questions": [
+        "Can the packet validator detect invented citations?",
+        "Are corroboration and contradiction groups properly populated?",
+        "Does the report validator ensure every claim resolves to exact packet passages?"
+      ],
+      "expected_source_classes": [
+        "Evidence packet implementation",
+        "Packet validator",
+        "Report validator",
+        "Claim binding service"
+      ],
+      "known_relevant_sources": [
+        "scripts/research_store/evidence.py",
+        "scripts/research_store/report_validator.py",
+        "scripts/research_store/claim_binding_service.py",
+        "scripts/research_store/evidence_grouping.py"
+      ],
+      "known_distractor_sources": [
+        "scripts/research_store/derivation_service.py",
+        "scripts/research_store/parsing_legacy.py",
+        "scripts/research_store/catalog_import.py"
+      ],
+      "expected_unresolved_controversies": [
+        "Some claims may be partially supported — the system must distinguish supported from unsupported"
+      ],
+      "citation_support_labels": {
+        "obj-003-q1": "SUPPORTED",
+        "obj-003-q2": "SUPPORTED",
+        "obj-003-q3": "SUPPORTED"
+      }
+    },
+    {
+      "id": "obj-004",
+      "title": "Resource governance and endpoint health",
+      "objective": "Evaluate the local resource governance system (issue #66) for concurrency control, token/batch caps, endpoint health tracking, and backpressure handling.",
+      "questions": [
+        "Does the governor enforce token and batch caps?",
+        "Does endpoint health tracking prevent calls to unhealthy endpoints?",
+        "Does backpressure correctly limit concurrent semantic calls?"
+      ],
+      "expected_source_classes": [
+        "Resource governor implementation",
+        "Semantic service",
+        "Model gateway"
+      ],
+      "known_relevant_sources": [
+        "scripts/research_store/resource_governor.py",
+        "scripts/research_store/semantic_service.py",
+        "scripts/model_gateway.py",
+        "scripts/test_resource_governor.py"
+      ],
+      "known_distractor_sources": [
+        "scripts/research_store/blob.py",
+        "scripts/research_store/url.py",
+        "scripts/research_store/queue.py"
+      ],
+      "expected_unresolved_controversies": [
+        "GPU is reserved for local LLM; embedding/reranker run on CPU with high latency"
+      ],
+      "citation_support_labels": {
+        "obj-004-q1": "SUPPORTED",
+        "obj-004-q2": "SUPPORTED",
+        "obj-004-q3": "SUPPORTED"
+      }
+    },
+    {
+      "id": "obj-005",
+      "title": "Lease-safe embedding microbatching",
+      "objective": "Verify that embedding microbatching (issue #65) correctly manages lease ownership, handles partial batch failures, and prevents false job completion.",
+      "questions": [
+        "Does each microbatch maintain lease ownership?",
+        "Does partial batch failure not falsely complete jobs?",
+        "Is the retry ledger idempotent?"
+      ],
+      "expected_source_classes": [
+        "Indexing service",
+        "Lease management",
+        "Job repository"
+      ],
+      "known_relevant_sources": [
+        "scripts/research_store/indexing.py",
+        "scripts/research_store/alembic/versions/0033_resource_governance.py",
+        "scripts/test_index_runtime.py"
+      ],
+      "known_distractor_sources": [
+        "scripts/research_store/catalog_export.py",
+        "scripts/research_store/compat_export.py",
+        "scripts/research_store/replay.py"
+      ],
+      "expected_unresolved_controversies": [
+        "Lease expiry during long-running batches may require restart"
+      ],
+      "citation_support_labels": {
+        "obj-005-q1": "SUPPORTED",
+        "obj-005-q2": "SUPPORTED",
+        "obj-005-q3": "SUPPORTED"
+      }
+    }
+  ],
+  "quality_thresholds": {
+    "min_candidate_recall": 0.6,
+    "min_source_quality_score": 0.7,
+    "min_coverage_completeness": 0.5,
+    "max_unsupported_claim_rate": 0.15,
+    "min_citation_accuracy": 0.8,
+    "max_latency_ratio_vs_baseline": 2.0,
+    "max_token_ratio_vs_baseline": 2.0,
+    "no_p0_deterministic_integrity_regression": true
+  },
+  "workflow_modes": [
+    "legacy",
+    "agent_led",
+    "autonomous_local",
+    "deterministic_debug"
+  ],
+  "deterministic_integrity_checks": [
+    "content_addressed_blob_integrity",
+    "derivation_versioning",
+    "lease_safety",
+    "state_machine_transitions",
+    "evidence_packet_validation",
+    "citation_binding_integrity",
+    "cache_key_identity",
+    "idempotent_replay"
+  ]
+}

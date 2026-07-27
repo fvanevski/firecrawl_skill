@@ -1,0 +1,212 @@
+{
+  "$defs": {
+    "DeterministicIntegrityCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "check_name": {
+          "type": "string"
+        },
+        "details": {
+          "type": "string"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "integrity-check-v1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "check_name",
+        "passed",
+        "details"
+      ],
+      "type": "object"
+    },
+    "PerformanceMeasurement": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_hit_rate": {
+          "type": "number"
+        },
+        "cache_miss_rate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cpu_percent": {
+          "type": "number"
+        },
+        "embedding_throughput": {
+          "type": "number"
+        },
+        "gpu_memory_mb": {
+          "type": "number"
+        },
+        "schema_version": {
+          "const": "performance-measurement-v1",
+          "type": "string"
+        },
+        "semantic_calls": {
+          "type": "integer"
+        },
+        "total_latency_ms": {
+          "type": "number"
+        },
+        "total_tokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "total_latency_ms",
+        "total_tokens",
+        "semantic_calls",
+        "cache_hit_rate",
+        "embedding_throughput",
+        "gpu_memory_mb",
+        "cpu_percent",
+        "cache_miss_rate"
+      ],
+      "type": "object"
+    },
+    "QualityMeasurement": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_recall": {
+          "type": "number"
+        },
+        "citation_accuracy": {
+          "type": "number"
+        },
+        "coverage_completeness": {
+          "type": "number"
+        },
+        "report_quality_score": {
+          "type": "number"
+        },
+        "schema_version": {
+          "const": "quality-measurement-v1",
+          "type": "string"
+        },
+        "source_quality_score": {
+          "type": "number"
+        },
+        "unsupported_claim_rate": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "schema_version",
+        "candidate_recall",
+        "source_quality_score",
+        "coverage_completeness",
+        "unsupported_claim_rate",
+        "citation_accuracy",
+        "report_quality_score"
+      ],
+      "type": "object"
+    },
+    "WorkflowRunResult": {
+      "additionalProperties": false,
+      "properties": {
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "integrity_checks": {
+          "items": {
+            "$ref": "#/$defs/DeterministicIntegrityCheck"
+          },
+          "type": "array"
+        },
+        "performance": {
+          "$ref": "#/$defs/PerformanceMeasurement"
+        },
+        "quality": {
+          "$ref": "#/$defs/QualityMeasurement"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_version": {
+          "const": "workflow-run-result-v1",
+          "type": "string"
+        },
+        "workflow_mode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "workflow_mode",
+        "quality",
+        "performance",
+        "integrity_checks",
+        "run_id",
+        "errors"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/workflow-comparison-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "dataset_version": {
+      "type": "string"
+    },
+    "integrity_regression": {
+      "type": "boolean"
+    },
+    "performance_vs_baseline": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "type": "object"
+    },
+    "quality_vs_baseline": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "type": "object"
+    },
+    "results": {
+      "items": {
+        "$ref": "#/$defs/WorkflowRunResult"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "workflow-comparison-v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "dataset_version",
+    "results",
+    "quality_vs_baseline",
+    "performance_vs_baseline",
+    "integrity_regression"
+  ],
+  "title": "WorkflowComparison",
+  "type": "object"
+}

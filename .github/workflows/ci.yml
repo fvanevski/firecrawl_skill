@@ -48,6 +48,7 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
+            scripts/test_research_domain.py \
             scripts/test_research_store.py \
             scripts/test_classifier.py \
             scripts/test_workflow.py \
@@ -61,7 +62,8 @@ jobs:
             scripts/test_duplicate_service.py \
             scripts/test_claim_binding_service.py \
             scripts/test_shadow_comparison.py \
-            scripts/test_uow_duplicate_methods.py
+            scripts/test_uow_duplicate_methods.py \
+            scripts/test_workflow_benchmark.py
 
   lint:
     name: Ruff
