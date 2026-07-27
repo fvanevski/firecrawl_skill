@@ -824,7 +824,9 @@ class WorkflowBenchmarkRunner:
                 max_adaptive_cycles=10,
                 legacy_adapter_mode="authoritative",
             )
-            orchestrator = build_orchestrator(config, orchestrator_config=orchestrator_config)
+            orchestrator = build_orchestrator(
+                config, orchestrator_config=orchestrator_config
+            )
 
             # Build run service
             run_service = build_run_service(config)
@@ -866,7 +868,9 @@ class WorkflowBenchmarkRunner:
                         "query_id": str(uuid4()),
                         "query": objective.objective[:100],  # Use objective as query
                         "facet": "primary",
-                        "target_question_ids": [str(uuid4())],  # Required by SearchQuery
+                        "target_question_ids": [
+                            str(uuid4())
+                        ],  # Required by SearchQuery
                         "target_claim_ids": [],
                         "intended_source_classes": [],
                         "expected_organizations": [],
@@ -953,9 +957,13 @@ class WorkflowBenchmarkRunner:
         # These are conservative estimates — real metrics would require
         # deeper analysis of the evidence packet and report.
         base_recall = min(1.0, successful_urls / 10.0) if successful_urls > 0 else 0.3
-        base_source_quality = min(1.0, successful_urls / 15.0) if successful_urls > 0 else 0.4
+        base_source_quality = (
+            min(1.0, successful_urls / 15.0) if successful_urls > 0 else 0.4
+        )
         base_coverage = min(1.0, wave_count / 5.0) if wave_count > 0 else 0.2
-        base_unsupported = max(0.0, 0.25 - (wave_count * 0.02)) if wave_count > 0 else 0.3
+        base_unsupported = (
+            max(0.0, 0.25 - (wave_count * 0.02)) if wave_count > 0 else 0.3
+        )
         base_citation = min(1.0, successful_urls / 20.0) if successful_urls > 0 else 0.5
         base_report = min(1.0, wave_count / 6.0) if wave_count > 0 else 0.3
 
