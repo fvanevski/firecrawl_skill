@@ -8,7 +8,14 @@
       "type": "number"
     },
     "cache_miss_rate": {
-      "type": "number"
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "cpu_percent": {
       "type": "number"
@@ -39,10 +46,10 @@
     "total_tokens",
     "semantic_calls",
     "cache_hit_rate",
-    "cache_miss_rate",
     "embedding_throughput",
     "gpu_memory_mb",
-    "cpu_percent"
+    "cpu_percent",
+    "cache_miss_rate"
   ],
   "title": "PerformanceMeasurement",
   "type": "object"

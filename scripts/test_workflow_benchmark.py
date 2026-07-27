@@ -796,6 +796,27 @@ class TestDeterministicIntegrityChecker:
         assert result.passed is False
         assert "strict" in result.details.lower()
 
+    def test_strict_mode_fails_multiple_checks(self):
+        """Strict mode fails ALL simulation-fallback checks, not just one."""
+        checker = DeterministicIntegrityChecker(strict=True)
+        checks = checker.check_all(DeterministicIntegrityChecker.CHECKS)
+
+        # Checks that fall back to simulation should all fail in strict mode
+        simulation_checks = {
+            "content_addressed_blob_integrity",
+            "derivation_versioning",
+            "lease_safety",
+            "cache_key_identity",
+            "idempotent_replay",
+        }
+        failed_simulation = [
+            c for c in checks if c.check_name in simulation_checks and c.passed is False
+        ]
+        assert len(failed_simulation) >= 3, (
+            f"Expected at least 3 strict-mode failures for simulation checks, "
+            f"got {len(failed_simulation)}: {[c.check_name for c in failed_simulation]}"
+        )
+
     def test_strict_mode_passes_with_real_data(self):
         """Strict mode passes when real data is provided."""
         transitions = [
@@ -1350,3 +1371,203 @@ class TestRealWorkflowExecution:
         ]
         assert len(strict_checks) > 0
         assert all(c.passed is False for c in strict_checks)
+
+
+# ---------------------------------------------------------------------------
+# deterministic_debug mode tests
+# ---------------------------------------------------------------------------
+
+
+class TestDeterministicDebugMode:
+    """Tests for the deterministic_debug workflow mode."""
+
+    def test_deterministic_debug_produces_lower_quality(self):
+        """deterministic_debug mode produces lower quality than all other modes."""
+        loader = _make_minimal_loader()
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("deterministic_debug", "legacy", "agent_led"),
+        )
+        runner = WorkflowBenchmarkRunner(loader, config)
+        result = runner.run()
+
+        debug_results = [
+            r
+            for r in result.comparison.results
+            if r.workflow_mode == "deterministic_debug"
+        ]
+        legacy_results = [
+            r for r in result.comparison.results if r.workflow_mode == "legacy"
+        ]
+        agent_results = [
+            r for r in result.comparison.results if r.workflow_mode == "agent_led"
+        ]
+
+        assert debug_results
+        assert legacy_results
+        assert agent_results
+
+        # deterministic_debug should have the lowest recall
+        avg_debug_recall = sum(r.quality.candidate_recall for r in debug_results) / len(
+            debug_results
+        )
+        avg_legacy_recall = sum(
+            r.quality.candidate_recall for r in legacy_results
+        ) / len(legacy_results)
+        avg_agent_recall = sum(r.quality.candidate_recall for r in agent_results) / len(
+            agent_results
+        )
+
+        assert avg_debug_recall < avg_legacy_recall < avg_agent_recall
+
+    def test_deterministic_debug_performance(self):
+        """deterministic_debug mode has minimal resource usage."""
+        loader = _make_minimal_loader()
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("deterministic_debug", "agent_led"),
+        )
+        runner = WorkflowBenchmarkRunner(loader, config)
+        result = runner.run()
+
+        debug_results = [
+            r
+            for r in result.comparison.results
+            if r.workflow_mode == "deterministic_debug"
+        ]
+        agent_results = [
+            r for r in result.comparison.results if r.workflow_mode == "agent_led"
+        ]
+
+        # deterministic_debug should have fewer semantic calls
+        debug_semantic = sum(r.performance.semantic_calls for r in debug_results) / len(
+            debug_results
+        )
+        agent_semantic = sum(r.performance.semantic_calls for r in agent_results) / len(
+            agent_results
+        )
+        assert debug_semantic < agent_semantic
+
+
+# ---------------------------------------------------------------------------
+# Recommendation outcome tests
+# ---------------------------------------------------------------------------
+
+
+class TestRecommendationOutcome:
+    """Tests for recommendation outcome logic."""
+
+    def test_full_pipeline_produces_no_go_with_legacy(self):
+        """Full pipeline with legacy mode produces NO_GO because legacy fails thresholds."""
+        loader = load_benchmark_dataset(BENCHMARK_FIXTURE)
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("legacy", "agent_led", "autonomous_local"),
+        )
+        runner = WorkflowBenchmarkRunner(loader, config)
+        result = runner.run()
+
+        # Legacy mode recall (0.45) < min_candidate_recall (0.6) → withdrawn claim
+        assert result.recommendation.outcome == "no_go"
+        assert len(result.recommendation.withdrawn_claims) > 0
+        # Verify the withdrawn claim mentions candidate_recall
+        assert any(
+            "candidate_recall" in claim
+            for claim in result.recommendation.withdrawn_claims
+        )
+
+    def test_no_legacy_produces_go(self):
+        """Without legacy mode, agent-led and autonomous_local pass thresholds → GO."""
+        loader = _make_minimal_loader()
+        config = WorkflowBenchmarkConfig(
+            workflow_modes=("agent_led", "autonomous_local"),
+        )
+        runner = WorkflowBenchmarkRunner(loader, config)
+        result = runner.run()
+
+        # Both agent_led and autonomous_local should pass all thresholds
+        assert result.recommendation.outcome == "go"
+        assert result.recommendation.withdrawn_claims == ()
+
+
+# ---------------------------------------------------------------------------
+# CLI integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestBenchmarkCLI:
+    """Integration tests for the benchmark CLI subcommands."""
+
+    def test_benchmark_run_json_output_structure(self):
+        """benchmark run produces correct JSON output structure."""
+        import subprocess
+
+        cli_script = SCRIPTS / "research-db"
+        result = subprocess.run(
+            [
+                str(cli_script),
+                "benchmark",
+                "run",
+                "--dataset",
+                str(BENCHMARK_FIXTURE),
+                "--modes",
+                "agent_led",
+                "autonomous_local",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(SCRIPTS.parent),
+            check=False,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        output = json.loads(result.stdout)
+        assert "dataset_version" in output
+        assert "recommendation" in output
+        assert "comparison" in output
+        assert output["recommendation"]["outcome"] in (
+            "go",
+            "go_with_conditions",
+            "no_go",
+        )
+
+    def test_benchmark_report_uses_results_path(self):
+        """benchmark report --results-path reads the correct file."""
+        import subprocess
+
+        cli_script = SCRIPTS / "research-db"
+
+        # First run the benchmark to produce results (use 2 modes for valid comparison)
+        run_result = subprocess.run(
+            [
+                str(cli_script),
+                "benchmark",
+                "run",
+                "--dataset",
+                str(BENCHMARK_FIXTURE),
+                "--modes",
+                "agent_led",
+                "autonomous_local",
+                "--output",
+                "/tmp/test_benchmark_results.json",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(SCRIPTS.parent),
+            check=False,
+        )
+        assert run_result.returncode == 0, f"stderr: {run_result.stderr}"
+
+        # Then use --results-path to generate report
+        report_result = subprocess.run(
+            [
+                str(cli_script),
+                "benchmark",
+                "report",
+                "--results-path",
+                "/tmp/test_benchmark_results.json",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(SCRIPTS.parent),
+            check=False,
+        )
+        assert report_result.returncode == 0, f"stderr: {report_result.stderr}"
+        assert "RELEASE BENCHMARK REPORT" in report_result.stdout
+        assert "agent_led" in report_result.stdout

@@ -224,7 +224,6 @@ class DeterministicIntegrityChecker:
                 performs real SHA-256 verification.
             evidence_packets: List of evidence packet dicts (with
                 ``claim_evidence_bindings``, ``passages``,
-                ``claim_evidence_bindings``, ``passages``,
                 ``claims`` keys).  When provided, the evidence packet
                 validation and citation binding checks perform real
                 cross-referencing.
@@ -744,7 +743,6 @@ class WorkflowBenchmarkRunner:
             total_tokens=performance.total_tokens,
             semantic_calls=performance.semantic_calls,
             cache_hit_rate=performance.cache_hit_rate,
-            cache_miss_rate=1.0 - performance.cache_hit_rate,
             embedding_throughput=performance.embedding_throughput,
             gpu_memory_mb=performance.gpu_memory_mb,
             cpu_percent=performance.cpu_percent,
@@ -868,7 +866,6 @@ class WorkflowBenchmarkRunner:
             total_tokens=int(base_tokens * (1.0 + adjustment)),
             semantic_calls=base_semantic + int(adjustment * 3),
             cache_hit_rate=min(1.0, base_cache + adjustment * 0.1),
-            cache_miss_rate=1.0 - min(1.0, base_cache + adjustment * 0.1),
             embedding_throughput=max(0.0, base_throughput * (1.0 - adjustment * 0.1)),
             gpu_memory_mb=base_gpu,
             cpu_percent=min(100.0, base_cpu * (1.0 + adjustment * 0.1)),
@@ -888,7 +885,6 @@ class WorkflowBenchmarkRunner:
         # Compute quality vs baseline (legacy is baseline)
         baseline_quality = self._avg_quality(mode_results.get("legacy", []))
         quality_vs_baseline: dict[str, float] = {}
-        quality_metrics_vs_baseline: dict[str, dict[str, float]] = {}
         for mode, qual_results in mode_results.items():
             if mode == "legacy":
                 continue
@@ -897,43 +893,8 @@ class WorkflowBenchmarkRunner:
                 quality_vs_baseline[mode] = (
                     avg.candidate_recall / baseline_quality.candidate_recall
                 )
-                # Compute per-metric quality ratios against baseline
-                metric_ratios: dict[str, float] = {}
-                if baseline_quality.candidate_recall > 0:
-                    metric_ratios["candidate_recall"] = (
-                        avg.candidate_recall / baseline_quality.candidate_recall
-                    )
-                if baseline_quality.source_quality_score > 0:
-                    metric_ratios["source_quality_score"] = (
-                        avg.source_quality_score / baseline_quality.source_quality_score
-                    )
-                if baseline_quality.coverage_completeness > 0:
-                    metric_ratios["coverage_completeness"] = (
-                        avg.coverage_completeness
-                        / baseline_quality.coverage_completeness
-                    )
-                if baseline_quality.citation_accuracy > 0:
-                    metric_ratios["citation_accuracy"] = (
-                        avg.citation_accuracy / baseline_quality.citation_accuracy
-                    )
-                if baseline_quality.report_quality_score > 0:
-                    metric_ratios["report_quality_score"] = (
-                        avg.report_quality_score / baseline_quality.report_quality_score
-                    )
-                # For unsupported_claim_rate, lower is better — invert the ratio
-                if baseline_quality.unsupported_claim_rate > 0:
-                    metric_ratios["unsupported_claim_rate"] = (
-                        baseline_quality.unsupported_claim_rate
-                        / avg.unsupported_claim_rate
-                    )
-                else:
-                    metric_ratios["unsupported_claim_rate"] = (
-                        1.0 if avg.unsupported_claim_rate == 0 else 2.0
-                    )
-                quality_metrics_vs_baseline[mode] = metric_ratios
             else:
                 quality_vs_baseline[mode] = 1.0
-                quality_metrics_vs_baseline[mode] = {}
 
         # Compute performance vs baseline
         baseline_perf = self._avg_performance(mode_results.get("legacy", []))

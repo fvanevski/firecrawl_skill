@@ -1645,10 +1645,10 @@ class PerformanceMeasurement:
     total_tokens: int
     semantic_calls: int
     cache_hit_rate: float
-    cache_miss_rate: float
     embedding_throughput: float
     gpu_memory_mb: float
     cpu_percent: float
+    cache_miss_rate: float | None = None
 
     SCHEMA_VERSION = "performance-measurement-v1"
 
@@ -1663,11 +1663,14 @@ class PerformanceMeasurement:
             raise ValueError("semantic_calls must be >= 0")
         if not (0.0 <= self.cache_hit_rate <= 1.0):
             raise ValueError("cache_hit_rate must be between 0.0 and 1.0")
-        # Auto-compute cache_miss_rate from cache_hit_rate if it differs.
+        # Auto-compute cache_miss_rate from cache_hit_rate when not provided.
         # This ensures callers only need to set cache_hit_rate and the
         # miss rate is derived deterministically.
         expected_miss = 1.0 - self.cache_hit_rate
-        if abs(self.cache_miss_rate - expected_miss) > 1e-9:
+        if (
+            self.cache_miss_rate is None
+            or abs(self.cache_miss_rate - expected_miss) > 1e-9
+        ):
             object.__setattr__(self, "cache_miss_rate", expected_miss)
         if self.embedding_throughput < 0:
             raise ValueError("embedding_throughput must be >= 0")

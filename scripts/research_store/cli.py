@@ -195,7 +195,7 @@ def parser():
         "report", help="Generate human-readable benchmark report"
     )
     bench_report.add_argument(
-        "--report-path",
+        "--results-path",
         dest="benchmark_report_path",
         required=True,
         help="Path to benchmark results JSON",
@@ -3789,7 +3789,7 @@ def main(argv=None):
             # Generate human-readable report from benchmark results
             if not args.benchmark_report_path:
                 print(
-                    "ERROR: --report-path is required for 'report' subcommand",
+                    "ERROR: --results-path is required for 'report' subcommand",
                     file=sys.stderr,
                 )
                 return 2
