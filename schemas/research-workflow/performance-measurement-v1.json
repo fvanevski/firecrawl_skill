@@ -1,0 +1,45 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/performance-measurement-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cache_hit_rate": {
+      "type": "number"
+    },
+    "cpu_percent": {
+      "type": "number"
+    },
+    "embedding_throughput": {
+      "type": "number"
+    },
+    "gpu_memory_mb": {
+      "type": "number"
+    },
+    "schema_version": {
+      "const": "performance-measurement-v1",
+      "type": "string"
+    },
+    "semantic_calls": {
+      "type": "integer"
+    },
+    "total_latency_ms": {
+      "type": "number"
+    },
+    "total_tokens": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "total_latency_ms",
+    "total_tokens",
+    "semantic_calls",
+    "cache_hit_rate",
+    "embedding_throughput",
+    "gpu_memory_mb",
+    "cpu_percent"
+  ],
+  "title": "PerformanceMeasurement",
+  "type": "object"
+}

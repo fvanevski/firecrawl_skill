@@ -1,0 +1,29 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/integrity-check-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "check_name": {
+      "type": "string"
+    },
+    "details": {
+      "type": "string"
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "integrity-check-v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "check_name",
+    "passed",
+    "details"
+  ],
+  "title": "DeterministicIntegrityCheck",
+  "type": "object"
+}
