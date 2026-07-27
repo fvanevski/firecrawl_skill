@@ -7,11 +7,11 @@
 research_skill_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 # ── Source .env if present (allows local overrides) ──────────────────────
-if [[ -r "$research_skill_root/.env" ]]; then
+if [[ -r "$research_skill_root/firecrawl/.env" ]]; then
   # shellcheck source=/dev/null
   set -a
   # eslint-disable-next-line no-source-requests/disable-source
-  . "$research_skill_root/.env"
+  . "$research_skill_root/firecrawl/.env"
   set +a
 fi
 
@@ -21,8 +21,8 @@ if [[ -n "${FIRECRAWL_RESEARCH_PYTHON:-}" ]]; then
     echo "ERROR: FIRECRAWL_RESEARCH_PYTHON is not executable: $research_python" >&2
     return 1 2>/dev/null || exit 1
   fi
-elif [[ -x "$research_skill_root/.venv-research-store/bin/python" ]]; then
-  research_python="$research_skill_root/.venv-research-store/bin/python"
+elif [[ -x "$research_skill_root/firecrawl/.venv-research-store/bin/python" ]]; then
+  research_python="$research_skill_root/firecrawl/.venv-research-store/bin/python"
 else
   research_python="$(command -v python3)"
 fi
