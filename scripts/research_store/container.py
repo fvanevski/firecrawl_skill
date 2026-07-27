@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from functools import partial
+from typing import Any
 
 from .acquisition_service import AcquisitionService
 from .blob import ContentAddressedBlobStore
@@ -231,6 +233,90 @@ def build_claim_service(config: StoreConfig | None = None):
             config.chunker_version,
         )
     )
+
+
+def build_resource_governor(
+    config: StoreConfig | None = None,
+) -> Any:
+    """Build a ResourceGovernor wired to the PostgreSQL database.
+
+    Args:
+        config: Store config. Uses ``StoreConfig.from_env()`` when
+            ``None``.
+
+    Returns:
+        A ``ResourceGovernor`` instance with PostgreSQL-backed health
+        persistence and all endpoint configurations registered.
+    """
+    config = config or StoreConfig.from_env()
+    config.require_database()
+    from .resource_governor import (
+        EndpointConfig,
+        ResourceGovernor,
+        make_health_query,
+        make_health_store,
+    )
+
+    uow_factory = partial(
+        PostgresUnitOfWork,
+        config.database_url,
+        config.physical_collection,
+        config.embedding_model,
+        config.embedding_revision,
+        config.embedding_dimension,
+        config.parser_version,
+        config.normalization_version,
+        config.chunker_version,
+    )
+
+    governor = ResourceGovernor(
+        health_store=make_health_store(uow_factory),
+        health_query=make_health_query(uow_factory),
+    )
+
+    # Register generative endpoint.
+    generative_url = os.environ.get("GENERATIVE_URL", "")
+    if generative_url:
+        governor.register_endpoint(
+            EndpointConfig(
+                name="generative",
+                url=generative_url,
+                max_concurrent=config.generative_max_concurrent,
+                max_input_tokens=config.generative_max_input_tokens,
+                max_batch_size=config.generative_max_batch_size,
+                health_check_interval=config.generative_health_check_interval,
+                backpressure_threshold=config.generative_backpressure_threshold,
+                token_cap=config.generative_token_cap,
+            )
+        )
+
+    # Register embedding endpoint.
+    if config.embedding_url:
+        governor.register_endpoint(
+            EndpointConfig(
+                name="embedding",
+                url=config.embedding_url,
+                max_concurrent=config.embedding_max_concurrent,
+                max_batch_size=config.embedding_max_batch_size,
+                health_check_interval=config.embedding_health_check_interval,
+                backpressure_threshold=config.embedding_backpressure_threshold,
+            )
+        )
+
+    # Register reranker endpoint.
+    if config.reranker_url:
+        governor.register_endpoint(
+            EndpointConfig(
+                name="reranker",
+                url=config.reranker_url,
+                max_concurrent=config.reranker_max_concurrent,
+                max_batch_size=config.reranker_max_batch_size,
+                health_check_interval=config.reranker_health_check_interval,
+                backpressure_threshold=config.reranker_backpressure_threshold,
+            )
+        )
+
+    return governor
 
 
 def build_audit_service(config: StoreConfig | None = None):

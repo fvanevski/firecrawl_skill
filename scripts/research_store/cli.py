@@ -141,6 +141,12 @@ def parser():
     sub.add_parser("ingest-ready")
 
     # ------------------------------------------------------------------
+    # Resource governance (P7-06)
+    # ------------------------------------------------------------------
+    sub.add_parser("endpoint-health")
+    sub.add_parser("resource-status")
+
+    # ------------------------------------------------------------------
     # Parser info (issue #44)
     # ------------------------------------------------------------------
     sub.add_parser("parser-info", help="Show parser registry information")
@@ -1692,6 +1698,147 @@ def _doctor(config):
     return checks, failed
 
 
+def _endpoint_health(config) -> dict:
+    """Return endpoint health information.
+
+    Checks PostgreSQL health store and runs live endpoint probes for
+    embedding and reranker when configured.
+    """
+    result: dict[str, Any] = {"endpoints": []}
+    try:
+        with _uow_factory(config)() as uow:
+            rows = uow.model_endpoints.list_endpoints()
+            for row in rows:
+                result["endpoints"].append(
+                    {
+                        "endpoint_name": row["endpoint_name"],
+                        "url": row["url"],
+                        "status": row["status"],
+                        "last_check_at": row["last_check_at"],
+                        "last_error": row["last_error"],
+                        "concurrent_requests": row["concurrent_requests"],
+                        "queued_requests": row["queued_requests"],
+                        "total_checks": row["total_checks"],
+                        "total_failures": row["total_failures"],
+                        "restart_count": row["restart_count"],
+                    }
+                )
+    except Exception as exc:  # noqa: BLE001
+        result["error"] = f"failed to query health store: {exc}"
+
+    # Live probe embedding endpoint.
+    if config.embedding_url:
+        try:
+            vector = OpenAICompatibleEmbedder(
+                config.embedding_url,
+                config.embedding_model,
+                config.embedding_api_key,
+                config.embedding_dimension,
+            )("resource-governance-health-check")
+            result["endpoints"].append(
+                {
+                    "endpoint_name": "embedding",
+                    "url": config.embedding_url,
+                    "status": "healthy",
+                    "dimension": len(vector),
+                    "live_probe": True,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            result["endpoints"].append(
+                {
+                    "endpoint_name": "embedding",
+                    "url": config.embedding_url,
+                    "status": "unhealthy",
+                    "error": str(exc),
+                    "live_probe": True,
+                }
+            )
+
+    # Live probe reranker endpoint.
+    if config.reranker_url:
+        try:
+            ranked = CohereCompatibleReranker(
+                config.reranker_url,
+                config.reranker_model,
+                config.reranker_api_key,
+            )(
+                "resource-governance-health-check",
+                [
+                    {"candidate_id": "relevant", "excerpt": "health check"},
+                    {"candidate_id": "other", "excerpt": "noise"},
+                ],
+            )
+            if not ranked or ranked[0]["candidate_id"] != "relevant":
+                raise RuntimeError("unexpected reranker ordering")
+            result["endpoints"].append(
+                {
+                    "endpoint_name": "reranker",
+                    "url": config.reranker_url,
+                    "status": "healthy",
+                    "live_probe": True,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            result["endpoints"].append(
+                {
+                    "endpoint_name": "reranker",
+                    "url": config.reranker_url,
+                    "status": "unhealthy",
+                    "error": str(exc),
+                    "live_probe": True,
+                }
+            )
+
+    # Generative endpoint probe (if configured).
+    generative_url = os.environ.get("GENERATIVE_URL", "")
+    if generative_url:
+        result["endpoints"].append(
+            {
+                "endpoint_name": "generative",
+                "url": generative_url,
+                "status": "unknown",
+                "note": "no live probe configured; use GENERATIVE_URL to enable",
+            }
+        )
+
+    return result
+
+
+def _resource_status(config) -> dict:
+    """Return resource governance status summary."""
+    status: dict[str, Any] = {
+        "configuration": {
+            "generative_max_concurrent": config.generative_max_concurrent,
+            "generative_max_input_tokens": config.generative_max_input_tokens,
+            "generative_max_batch_size": config.generative_max_batch_size,
+            "embedding_max_concurrent": config.embedding_max_concurrent,
+            "embedding_max_batch_size": config.embedding_max_batch_size,
+            "reranker_max_concurrent": config.reranker_max_concurrent,
+            "reranker_max_batch_size": config.reranker_max_batch_size,
+        },
+        "endpoints": [],
+    }
+    try:
+        with _uow_factory(config)() as uow:
+            rows = uow.model_endpoints.list_endpoints()
+            for row in rows:
+                status["endpoints"].append(
+                    {
+                        "endpoint_name": row["endpoint_name"],
+                        "url": row["url"],
+                        "status": row["status"],
+                        "concurrent_requests": row["concurrent_requests"],
+                        "queued_requests": row["queued_requests"],
+                        "restart_count": row["restart_count"],
+                    }
+                )
+    except Exception as exc:  # noqa: BLE001
+        status["error"] = f"failed to query health store: {exc}"
+
+    return status
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     config = StoreConfig.from_env()
@@ -1727,6 +1874,19 @@ def main(argv=None):
         checks, failed = _doctor(config)
         print(dumps(checks))
         return 1 if failed else 0
+    if args.command == "endpoint-health":
+        health = _endpoint_health(config)
+        print(dumps(health))
+        # Return 1 if any endpoint is unhealthy.
+        has_unhealthy = any(
+            e.get("status") in ("unhealthy", "unknown")
+            for e in health.get("endpoints", [])
+        )
+        return 1 if has_unhealthy else 0
+    if args.command == "resource-status":
+        status = _resource_status(config)
+        print(dumps(status))
+        return 0
     if args.command == "ingest-ready":
         schema = _schema_state(config)
         if not schema["at_head"]:
