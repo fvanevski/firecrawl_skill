@@ -7484,3 +7484,83 @@ class PostgresUnitOfWork:
                 (endpoint_name,),
             )
             return cur.rowcount
+
+    def record_terminal_decision(
+        self,
+        run_id,
+        decision_id,
+        run_revision,
+        coverage_revision,
+        outcome,
+        no_progress_signals,
+        unresolved_gap,
+        policy_version,
+        idempotency_key,
+        created_at,
+    ) -> dict[str, Any]:
+        """Persist a terminal decision to the ``terminal_decisions`` table.
+
+        Checks for existing decisions with the same idempotency key and
+        returns the existing record if found (idempotent).
+
+        Args:
+            run_id: The research run UUID.
+            decision_id: The decision UUID.
+            run_revision: Current run lifecycle revision.
+            coverage_revision: Current coverage revision.
+            outcome: The terminal outcome string.
+            no_progress_signals: Tuple of signal strings.
+            unresolved_gap: Human-readable gap description.
+            policy_version: Policy version string.
+            idempotency_key: Deduplication key.
+            created_at: Timestamp.
+
+        Returns:
+            Dict with ``decision_id``, ``id``, ``created_at``.
+        """
+        with self.connection.cursor() as cur:
+            # Check for existing decision with same idempotency key
+            cur.execute(
+                """SELECT id, decision_id, run_revision, coverage_revision,
+                          outcome, no_progress_signals, unresolved_gap,
+                          policy_version, idempotency_key, created_at
+                   FROM terminal_decisions
+                   WHERE run_id = %s AND idempotency_key = %s""",
+                (run_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                return {
+                    "decision_id": existing[1],
+                    "id": existing[0],
+                    "created_at": existing[9],
+                    "reused": True,
+                }
+
+            cur.execute(
+                """INSERT INTO terminal_decisions (
+                    run_id, decision_id, run_revision, coverage_revision,
+                    outcome, no_progress_signals, unresolved_gap,
+                    policy_version, idempotency_key, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, created_at""",
+                (
+                    run_id,
+                    decision_id,
+                    run_revision,
+                    coverage_revision,
+                    outcome,
+                    no_progress_signals,
+                    unresolved_gap,
+                    policy_version,
+                    idempotency_key,
+                    created_at,
+                ),
+            )
+            row = cur.fetchone()
+            return {
+                "decision_id": decision_id,
+                "id": row[0],
+                "created_at": row[1],
+                "reused": False,
+            }

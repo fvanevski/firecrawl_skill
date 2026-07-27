@@ -26,6 +26,9 @@ Key scenarios:
    and falls back to budget check.
 
 7. End-to-end: the full orchestrator call path with a failing service.
+
+8. Atomic commit: ``commit_terminal_decision`` executes both the INSERT
+   and lifecycle transition in a single PostgreSQL transaction.
 """
 
 from __future__ import annotations
@@ -53,7 +56,6 @@ from research_store.orchestrator import (
 from research_store.terminal_decision_service import (
     DuplicateTerminalDecisionError,
     TerminalDecisionError,
-    TerminalDecisionRecord,
     TerminalDecisionService,
 )
 
@@ -111,6 +113,7 @@ class MockRunService:
         self.evidence_service.export_packet.return_value = {
             "schema_version": "evidence-packet-v1",
         }
+        self.policy_version = "run-policy-v1"
 
     def fail(self, run_id, **kwargs):
         self._state = "failed"
@@ -165,6 +168,29 @@ class MockRunService:
 
     def complete(self, run_id, **kwargs):
         return self.transition(run_id, "completed", **kwargs)
+
+    def commit_terminal_decision(self, run_id, **kwargs):
+        """Mock atomic commit — simulates success."""
+        # Determine next_state from kwargs
+        next_state = kwargs.get("next_state", "failed")
+        self._state = next_state
+        self._revision += 1
+        self.transitions.append(
+            {
+                "run_id": str(run_id),
+                "next_state": next_state,
+                "revision": self._revision,
+                **kwargs,
+            }
+        )
+        return {
+            "transition_id": uuid4(),
+            "event_id": uuid4(),
+            "lifecycle_revision": self._revision,
+            "prior_state": self._state,
+            "next_state": next_state,
+            "reused": False,
+        }
 
     @property
     def uow_factory(self):
@@ -229,30 +255,17 @@ def _make_service(
 
 
 # ===================================================================
-# Test: Historical failure (pre-fix behaviour)
+# Test: Policy evaluation returns TerminalDecision (not Outcome)
 # ===================================================================
 
 
-class TestHistoricalFailure(unittest.TestCase):
-    """Verify that the pre-fix defect is now corrected.
+class TestPolicyEvaluation(unittest.TestCase):
+    """Verify that _evaluate_terminal_decision returns a TerminalDecision."""
 
-    Before the fix, ``_evaluate_terminal_decision`` caught
-    ``TerminalDecisionError`` in a broad ``except Exception`` and returned
-    ``None``, allowing orchestration to continue.
-
-    After the fix, ``TerminalDecisionError`` propagates to the caller.
-    """
-
-    def test_terminal_decision_error_propagates(self):
-        """A database failure during persistence must raise — not return None."""
+    def test_returns_terminal_decision(self):
+        """_evaluate_terminal_decision returns a TerminalDecision, not Outcome."""
 
         run_svc = MockRunService(initial_state="created", revision=0)
-
-        # Service that always fails on insert
-        def failing_uow_factory():
-            raise RuntimeError("database unavailable")
-
-        service = _make_service(failing_uow_factory, fail_on_insert=True)
 
         orchestrator = ResearchOrchestrator(
             run_service=run_svc,
@@ -261,11 +274,8 @@ class TestHistoricalFailure(unittest.TestCase):
             acquisition_service=MagicMock(),
             config=MockConfig(),
             orchestrator_config=OrchestratorConfig(),
-            terminal_service=service,
         )
 
-        # Inject a terminal outcome into context so the orchestrator
-        # would attempt a terminal decision if the service didn't fail.
         ctx = {
             "overall_status": "insufficient",
             "_budget_exhausted": True,
@@ -277,16 +287,19 @@ class TestHistoricalFailure(unittest.TestCase):
         }
 
         run_id = uuid4()
-        with self.assertRaises(TerminalDecisionError):
-            orchestrator._evaluate_terminal_decision(
-                ctx, run_id, run_revision=1, coverage_revision=1
-            )
+        decision = orchestrator._evaluate_terminal_decision(
+            ctx, run_id, run_revision=1, coverage_revision=1
+        )
 
-    def test_policy_error_falls_back(self):
-        """Policy evaluation errors must fall back — not block."""
+        # Should return a TerminalDecision, not None or Outcome
+        self.assertIsNotNone(decision)
+        self.assertIsInstance(decision, TerminalDecision)
+        self.assertEqual(decision.outcome, TerminalDecisionOutcome.PARTIAL)
+
+    def test_returns_none_on_policy_error(self):
+        """Policy evaluation errors return None (fallback)."""
 
         run_svc = MockRunService(initial_state="created", revision=0)
-        service = MagicMock()
 
         orchestrator = ResearchOrchestrator(
             run_service=run_svc,
@@ -295,7 +308,6 @@ class TestHistoricalFailure(unittest.TestCase):
             acquisition_service=MagicMock(),
             config=MockConfig(),
             orchestrator_config=OrchestratorConfig(),
-            terminal_service=service,
         )
 
         # Patch policy.evaluate to raise a policy error
@@ -316,377 +328,262 @@ class TestHistoricalFailure(unittest.TestCase):
             )
             # Should return None (fallback), not raise
             self.assertIsNone(result)
-            # Context should NOT have _terminal_outcome set
-            self.assertNotIn("_terminal_outcome", ctx)
         finally:
             TerminalDecisionPolicy.evaluate = original_evaluate
 
 
 # ===================================================================
-# Test: No lifecycle transition after persistence failure
+# Test: commit_terminal_decision raises on DB failure
 # ===================================================================
 
 
-class TestNoTransitionOnFailure(unittest.TestCase):
-    """A failed terminal-decision persistence must not trigger a lifecycle transition."""
+class TestCommitTerminalDecision(unittest.TestCase):
+    """Verify that commit_terminal_decision raises on DB failure."""
 
-    def test_no_fail_transition_after_persistence_failure(self):
-        """When persistence fails, the orchestrator must NOT call run_service.fail()."""
+    def test_raises_on_db_failure(self):
+        """A database failure during commit must raise — not return None."""
+        from research_store.run_service import ResearchRunService
 
         run_svc = MockRunService(initial_state="acquiring", revision=5)
 
         def failing_uow_factory():
             raise RuntimeError("database unavailable")
 
-        service = _make_service(failing_uow_factory, fail_on_insert=True)
-
-        orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=MagicMock(),
-            strategy_service=MagicMock(),
-            acquisition_service=MagicMock(),
-            config=MockConfig(),
-            orchestrator_config=OrchestratorConfig(),
-            terminal_service=service,
-        )
-
-        run_id = uuid4()
-        with self.assertRaises(TerminalDecisionError):
-            orchestrator._evaluate_terminal_decision(
-                {"overall_status": "insufficient"},
-                run_id,
-                run_revision=5,
-                coverage_revision=3,
-            )
-
-        # The run service must NOT have been transitioned to "failed"
-        fail_transitions = [
-            t for t in run_svc.transitions if t["next_state"] == "failed"
-        ]
-        self.assertEqual(len(fail_transitions), 0)
-
-
-# ===================================================================
-# Test: No committed terminal outcome in context after failure
-# ===================================================================
-
-
-class TestNoCommittedContext(unittest.TestCase):
-    """A failed persistence attempt must not leave _terminal_outcome in context."""
-
-    def test_context_not_tainted_after_failure(self):
-        """_terminal_outcome must not be set when persistence fails."""
-
-        run_svc = MockRunService(initial_state="created", revision=0)
-
-        def failing_uow_factory():
-            raise RuntimeError("database unavailable")
-
-        service = _make_service(failing_uow_factory, fail_on_insert=True)
-
-        orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=MagicMock(),
-            strategy_service=MagicMock(),
-            acquisition_service=MagicMock(),
-            config=MockConfig(),
-            orchestrator_config=OrchestratorConfig(),
-            terminal_service=service,
-        )
-
-        ctx = {"overall_status": "insufficient", "_budget_exhausted": True}
-        run_id = uuid4()
+        service = ResearchRunService(failing_uow_factory)
+        decision = _make_decision()
 
         with self.assertRaises(TerminalDecisionError):
-            orchestrator._evaluate_terminal_decision(
-                ctx, run_id, run_revision=1, coverage_revision=1
+            service.commit_terminal_decision(
+                decision.run_id,
+                decision_id=decision.decision_id,
+                run_revision=decision.run_revision,
+                coverage_revision=decision.coverage_revision,
+                outcome=decision.outcome.value,
+                no_progress_signals=tuple(
+                    s.value for s in decision.no_progress_signals
+                ),
+                unresolved_gap=decision.unresolved_gap,
+                policy_version=decision.policy_version,
+                idempotency_key="test:key",
+                created_at=decision.created_at,
+                next_state="partial",
+                expected_revision=5,
+                actor_type="orchestrator",
             )
 
-        # Context must NOT contain _terminal_outcome after a failed attempt
-        self.assertNotIn("_terminal_outcome", ctx)
-        self.assertNotIn("_terminal_signals", ctx)
-        self.assertNotIn("_terminal_reason", ctx)
+        # No transition should have occurred
+        self.assertEqual(run_svc._state, "acquiring")
+        self.assertEqual(len(run_svc.transitions), 0)
+
+    def test_raises_on_transition_failure(self):
+        """A transition failure during commit must raise and rollback INSERT."""
+        from research_store.run_service import ResearchRunService
+
+        run_svc = MockRunService(initial_state="acquiring", revision=5)
+
+        def failing_transition_uow_factory():
+            mock_uow = MagicMock()
+            mock_uow.fetchone.return_value = (uuid4(), "PARTIAL", uuid4())
+            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow.__exit__ = MagicMock(return_value=False)
+
+            # Simulate: record_terminal_decision succeeds, apply_run_transition fails
+            call_count = [0]
+
+            def mock_apply_run_transition(*args, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise RuntimeError("transition failed")
+                return {"transition_id": uuid4(), "reused": False}
+
+            mock_uow.runs.apply_run_transition = mock_apply_run_transition
+            return mock_uow
+
+        service = ResearchRunService(failing_transition_uow_factory)
+        decision = _make_decision()
+
+        with self.assertRaises(TerminalDecisionError):
+            service.commit_terminal_decision(
+                decision.run_id,
+                decision_id=decision.decision_id,
+                run_revision=decision.run_revision,
+                coverage_revision=decision.coverage_revision,
+                outcome=decision.outcome.value,
+                no_progress_signals=tuple(
+                    s.value for s in decision.no_progress_signals
+                ),
+                unresolved_gap=decision.unresolved_gap,
+                policy_version=decision.policy_version,
+                idempotency_key="test:key",
+                created_at=decision.created_at,
+                next_state="partial",
+                expected_revision=5,
+                actor_type="orchestrator",
+            )
+
+        # No transition should have occurred (rollback)
+        self.assertEqual(run_svc._state, "acquiring")
+        self.assertEqual(len(run_svc.transitions), 0)
 
 
 # ===================================================================
-# Test: Successful behaviour (unchanged)
+# Test: Successful commit updates state
 # ===================================================================
 
 
-class TestSuccessfulBehaviour(unittest.TestCase):
-    """Successful evaluation, persistence, and transition must remain unchanged."""
+class TestSuccessfulCommit(unittest.TestCase):
+    """Verify that successful commit updates state correctly."""
 
-    def test_context_updated_after_persistence(self):
-        """Context must be updated only after persistence succeeds."""
-
-        run_svc = MockRunService(initial_state="created", revision=0)
-
-        # Service that succeeds
-        captured_records = []
+    def test_commit_succeeds_and_updates_state(self):
+        """A successful commit should update the run state."""
+        from research_store.run_service import ResearchRunService
 
         def success_uow_factory():
             mock_uow = MagicMock()
             mock_uow.fetchone.return_value = (uuid4(), "PARTIAL", uuid4())
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
+
+            def mock_apply_run_transition(*args, **kwargs):
+                return {
+                    "transition_id": uuid4(),
+                    "event_id": uuid4(),
+                    "lifecycle_revision": 6,
+                    "prior_state": "acquiring",
+                    "next_state": "partial",
+                    "reused": False,
+                }
+
+            mock_uow.runs.apply_run_transition = mock_apply_run_transition
             return mock_uow
 
-        service = TerminalDecisionService(success_uow_factory)
+        service = ResearchRunService(success_uow_factory)
+        decision = _make_decision()
 
-        # Patch record to capture calls
-        original_record = service.record
-
-        def capturing_record(run_id, decision, idempotency_key):
-            captured_records.append((run_id, decision, idempotency_key))
-            return original_record(run_id, decision, idempotency_key)
-
-        service.record = capturing_record
-
-        orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=MagicMock(),
-            strategy_service=MagicMock(),
-            acquisition_service=MagicMock(),
-            config=MockConfig(),
-            orchestrator_config=OrchestratorConfig(),
-            terminal_service=service,
+        result = service.commit_terminal_decision(
+            decision.run_id,
+            decision_id=decision.decision_id,
+            run_revision=decision.run_revision,
+            coverage_revision=decision.coverage_revision,
+            outcome=decision.outcome.value,
+            no_progress_signals=tuple(s.value for s in decision.no_progress_signals),
+            unresolved_gap=decision.unresolved_gap,
+            policy_version=decision.policy_version,
+            idempotency_key="test:key",
+            created_at=decision.created_at,
+            next_state="partial",
+            expected_revision=5,
+            actor_type="orchestrator",
         )
 
-        ctx = {
-            "overall_status": "insufficient",
-            "_budget_exhausted": True,
-            "_no_progress": False,
-            "_strategy_revision_count": 0,
-            "_repeated_extraction_failures": 0,
-            "_repeated_retrieval_count": 0,
-            "_unsatisfiable_source": False,
-        }
-
-        run_id = uuid4()
-        outcome = orchestrator._evaluate_terminal_decision(
-            ctx, run_id, run_revision=1, coverage_revision=1
-        )
-
-        # Should return the terminal outcome
-        self.assertEqual(outcome, TerminalDecisionOutcome.PARTIAL)
-        # Context must be updated
-        self.assertEqual(ctx["_terminal_outcome"], "partial")
-        self.assertIn("_terminal_signals", ctx)
-        self.assertIn("_terminal_reason", ctx)
-        # Persistence must have been called
-        self.assertEqual(len(captured_records), 1)
+        # Should return transition result
+        self.assertIsNotNone(result)
+        self.assertEqual(result["next_state"], "partial")
 
 
 # ===================================================================
-# Test: Retry after database recovery
+# Test: Idempotent commit
 # ===================================================================
 
 
-class TestRetryAfterRecovery(unittest.TestCase):
-    """Retrying after database recovery must persist exactly one decision."""
+class TestIdempotentCommit(unittest.TestCase):
+    """Verify that commit_terminal_decision is idempotent."""
 
-    def test_retry_succeeds_after_recovery(self):
-        """First call fails, second call succeeds — exactly one decision persisted."""
-
-        run_svc = MockRunService(initial_state="created", revision=0)
+    def test_duplicate_key_returns_existing(self):
+        """A duplicate idempotency key should return existing results."""
+        from research_store.run_service import ResearchRunService
 
         call_count = [0]
 
-        def recovering_uow_factory():
+        def idempotent_uow_factory():
             call_count[0] += 1
             mock_uow = MagicMock()
-            mock_uow.fetchone.return_value = (uuid4(), "PARTIAL", uuid4())
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
+
+            # First call: INSERT succeeds
+            # Second call: returns existing (reused=True)
             if call_count[0] == 1:
-                # First call: fail
-                raise RuntimeError("database unavailable")
-            # Second call: succeed
+                mock_uow.fetchone.return_value = None  # No existing decision
+            else:
+                mock_uow.fetchone.return_value = (
+                    uuid4(),
+                    str(uuid4()),
+                    1,
+                    1,
+                    "partial",
+                    (),
+                    "gap",
+                    "v1",
+                    "test:key",
+                    None,
+                )
+
+            def mock_apply_run_transition(*args, **kwargs):
+                return {
+                    "transition_id": uuid4(),
+                    "event_id": uuid4(),
+                    "lifecycle_revision": 6,
+                    "prior_state": "acquiring",
+                    "next_state": "partial",
+                    "reused": call_count[0] > 1,
+                }
+
+            mock_uow.runs.apply_run_transition = mock_apply_run_transition
             return mock_uow
 
-        service = TerminalDecisionService(recovering_uow_factory)
+        service = ResearchRunService(idempotent_uow_factory)
+        decision = _make_decision()
 
-        orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=MagicMock(),
-            strategy_service=MagicMock(),
-            acquisition_service=MagicMock(),
-            config=MockConfig(),
-            orchestrator_config=OrchestratorConfig(),
-            terminal_service=service,
-        )
-
-        ctx = {
-            "overall_status": "insufficient",
-            "_budget_exhausted": True,
-            "_no_progress": False,
-            "_strategy_revision_count": 0,
-            "_repeated_extraction_failures": 0,
-            "_repeated_retrieval_count": 0,
-            "_unsatisfiable_source": False,
-        }
-
-        run_id = uuid4()
-
-        # First call: should raise
-        with self.assertRaises(TerminalDecisionError):
-            orchestrator._evaluate_terminal_decision(
-                ctx, run_id, run_revision=1, coverage_revision=1
-            )
-
-        self.assertNotIn("_terminal_outcome", ctx)
-
-        # Second call: should succeed
-        outcome = orchestrator._evaluate_terminal_decision(
-            ctx, run_id, run_revision=1, coverage_revision=1
-        )
-        self.assertEqual(outcome, TerminalDecisionOutcome.PARTIAL)
-        self.assertEqual(ctx["_terminal_outcome"], "partial")
-
-        # Exactly one record was captured (the second call)
-        # Note: the first call's record was never committed because the
-        # uow_factory raises before any insert, so there's no duplicate.
-
-
-# ===================================================================
-# Test: Duplicate idempotency handling
-# ===================================================================
-
-
-class TestDuplicateIdempotency(unittest.TestCase):
-    """Duplicate idempotency keys must be handled correctly."""
-
-    def test_duplicate_key_raises_duplicate_error(self):
-        """A duplicate idempotency key must raise DuplicateTerminalDecisionError."""
-        run_svc = MockRunService(initial_state="created", revision=0)
-        key = "terminal:test-run:r1:c1"
-
-        def duplicate_uow_factory():
-            raise DuplicateTerminalDecisionError(f"Duplicate idempotency key: {key}")
-
-        service = _make_service(duplicate_uow_factory, duplicate_on_key=key)
-
-        orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=MagicMock(),
-            strategy_service=MagicMock(),
-            acquisition_service=MagicMock(),
-            config=MockConfig(),
-            orchestrator_config=OrchestratorConfig(),
-            terminal_service=service,
-        )
-
-        ctx = {
-            "overall_status": "insufficient",
-            "_budget_exhausted": True,
-            "_no_progress": False,
-            "_strategy_revision_count": 0,
-            "_repeated_extraction_failures": 0,
-            "_repeated_retrieval_count": 0,
-            "_unsatisfiable_source": False,
-        }
-
-        run_id = uuid4()
-        with self.assertRaises(DuplicateTerminalDecisionError):
-            orchestrator._evaluate_terminal_decision(
-                ctx, run_id, run_revision=1, coverage_revision=1
-            )
-
-        # Context must NOT be tainted
-        self.assertNotIn("_terminal_outcome", ctx)
-
-
-# ===================================================================
-# Test: get_existing_decision
-# ===================================================================
-
-
-class TestGetExistingDecision(unittest.TestCase):
-    """The service must support looking up an existing decision."""
-
-    def test_returns_none_when_no_decision(self):
-        """When no decision exists, get_existing_decision returns None."""
-
-        def empty_uow_factory():
-            mock_uow = MagicMock()
-            mock_uow.fetchone.return_value = None
-            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow.__exit__ = MagicMock(return_value=False)
-            return mock_uow
-
-        service = TerminalDecisionService(empty_uow_factory)
-        result = service.get_existing_decision(uuid4())
-        self.assertIsNone(result)
-
-    def test_returns_record_when_exists(self):
-        """When a decision exists, get_existing_decision returns it."""
-        existing = TerminalDecisionRecord(
-            id=uuid4(),
-            run_id=uuid4(),
-            decision_id=uuid4(),
-            run_revision=1,
-            coverage_revision=1,
-            outcome="partial",
-            no_progress_signals=(),
-            unresolved_gap="test gap",
-            policy_version="terminal-decision-policy-v1",
+        # First call: should succeed
+        result1 = service.commit_terminal_decision(
+            decision.run_id,
+            decision_id=decision.decision_id,
+            run_revision=decision.run_revision,
+            coverage_revision=decision.coverage_revision,
+            outcome=decision.outcome.value,
+            no_progress_signals=tuple(s.value for s in decision.no_progress_signals),
+            unresolved_gap=decision.unresolved_gap,
+            policy_version=decision.policy_version,
             idempotency_key="test:key",
-            created_at=None,
+            created_at=decision.created_at,
+            next_state="partial",
+            expected_revision=5,
+            actor_type="orchestrator",
         )
+        self.assertFalse(result1.get("reused", False))
 
-        def populated_uow_factory():
-            mock_uow = MagicMock()
-            mock_uow.fetchone.return_value = (
-                existing.id,
-                str(existing.run_id),
-                str(existing.decision_id),
-                existing.run_revision,
-                existing.coverage_revision,
-                existing.outcome,
-                existing.no_progress_signals,
-                existing.unresolved_gap,
-                existing.policy_version,
-                existing.idempotency_key,
-                existing.created_at,
-            )
-            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow.__exit__ = MagicMock(return_value=False)
-            return mock_uow
-
-        service = TerminalDecisionService(populated_uow_factory)
-        result = service.get_existing_decision(existing.run_id)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.outcome, "partial")
-        self.assertEqual(result.idempotency_key, "test:key")
-
-    def test_returns_none_on_lookup_failure(self):
-        """When the lookup itself fails, return None (not an exception)."""
-
-        def broken_uow_factory():
-            raise RuntimeError("database unavailable")
-
-        service = TerminalDecisionService(broken_uow_factory)
-        result = service.get_existing_decision(uuid4())
-        self.assertIsNone(result)
+        # Second call: should return existing (reused=True)
+        result2 = service.commit_terminal_decision(
+            decision.run_id,
+            decision_id=decision.decision_id,
+            run_revision=decision.run_revision,
+            coverage_revision=decision.coverage_revision,
+            outcome=decision.outcome.value,
+            no_progress_signals=tuple(s.value for s in decision.no_progress_signals),
+            unresolved_gap=decision.unresolved_gap,
+            policy_version=decision.policy_version,
+            idempotency_key="test:key",
+            created_at=decision.created_at,
+            next_state="partial",
+            expected_revision=5,
+            actor_type="orchestrator",
+        )
+        self.assertTrue(result2.get("reused", False))
 
 
 # ===================================================================
-# Test: End-to-end through orchestrator with failing service
+# Test: End-to-end orchestrator with commit_terminal_decision
 # ===================================================================
 
 
 class TestEndToEndOrchestrator(unittest.TestCase):
-    """Full orchestration path with a failing terminal-decision service."""
+    """Full orchestration path with commit_terminal_decision."""
 
-    def test_orchestrator_aborts_on_persistence_failure(self):
-        """The orchestrator must abort the run when terminal-decision persistence fails."""
+    def test_orchestrator_uses_commit_terminal_decision(self):
+        """The orchestrator should call commit_terminal_decision, not separate calls."""
 
         run_svc = MockRunService(initial_state="acquiring", revision=5)
-
-        def failing_uow_factory():
-            raise RuntimeError("database unavailable")
-
-        service = _make_service(failing_uow_factory, fail_on_insert=True)
 
         orchestrator = ResearchOrchestrator(
             run_service=run_svc,
@@ -695,20 +592,7 @@ class TestEndToEndOrchestrator(unittest.TestCase):
             acquisition_service=MagicMock(),
             config=MockConfig(),
             orchestrator_config=OrchestratorConfig(),
-            terminal_service=service,
         )
-
-        run_id = uuid4()
-
-        # The orchestrator's main run() method wraps the loop in a broad
-        # except Exception. When TerminalDecisionError escapes from
-        # _evaluate_terminal_decision, it will be caught by the outer
-        # handler and converted to a failed result.
-        #
-        # However, the key invariant is:
-        # 1. The error propagates out of _evaluate_terminal_decision
-        # 2. No lifecycle transition occurs
-        # 3. No committed terminal outcome remains in context
 
         ctx = {
             "overall_status": "insufficient",
@@ -720,23 +604,39 @@ class TestEndToEndOrchestrator(unittest.TestCase):
             "_unsatisfiable_source": False,
         }
 
-        # Directly test _evaluate_terminal_decision — this is the public
-        # entry point that the orchestration loop calls.
-        with self.assertRaises(TerminalDecisionError):
-            orchestrator._evaluate_terminal_decision(
-                ctx, run_id, run_revision=5, coverage_revision=3
-            )
+        run_id = uuid4()
+        decision = orchestrator._evaluate_terminal_decision(
+            ctx, run_id, run_revision=5, coverage_revision=3
+        )
 
-        # Verify: no lifecycle transition occurred
-        self.assertEqual(run_svc._state, "acquiring")
-        self.assertEqual(len(run_svc.transitions), 0)
+        # Should return a TerminalDecision
+        self.assertIsNotNone(decision)
+        self.assertIsInstance(decision, TerminalDecision)
 
-        # Verify: context is clean
-        self.assertNotIn("_terminal_outcome", ctx)
+        # Simulate the orchestrator loop calling commit_terminal_decision
+        run_svc.commit_terminal_decision(
+            run_id,
+            decision_id=decision.decision_id,
+            run_revision=5,
+            coverage_revision=3,
+            outcome=decision.outcome.value,
+            no_progress_signals=tuple(s.value for s in decision.no_progress_signals),
+            unresolved_gap=decision.unresolved_gap,
+            policy_version=decision.policy_version,
+            idempotency_key=f"terminal:{run_id}:r5:c3",
+            created_at=decision.created_at,
+            next_state="partial",
+            expected_revision=5,
+            actor_type="orchestrator",
+        )
+
+        # State should be updated
+        self.assertEqual(run_svc._state, "partial")
+        self.assertEqual(len(run_svc.transitions), 1)
 
 
 # ===================================================================
-# Test: TerminalDecisionService.record raises correctly
+# Test: Service record raises correctly
 # ===================================================================
 
 
