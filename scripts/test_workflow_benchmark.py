@@ -1344,7 +1344,8 @@ class TestRealWorkflowExecution:
         result = runner.run()
         # Strict mode should fail integrity checks that fall back to simulation
         strict_checks = [
-            c for c in result.comparison.results[0].integrity_checks
+            c
+            for c in result.comparison.results[0].integrity_checks
             if "strict" in c.details.lower()
         ]
         assert len(strict_checks) > 0
