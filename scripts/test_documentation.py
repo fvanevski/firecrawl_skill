@@ -1,4 +1,4 @@
-#!/usr/bin/env python3  # noqa: EXE001
+#!/usr/bin/env python3
 """Documentation command verification test.
 
 Verifies that documentation files exist, cover all required topics,
@@ -48,10 +48,11 @@ def _check_command_exists(cmd: str, extra_args: list[str]) -> bool:
         if "usage:" in output.lower():
             return True
         # An unrecognized command shows "unrecognized arguments" or "invalid choice"
-        if (
+        is_unrecognized = (
             "unrecognized arguments" in output.lower()
             or "invalid choice" in output.lower()
-        ):  # noqa: SIM103
+        )
+        if is_unrecognized:  # noqa: SIM103
             return False
         # If we got help output, the command exists even if it has errors
         return True
@@ -74,7 +75,7 @@ OPERATIONS_RUNBOOK_COMMANDS = [
     ("index-once", []),
     # Index lifecycle
     ("index-list", []),
-    ("index-build", ["--current-config", "--all", "--all"]),
+    ("index-build", ["--current-config", "--all"]),
     ("index-activate", ["test-id"]),
     ("index-rollback", ["test-id"]),
     ("index-prune", ["--dry-run"]),
@@ -96,7 +97,10 @@ OPERATIONS_RUNBOOK_COMMANDS = [
     ("export-run", ["test-run-id", "--output", "/tmp/out.json"]),
     # Catalog export
     ("catalog-export", ["run", "test-id", "--target-dir", "/tmp/catalog"]),
-    ("catalog-export", ["invocation", "test-inv-id", "test-run-id", "--target-dir", "/tmp/catalog"]),
+    (
+        "catalog-export",
+        ["invocation", "test-inv-id", "test-run-id", "--target-dir", "/tmp/catalog"],
+    ),
     ("catalog-export", ["events", "test-id", "--target-dir", "/tmp/catalog"]),
     ("catalog-export", ["snapshots", "test-id", "--target-dir", "/tmp/catalog"]),
     ("catalog-export", ["claims", "test-id", "--target-dir", "/tmp/catalog"]),
@@ -106,8 +110,34 @@ OPERATIONS_RUNBOOK_COMMANDS = [
     # Run lifecycle
     ("run-start", ["test-ext-id", "Test objective"]),
     ("run-status", ["test-run-id"]),
-    ("run-mode-change", ["test-run-id", "agent_led", "--expected-revision", "1", "--idempotency-key", "test-key", "--requested-by", "operator", "--approved-by", "operator", "--reason", "test"]),
-    ("run-transition", ["test-run-id", "planning", "--expected-revision", "1", "--idempotency-key", "test-key"]),
+    (
+        "run-mode-change",
+        [
+            "test-run-id",
+            "agent_led",
+            "--expected-revision",
+            "1",
+            "--idempotency-key",
+            "test-key",
+            "--requested-by",
+            "operator",
+            "--approved-by",
+            "operator",
+            "--reason",
+            "test",
+        ],
+    ),
+    (
+        "run-transition",
+        [
+            "test-run-id",
+            "planning",
+            "--expected-revision",
+            "1",
+            "--idempotency-key",
+            "test-key",
+        ],
+    ),
     ("run-finish", ["test-run-id", "--outcome", "satisfied"]),
     ("run-reopen", ["test-run-id"]),
     ("run-cancel", ["test-run-id"]),
@@ -116,7 +146,16 @@ OPERATIONS_RUNBOOK_COMMANDS = [
     ("run-audit", ["test-run-id"]),
     ("run-compare", ["test-run-id-1", "test-run-id-2"]),
     # Budget
-    ("budget-record", ["test-run-id", "--research-spec", "/tmp/spec.json", "--budget-snapshot", "/tmp/budget.json"]),
+    (
+        "budget-record",
+        [
+            "test-run-id",
+            "--research-spec",
+            "/tmp/spec.json",
+            "--budget-snapshot",
+            "/tmp/budget.json",
+        ],
+    ),
     # Legacy comparisons
     ("legacy-comparisons", ["--research-run-id", "test-run-id"]),
     ("legacy-comparisons", ["--divergent-only"]),
@@ -196,6 +235,7 @@ class TestDocumentationCommands:
 # ------------------------------------------------------------------
 # Documentation file verification
 # ------------------------------------------------------------------
+
 
 class TestDocumentationFiles:
     """Verify that all referenced documentation files exist and are non-empty."""

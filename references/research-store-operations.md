@@ -1,4 +1,10 @@
+<!-- @format -->
+
 # Research Store Operations
+
+> ⚠️ **Deprecated:** This document is superseded by `operations-runbook.md` (Section 4–5 cover deployment and configuration; Section 6–7 cover backup/restore and Qdrant rebuild). Last updated at migration `0008`.
+
+---
 
 ## Configure persistence
 

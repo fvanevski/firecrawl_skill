@@ -27,13 +27,13 @@ Complete runbook for deploying, operating, debugging, benchmarking, and recoveri
 
 The platform comprises five layers:
 
-| Layer | Component | Role | Recovery rule |
-|-------|-----------|------|---------------|
-| **Authoritative state** | PostgreSQL | Workflow state, corpus, indices, events, budgets, audits | Restore first; never infer from Qdrant, Valkey, or filesystem |
-| **Immutable payloads** | Content-addressed blob root | Raw and normalized source bytes | Restore alongside PostgreSQL; verify referenced hashes |
-| **Retrieval projection** | Qdrant | Dense-retrieval vector index (versioned by embedding fingerprint) | Rebuildable from PostgreSQL chunks |
-| **Transient coordination** | Valkey | Best-effort worker wakeups and bounded cache | Lose safely; worker recovers by polling PostgreSQL |
-| **Compatibility artifacts** | Scratch directories, Catalog v5 | Debugging, audit, export | Regenerable from PostgreSQL + blobs |
+| Layer                       | Component                       | Role                                                              | Recovery rule                                                 |
+| --------------------------- | ------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------- |
+| **Authoritative state**     | PostgreSQL                      | Workflow state, corpus, indices, events, budgets, audits          | Restore first; never infer from Qdrant, Valkey, or filesystem |
+| **Immutable payloads**      | Content-addressed blob root     | Raw and normalized source bytes                                   | Restore alongside PostgreSQL; verify referenced hashes        |
+| **Retrieval projection**    | Qdrant                          | Dense-retrieval vector index (versioned by embedding fingerprint) | Rebuildable from PostgreSQL chunks                            |
+| **Transient coordination**  | Valkey                          | Best-effort worker wakeups and bounded cache                      | Lose safely; worker recovers by polling PostgreSQL            |
+| **Compatibility artifacts** | Scratch directories, Catalog v5 | Debugging, audit, export                                          | Regenerable from PostgreSQL + blobs                           |
 
 **Governing rules:**
 
@@ -67,7 +67,7 @@ The platform comprises five layers:
 - **Role:** Authoritative for all workflow state, corpus records, indexing jobs, retrieval events, budget snapshots, semantic call provenance, and audit records.
 - **Recovery:** Custom-format dump (`pg_dump --format=custom`). Restore with `pg_restore`.
 - **Backup frequency:** Before every migration, before every index activation, and on a scheduled basis.
-- **Schema version:** Track with `research-db status`. The current Alembic head is `0008_legacy_adapter_comparisons`.
+- **Schema version:** Track with `research-db status`. The current Alembic head is `0033_resource_governance`.
 
 ### Blob root
 
@@ -104,30 +104,30 @@ The system supports three execution modes, each with distinct semantic authority
 
 ### `agent_led`
 
-| Aspect | Detail |
-|--------|--------|
-| **Semantic authority** | Host agent (ChatGPT, Gemini, or other capable hosted model) |
-| **Inner LLM calls** | Absent when a valid host-agent decision exists for the same decision point |
-| **Default** | Set by the host-facing service |
-| **Use case** | Outer agent interprets user intent, approves or supplies `ResearchSpec`, makes semantic decisions, reviews coverage, produces final report |
+| Aspect                 | Detail                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Semantic authority** | Host agent (ChatGPT, Gemini, or other capable hosted model)                                                                                |
+| **Inner LLM calls**    | Absent when a valid host-agent decision exists for the same decision point                                                                 |
+| **Default**            | Set by the host-facing service                                                                                                             |
+| **Use case**           | Outer agent interprets user intent, approves or supplies `ResearchSpec`, makes semantic decisions, reviews coverage, produces final report |
 
 ### `autonomous_local`
 
-| Aspect | Detail |
-|--------|--------|
-| **Semantic authority** | Configured local LLM (via `model_gateway`) |
-| **Inner LLM calls** | Each stage is independently retryable and resumable |
-| **Default** | Set by the standalone `run-start` CLI |
-| **Use case** | Local LLM generates `ResearchSpec`, proposes search plan, triages candidates, assesses coverage, maps evidence to claims, drafts report |
+| Aspect                 | Detail                                                                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **Semantic authority** | Configured local LLM (via `model_gateway`)                                                                                              |
+| **Inner LLM calls**    | Each stage is independently retryable and resumable                                                                                     |
+| **Default**            | Set by the standalone `run-start` CLI                                                                                                   |
+| **Use case**           | Local LLM generates `ResearchSpec`, proposes search plan, triages candidates, assesses coverage, maps evidence to claims, drafts report |
 
 ### `deterministic_debug`
 
-| Aspect | Detail |
-|--------|--------|
-| **Semantic authority** | Explicit user-supplied plans or deterministic fixtures |
-| **Inner LLM calls** | None — avoids generative semantic decisions |
-| **Use case** | Testing, regression isolation, infrastructure diagnosis |
-| **Note** | Marks semantic coverage fields as `unassessed` |
+| Aspect                 | Detail                                                  |
+| ---------------------- | ------------------------------------------------------- |
+| **Semantic authority** | Explicit user-supplied plans or deterministic fixtures  |
+| **Inner LLM calls**    | None — avoids generative semantic decisions             |
+| **Use case**           | Testing, regression isolation, infrastructure diagnosis |
+| **Note**               | Marks semantic coverage fields as `unassessed`          |
 
 **Mode changes:** Use `research-db run-mode-change <external_id> <new_mode> --expected-revision <N> --idempotency-key <key> --requested-by <user> --approved-by <user> --reason <reason>`. Terminal runs must be reopened before changing mode. Changes record an append-only event and invalidate prior valid semantic artifacts.
 
@@ -215,11 +215,11 @@ systemctl --user status firecrawl-research-indexer.service
 
 ### 4.5 Persistence modes
 
-| Mode | Value | Behavior |
-|------|-------|----------|
-| **Auto** | `auto` | Persist when `DATABASE_URL` resolves; otherwise retain filesystem workflow |
-| **On** | `on` | Validate research-store environment before acquisition; fail if unavailable |
-| **Off** | `off` | Write no database records or raw corpus blobs |
+| Mode     | Value  | Behavior                                                                    |
+| -------- | ------ | --------------------------------------------------------------------------- |
+| **Auto** | `auto` | Persist when `DATABASE_URL` resolves; otherwise retain filesystem workflow  |
+| **On**   | `on`   | Validate research-store environment before acquisition; fail if unavailable |
+| **Off**  | `off`  | Write no database records or raw corpus blobs                               |
 
 Private runs disable both durable paths:
 
@@ -236,69 +236,69 @@ All configuration variables with their defaults, effects, and constraints.
 
 ### 5.1 Core persistence
 
-| Variable | Default | Effect | Constraints |
-|----------|---------|--------|-------------|
-| `FIRECRAWL_RESEARCH_PERSIST` | `auto` | Controls database/blob persistence mode | `auto`, `on`, `off` |
-| `DATABASE_URL` | Derived from `research-env` | PostgreSQL connection string | Required for `on` mode; takes precedence over `research-env` |
-| `BLOB_ROOT` | `$HOME/.local/share/firecrawl/blobs` | Content-addressed blob storage root | Must be writable; read-only for systemd service except this path |
+| Variable                     | Default                              | Effect                                  | Constraints                                                      |
+| ---------------------------- | ------------------------------------ | --------------------------------------- | ---------------------------------------------------------------- |
+| `FIRECRAWL_RESEARCH_PERSIST` | `auto`                               | Controls database/blob persistence mode | `auto`, `on`, `off`                                              |
+| `DATABASE_URL`               | Derived from `research-env`          | PostgreSQL connection string            | Required for `on` mode; takes precedence over `research-env`     |
+| `BLOB_ROOT`                  | `$HOME/.local/share/firecrawl/blobs` | Content-addressed blob storage root     | Must be writable; read-only for systemd service except this path |
 
 ### 5.2 Vector retrieval
 
-| Variable | Default | Effect | Constraints |
-|----------|---------|--------|-------------|
-| `QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant HTTP endpoint | Optional — system degrades to lexical search if unavailable |
-| `QDRANT_API_KEY` | Derived from `research-env` | Qdrant API key | Required if Qdrant requires authentication |
-| `QDRANT_COLLECTION` | `research_chunks_v1` | Default Qdrant collection name | Informational; physical collections are fingerprint-named |
+| Variable            | Default                     | Effect                         | Constraints                                                 |
+| ------------------- | --------------------------- | ------------------------------ | ----------------------------------------------------------- |
+| `QDRANT_URL`        | `http://127.0.0.1:6333`     | Qdrant HTTP endpoint           | Optional — system degrades to lexical search if unavailable |
+| `QDRANT_API_KEY`    | Derived from `research-env` | Qdrant API key                 | Required if Qdrant requires authentication                  |
+| `QDRANT_COLLECTION` | `research_chunks_v1`        | Default Qdrant collection name | Informational; physical collections are fingerprint-named   |
 
 ### 5.3 Transient coordination
 
-| Variable | Default | Effect | Constraints |
-|----------|---------|--------|-------------|
+| Variable     | Default                     | Effect                | Constraints                                        |
+| ------------ | --------------------------- | --------------------- | -------------------------------------------------- |
 | `VALKEY_URL` | Derived from `research-env` | Valkey connection URL | Optional — worker falls back to polling PostgreSQL |
 
 ### 5.4 Model endpoints
 
-| Variable | Default | Effect | Constraints |
-|----------|---------|--------|-------------|
-| `FIRECRAWL_LLM_LOCAL_BASE_URL` | `http://192.168.4.115:8002/v1` | Local LLM endpoint | Required for `autonomous_local` mode |
-| `FIRECRAWL_LLM_LOCAL_MODEL` | `chat` | Local LLM model name | |
-| `FIRECRAWL_AUDIT_LOCAL_*` | Legacy | Legacy audit endpoint variables | Accepted for backward compatibility |
-| `EMBEDDING_URL` | Derived from `research-env` | Embedding endpoint | Required for indexing |
-| `EMBEDDING_API_KEY` | | Embedding API key | |
-| `EMBEDDING_MODEL` | | Embedding model name | |
-| `EMBEDDING_REVISION` | | Embedding model revision | |
-| `EMBEDDING_DIMENSION` | | Embedding dimension | Must match Qdrant collection schema |
-| `RERANKER_URL` | Derived from `research-env` | Reranker endpoint | Required for reranking in retrieval |
-| `RERANKER_API_KEY` | | Reranker API key | |
-| `RERANKER_MODEL` | | Reranker model name | |
-| `RERANKER_CANDIDATE_LIMIT` | | Maximum reranker candidates | |
+| Variable                       | Default                        | Effect                          | Constraints                          |
+| ------------------------------ | ------------------------------ | ------------------------------- | ------------------------------------ |
+| `FIRECRAWL_LLM_LOCAL_BASE_URL` | `http://192.168.4.115:8002/v1` | Local LLM endpoint              | Required for `autonomous_local` mode |
+| `FIRECRAWL_LLM_LOCAL_MODEL`    | `chat`                         | Local LLM model name            |                                      |
+| `FIRECRAWL_AUDIT_LOCAL_*`      | Legacy                         | Legacy audit endpoint variables | Accepted for backward compatibility  |
+| `EMBEDDING_URL`                | Derived from `research-env`    | Embedding endpoint              | Required for indexing                |
+| `EMBEDDING_API_KEY`            |                                | Embedding API key               |                                      |
+| `EMBEDDING_MODEL`              |                                | Embedding model name            |                                      |
+| `EMBEDDING_REVISION`           |                                | Embedding model revision        |                                      |
+| `EMBEDDING_DIMENSION`          |                                | Embedding dimension             | Must match Qdrant collection schema  |
+| `RERANKER_URL`                 | Derived from `research-env`    | Reranker endpoint               | Required for reranking in retrieval  |
+| `RERANKER_API_KEY`             |                                | Reranker API key                |                                      |
+| `RERANKER_MODEL`               |                                | Reranker model name             |                                      |
+| `RERANKER_CANDIDATE_LIMIT`     |                                | Maximum reranker candidates     |                                      |
 
 ### 5.5 Derivation versions
 
-| Variable | Default | Effect | Constraints |
-|----------|---------|--------|-------------|
-| `PARSER_VERSION` | Derived from code | Document parser version | |
-| `NORMALIZATION_VERSION` | Derived from code | Document normalization version | |
-| `CHUNKER_VERSION` | Derived from code | Text chunker version | |
+| Variable                | Default           | Effect                         | Constraints |
+| ----------------------- | ----------------- | ------------------------------ | ----------- |
+| `PARSER_VERSION`        | Derived from code | Document parser version        |             |
+| `NORMALIZATION_VERSION` | Derived from code | Document normalization version |             |
+| `CHUNKER_VERSION`       | Derived from code | Text chunker version           |             |
 
 ### 5.6 Catalog and scratch
 
-| Variable | Default | Effect | Constraints |
-|----------|---------|--------|-------------|
-| `FIRECRAWL_CATALOG_DIR` | `$XDG_DATA_HOME/firecrawl` | Persistent catalog root | |
-| `FIRECRAWL_CATALOG_DISABLED` | unset | Disable catalog for private runs | Set to `1` |
-| `FIRECRAWL_AUDIT_AUTO_SEMANTIC` | `1` | Auto-run LLM audits on completed runs | Set to `0` to disable |
-| `FIRECRAWL_LEGACY_ADAPTER_MODE` | `compatibility` | Legacy adapter behavior | `compatibility`, `shadow`, `authoritative` |
-| `FIRECRAWL_RESEARCH_AUTO_ENV` | `1` | Auto-source `research-env` | Set to `0` to disable |
-| `FIRECRAWL_RESEARCH_PYTHON` | `python3` | Python executable for research scripts | Must be valid if set |
-| `FIRECRAWL_SEARCH_RETRIES` | `2` | Transient acquisition retry count | |
-| `FIRECRAWL_RESEARCH_RUN_ID` | | Explicit run linkage | |
+| Variable                        | Default                    | Effect                                 | Constraints                                |
+| ------------------------------- | -------------------------- | -------------------------------------- | ------------------------------------------ |
+| `FIRECRAWL_CATALOG_DIR`         | `$XDG_DATA_HOME/firecrawl` | Persistent catalog root                |                                            |
+| `FIRECRAWL_CATALOG_DISABLED`    | unset                      | Disable catalog for private runs       | Set to `1`                                 |
+| `FIRECRAWL_AUDIT_AUTO_SEMANTIC` | `1`                        | Auto-run LLM audits on completed runs  | Set to `0` to disable                      |
+| `FIRECRAWL_LEGACY_ADAPTER_MODE` | `compatibility`            | Legacy adapter behavior                | `compatibility`, `shadow`, `authoritative` |
+| `FIRECRAWL_RESEARCH_AUTO_ENV`   | `1`                        | Auto-source `research-env`             | Set to `0` to disable                      |
+| `FIRECRAWL_RESEARCH_PYTHON`     | `python3`                  | Python executable for research scripts | Must be valid if set                       |
+| `FIRECRAWL_SEARCH_RETRIES`      | `2`                        | Transient acquisition retry count      |                                            |
+| `FIRECRAWL_RESEARCH_RUN_ID`     |                            | Explicit run linkage                   |                                            |
 
 ### 5.7 Budget and legacy
 
-| Variable | Default | Effect | Constraints |
-|----------|---------|--------|-------------|
-| (none) | — | Legacy `--complexity` flag is retired | Accepted as diagnostic metadata only |
+| Variable | Default | Effect                                | Constraints                          |
+| -------- | ------- | ------------------------------------- | ------------------------------------ |
+| (none)   | —       | Legacy `--complexity` flag is retired | Accepted as diagnostic metadata only |
 
 **Never print or commit credentials.** All API keys and connection strings are sensitive.
 
@@ -722,53 +722,53 @@ Every destructive command is documented with its scope, safeguards, and recovery
 
 ### 13.1 `index-prune --force`
 
-| Aspect | Detail |
-|--------|--------|
-| **What it does** | Permanently deletes a Qdrant physical collection |
-| **Scope** | One specific collection identified by `--index-id` |
-| **Safeguard** | Never prunes the active index; requires `--force` flag |
-| **Recovery** | Rebuild the collection with `index-build --current-config --all` |
-| **Before use** | Verify the index ID is not the active index via `index-list` |
+| Aspect           | Detail                                                           |
+| ---------------- | ---------------------------------------------------------------- |
+| **What it does** | Permanently deletes a Qdrant physical collection                 |
+| **Scope**        | One specific collection identified by `--index-id`               |
+| **Safeguard**    | Never prunes the active index; requires `--force` flag           |
+| **Recovery**     | Rebuild the collection with `index-build --current-config --all` |
+| **Before use**   | Verify the index ID is not the active index via `index-list`     |
 
 ### 13.2 `migrate --from N --to M --apply`
 
-| Aspect | Detail |
-|--------|--------|
-| **What it does** | Discards the entire old Catalog v5 schema and initializes an empty catalog at the new schema |
-| **Scope** | One catalog root |
-| **Safeguard** | Dry run by default; `--apply` required to execute |
-| **Recovery** | No automatic recovery. Restore from a prior catalog backup if available. Database state is unaffected. |
-| **Before use** | Ensure the database is in a consistent state; stop all ingestion. |
+| Aspect           | Detail                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------ |
+| **What it does** | Discards the entire old Catalog v5 schema and initializes an empty catalog at the new schema           |
+| **Scope**        | One catalog root                                                                                       |
+| **Safeguard**    | Dry run by default; `--apply` required to execute                                                      |
+| **Recovery**     | No automatic recovery. Restore from a prior catalog backup if available. Database state is unaffected. |
+| **Before use**   | Ensure the database is in a consistent state; stop all ingestion.                                      |
 
 ### 13.3 `purge --force` (no filter)
 
-| Aspect | Detail |
-|--------|--------|
-| **What it does** | Removes the entire resolved catalog root |
-| **Scope** | One catalog root |
-| **Safeguard** | Requires `--force`; no filter removes everything |
-| **Recovery** | Regenerate from PostgreSQL and blob storage via `catalog-export` commands |
-| **Before use** | Verify the catalog root path; consider `--keep-last` or `--before` instead |
+| Aspect           | Detail                                                                     |
+| ---------------- | -------------------------------------------------------------------------- |
+| **What it does** | Removes the entire resolved catalog root                                   |
+| **Scope**        | One catalog root                                                           |
+| **Safeguard**    | Requires `--force`; no filter removes everything                           |
+| **Recovery**     | Regenerate from PostgreSQL and blob storage via `catalog-export` commands  |
+| **Before use**   | Verify the catalog root path; consider `--keep-last` or `--before` instead |
 
 ### 13.4 `verify-blobs` with `--force` deletion
 
-| Aspect | Detail |
-|--------|--------|
-| **What it does** | Deletes blobs not referenced by any snapshot |
-| **Scope** | All unreferenced blobs in `BLOB_ROOT` |
-| **Safeguard** | First reports orphans; requires exact hash set and `--force` for deletion |
-| **Recovery** | Not recoverable. Re-import from source if needed. |
-| **Before use** | Always run without `--force` first to review the orphan list |
+| Aspect           | Detail                                                                    |
+| ---------------- | ------------------------------------------------------------------------- |
+| **What it does** | Deletes blobs not referenced by any snapshot                              |
+| **Scope**        | All unreferenced blobs in `BLOB_ROOT`                                     |
+| **Safeguard**    | First reports orphans; requires exact hash set and `--force` for deletion |
+| **Recovery**     | Not recoverable. Re-import from source if needed.                         |
+| **Before use**   | Always run without `--force` first to review the orphan list              |
 
 ### 13.5 Manual job/lease editing
 
-| Aspect | Detail |
-|--------|--------|
-| **What it does** | Direct SQL manipulation of jobs, leases, or state tables |
-| **Scope** | Arbitrary PostgreSQL tables |
-| **Safeguard** | **Not recommended.** Use CLI commands instead. |
-| **Recovery** | Restore from PostgreSQL backup. |
-| **Before use** | **Do not do this.** Use `run-reopen`, `run-transition`, or `index-build` commands. |
+| Aspect           | Detail                                                                             |
+| ---------------- | ---------------------------------------------------------------------------------- |
+| **What it does** | Direct SQL manipulation of jobs, leases, or state tables                           |
+| **Scope**        | Arbitrary PostgreSQL tables                                                        |
+| **Safeguard**    | **Not recommended.** Use CLI commands instead.                                     |
+| **Recovery**     | Restore from PostgreSQL backup.                                                    |
+| **Before use**   | **Do not do this.** Use `run-reopen`, `run-transition`, or `index-build` commands. |
 
 ### 13.6 General safeguards for all destructive operations
 
@@ -828,4 +828,4 @@ Use this checklist periodically to verify that recovery procedures work end-to-e
 
 ---
 
-*This runbook is a living document. Update it when new failure modes are discovered, new procedures are validated, or new configuration variables are added. Cross-reference `research-store-architecture.md` for authority boundaries and `workflow-state-schema.md` for the state machine.*
+_This runbook is a living document. Update it when new failure modes are discovered, new procedures are validated, or new configuration variables are added. Cross-reference `research-store-architecture.md` for authority boundaries and `workflow-state-schema.md` for the state machine._
