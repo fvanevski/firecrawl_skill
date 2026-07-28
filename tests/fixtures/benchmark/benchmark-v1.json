@@ -190,7 +190,6 @@
     "no_p0_deterministic_integrity_regression": true
   },
   "workflow_modes": [
-    "legacy",
     "agent_led",
     "autonomous_local",
     "deterministic_debug"

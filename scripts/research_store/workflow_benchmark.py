@@ -834,14 +834,29 @@ class WorkflowBenchmarkRunner:
             # Create a unique external ID for this benchmark run
             external_id = f"fr_bench_{workflow_mode}_{objective.id}_{uuid4().hex[:8]}"
 
-            # Map benchmark modes to supported execution modes
+            # Map benchmark modes to supported execution modes.
+            #
+            # Per issue #135: "legacy" is no longer a valid benchmark mode
+            # because no distinct retained baseline exists.  The runner must
+            # raise an explicit error if "legacy" is requested rather than
+            # silently aliasing to another mode.
+            #
+            # The three genuinely distinct execution modes are:
+            #   - "agent_led"       → host-agent semantic authority
+            #   - "autonomous_local" → local-model semantic authority
+            #   - "deterministic_debug" → deterministic fixture, no semantic calls
             mode_map = {
-                "legacy": "autonomous_local",  # Legacy uses autonomous_local execution
                 "agent_led": "agent_led",
                 "autonomous_local": "autonomous_local",
                 "deterministic_debug": "deterministic_debug",
             }
-            execution_mode = mode_map.get(workflow_mode, "autonomous_local")
+            if workflow_mode not in mode_map:
+                raise RuntimeError(
+                    f"Benchmark mode '{workflow_mode}' is not a supported execution mode. "
+                    f"Supported modes: {', '.join(mode_map.keys())}. "
+                    "The legacy mode has been removed — no distinct retained baseline exists."
+                )
+            execution_mode = mode_map[workflow_mode]
 
             # Create the run
             run_status = run_service.create(
@@ -1019,14 +1034,9 @@ class WorkflowBenchmarkRunner:
         gate (see PLACEHOLDER annotation on WorkflowBenchmarkRunner).
         """
         # Base quality depends on workflow mode
-        if workflow_mode == "legacy":
-            base_recall = 0.45  # PLACEHOLDER: unverified
-            base_source_quality = 0.55  # PLACEHOLDER: unverified
-            base_coverage = 0.35  # PLACEHOLDER: unverified
-            base_unsupported = 0.25  # PLACEHOLDER: unverified
-            base_citation = 0.60  # PLACEHOLDER: unverified
-            base_report = 0.50  # PLACEHOLDER: unverified
-        elif workflow_mode == "agent_led":
+        # Per issue #135: each mode produces genuinely distinct quality.
+        # "legacy" has been removed — no distinct retained baseline exists.
+        if workflow_mode == "agent_led":
             base_recall = 0.75  # PLACEHOLDER: unverified
             base_source_quality = 0.80  # PLACEHOLDER: unverified
             base_coverage = 0.70  # PLACEHOLDER: unverified
@@ -1040,13 +1050,20 @@ class WorkflowBenchmarkRunner:
             base_unsupported = 0.10  # PLACEHOLDER: unverified
             base_citation = 0.85  # PLACEHOLDER: unverified
             base_report = 0.72  # PLACEHOLDER: unverified
-        else:  # deterministic_debug — no semantic judgment, unassessed coverage
+        elif workflow_mode == "deterministic_debug":
+            # deterministic_debug has no semantic judgment and unassessed coverage
             base_recall = 0.30  # PLACEHOLDER: unverified
             base_source_quality = 0.40  # PLACEHOLDER: unverified
             base_coverage = 0.20  # PLACEHOLDER: unverified
             base_unsupported = 0.30  # PLACEHOLDER: unverified
             base_citation = 0.50  # PLACEHOLDER: unverified
             base_report = 0.40  # PLACEHOLDER: unverified
+        else:
+            # Unknown mode — raise error per issue #135
+            raise RuntimeError(
+                f"Unknown benchmark mode '{workflow_mode}'. "
+                f"Supported modes: agent_led, autonomous_local, deterministic_debug"
+            )
 
         # Objective-specific adjustments (deterministic hash-based).
         # The adjustment range is [0.0, 0.099] — a small delta that ensures
@@ -1083,15 +1100,9 @@ class WorkflowBenchmarkRunner:
         gate (see PLACEHOLDER annotation on WorkflowBenchmarkRunner).
         """
         # Base performance depends on workflow mode
-        if workflow_mode == "legacy":
-            base_latency = 5000.0  # PLACEHOLDER: unverified
-            base_tokens = 5000  # PLACEHOLDER: unverified
-            base_semantic = 2  # PLACEHOLDER: unverified
-            base_cache = 0.1  # PLACEHOLDER: unverified
-            base_throughput = 100.0  # PLACEHOLDER: unverified
-            base_gpu = 0.0  # PLACEHOLDER: unverified
-            base_cpu = 30.0  # PLACEHOLDER: unverified
-        elif workflow_mode == "agent_led":
+        # Per issue #135: each mode produces genuinely distinct performance.
+        # "legacy" has been removed — no distinct retained baseline exists.
+        if workflow_mode == "agent_led":
             base_latency = 15000.0  # PLACEHOLDER: unverified
             base_tokens = 15000  # PLACEHOLDER: unverified
             base_semantic = 8  # PLACEHOLDER: unverified
@@ -1107,7 +1118,8 @@ class WorkflowBenchmarkRunner:
             base_throughput = 30.0  # PLACEHOLDER: unverified
             base_gpu = 8192.0  # PLACEHOLDER: unverified
             base_cpu = 70.0  # PLACEHOLDER: unverified
-        else:  # deterministic_debug — no semantic calls, minimal resources
+        elif workflow_mode == "deterministic_debug":
+            # deterministic_debug — no semantic calls, minimal resources
             base_latency = 2000.0  # PLACEHOLDER: unverified
             base_tokens = 1000  # PLACEHOLDER: unverified
             base_semantic = 0  # PLACEHOLDER: unverified
@@ -1115,6 +1127,12 @@ class WorkflowBenchmarkRunner:
             base_throughput = 200.0  # PLACEHOLDER: unverified
             base_gpu = 0.0  # PLACEHOLDER: unverified
             base_cpu = 15.0  # PLACEHOLDER: unverified
+        else:
+            # Unknown mode — raise error per issue #135
+            raise RuntimeError(
+                f"Unknown benchmark mode '{workflow_mode}'. "
+                f"Supported modes: agent_led, autonomous_local, deterministic_debug"
+            )
 
         # Objective-specific adjustments (deterministic hash-based).
         # Adjustment range is [0.0, 0.49] — larger than quality because
@@ -1152,12 +1170,14 @@ class WorkflowBenchmarkRunner:
         for r in results:
             mode_results.setdefault(r.workflow_mode, []).append(r)
 
-        # Compute quality vs baseline (legacy is baseline).
-        # When legacy is absent, defaults to 1.0 (no baseline available).
-        baseline_quality = self._avg_quality(mode_results.get("legacy", []))
+        # Compute quality vs baseline (first mode is baseline).
+        # Per issue #135: "legacy" is no longer a valid mode, so the first
+        # mode in the results becomes the baseline reference.
+        first_mode = next(iter(mode_results))
+        baseline_quality = self._avg_quality(mode_results[first_mode])
         quality_vs_baseline: dict[str, float] = {}
         for mode, qual_results in mode_results.items():
-            if mode == "legacy":
+            if mode == first_mode:
                 continue
             avg = self._avg_quality(qual_results)
             if baseline_quality and baseline_quality.candidate_recall > 0:
@@ -1168,11 +1188,11 @@ class WorkflowBenchmarkRunner:
                 quality_vs_baseline[mode] = 1.0
 
         # Compute performance vs baseline.
-        # When legacy is absent, defaults to 1.0 (no baseline available).
-        baseline_perf = self._avg_performance(mode_results.get("legacy", []))
+        # Per issue #135: "legacy" is no longer a valid mode.
+        baseline_perf = self._avg_performance(mode_results[first_mode])
         performance_vs_baseline: dict[str, float] = {}
         for mode, perf_results in mode_results.items():
-            if mode == "legacy":
+            if mode == first_mode:
                 continue
             avg = self._avg_performance(perf_results)
             if baseline_perf and baseline_perf.total_latency_ms > 0:
@@ -1264,92 +1284,90 @@ class WorkflowBenchmarkRunner:
 
         # Evaluate quality thresholds
         thresholds = self.loader.quality_thresholds
-        baseline_quality = None
         mode_results: dict[str, list[WorkflowRunResult]] = {}
         for result in comparison.results:
             mode_results.setdefault(result.workflow_mode, []).append(result)
-            if result.workflow_mode == "legacy":
-                baseline_quality = result.quality
-                break
 
-        if baseline_quality:
-            # Check candidate recall
-            min_recall = thresholds.get("min_candidate_recall", 0.5)
-            for result in comparison.results:
-                if result.quality.candidate_recall < min_recall:
-                    withdrawn.append(
-                        f"candidate_recall >= {min_recall} — "
-                        f"{result.workflow_mode} achieved {result.quality.candidate_recall:.3f}"
-                    )
+        # Per issue #135: "legacy" is no longer a valid mode.
+        # Use the first mode as baseline for threshold evaluation.
+        first_mode = next(iter(mode_results))
+        _baseline_quality = self._avg_quality(mode_results[first_mode])
 
-            # Check source quality score
-            min_source_quality = thresholds.get("min_source_quality_score", 0.7)
-            for result in comparison.results:
-                if result.quality.source_quality_score < min_source_quality:
-                    withdrawn.append(
-                        f"source_quality_score >= {min_source_quality} — "
-                        f"{result.workflow_mode} achieved {result.quality.source_quality_score:.3f}"
-                    )
+        # Check thresholds against ALL modes (not just non-baseline)
+        min_recall = thresholds.get("min_candidate_recall", 0.5)
+        for result in comparison.results:
+            if result.quality.candidate_recall < min_recall:
+                withdrawn.append(
+                    f"candidate_recall >= {min_recall} — "
+                    f"{result.workflow_mode} achieved {result.quality.candidate_recall:.3f}"
+                )
 
-            # Check coverage completeness
-            min_coverage = thresholds.get("min_coverage_completeness", 0.5)
-            for result in comparison.results:
-                if result.quality.coverage_completeness < min_coverage:
-                    withdrawn.append(
-                        f"coverage_completeness >= {min_coverage} — "
-                        f"{result.workflow_mode} achieved {result.quality.coverage_completeness:.3f}"
-                    )
+        # Check source quality score
+        min_source_quality = thresholds.get("min_source_quality_score", 0.7)
+        for result in comparison.results:
+            if result.quality.source_quality_score < min_source_quality:
+                withdrawn.append(
+                    f"source_quality_score >= {min_source_quality} — "
+                    f"{result.workflow_mode} achieved {result.quality.source_quality_score:.3f}"
+                )
 
-            # Check unsupported claim rate
-            max_unsupported = thresholds.get("max_unsupported_claim_rate", 0.15)
-            for result in comparison.results:
-                if result.quality.unsupported_claim_rate > max_unsupported:
-                    withdrawn.append(
-                        f"unsupported_claim_rate <= {max_unsupported} — "
-                        f"{result.workflow_mode} achieved {result.quality.unsupported_claim_rate:.3f}"
-                    )
+        # Check coverage completeness
+        min_coverage = thresholds.get("min_coverage_completeness", 0.5)
+        for result in comparison.results:
+            if result.quality.coverage_completeness < min_coverage:
+                withdrawn.append(
+                    f"coverage_completeness >= {min_coverage} — "
+                    f"{result.workflow_mode} achieved {result.quality.coverage_completeness:.3f}"
+                )
 
-            # Check citation accuracy
-            min_citation = thresholds.get("min_citation_accuracy", 0.8)
-            for result in comparison.results:
-                if result.quality.citation_accuracy < min_citation:
-                    withdrawn.append(
-                        f"citation_accuracy >= {min_citation} — "
-                        f"{result.workflow_mode} achieved {result.quality.citation_accuracy:.3f}"
-                    )
+        # Check unsupported claim rate
+        max_unsupported = thresholds.get("max_unsupported_claim_rate", 0.15)
+        for result in comparison.results:
+            if result.quality.unsupported_claim_rate > max_unsupported:
+                withdrawn.append(
+                    f"unsupported_claim_rate <= {max_unsupported} — "
+                    f"{result.workflow_mode} achieved {result.quality.unsupported_claim_rate:.3f}"
+                )
 
-            # Check latency ratio vs baseline
-            max_latency_ratio = thresholds.get("max_latency_ratio_vs_baseline", 2.0)
-            baseline_perf = self._avg_performance(mode_results.get("legacy", []))
-            if baseline_perf:
-                for mode, perf_results in mode_results.items():
-                    if mode == "legacy":
-                        continue
-                    avg_perf = self._avg_performance(perf_results)
-                    if avg_perf and baseline_perf.total_latency_ms > 0:
-                        ratio = (
-                            avg_perf.total_latency_ms / baseline_perf.total_latency_ms
+        # Check citation accuracy
+        min_citation = thresholds.get("min_citation_accuracy", 0.8)
+        for result in comparison.results:
+            if result.quality.citation_accuracy < min_citation:
+                withdrawn.append(
+                    f"citation_accuracy >= {min_citation} — "
+                    f"{result.workflow_mode} achieved {result.quality.citation_accuracy:.3f}"
+                )
+
+        # Check latency ratio vs baseline (first mode)
+        max_latency_ratio = thresholds.get("max_latency_ratio_vs_baseline", 2.0)
+        baseline_perf = self._avg_performance(mode_results[first_mode])
+        if baseline_perf:
+            for mode, perf_results in mode_results.items():
+                if mode == first_mode:
+                    continue
+                avg_perf = self._avg_performance(perf_results)
+                if avg_perf and baseline_perf.total_latency_ms > 0:
+                    ratio = avg_perf.total_latency_ms / baseline_perf.total_latency_ms
+                    if ratio > max_latency_ratio:
+                        withdrawn.append(
+                            f"latency_ratio <= {max_latency_ratio} — "
+                            f"{mode} ratio {ratio:.2f} vs baseline"
                         )
-                        if ratio > max_latency_ratio:
-                            withdrawn.append(
-                                f"latency_ratio <= {max_latency_ratio} — "
-                                f"{mode} ratio {ratio:.2f} vs baseline"
-                            )
 
-            # Check token ratio vs baseline
-            max_token_ratio = thresholds.get("max_token_ratio_vs_baseline", 2.0)
-            if baseline_perf:
-                for mode, perf_results in mode_results.items():
-                    if mode == "legacy":
-                        continue
-                    avg_perf = self._avg_performance(perf_results)
-                    if avg_perf and baseline_perf.total_tokens > 0:
-                        ratio = avg_perf.total_tokens / baseline_perf.total_tokens
-                        if ratio > max_token_ratio:
-                            withdrawn.append(
-                                f"token_ratio <= {max_token_ratio} — "
-                                f"{mode} ratio {ratio:.2f} vs baseline"
-                            )
+        # Check token ratio vs baseline
+        max_token_ratio = thresholds.get("max_token_ratio_vs_baseline", 2.0)
+        if baseline_perf:
+            for mode, perf_results in mode_results.items():
+                if mode == first_mode:
+                    continue
+                avg_perf = self._avg_performance(perf_results)
+                if avg_perf and baseline_perf.total_tokens > 0:
+                    ratio = avg_perf.total_tokens / baseline_perf.total_tokens
+                    if ratio > max_token_ratio:
+                        withdrawn.append(
+                            f"token_ratio <= {max_token_ratio} — "
+                            f"{mode} ratio {ratio:.2f} vs baseline"
+                        )
 
         # Determine outcome
         p0_regressions: list[str] = []
