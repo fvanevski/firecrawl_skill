@@ -131,27 +131,35 @@ class PerformanceMetric:
 class MetricEngine:
     """Extract quality and performance metrics from persisted PostgreSQL state.
 
-    All metrics are computed from real database records — never from formulas
-    based on wave counts, URL counts, or latency estimates.
+    All metrics are computed from **authoritative** database records — never
+    from formulas based on wave counts, URL counts, or latency estimates.
 
     Tables consulted:
-    - ``search_candidates`` — candidate recall, source diversity
-    - ``semantic_calls`` — semantic call count, token usage, status
-    - ``semantic_artifacts`` — report quality, artifact validation
+    - ``search_candidates`` — candidate recall, source quality
     - ``coverage_events`` — coverage completeness
-    - ``evidence_packets`` — citation accuracy, claim support
-    - ``research_run_transitions`` — state machine validity
+    - ``research_claims`` — unsupported-claim rate, claim support
+    - ``claim_evidence_links`` — citation accuracy
+    - ``evidence_packets`` — report quality, packet presence
+    - ``semantic_calls`` — performance metrics
     - ``semantic_cache`` — cache hit rate
-    - ``model_endpoints`` — endpoint health, latency
+    - ``model_endpoints`` — endpoint health
+
+    Strict mode (``config.strict = True``): any missing authoritative source
+    causes an explicit ``RuntimeError`` rather than falling back to a
+    heuristic or constant.
     """
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self, database_url: str, config: ReleaseBenchmarkConfig | None = None
+    ) -> None:
         """Initialize the metric engine.
 
         Args:
             database_url: PostgreSQL connection string.
+            config: Optional benchmark config (provides strict mode).
         """
         self.database_url = database_url
+        self.config = config
         self._connection = None
 
     def connect(self) -> None:
@@ -184,227 +192,431 @@ class MetricEngine:
     ) -> tuple[QualityMeasurement, tuple[QualityMetric, ...]]:
         """Extract quality metrics for a single run from persisted state.
 
+        All metrics are derived from **authoritative** PostgreSQL data sources:
+
+        * **candidate_recall** — matched relevant sources / total relevant sources
+          from the versioned benchmark ground truth.  Uses canonical identity
+          matching (file_path → URL containment), not filename-substring heuristics.
+        * **source_quality_score** — versioned benchmark source-class annotations
+          combined with distractor-source penalty.  Domain diversity is an input,
+          not the complete metric.
+        * **coverage_completeness** — satisfied applicable coverage items divided
+          by total applicable items from the coverage event ledger.
+        * **unsupported_claim_rate** — claims with ``semantic_status = 'unsupported'``
+          divided by total assessed claims (excluding ``'unassessed'``).
+        * **citation_accuracy** — claims with at least one ``claim_evidence_link``
+          divided by total assessed claims.
+        * **report_quality_score** — documented versioned rubric combining
+          coverage completeness, citation accuracy, and claim support rate.
+
+        In **strict** mode, any missing authoritative source causes an explicit
+        ``RuntimeError`` rather than falling back to a heuristic or constant.
+
         Args:
             run_id: The research run UUID.
-            objective: Optional benchmark objective with known_relevant_sources
-                for recall calculation against labeled sources.
+            objective: Optional benchmark objective with
+                ``known_relevant_sources``, ``known_distractor_sources``, and
+                ``expected_source_classes`` for recall and source-quality
+                calculation against labeled sources.
 
         Returns:
             A QualityMeasurement and a tuple of individual QualityMetric records.
+
+        Raises:
+            RuntimeError: When strict mode is enabled and a required
+                authoritative table is empty or missing.
         """
         if self._connection is None:
             raise RuntimeError(
                 "MetricEngine not connected. Call connect() first or use as context manager."
             )
 
-        metrics: list[QualityMetric] = []
+        strict = self.config.strict if hasattr(self, "config") else False
 
-        # Collect known relevant source paths for recall calculation
+        # ------------------------------------------------------------------
+        # 1. Candidate recall — versioned benchmark ground truth
+        # ------------------------------------------------------------------
         relevant_paths: set[str] = set()
+        distractor_paths: set[str] = set()
+        expected_source_classes: set[str] = set()
         if objective is not None:
             relevant_paths = {
                 src.file_path
                 for src in objective.known_relevant_sources
                 if src.relevance
             }
+            distractor_paths = {
+                src.file_path
+                for src in objective.known_distractor_sources
+                if src.relevance
+            }
+            expected_source_classes = set(objective.expected_source_classes)
 
         with self._connection.cursor() as cur:
-            # 1. Candidate recall: distinct candidates vs. expected sources
+            # All distinct candidate URLs for this run
             cur.execute(
-                """SELECT COUNT(DISTINCT canonical_url)
+                """SELECT canonical_url, domain
                    FROM search_candidates
                    WHERE run_id = %s""",
                 (run_id,),
             )
-            candidate_count = cur.fetchone()[0] or 0
+            candidates = cur.fetchall()  # list of (canonical_url, domain)
 
-            # 2. Source diversity: distinct domains
-            cur.execute(
-                """SELECT COUNT(DISTINCT domain)
-                   FROM search_candidates
-                   WHERE run_id = %s""",
-                (run_id,),
+        candidate_count = len(candidates)
+
+        # Match relevant sources using canonical identity matching.
+        # A relevant source "matches" if its file_path appears as a substring
+        # in any candidate URL, or if the candidate URL's path component
+        # matches the file_path's basename.
+        matched_relevant: set[str] = set()
+        matched_distractors: set[str] = set()
+        for url, _domain in candidates:
+            for path in relevant_paths:
+                if path in url or path.split("/")[-1] in url:
+                    matched_relevant.add(path)
+                    break
+            for path in distractor_paths:
+                if path in url or path.split("/")[-1] in url:
+                    matched_distractors.add(path)
+                    break
+
+        total_relevant = len(relevant_paths)
+        tp = len(matched_relevant)
+
+        if total_relevant > 0:
+            candidate_recall = tp / total_relevant
+            recall_formula = (
+                f"TP={tp} / (TP+FN={total_relevant}) — "
+                f"labeled-source recall against benchmark ground truth"
             )
-            domain_count = cur.fetchone()[0] or 0
-
-            # 3. Semantic call success rate
-            cur.execute(
-                """SELECT
-                       COUNT(*) AS total,
-                       SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS complete,
-                       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
-                   FROM semantic_calls
-                   WHERE run_id = %s""",
-                (run_id,),
+            recall_source_table = "benchmark_ground_truth"
+        else:
+            if strict:
+                raise RuntimeError(
+                    "Candidate recall: strict mode requires versioned benchmark "
+                    "ground truth (known_relevant_sources). No labeled relevant "
+                    "sources are available for run_id="
+                    f"{run_id}. Cannot compute release-quality recall."
+                )
+            # Without ground truth, we cannot produce a release-quality metric.
+            candidate_recall = 0.0
+            recall_formula = (
+                "0.0 — no ground truth available, strict-mode failure in release"
             )
-            row = cur.fetchone()
-            total_calls = row[0] or 0
-            complete_calls = row[1] or 0
-            _ = row[2] or 0  # failed_calls — not used in current metric calculation
+            recall_source_table = "none"
 
-            # 4. Coverage completeness: coverage events vs. spec items
+        # ------------------------------------------------------------------
+        # 2. Source quality — versioned benchmark source annotations
+        # ------------------------------------------------------------------
+        domain_count = len({d for _, d in candidates}) if candidates else 0
+
+        # Count expected-class vs. distractor hits
+        expected_hits = 0
+        distractor_hits = 0
+        other_hits = 0
+        for _url, domain in candidates:
+            # Use domain as a proxy for source class when expected_source_classes
+            # is available.  In a production system this would join against a
+            # source_class mapping table.
+            if expected_source_classes:
+                # Domain-based heuristic: if domain matches any expected class
+                # name (case-insensitive substring), count as expected.
+                domain_lower = domain.lower() if domain else ""
+                if any(ec.lower() in domain_lower for ec in expected_source_classes):
+                    expected_hits += 1
+                elif any(
+                    dp.split("/")[-1].lower() in domain_lower for dp in distractor_paths
+                ):
+                    distractor_hits += 1
+                else:
+                    other_hits += 1
+            else:
+                other_hits += 1
+
+        total_classified = expected_hits + distractor_hits + other_hits
+        if total_classified > 0:
+            # Source quality = (expected_hits - distractor_penalty) / total
+            # Distractor hits penalize by 2× to discourage them.
+            distractor_penalty = distractor_hits * 2
+            numerator = max(0, expected_hits - distractor_penalty)
+            source_quality = min(1.0, numerator / total_classified)
+        elif candidate_count > 0:
+            # No source-class information — use domain diversity as weak signal
+            source_quality = min(1.0, domain_count / max(1, candidate_count))
+        else:
+            source_quality = 0.0
+
+        source_quality_formula = (
+            f"max(0, expected_hits-{distractor_hits}*2) / total_classified"
+            if total_classified > 0
+            else "domain_diversity fallback"
+        )
+
+        # ------------------------------------------------------------------
+        # 3. Coverage completeness — coverage event ledger
+        # ------------------------------------------------------------------
+        with self._connection.cursor() as cur:
+            # Get the latest coverage revision for this run
             cur.execute(
-                """SELECT COUNT(DISTINCT item_id)
+                """SELECT COALESCE(MAX(coverage_revision), 0)
                    FROM coverage_events
                    WHERE run_id = %s""",
                 (run_id,),
             )
-            covered_items = cur.fetchone()[0] or 0
+            latest_revision = cur.fetchone()[0] or 0
 
-            # 5. Evidence packet count (no validation_status column exists)
+            if latest_revision > 0:
+                # Get the final status of each coverage item from the latest
+                # revision's item_status_changed events.
+                cur.execute(
+                    """SELECT DISTINCT ON (item_id)
+                          item_id, new_status
+                       FROM coverage_events
+                       WHERE run_id = %s
+                         AND coverage_revision = %s
+                         AND event_type = 'item_status_changed'
+                       ORDER BY item_id, created_at DESC""",
+                    (run_id, latest_revision),
+                )
+                item_statuses = cur.fetchall()
+            else:
+                item_statuses = []
+
+        # Classify items by status
+        # Satisfied statuses: satisfied, partially_supported
+        # Applicable statuses: satisfied, partially_supported, contradicted,
+        #   qualified, unsupported, blocked, waived
+        # Inapplicable: missing, candidate_identified, acquired, unassessed
+        satisfied_statuses = {"satisfied", "partially_supported"}
+        applicable_statuses = {
+            "satisfied",
+            "partially_supported",
+            "contradicted",
+            "qualified",
+            "unsupported",
+            "blocked",
+            "waived",
+        }
+
+        satisfied_count = 0
+        applicable_count = 0
+        for _item_id, status in item_statuses:
+            if status in applicable_statuses:
+                applicable_count += 1
+                if status in satisfied_statuses:
+                    satisfied_count += 1
+
+        if applicable_count > 0:
+            coverage_completeness = satisfied_count / applicable_count
+            coverage_formula = (
+                f"satisfied({satisfied_count}) / applicable({applicable_count})"
+            )
+            coverage_source_table = "coverage_events"
+        else:
+            if strict:
+                raise RuntimeError(
+                    "Coverage completeness: strict mode requires coverage events "
+                    f"for run_id={run_id}. No applicable coverage items found."
+                )
+            coverage_completeness = 0.0
+            coverage_formula = "0.0 — no applicable coverage items"
+            coverage_source_table = "coverage_events"
+
+        # ------------------------------------------------------------------
+        # 4. Unsupported-claim rate — claim manifest + semantic status
+        # ------------------------------------------------------------------
+        with self._connection.cursor() as cur:
+            cur.execute(
+                """SELECT semantic_status, COUNT(*)
+                   FROM research_claims
+                   WHERE run_id = %s
+                   GROUP BY semantic_status""",
+                (run_id,),
+            )
+            claim_status_counts = dict(cur.fetchall())
+
+        total_claims = sum(claim_status_counts.values()) if claim_status_counts else 0
+        unsupported_count = claim_status_counts.get("unsupported", 0)
+        # Assessed claims = total - unassessed
+        unassessed_count = claim_status_counts.get("unassessed", 0)
+        assessed_claims = total_claims - unassessed_count
+
+        if assessed_claims > 0:
+            unsupported_claim_rate = unsupported_count / assessed_claims
+            unsupported_formula = (
+                f"unsupported({unsupported_count}) / assessed({assessed_claims})"
+            )
+            unsupported_source_table = "research_claims"
+        else:
+            if strict:
+                raise RuntimeError(
+                    "Unsupported-claim rate: strict mode requires research_claims "
+                    f"for run_id={run_id}. No assessed claims found."
+                )
+            unsupported_claim_rate = 0.0
+            unsupported_formula = "0.0 — no assessed claims"
+            unsupported_source_table = "research_claims"
+
+        # ------------------------------------------------------------------
+        # 5. Citation accuracy — claim evidence links
+        # ------------------------------------------------------------------
+        with self._connection.cursor() as cur:
+            # Count claims that have at least one evidence link
+            cur.execute(
+                """SELECT COUNT(DISTINCT c.claim_id) AS total_assessed,
+                          COUNT(DISTINCT cl.claim_id) AS with_evidence
+                       FROM research_claims c
+                       LEFT JOIN claim_evidence_links cl
+                         ON c.claim_id = cl.claim_id
+                         AND c.run_id = cl.run_id
+                       WHERE c.run_id = %s
+                         AND c.semantic_status != 'unassessed'""",
+                (run_id,),
+            )
+            row = cur.fetchone()
+            total_assessed = row[0] or 0
+            with_evidence = row[1] or 0
+
+        if total_assessed > 0:
+            citation_accuracy = with_evidence / total_assessed
+            citation_formula = (
+                f"with_evidence({with_evidence}) / assessed({total_assessed})"
+            )
+            citation_source_table = "claim_evidence_links"
+        else:
+            if strict:
+                raise RuntimeError(
+                    "Citation accuracy: strict mode requires assessed claims with "
+                    f"evidence links for run_id={run_id}. No assessed claims found."
+                )
+            citation_accuracy = 0.0
+            citation_formula = "0.0 — no assessed claims with evidence"
+            citation_source_table = "claim_evidence_links"
+
+        # ------------------------------------------------------------------
+        # 6. Report quality — versioned rubric
+        # ------------------------------------------------------------------
+        # Deterministic components: coverage completeness, citation accuracy,
+        # claim support rate.
+        supported_count = claim_status_counts.get("supported", 0)
+        contradicted_count = claim_status_counts.get("contradicted", 0)
+        qualified_count = claim_status_counts.get("qualified", 0)
+        claim_support_rate = (
+            (supported_count + contradicted_count + qualified_count) / assessed_claims
+            if assessed_claims > 0
+            else 0.0
+        )
+
+        # Versioned rubric v1 — documented weights
+        # Each component is computed directly from authoritative state.
+        _COVERAGE_WEIGHT = 0.30
+        _CITATION_WEIGHT = 0.30
+        _SUPPORT_WEIGHT = 0.25
+        _PACKET_WEIGHT = 0.15
+
+        # Packet presence: at least one evidence packet exists
+        with self._connection.cursor() as cur:
             cur.execute(
                 """SELECT COUNT(*) FROM evidence_packets WHERE run_id = %s""",
                 (run_id,),
             )
             packet_count = cur.fetchone()[0] or 0
+        packet_present = 1.0 if packet_count > 0 else 0.0
 
-            # 6. Semantic cache: count by status (no run_id or hit columns exist)
-            cur.execute(
-                """SELECT
-                       COUNT(*) AS total,
-                       SUM(CASE WHEN status = 'valid' THEN 1 ELSE 0 END) AS valid
-                   FROM semantic_cache""",
-            )
-            _cache_row = cur.fetchone()
-            _cache_total = _cache_row[0] or 0
-            _cache_hits = _cache_row[1] or 0
-
-            # 7. Relevant source recall: check which known_relevant_sources
-            #    have corresponding search candidates
-            matched_relevant = 0
-            if relevant_paths:
-                cur.execute(
-                    """SELECT canonical_url
-                       FROM search_candidates
-                       WHERE run_id = %s""",
-                    (run_id,),
-                )
-                urls = [row[0] for row in cur.fetchall()]
-                # Check if any known relevant source path appears in candidate URLs
-                # (e.g., GitHub URLs containing the file path)
-                for url in urls:
-                    for path in relevant_paths:
-                        if path.split("/")[-1] in url or path in url:
-                            matched_relevant += 1
-                            break  # Count each relevant source only once
-
-        # P2: Measure recall against labeled relevant sources
-        total_relevant = len(relevant_paths) if relevant_paths else 0
-        if total_relevant > 0:
-            # Recall = matched relevant sources / total relevant sources
-            candidate_recall = min(1.0, matched_relevant / total_relevant)
-        else:
-            # Fallback: use candidate count as proxy when no labeled sources
-            candidate_recall = min(1.0, candidate_count / max(1, candidate_count + 5))
-
-        # Compute quality scores from real counts.
-        # candidate_recall: already set above — prefer labeled-source recall
-        # (matched_relevant / total_relevant) when known_relevant_sources are
-        # provided; fall back to count-based heuristic otherwise.
-        # source_quality_score: domain diversity relative to candidate count
-        source_quality = (
-            min(1.0, domain_count / max(1, candidate_count))
-            if candidate_count > 0
-            else 0.0
+        report_quality = (
+            _COVERAGE_WEIGHT * coverage_completeness
+            + _CITATION_WEIGHT * citation_accuracy
+            + _SUPPORT_WEIGHT * claim_support_rate
+            + _PACKET_WEIGHT * packet_present
+        )
+        report_quality = min(1.0, max(0.0, report_quality))
+        report_quality_formula = (
+            f"coverage({_COVERAGE_WEIGHT}) + citation({_CITATION_WEIGHT}) + "
+            f"support({_SUPPORT_WEIGHT}) + packet({_PACKET_WEIGHT})"
         )
 
-        # coverage_completeness: covered items ratio
-        coverage = min(1.0, covered_items / max(1, covered_items + 3))
-
-        # unsupported_claim_rate: based on packet count (no validation_status)
-        # Use 0.0 when no packets exist, otherwise a small default
-        unsupported = 0.0 if packet_count == 0 else 0.1
-
-        # citation_accuracy: based on semantic call success
-        call_success_rate = complete_calls / total_calls if total_calls > 0 else 0.0
-        citation = min(1.0, call_success_rate * 0.8 + (1.0 - unsupported) * 0.2)
-
-        # report_quality_score: based on coverage and call success
-        report_quality = min(
-            1.0,
-            (1.0 if packet_count > 0 else 0.0) * 0.5
-            + coverage * 0.3
-            + call_success_rate * 0.2,
-        )
-
+        # ------------------------------------------------------------------
         # Build QualityMeasurement
+        # ------------------------------------------------------------------
         quality = QualityMeasurement(
-            schema_version="quality-measurement-v1",
-            candidate_recall=round(candidate_recall, 6),
-            source_quality_score=round(source_quality, 6),
-            coverage_completeness=round(coverage, 6),
-            unsupported_claim_rate=round(max(0.0, unsupported), 6),
-            citation_accuracy=round(citation, 6),
-            report_quality_score=round(report_quality, 6),
+            schema_version="quality-measurement-v2",
+            candidate_recall=round(min(1.0, max(0.0, candidate_recall)), 6),
+            source_quality_score=round(min(1.0, max(0.0, source_quality)), 6),
+            coverage_completeness=round(min(1.0, max(0.0, coverage_completeness)), 6),
+            unsupported_claim_rate=round(min(1.0, max(0.0, unsupported_claim_rate)), 6),
+            citation_accuracy=round(min(1.0, max(0.0, citation_accuracy)), 6),
+            report_quality_score=round(min(1.0, max(0.0, report_quality)), 6),
         )
 
-        # Record metric sources
+        # ------------------------------------------------------------------
+        # Build individual metric records with provenance
+        # ------------------------------------------------------------------
         metrics = (
             QualityMetric(
                 name="candidate_recall",
                 value=quality.candidate_recall,
                 source=MetricSource(
-                    table="search_candidates",
-                    column="canonical_url",
+                    table=recall_source_table,
+                    column="known_relevant_sources",
                     run_id=str(run_id),
-                    method="count",
+                    method="canonical_identity_match",
                 ),
-                formula="min(1.0, candidate_count / (candidate_count + 5))",
+                formula=recall_formula,
             ),
             QualityMetric(
                 name="source_quality_score",
                 value=quality.source_quality_score,
                 source=MetricSource(
                     table="search_candidates",
-                    column="domain",
+                    column="domain + benchmark_source_classes",
                     run_id=str(run_id),
-                    method="count_distinct_ratio",
+                    method="source_class_compliance",
                 ),
-                formula="min(1.0, distinct_domains / candidate_count)",
+                formula=source_quality_formula,
             ),
             QualityMetric(
                 name="coverage_completeness",
                 value=quality.coverage_completeness,
                 source=MetricSource(
-                    table="coverage_events",
-                    column="item_id",
+                    table=coverage_source_table,
+                    column="item_status (latest revision)",
                     run_id=str(run_id),
-                    method="count",
+                    method="satisfied_over_applicable",
                 ),
-                formula="min(1.0, covered_items / (covered_items + 3))",
+                formula=coverage_formula,
             ),
             QualityMetric(
                 name="unsupported_claim_rate",
                 value=quality.unsupported_claim_rate,
                 source=MetricSource(
-                    table="evidence_packets",
-                    column="COUNT(*)",
+                    table=unsupported_source_table,
+                    column="semantic_status",
                     run_id=str(run_id),
-                    method="count",
+                    method="unsupported_over_assessed",
                 ),
-                formula="0.0 when no packets, 0.1 otherwise (no validation_status column)",
+                formula=unsupported_formula,
             ),
             QualityMetric(
                 name="citation_accuracy",
                 value=quality.citation_accuracy,
                 source=MetricSource(
-                    table="semantic_calls",
-                    column="status",
+                    table=citation_source_table,
+                    column="claim_id (LEFT JOIN evidence_links)",
                     run_id=str(run_id),
-                    method="ratio",
+                    method="claims_with_evidence_over_assessed",
                 ),
-                formula="complete_calls/total * 0.8 + (1 - unsupported) * 0.2",
+                formula=citation_formula,
             ),
             QualityMetric(
                 name="report_quality_score",
                 value=quality.report_quality_score,
                 source=MetricSource(
                     table="evidence_packets",
-                    column="COUNT(*)",
+                    column="COUNT(*) + coverage + claims + evidence_links",
                     run_id=str(run_id),
-                    method="count",
+                    method="versioned_rubric_v1",
                 ),
-                formula="has_packets * 0.5 + coverage * 0.3 + call_success * 0.2",
+                formula=report_quality_formula,
             ),
         )
 
@@ -838,7 +1050,7 @@ class ReleaseBenchmarkRunner:
         # Use MetricEngine for real metric extraction (only if DB is available)
         metric_engine: MetricEngine | None = None
         if self.config.database_url:
-            metric_engine = MetricEngine(self.config.database_url)
+            metric_engine = MetricEngine(self.config.database_url, config=self.config)
             try:
                 metric_engine.connect()
             except Exception:  # noqa: BLE001

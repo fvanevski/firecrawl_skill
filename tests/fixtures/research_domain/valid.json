@@ -665,6 +665,15 @@
     "citation_accuracy": 0.88,
     "report_quality_score": 0.78
   },
+  "quality-measurement-v2": {
+    "schema_version": "quality-measurement-v2",
+    "candidate_recall": 0.82,
+    "source_quality_score": 0.75,
+    "coverage_completeness": 0.7,
+    "unsupported_claim_rate": 0.06,
+    "citation_accuracy": 0.9,
+    "report_quality_score": 0.8
+  },
   "performance-measurement-v1": {
     "schema_version": "performance-measurement-v1",
     "total_latency_ms": 15000.0,

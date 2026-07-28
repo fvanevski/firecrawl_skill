@@ -1588,7 +1588,8 @@ class QualityMeasurement:
     """Quality metric measurement for a single workflow run.
 
     Attributes:
-        schema_version: Always ``"quality-measurement-v1"``.
+        schema_version: One of ``"quality-measurement-v1"`` (legacy heuristic)
+            or ``"quality-measurement-v2"`` (authoritative metrics from issue #142).
         candidate_recall: Fraction of relevant candidates retrieved.
         source_quality_score: Quality score of sources (0.0–1.0).
         coverage_completeness: Fraction of coverage items resolved.
@@ -1605,11 +1606,17 @@ class QualityMeasurement:
     citation_accuracy: float
     report_quality_score: float
 
-    SCHEMA_VERSION = "quality-measurement-v1"
+    # Backward-compatible attribute used by the schema registry.
+    # The v2 schema is the current write version; v1 is preserved for reading.
+    SCHEMA_VERSION = "quality-measurement-v2"
+    SCHEMA_VERSIONS = ("quality-measurement-v1", "quality-measurement-v2")
 
     def __post_init__(self) -> None:
-        if self.schema_version != self.SCHEMA_VERSION:
-            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+        if self.schema_version not in self.SCHEMA_VERSIONS:
+            raise ValueError(
+                f"unsupported schema_version: {self.schema_version}. "
+                f"Allowed: {self.SCHEMA_VERSIONS}"
+            )
         for field_name, value in [
             ("candidate_recall", self.candidate_recall),
             ("source_quality_score", self.source_quality_score),
