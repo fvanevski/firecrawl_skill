@@ -75,7 +75,8 @@ jobs:
             scripts/test_terminal_decision_authority.py \
             scripts/test_persist_results.py \
             scripts/test_release_benchmark.py \
-            scripts/test_performance_telemetry.py
+            scripts/test_performance_telemetry.py \
+            scripts/test_performance_telemetry_integration.py
 
   lint:
     name: Ruff
