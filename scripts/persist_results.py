@@ -437,6 +437,17 @@ def _persist_search_manifest(
             )
             continue
 
+        # Create a placeholder record so the batch result mapping can update it.
+        records.append(
+            {
+                "index": idx,
+                "url": url,
+                "title": cand.get("title", ""),
+                "status": "ok",
+                "persisted": False,
+            }
+        )
+
         ingest_items.append(ingest_request)
 
     # Batch ingest all successfully scraped candidates.
@@ -595,6 +606,17 @@ def _persist_scrape_manifest(
             )
             continue
 
+        # Create a placeholder record so the batch result mapping can update it.
+        records.append(
+            {
+                "index": idx,
+                "url": url,
+                "title": res.get("title", ""),
+                "status": "ok",
+                "persisted": False,
+            }
+        )
+
         ingest_items.append(ingest_request)
 
     # Batch ingest all successfully scraped results.
@@ -672,9 +694,18 @@ def main(argv: list[str] | None = None) -> int:
         Path(output_path).write_text(json.dumps(records, indent=2), encoding="utf-8")
         return 0
 
+    # When authoritative persistence is enabled, a run ID is required so that
+    # every ingested record is associated with a research run.
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url and not args.research_run_id:
+        print(
+            "ERROR: persistence requested but no --research-run-id provided",
+            file=sys.stderr,
+        )
+        return 1
+
     # Build a minimal uow_factory for run-ID resolution.
     # When no database is configured we skip resolution entirely.
-    database_url = os.environ.get("DATABASE_URL")
     if database_url:
         from functools import partial
 

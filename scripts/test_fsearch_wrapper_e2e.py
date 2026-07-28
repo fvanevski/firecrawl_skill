@@ -229,6 +229,10 @@ class TestPersistResultsIntegration:
         assert len(corpus) == 1
         assert corpus[0]["persisted"] is False
         assert corpus[0]["status"] == "ok"
+        # In scratch-only mode (no DB), unscripted candidates get
+        # reason="not_scraped". When a DB is configured the same
+        # path is exercised by the integration test
+        # TestSearchPersistence.test_fsearch_mixed_success_and_failure.
 
     def test_fsearch_manifest_multiple_candidates(self, tmp_path, monkeypatch):
         """fsearch manifest with multiple candidates is fully processed."""

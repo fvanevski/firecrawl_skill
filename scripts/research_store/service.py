@@ -373,9 +373,22 @@ class CorpusService:
                             else None,
                         )
                         if research_run_external_id:
-                            uow.link_run_asset(
-                                research_run_external_id, result.snapshot_id, "acquired"
-                            )
+                            try:
+                                uow.link_run_asset(
+                                    research_run_external_id,
+                                    result.snapshot_id,
+                                    "acquired",
+                                )
+                            except KeyError:
+                                # Run not found or not running — log a warning
+                                # so provenance gaps are visible.
+                                logging.getLogger(__name__).warning(
+                                    "link_run_asset failed for batch %s, "
+                                    "ordinal %s: run %s not found or not running",
+                                    batch_id,
+                                    ordinal,
+                                    research_run_external_id,
+                                )
                 except Exception as exc:  # noqa: BLE001
                     failures += 1
                     uow.record_batch_asset(

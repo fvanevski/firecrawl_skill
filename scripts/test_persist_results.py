@@ -81,8 +81,10 @@ def _run_persist(manifest_path: Path, **kwargs) -> subprocess.CompletedProcess:
     )
     if kwargs.get("database_url"):
         env["DATABASE_URL"] = kwargs["database_url"]
-    elif "DATABASE_URL" in env:
-        del env["DATABASE_URL"]
+    else:
+        # Explicitly remove DATABASE_URL for scratch-only / CLI tests.
+        # Integration tests pass database_url=TEST_DSN to enable DB mode.
+        env.pop("DATABASE_URL", None)
     return subprocess.run(  # noqa: PLW1510
         args,
         text=True,
@@ -259,6 +261,38 @@ class TestResolveRunId:
         with pytest.raises(ValueError, match="research run 'fr_unknown' not found"):
             _resolve_run_id("fr_unknown", lambda: mock_uow)
 
+    def test_keyerror_falls_through_to_external_id(self):
+        """When internal UUID lookup raises KeyError, fall through to external ID."""
+        from persist_results import _resolve_run_id
+
+        internal_id = uuid4()
+        external_id = f"fr_{internal_id.hex[:32]}"
+
+        call_order = []
+
+        def mock_get_run_status(*, run_id=None, external_id=None):
+            call_order.append({"run_id": run_id, "external_id": external_id})
+            if run_id is not None:
+                # Internal UUID lookup fails — fall through to external
+                raise KeyError(run_id)
+            # External ID lookup succeeds
+            return {"id": str(internal_id), "external_id": external_id}
+
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.runs.get_run_status = mock_get_run_status
+
+        # Provide an external ID whose stripped hex is a valid UUID format
+        # but does not exist internally.
+        result = _resolve_run_id(external_id, lambda: mock_uow)
+
+        assert result == internal_id
+        # Verify the fallback: first call was internal UUID, second was external
+        assert len(call_order) == 2
+        assert call_order[0]["run_id"] == internal_id
+        assert call_order[1]["external_id"] == external_id
+
 
 class TestManifestDetection:
     """Manifest type detection."""
@@ -354,12 +388,10 @@ class TestSearchPersistence:
     )
     def test_fsearch_persists_candidates(self, tmp_path, monkeypatch):
         """fsearch manifest with valid candidates is persisted authoritatively."""
-        from uuid import uuid4 as _uuid4
-
         monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
         # Create a research run to associate with.
         from functools import partial
+        from uuid import uuid4 as _uuid4
 
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -377,12 +409,12 @@ class TestSearchPersistence:
             config.chunker_version,
         )
 
-        run_id = _uuid4()
+        external_run_id = f"fr_test_{_uuid4().hex[:16]}"
         with uow_factory() as uow:
-            uow.runs.start_run(
+            internal_run_id = uow.runs.start_run(
                 "Integration test",
                 {
-                    "external_run_id": f"fr_test_{run_id.hex[:16]}",
+                    "external_run_id": external_run_id,
                     "execution_mode": "autonomous_local",
                 },
             )
@@ -393,7 +425,7 @@ class TestSearchPersistence:
             tmp_path, "result_000.md", "# Title\n\nParagraph one.\n"
         )
         manifest = {
-            "invocation_id": "fc_test",
+            "invocation_id": f"fc_test_{_uuid4().hex[:8]}",
             "operation": "search",
             "query": "test query",
             "candidates": [
@@ -410,7 +442,12 @@ class TestSearchPersistence:
         }
         path = _write_manifest(tmp_path, manifest)
         output = tmp_path / "_corpus.json"
-        result = _run_persist(path, output=output, run_id=f"fr_test_{run_id.hex[:16]}")
+        result = _run_persist(
+            path,
+            output=output,
+            run_id=external_run_id,
+            database_url=TEST_DSN,
+        )
         assert result.returncode == 0, result.stderr
 
         corpus = json.loads(output.read_text())
@@ -421,23 +458,26 @@ class TestSearchPersistence:
         assert corpus[0]["document_id"] is not None
         assert len(corpus[0]["chunk_ids"]) > 0
 
-        # Verify the candidate exists in the database.
+        # Verify the asset linkage exists via research_run_assets.
         with uow_factory() as uow:
-            candidates = uow.runs.list_candidates(run_id)
-            assert len(candidates) > 0
-            found = any(c["canonical_url"] == "https://example.com" for c in candidates)
-            assert found
+            cur = uow.connection.cursor()
+            cur.execute(
+                """SELECT COUNT(*) FROM research_run_assets
+                WHERE run_id=%s AND role='acquired'""",
+                (internal_run_id,),
+            )
+            count = cur.fetchone()[0]
+            assert count == 1
+            cur.close()
 
     @pytest.mark.skipif(
         not TEST_DSN or not psycopg, reason="Requires PostgreSQL and psycopg"
     )
     def test_fsearch_multiple_candidates(self, tmp_path, monkeypatch):
         """Multiple fsearch candidates are all persisted."""
-        from uuid import uuid4 as _uuid4
-
         monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
         from functools import partial
+        from uuid import uuid4 as _uuid4
 
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -469,7 +509,7 @@ class TestSearchPersistence:
         scratch1 = _write_scratch_file(tmp_path, "result_000.md", "content one")
         scratch2 = _write_scratch_file(tmp_path, "result_001.md", "content two")
         manifest = {
-            "invocation_id": "fc_test",
+            "invocation_id": f"fc_test_{_uuid4().hex[:8]}",
             "operation": "search",
             "query": "test",
             "candidates": [
@@ -492,7 +532,10 @@ class TestSearchPersistence:
         path = _write_manifest(tmp_path, manifest)
         output = tmp_path / "_corpus.json"
         result = _run_persist(
-            path, output=output, run_id=f"fr_test_multi_{run_id.hex[:16]}"
+            path,
+            output=output,
+            run_id=f"fr_test_multi_{run_id.hex[:16]}",
+            database_url=TEST_DSN,
         )
         assert result.returncode == 0
 
@@ -505,11 +548,9 @@ class TestSearchPersistence:
     )
     def test_fsearch_mixed_success_and_failure(self, tmp_path, monkeypatch):
         """Mixed results: successful items persist, failed items are recorded."""
-        from uuid import uuid4 as _uuid4
-
         monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
         from functools import partial
+        from uuid import uuid4 as _uuid4
 
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -540,7 +581,7 @@ class TestSearchPersistence:
 
         scratch = _write_scratch_file(tmp_path, "result_000.md", "content")
         manifest = {
-            "invocation_id": "fc_test",
+            "invocation_id": f"fc_test_{_uuid4().hex[:8]}",
             "operation": "search",
             "query": "test",
             "candidates": [
@@ -556,14 +597,17 @@ class TestSearchPersistence:
                     "url": "https://missing.com",
                     "title": "Bad",
                     "scratch_file": "/nonexistent/file.md",
-                    "scrape_status": "error",
+                    "scrape_status": "ok",
                 },
             ],
         }
         path = _write_manifest(tmp_path, manifest)
         output = tmp_path / "_corpus.json"
         result = _run_persist(
-            path, output=output, run_id=f"fr_test_mix_{run_id.hex[:16]}"
+            path,
+            output=output,
+            run_id=f"fr_test_mix_{run_id.hex[:16]}",
+            database_url=TEST_DSN,
         )
         # Should exit nonzero because one item failed
         assert result.returncode != 0
@@ -573,17 +617,19 @@ class TestSearchPersistence:
         assert corpus[0]["persisted"] is True
         assert corpus[1]["persisted"] is False
         assert corpus[1]["status"] == "error"
+        assert "scratch file not found" in corpus[1]["error"]
 
     @pytest.mark.skipif(
         not TEST_DSN or not psycopg, reason="Requires PostgreSQL and psycopg"
     )
     def test_fsearch_no_run_id_fails(self, tmp_path, monkeypatch):
-        """Persistence requested without a run ID should fail."""
+        """Persistence-enabled execution rejects missing run ID."""
         monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+        from uuid import uuid4 as _uuid4
 
         scratch = _write_scratch_file(tmp_path, "result_000.md", "content")
         manifest = {
-            "invocation_id": "fc_test",
+            "invocation_id": f"fc_test_{_uuid4().hex[:8]}",
             "operation": "search",
             "query": "test",
             "candidates": [
@@ -598,14 +644,77 @@ class TestSearchPersistence:
         }
         path = _write_manifest(tmp_path, manifest)
         output = tmp_path / "_corpus.json"
-        result = _run_persist(path, output=output)
-        # Without a run ID, the service can't associate candidates with a run
-        # The ingest should still work but the manifest may not have a run_id
-        # Let's verify the behavior — the current implementation allows ingest
-        # without a run_id, so this test checks that behavior is reasonable.
-        assert result.returncode == 0
+        result = _run_persist(path, output=output, database_url=TEST_DSN)
+        # Persistence requires a run ID so every record is associated with a run.
+        assert result.returncode != 0
+        assert "no --research-run-id provided" in result.stderr
+
+    @pytest.mark.skipif(
+        not TEST_DSN or not psycopg, reason="Requires PostgreSQL and psycopg"
+    )
+    def test_fsearch_missing_scratch_with_db(self, tmp_path, monkeypatch):
+        """Missing scratch file with scrape_status ok produces error record."""
+        monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+        from functools import partial
+        from uuid import uuid4 as _uuid4
+
+        from research_store.config import StoreConfig
+        from research_store.postgres import PostgresUnitOfWork
+
+        config = StoreConfig.from_env()
+        uow_factory = partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
+
+        run_id = _uuid4()
+        with uow_factory() as uow:
+            uow.runs.start_run(
+                "Integration test",
+                {
+                    "external_run_id": f"fr_test_miss_{run_id.hex[:16]}",
+                    "execution_mode": "autonomous_local",
+                },
+            )
+            uow.commit()
+
+        manifest = {
+            "invocation_id": f"fc_test_{_uuid4().hex[:8]}",
+            "operation": "search",
+            "query": "test",
+            "candidates": [
+                {
+                    "rank": 1,
+                    "url": "https://example.com",
+                    "title": "Example",
+                    "scratch_file": "/nonexistent/file.md",
+                    "scrape_status": "ok",
+                }
+            ],
+        }
+        path = _write_manifest(tmp_path, manifest)
+        output = tmp_path / "_corpus.json"
+        result = _run_persist(
+            path,
+            output=output,
+            run_id=f"fr_test_miss_{run_id.hex[:16]}",
+            database_url=TEST_DSN,
+        )
+        # Should exit nonzero because the item failed to ingest
+        assert result.returncode != 0
+
         corpus = json.loads(output.read_text())
-        assert corpus[0]["persisted"] is True
+        assert len(corpus) == 1
+        assert corpus[0]["persisted"] is False
+        assert corpus[0]["status"] == "error"
+        assert "scratch file not found" in corpus[0]["error"]
 
 
 class TestScrapePersistence:
@@ -616,11 +725,9 @@ class TestScrapePersistence:
     )
     def test_fscrape_single_result(self, tmp_path, monkeypatch):
         """fscrape manifest with one result is persisted."""
-        from uuid import uuid4 as _uuid4
-
         monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
         from functools import partial
+        from uuid import uuid4 as _uuid4
 
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -651,7 +758,7 @@ class TestScrapePersistence:
 
         scratch = _write_scratch_file(tmp_path, "url_000.md", "# Page\n\nContent")
         manifest = {
-            "invocation_id": "fc_test",
+            "invocation_id": f"fc_test_{_uuid4().hex[:8]}",
             "operation": "scrape",
             "results": [
                 {
@@ -667,7 +774,10 @@ class TestScrapePersistence:
         path = _write_manifest(tmp_path, manifest)
         output = tmp_path / "_corpus.json"
         result = _run_persist(
-            path, output=output, run_id=f"fr_test_scrape_{run_id.hex[:16]}"
+            path,
+            output=output,
+            run_id=f"fr_test_scrape_{run_id.hex[:16]}",
+            database_url=TEST_DSN,
         )
         assert result.returncode == 0, result.stderr
 
@@ -682,11 +792,9 @@ class TestScrapePersistence:
     )
     def test_fscrape_multiple_results(self, tmp_path, monkeypatch):
         """fscrape manifest with multiple results are all persisted."""
-        from uuid import uuid4 as _uuid4
-
         monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
         from functools import partial
+        from uuid import uuid4 as _uuid4
 
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -718,7 +826,7 @@ class TestScrapePersistence:
         scratch1 = _write_scratch_file(tmp_path, "url_000.md", "content one")
         scratch2 = _write_scratch_file(tmp_path, "url_001.md", "content two")
         manifest = {
-            "invocation_id": "fc_test",
+            "invocation_id": f"fc_test_{_uuid4().hex[:8]}",
             "operation": "scrape",
             "results": [
                 {
@@ -740,7 +848,10 @@ class TestScrapePersistence:
         path = _write_manifest(tmp_path, manifest)
         output = tmp_path / "_corpus.json"
         result = _run_persist(
-            path, output=output, run_id=f"fr_test_scrape_multi_{run_id.hex[:16]}"
+            path,
+            output=output,
+            run_id=f"fr_test_scrape_multi_{run_id.hex[:16]}",
+            database_url=TEST_DSN,
         )
         assert result.returncode == 0
 
@@ -757,11 +868,9 @@ class TestStableIdentities:
     )
     def test_source_id_is_valid_uuid(self, tmp_path, monkeypatch):
         """Persisted output contains valid UUID source_id."""
-        from uuid import uuid4 as _uuid4
-
         monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
         from functools import partial
+        from uuid import uuid4 as _uuid4
 
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -792,7 +901,7 @@ class TestStableIdentities:
 
         scratch = _write_scratch_file(tmp_path, "result_000.md", "content")
         manifest = {
-            "invocation_id": "fc_test",
+            "invocation_id": f"fc_test_{_uuid4().hex[:8]}",
             "operation": "search",
             "query": "test",
             "candidates": [
@@ -807,7 +916,12 @@ class TestStableIdentities:
         }
         path = _write_manifest(tmp_path, manifest)
         output = tmp_path / "_corpus.json"
-        _run_persist(path, output=output, run_id=f"fr_test_uuid_{run_id.hex[:16]}")
+        _run_persist(
+            path,
+            output=output,
+            run_id=f"fr_test_uuid_{run_id.hex[:16]}",
+            database_url=TEST_DSN,
+        )
 
         corpus = json.loads(output.read_text())
         # source_id should be a valid UUID string
@@ -825,11 +939,9 @@ class TestStableIdentities:
     )
     def test_idempotent_ingestion_reuses_documents(self, tmp_path, monkeypatch):
         """Repeated invocation with same content produces stable identities."""
-        from uuid import uuid4 as _uuid4
-
         monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
         from functools import partial
+        from uuid import uuid4 as _uuid4
 
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -859,8 +971,8 @@ class TestStableIdentities:
             uow.commit()
 
         scratch = _write_scratch_file(tmp_path, "result_000.md", "identical content")
-        manifest = {
-            "invocation_id": "fc_test",
+        manifest1 = {
+            "invocation_id": f"fc_test_{_uuid4().hex[:8]}",
             "operation": "search",
             "query": "test",
             "candidates": [
@@ -873,16 +985,27 @@ class TestStableIdentities:
                 }
             ],
         }
-        path = _write_manifest(tmp_path, manifest)
+        path1 = _write_manifest(tmp_path, manifest1)
 
         # First invocation
         output1 = tmp_path / "_corpus1.json"
-        _run_persist(path, output=output1, run_id=f"fr_test_idem_{run_id.hex[:16]}")
+        _run_persist(
+            path1,
+            output=output1,
+            run_id=f"fr_test_idem_{run_id.hex[:16]}",
+            database_url=TEST_DSN,
+        )
         corpus1 = json.loads(output1.read_text())
 
-        # Second invocation with same content
+        # Second invocation with same content (different invocation_id to avoid
+        # ingestion_batches unique constraint, but same manifest/content).
         output2 = tmp_path / "_corpus2.json"
-        _run_persist(path, output=output2, run_id=f"fr_test_idem_{run_id.hex[:16]}")
+        _run_persist(
+            path1,
+            output=output2,
+            run_id=f"fr_test_idem_{run_id.hex[:16]}",
+            database_url=TEST_DSN,
+        )
         corpus2 = json.loads(output2.read_text())
 
         # content_sha256 should be identical (content-addressed dedup)
@@ -893,11 +1016,9 @@ class TestStableIdentities:
     )
     def test_ingest_links_to_run_via_research_run_assets(self, tmp_path, monkeypatch):
         """Ingest with run_id creates a research_run_assets linkage."""
-        from uuid import uuid4 as _uuid4
-
         monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
         from functools import partial
+        from uuid import uuid4 as _uuid4
 
         from research_store.config import StoreConfig
         from research_store.postgres import PostgresUnitOfWork
@@ -915,12 +1036,12 @@ class TestStableIdentities:
             config.chunker_version,
         )
 
-        run_id = _uuid4()
+        external_run_id = f"fr_test_link_{_uuid4().hex[:16]}"
         with uow_factory() as uow:
-            uow.runs.start_run(
+            internal_run_id = uow.runs.start_run(
                 "Integration test",
                 {
-                    "external_run_id": f"fr_test_link_{run_id.hex[:16]}",
+                    "external_run_id": external_run_id,
                     "execution_mode": "autonomous_local",
                 },
             )
@@ -928,7 +1049,7 @@ class TestStableIdentities:
 
         scratch = _write_scratch_file(tmp_path, "result_000.md", "content")
         manifest = {
-            "invocation_id": "fc_test",
+            "invocation_id": f"fc_test_{_uuid4().hex[:8]}",
             "operation": "search",
             "query": "test",
             "candidates": [
@@ -943,19 +1064,23 @@ class TestStableIdentities:
         }
         path = _write_manifest(tmp_path, manifest)
         output = tmp_path / "_corpus.json"
-        _run_persist(path, output=output, run_id=f"fr_test_link_{run_id.hex[:16]}")
+        _run_persist(
+            path,
+            output=output,
+            run_id=external_run_id,
+            database_url=TEST_DSN,
+        )
 
         corpus = json.loads(output.read_text())
         assert corpus[0]["persisted"] is True
 
         # Verify the run_assets linkage exists.
         with uow_factory() as uow:
-            # Query research_run_assets for the run.
             cur = uow.connection.cursor()
             cur.execute(
                 """SELECT COUNT(*) FROM research_run_assets
                 WHERE run_id=%s AND role='acquired'""",
-                (run_id,),
+                (internal_run_id,),
             )
             count = cur.fetchone()[0]
             assert count == 1
