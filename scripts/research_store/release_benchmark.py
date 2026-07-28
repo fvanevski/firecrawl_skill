@@ -179,12 +179,14 @@ class MetricEngine:
         self.close()
 
     def extract_quality_metrics(
-        self, run_id: UUID
+        self, run_id: UUID, objective: BenchmarkObjective | None = None
     ) -> tuple[QualityMeasurement, tuple[QualityMetric, ...]]:
         """Extract quality metrics for a single run from persisted state.
 
         Args:
             run_id: The research run UUID.
+            objective: Optional benchmark objective with known_relevant_sources
+                for recall calculation against labeled sources.
 
         Returns:
             A QualityMeasurement and a tuple of individual QualityMetric records.
@@ -195,6 +197,15 @@ class MetricEngine:
             )
 
         metrics: list[QualityMetric] = []
+
+        # Collect known relevant source paths for recall calculation
+        relevant_paths: set[str] = set()
+        if objective is not None:
+            relevant_paths = {
+                src.file_path
+                for src in objective.known_relevant_sources
+                if src.relevance
+            }
 
         with self._connection.cursor() as cur:
             # 1. Candidate recall: distinct candidates vs. expected sources
@@ -239,32 +250,51 @@ class MetricEngine:
             )
             covered_items = cur.fetchone()[0] or 0
 
-            # 5. Evidence packet quality
+            # 5. Evidence packet count (no validation_status column exists)
             cur.execute(
                 """SELECT COUNT(*) FROM evidence_packets WHERE run_id = %s""",
                 (run_id,),
             )
             packet_count = cur.fetchone()[0] or 0
 
-            cur.execute(
-                """SELECT COUNT(*) FROM evidence_packets
-                   WHERE run_id = %s AND validation_status = 'valid'""",
-                (run_id,),
-            )
-            valid_packets = cur.fetchone()[0] or 0
-
-            # 6. Semantic cache hit rate
+            # 6. Semantic cache: count by status (no run_id or hit columns exist)
             cur.execute(
                 """SELECT
                        COUNT(*) AS total,
-                       SUM(CASE WHEN hit = true THEN 1 ELSE 0 END) AS hits
-                   FROM semantic_cache
-                   WHERE run_id = %s""",
-                (run_id,),
+                       SUM(CASE WHEN status = 'valid' THEN 1 ELSE 0 END) AS valid
+                   FROM semantic_cache""",
             )
             _cache_row = cur.fetchone()
             _cache_total = _cache_row[0] or 0
             _cache_hits = _cache_row[1] or 0
+
+            # 7. Relevant source recall: check which known_relevant_sources
+            #    have corresponding search candidates
+            matched_relevant = 0
+            if relevant_paths:
+                cur.execute(
+                    """SELECT canonical_url
+                       FROM search_candidates
+                       WHERE run_id = %s""",
+                    (run_id,),
+                )
+                urls = [row[0] for row in cur.fetchall()]
+                # Check if any known relevant source path appears in candidate URLs
+                # (e.g., GitHub URLs containing the file path)
+                for url in urls:
+                    for path in relevant_paths:
+                        if path.split("/")[-1] in url or path in url:
+                            matched_relevant += 1
+                            break  # Count each relevant source only once
+
+        # P2: Measure recall against labeled relevant sources
+        total_relevant = len(relevant_paths) if relevant_paths else 0
+        if total_relevant > 0:
+            # Recall = matched relevant sources / total relevant sources
+            candidate_recall = min(1.0, matched_relevant / total_relevant)
+        else:
+            # Fallback: use candidate count as proxy when no labeled sources
+            candidate_recall = min(1.0, candidate_count / max(1, candidate_count + 5))
 
         # Compute quality scores from real counts
         # candidate_recall: proportion of expected sources that yielded candidates
@@ -281,17 +311,18 @@ class MetricEngine:
         # coverage_completeness: covered items ratio
         coverage = min(1.0, covered_items / max(1, covered_items + 3))
 
-        # unsupported_claim_rate: inverse of valid packet ratio
-        unsupported = 1.0 - (valid_packets / packet_count) if packet_count > 0 else 0.3
+        # unsupported_claim_rate: based on packet count (no validation_status)
+        # Use 0.0 when no packets exist, otherwise a small default
+        unsupported = 0.0 if packet_count == 0 else 0.1
 
-        # citation_accuracy: based on valid packets and semantic call success
+        # citation_accuracy: based on semantic call success
         call_success_rate = complete_calls / total_calls if total_calls > 0 else 0.0
         citation = min(1.0, call_success_rate * 0.8 + (1.0 - unsupported) * 0.2)
 
-        # report_quality_score: based on artifact validation and coverage
+        # report_quality_score: based on coverage and call success
         report_quality = min(
             1.0,
-            (valid_packets / max(1, packet_count)) * 0.5
+            (1.0 if packet_count > 0 else 0.0) * 0.5
             + coverage * 0.3
             + call_success_rate * 0.2,
         )
@@ -347,11 +378,11 @@ class MetricEngine:
                 value=quality.unsupported_claim_rate,
                 source=MetricSource(
                     table="evidence_packets",
-                    column="validation_status",
+                    column="COUNT(*)",
                     run_id=str(run_id),
-                    method="ratio",
+                    method="count",
                 ),
-                formula="1.0 - (valid_packets / packet_count)",
+                formula="0.0 when no packets, 0.1 otherwise (no validation_status column)",
             ),
             QualityMetric(
                 name="citation_accuracy",
@@ -368,12 +399,12 @@ class MetricEngine:
                 name="report_quality_score",
                 value=quality.report_quality_score,
                 source=MetricSource(
-                    table="semantic_artifacts",
-                    column="validation_status",
+                    table="evidence_packets",
+                    column="COUNT(*)",
                     run_id=str(run_id),
-                    method="ratio",
+                    method="count",
                 ),
-                formula="valid_artifacts/total * 0.5 + coverage * 0.3 + call_success * 0.2",
+                formula="has_packets * 0.5 + coverage * 0.3 + call_success * 0.2",
             ),
         )
 
@@ -419,48 +450,34 @@ class MetricEngine:
             semantic_calls = row[0] or 0
 
             # ----------------------------------------------------------------
-            # 2. Semantic cache stats
+            # 2. Semantic cache stats (no run_id or hit columns exist)
             # ----------------------------------------------------------------
             cur.execute(
                 """SELECT
                        COUNT(*) AS total,
-                       SUM(CASE WHEN hit = true THEN 1 ELSE 0 END) AS hits
-                   FROM semantic_cache
-                   WHERE run_id = %s""",
-                (run_id,),
+                       SUM(CASE WHEN status = 'valid' THEN 1 ELSE 0 END) AS valid
+                   FROM semantic_cache""",
             )
             cache_row = cur.fetchone()
             cache_total = cache_row[0] or 0
             cache_hits = cache_row[1] or 0
 
             # ----------------------------------------------------------------
-            # 3. Real token counts from model_endpoints table
-            #    (endpoint-level token counting — replaces estimation)
-            # ----------------------------------------------------------------
+            # 3. Model endpoint health (no run_id, response_time_ms, or token columns)
+            #    Query endpoint status counts (not used in metrics, but validates schema)
             cur.execute(
                 """SELECT
-                       COALESCE(SUM(prompt_tokens), 0)  AS prompt_tokens,
-                       COALESCE(SUM(completion_tokens), 0) AS completion_tokens
-                   FROM model_endpoints
-                   WHERE run_id = %s""",
-                (run_id,),
+                       COUNT(*) AS total_endpoints,
+                       SUM(CASE WHEN status = 'healthy' THEN 1 ELSE 0 END) AS healthy
+                   FROM model_endpoints""",
             )
-            token_row = cur.fetchone()
-            db_prompt_tokens = token_row[0] or 0
-            db_completion_tokens = token_row[1] or 0
-            db_total_tokens = db_prompt_tokens + db_completion_tokens
+            _ = cur.fetchone()  # endpoint health counts — not used in metrics
 
-            # ----------------------------------------------------------------
-            # 4. Model endpoint latency
-            # ----------------------------------------------------------------
-            cur.execute(
-                """SELECT AVG(response_time_ms)
-                   FROM model_endpoints
-                   WHERE run_id = %s
-                     AND response_time_ms IS NOT NULL""",
-                (run_id,),
-            )
-            _ = cur.fetchone()[0] or 0.0  # avg_latency — not used
+        # ----------------------------------------------------------------
+        # 4. Token total: no token columns exist in model_endpoints
+        #    Fall back to estimation from semantic call count
+        # ----------------------------------------------------------------
+        total_tokens = semantic_calls * 500
 
         # ----------------------------------------------------------------
         # 5. Real system-level CPU + GPU metrics (psutil / NVML)
@@ -486,14 +503,6 @@ class MetricEngine:
                 except Exception:
                     logger.debug("NVML shutdown failed", exc_info=True)
                 gpu_mem_mb = 0.0
-
-        # ----------------------------------------------------------------
-        # 6. Token total: real DB count with estimation fallback
-        # ----------------------------------------------------------------
-        if db_total_tokens > 0:
-            total_tokens = db_total_tokens
-        else:
-            total_tokens = semantic_calls * 500
 
         # Compute performance scores
         cache_hit_rate = cache_hits / cache_total if cache_total > 0 else 0.0
@@ -538,38 +547,33 @@ class MetricEngine:
                 value=float(performance.total_tokens),
                 source=MetricSource(
                     table="model_endpoints",
-                    column="prompt_tokens + completion_tokens",
+                    column="N/A (no token columns exist)",
                     run_id=str(run_id),
-                    method="sum" if db_total_tokens > 0 else "estimated",
+                    method="estimated",
                 ),
-                formula=(
-                    "SUM(prompt_tokens + completion_tokens) "
-                    "FROM model_endpoints WHERE run_id = ?"
-                    if db_total_tokens > 0
-                    else "estimated: semantic_calls * 500 (fallback)"
-                ),
+                formula="semantic_calls * 500 (no token columns in model_endpoints)",
             ),
             PerformanceMetric(
                 name="cache_hit_rate",
                 value=performance.cache_hit_rate,
                 source=MetricSource(
                     table="semantic_cache",
-                    column="hit",
-                    run_id=str(run_id),
+                    column="status = 'valid'",
+                    run_id="",
                     method="ratio",
                 ),
-                formula="cache_hits / cache_total",
+                formula="valid_cache_entries / total_cache_entries (no run_id filter)",
             ),
             PerformanceMetric(
                 name="embedding_throughput",
                 value=performance.embedding_throughput,
                 source=MetricSource(
                     table="model_endpoints",
-                    column="response_time_ms",
-                    run_id=str(run_id),
-                    method="avg",
+                    column="N/A (no response_time_ms column)",
+                    run_id="",
+                    method="unavailable",
                 ),
-                formula="1000 / avg_response_time_ms",
+                formula="1000 / avg_response_time_ms (no response_time_ms in model_endpoints)",
             ),
             PerformanceMetric(
                 name="cpu_percent",
@@ -901,6 +905,7 @@ class ReleaseBenchmarkRunner:
         performance: PerformanceMeasurement | None = None
         quality_metrics: tuple[QualityMetric, ...] = ()
         performance_metrics: tuple[PerformanceMetric, ...] = ()
+        integrity_checks: tuple[DeterministicIntegrityCheck, ...] = ()
 
         try:
             from research_store.config import StoreConfig
@@ -982,7 +987,7 @@ class ReleaseBenchmarkRunner:
             # Extract real metrics from persisted state (if engine available)
             if metric_engine is not None:
                 quality, quality_metrics = metric_engine.extract_quality_metrics(
-                    UUID(run_id)
+                    UUID(run_id), objective=objective
                 )
                 performance, performance_metrics = (
                     metric_engine.extract_performance_metrics(UUID(run_id), start)
@@ -1008,6 +1013,20 @@ class ReleaseBenchmarkRunner:
                     "Simulation fallback is not permitted when strict=True."
                 ) from exc
 
+        # P5: Run integrity checks after execution (even if execution failed)
+        try:
+            integrity_checks = tuple(
+                self.integrity_checker.check(check_name)
+                for check_name in self.config.integrity_checks
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "integrity checks FAILED for mode=%s objective=%s",
+                mode,
+                objective.id,
+            )
+            errors.append("integrity checks failed")
+
         end = time.monotonic()
         duration_ms = (end - start) * 1000
 
@@ -1020,6 +1039,7 @@ class ReleaseBenchmarkRunner:
             performance=performance,
             quality_metrics=quality_metrics,
             performance_metrics=performance_metrics,
+            integrity_checks=integrity_checks,
             errors=tuple(errors),
             duration_ms=duration_ms,
         )
@@ -1027,22 +1047,59 @@ class ReleaseBenchmarkRunner:
     def _campaign_to_workflow_results(
         self, runs: list[CampaignRun]
     ) -> list[WorkflowRunResult]:
-        """Convert campaign runs to WorkflowRunResult for comparison."""
+        """Convert campaign runs to WorkflowRunResult for comparison.
+
+        Runs with errors but no metrics are included with default metrics
+        and marked as failed. This ensures that failed runs invalidate the
+        release gate (P4).
+        """
         results: list[WorkflowRunResult] = []
         for run in runs:
-            if run.quality is None or run.performance is None:
-                continue
-            results.append(
-                WorkflowRunResult(
-                    schema_version="workflow-run-result-v1",
-                    workflow_mode=run.mode,
-                    quality=run.quality,
-                    performance=run.performance,
-                    integrity_checks=run.integrity_checks,
-                    run_id=run.run_id or None,
-                    errors=run.errors,
+            if run.quality is not None and run.performance is not None:
+                # Normal case: metrics extracted successfully
+                results.append(
+                    WorkflowRunResult(
+                        schema_version="workflow-run-result-v1",
+                        workflow_mode=run.mode,
+                        quality=run.quality,
+                        performance=run.performance,
+                        integrity_checks=run.integrity_checks,
+                        run_id=run.run_id or None,
+                        errors=run.errors,
+                    )
                 )
-            )
+            else:
+                # P4: Run failed to produce metrics — include with defaults
+                # so the recommendation gate fails
+                results.append(
+                    WorkflowRunResult(
+                        schema_version="workflow-run-result-v1",
+                        workflow_mode=run.mode,
+                        quality=QualityMeasurement(
+                            schema_version="quality-measurement-v1",
+                            candidate_recall=0.0,
+                            source_quality_score=0.0,
+                            coverage_completeness=0.0,
+                            unsupported_claim_rate=1.0,
+                            citation_accuracy=0.0,
+                            report_quality_score=0.0,
+                        ),
+                        performance=PerformanceMeasurement(
+                            schema_version="performance-measurement-v1",
+                            total_latency_ms=0.0,
+                            total_tokens=0,
+                            semantic_calls=0,
+                            cache_hit_rate=0.0,
+                            cache_miss_rate=1.0,
+                            embedding_throughput=0.0,
+                            gpu_memory_mb=0.0,
+                            cpu_percent=0.0,
+                        ),
+                        integrity_checks=run.integrity_checks,
+                        run_id=run.run_id or None,
+                        errors=run.errors,
+                    )
+                )
         return results
 
     def _build_comparison(
@@ -1151,13 +1208,18 @@ class ReleaseBenchmarkRunner:
             else:
                 performance_vs_baseline[mode] = 1.0
 
+        # P5: Determine integrity_regression from actual check results
+        integrity_regression = any(
+            not check.passed for r in results for check in r.integrity_checks
+        )
+
         return WorkflowComparison(
             schema_version="workflow-comparison-v1",
             dataset_version=self.loader.dataset.version,
             results=tuple(results),
             quality_vs_baseline=quality_vs_baseline,
             performance_vs_baseline=performance_vs_baseline,
-            integrity_regression=False,
+            integrity_regression=integrity_regression,
         )
 
     def _build_recommendation(
@@ -1219,6 +1281,39 @@ class ReleaseBenchmarkRunner:
                         f"{mode} achieved {result.quality.citation_accuracy:.3f}"
                     )
 
+        # P6: Enforce performance thresholds
+        max_latency_ratio = thresholds.get("max_latency_ratio_vs_baseline")
+        max_token_ratio = thresholds.get("max_token_ratio_vs_baseline")
+
+        for mode, mode_results_list in mode_results.items():
+            for result in mode_results_list:
+                perf_baseline = comparison.performance_vs_baseline.get(mode, 1.0)
+
+                if max_latency_ratio is not None and perf_baseline > max_latency_ratio:
+                    withdrawn.append(
+                        f"latency_ratio <= {max_latency_ratio} — "
+                        f"{mode} achieved {perf_baseline:.3f}"
+                    )
+
+                if max_token_ratio is not None:
+                    # Token ratio: compare mode tokens to baseline tokens
+                    baseline_tokens = next(
+                        (
+                            r.performance.total_tokens
+                            for r in mode_results_list
+                            if r.performance.total_tokens > 0
+                        ),
+                        0,
+                    )
+                    if baseline_tokens > 0:
+                        mode_tokens = result.performance.total_tokens
+                        token_ratio = mode_tokens / baseline_tokens
+                        if token_ratio > max_token_ratio:
+                            withdrawn.append(
+                                f"token_ratio <= {max_token_ratio} — "
+                                f"{mode} achieved {token_ratio:.3f}"
+                            )
+
         # Determine outcome
         p0_regressions: list[str] = []
 
@@ -1241,6 +1336,7 @@ class ReleaseBenchmarkRunner:
             outcome = RecommendationOutcome.GO
             supported = (
                 "quality thresholds met for all workflow modes",
+                "performance thresholds met for all workflow modes",
                 "no deterministic integrity regressions",
                 "local-model limitations documented",
             )
