@@ -624,107 +624,146 @@ class MetricEngine:
     ) -> tuple[PerformanceMeasurement, tuple[PerformanceMetric, ...]]:
         """Extract performance metrics for a single run from persisted state.
 
+        Metrics are read from the run-scoped telemetry tables introduced
+        in migration 0036 (issue #143).  When telemetry tables do not exist
+        (pre-migration database), falls back to the legacy path with
+        explicit ``unavailable`` status.
+
         Args:
             run_id: The research run UUID.
             start_time: Wall-clock start time (from ``time.monotonic()``).
 
         Returns:
-            A PerformanceMeasurement and a tuple of individual PerformanceMetric records.
+            A PerformanceMeasurement and a tuple of individual PerformanceMetric
+            records with provenance.
         """
         if self._connection is None:
             raise RuntimeError(
                 "MetricEngine not connected. Call connect() first or use as context manager."
             )
 
-        metrics: list[PerformanceMetric] = []
         end_time = time.monotonic()
         latency_ms = (end_time - start_time) * 1000
 
         # ----------------------------------------------------------------
-        # 1. Semantic call count
+        # Try to read from new telemetry tables first.
+        # ----------------------------------------------------------------
+        telemetry = self._read_telemetry(run_id)
+
+        # ----------------------------------------------------------------
+        # Strict mode: reject when required telemetry is unavailable.
+        # ----------------------------------------------------------------
+        strict = self.config.strict if self.config else False
+        if strict:
+            if telemetry["token_source"] == "unavailable":
+                raise RuntimeError(
+                    "Strict mode: token_source is unavailable for run_id "
+                    f"{run_id}. Cannot produce release-quality metrics."
+                )
+            if telemetry["embedding_throughput"] <= 0:
+                raise RuntimeError(
+                    "Strict mode: embedding telemetry unavailable for run_id "
+                    f"{run_id}. Cannot compute release-quality throughput."
+                )
+            if telemetry["cpu_samples"] == 0:
+                raise RuntimeError(
+                    "Strict mode: CPU telemetry unavailable for run_id "
+                    f"{run_id}. Cannot compute release-quality CPU metrics."
+                )
+            if telemetry["cache_lookups"] == 0:
+                raise RuntimeError(
+                    "Strict mode: cache telemetry unavailable for run_id "
+                    f"{run_id}. Cannot compute release-quality cache metrics."
+                )
+
+        # ----------------------------------------------------------------
+        # Semantic calls — always available from semantic_calls table.
         # ----------------------------------------------------------------
         with self._connection.cursor() as cur:
             cur.execute(
-                """SELECT
-                       COUNT(*) AS total_calls,
-                       COALESCE(SUM(
-                           CASE WHEN status = 'complete'
-                           THEN 1 ELSE 0 END
-                       ), 0) AS successful_calls
-                   FROM semantic_calls
-                   WHERE run_id = %s""",
+                """SELECT COUNT(*) FROM semantic_calls WHERE run_id = %s""",
                 (run_id,),
             )
-            row = cur.fetchone()
-            semantic_calls = row[0] or 0
+            semantic_calls = cur.fetchone()[0] or 0
 
-            # ----------------------------------------------------------------
-            # 2. Semantic cache stats (no run_id or hit columns exist)
-            # ----------------------------------------------------------------
-            cur.execute(
-                """SELECT
-                       COUNT(*) AS total,
-                       SUM(CASE WHEN status = 'valid' THEN 1 ELSE 0 END) AS valid
-                   FROM semantic_cache""",
+        # ----------------------------------------------------------------
+        # Build PerformanceMeasurement from telemetry or legacy fallback.
+        # ----------------------------------------------------------------
+        total_tokens = telemetry["total_tokens"]
+        token_source = telemetry["token_source"]
+        token_method = (
+            "endpoint"
+            if token_source == "endpoint"
+            else ("tokenizer" if token_source == "tokenizer" else "estimated")
+        )
+        token_formula = (
+            f"SUM(endpoint_usage_records.total_tokens) — source={token_source}"
+            if token_source != "unavailable"
+            else "semantic_calls * 500 (endpoint_usage_records absent)"
+        )
+
+        # Cache — run-scoped from run_cache_events, or legacy global.
+        cache_lookups = telemetry["cache_lookups"]
+        cache_hits = telemetry["cache_hits"]
+        if cache_lookups > 0:
+            cache_hit_rate = round(cache_hits / cache_lookups, 6)
+            cache_formula = (
+                f"run_cache_events: hits({cache_hits}) / lookups({cache_lookups})"
             )
-            cache_row = cur.fetchone()
-            cache_total = cache_row[0] or 0
-            cache_hits = cache_row[1] or 0
+        else:
+            # Legacy fallback: global semantic_cache (no run_id filter).
+            cache_hit_rate, cache_formula = self._legacy_cache_hit_rate()
 
-            # ----------------------------------------------------------------
-            # 3. Model endpoint health (no run_id, response_time_ms, or token columns)
-            #    Query endpoint status counts (not used in metrics, but validates schema)
-            cur.execute(
-                """SELECT
-                       COUNT(*) AS total_endpoints,
-                       SUM(CASE WHEN status = 'healthy' THEN 1 ELSE 0 END) AS healthy
-                   FROM model_endpoints""",
+        # Embedding throughput — from run_embedding_throughput, or legacy estimate.
+        embedding_throughput = telemetry["embedding_throughput"]
+        if embedding_throughput > 0:
+            emb_formula = (
+                f"run_embedding_throughput: {telemetry['embedding_total_texts']}/"
+                f"{telemetry['embedding_elapsed_seconds']:.3f}s"
             )
-            _ = cur.fetchone()  # endpoint health counts — not used in metrics
+        else:
+            embedding_throughput = max(0.0, 1000.0 / max(1, latency_ms / 100))
+            emb_formula = (
+                "1000 / max(1, latency_ms / 100) — run_embedding_throughput absent"
+            )
 
-        # ----------------------------------------------------------------
-        # 4. Token total: no token columns exist in model_endpoints
-        #    Fall back to estimation from semantic call count
-        # ----------------------------------------------------------------
-        total_tokens = semantic_calls * 500
+        # CPU — from run_resource_samples, or legacy single sample.
+        cpu_pct = telemetry["cpu_mean_percent"]
+        if cpu_pct is None:
+            cpu_pct = self._legacy_cpu_percent()
+        cpu_formula = (
+            f"run_resource_samples: mean({telemetry['cpu_samples']} samples)"
+            if telemetry["cpu_samples"] > 0
+            else (
+                "psutil.cpu_percent(interval=0.1) — single sample"
+                if _HAS_PSUTIL
+                else "0.0 — psutil not available"
+            )
+        )
 
-        # ----------------------------------------------------------------
-        # 5. Real system-level CPU + GPU metrics (psutil / NVML)
-        # ----------------------------------------------------------------
-        cpu_pct = 0.0
-        gpu_mem_mb = 0.0
-        if _HAS_PSUTIL:
-            try:
-                cpu_pct = round(psutil.cpu_percent(interval=0.1), 2)
-            except Exception:  # noqa: BLE001
-                cpu_pct = 0.0
-
-        if _HAS_PYNVML:
-            try:
-                pynvml.nvmlInit()
-                handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-                info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                gpu_mem_mb = round(info.used / (1024 * 1024), 2)
-                pynvml.nvmlShutdown()
-            except Exception:  # noqa: BLE001
-                try:
-                    pynvml.nvmlShutdown()
-                except Exception:
-                    logger.debug("NVML shutdown failed", exc_info=True)
-                gpu_mem_mb = 0.0
-
-        # Compute performance scores
-        cache_hit_rate = cache_hits / cache_total if cache_total > 0 else 0.0
+        # GPU — from run_resource_samples, or legacy single sample.
+        gpu_mem = telemetry["gpu_mean_memory_mb"]
+        if gpu_mem is None:
+            gpu_mem = self._legacy_gpu_memory()
+        gpu_formula = (
+            f"run_resource_samples: mean({telemetry['gpu_samples']} samples)"
+            if telemetry["gpu_samples"] > 0
+            else (
+                "pynvml.nvmlDeviceGetMemoryInfo — single sample"
+                if _HAS_PYNVML and gpu_mem is not None
+                else "0.0 — NVML not available"
+            )
+        )
 
         performance = PerformanceMeasurement(
             schema_version="performance-measurement-v1",
             total_latency_ms=round(latency_ms, 2),
-            total_tokens=total_tokens,
+            total_tokens=total_tokens if total_tokens else 0,
             semantic_calls=semantic_calls,
-            cache_hit_rate=round(cache_hit_rate, 6),
-            cache_miss_rate=round(1.0 - cache_hit_rate, 6),
-            embedding_throughput=max(0.0, 1000.0 / max(1, latency_ms / 100)),
-            gpu_memory_mb=gpu_mem_mb,
+            cache_hit_rate=round(max(0.0, min(1.0, cache_hit_rate)), 6),
+            cache_miss_rate=round(max(0.0, min(1.0, 1.0 - cache_hit_rate)), 6),
+            embedding_throughput=round(max(0.0, embedding_throughput), 3),
+            gpu_memory_mb=gpu_mem if gpu_mem is not None else 0.0,
             cpu_percent=round(max(0.0, min(100.0, cpu_pct)), 2),
         )
 
@@ -749,74 +788,215 @@ class MetricEngine:
                     run_id=str(run_id),
                     method="count",
                 ),
-                formula="COUNT(*) FROM semantic_calls WHERE run_id = ?",
+                formula="COUNT(*) FROM semantic_calls WHERE run_id = %s",
             ),
             PerformanceMetric(
                 name="total_tokens",
                 value=float(performance.total_tokens),
                 source=MetricSource(
-                    table="model_endpoints",
-                    column="N/A (no token columns exist)",
+                    table="endpoint_usage_records"
+                    if token_source != "unavailable"
+                    else "run_performance_telemetry",
+                    column="total_tokens"
+                    if token_source != "unavailable"
+                    else "total_tokens (fallback)",
                     run_id=str(run_id),
-                    method="estimated",
+                    method=token_method,
                 ),
-                formula="semantic_calls * 500 (no token columns in model_endpoints)",
+                formula=token_formula,
             ),
             PerformanceMetric(
                 name="cache_hit_rate",
                 value=performance.cache_hit_rate,
                 source=MetricSource(
-                    table="semantic_cache",
-                    column="status = 'valid'",
-                    run_id="",
+                    table="run_cache_events" if cache_lookups > 0 else "semantic_cache",
+                    column="event_type, hit"
+                    if cache_lookups > 0
+                    else "status = 'valid'",
+                    run_id=str(run_id) if cache_lookups > 0 else "",
                     method="ratio",
                 ),
-                formula="valid_cache_entries / total_cache_entries (no run_id filter)",
+                formula=cache_formula,
             ),
             PerformanceMetric(
                 name="embedding_throughput",
                 value=performance.embedding_throughput,
                 source=MetricSource(
-                    table="model_endpoints",
-                    column="N/A (no response_time_ms column)",
-                    run_id="",
-                    method="unavailable",
+                    table="run_embedding_throughput"
+                    if embedding_throughput > 0
+                    else "model_endpoints",
+                    column="batch_count, elapsed_seconds"
+                    if embedding_throughput > 0
+                    else "N/A",
+                    run_id=str(run_id) if embedding_throughput > 0 else "",
+                    method="ratio" if embedding_throughput > 0 else "unavailable",
                 ),
-                formula="1000 / avg_response_time_ms (no response_time_ms in model_endpoints)",
+                formula=emb_formula,
             ),
             PerformanceMetric(
                 name="cpu_percent",
                 value=performance.cpu_percent,
                 source=MetricSource(
-                    table="psutil",
-                    column="cpu_percent(interval=0.1)",
+                    table="run_resource_samples"
+                    if telemetry["cpu_samples"] > 0
+                    else ("psutil" if _HAS_PSUTIL else "none"),
+                    column="AVG(value)"
+                    if telemetry["cpu_samples"] > 0
+                    else "cpu_percent(interval=0.1)",
                     run_id=str(run_id),
-                    method="sample" if _HAS_PSUTIL else "unavailable",
+                    method="mean" if telemetry["cpu_samples"] > 0 else "sample",
                 ),
-                formula=(
-                    "psutil.cpu_percent(interval=0.1) — real system metric"
-                    if _HAS_PSUTIL
-                    else "0.0 — psutil not available"
-                ),
+                formula=cpu_formula,
             ),
             PerformanceMetric(
                 name="gpu_memory_mb",
                 value=performance.gpu_memory_mb,
                 source=MetricSource(
-                    table="pynvml",
-                    column="nvmlDeviceGetMemoryInfo",
-                    run_id=str(run_id),
-                    method="nvml" if _HAS_PYNVML else "unavailable",
+                    table="run_resource_samples"
+                    if telemetry["gpu_samples"] > 0
+                    else ("pynvml" if _HAS_PYNVML else "none"),
+                    column="AVG(value)"
+                    if telemetry["gpu_samples"] > 0
+                    else "nvmlDeviceGetMemoryInfo",
+                    run_id=str(run_id) if telemetry["gpu_samples"] > 0 else "",
+                    method="mean" if telemetry["gpu_samples"] > 0 else "nvml",
                 ),
-                formula=(
-                    "pynvml.nvmlDeviceGetMemoryInfo(0).used / 1MB"
-                    if _HAS_PYNVML
-                    else "0.0 — NVML not available"
-                ),
+                formula=gpu_formula,
             ),
         )
 
         return performance, metrics
+
+    # ------------------------------------------------------------------
+    # New telemetry path (migration 0036+)
+    # ------------------------------------------------------------------
+
+    def _read_telemetry(self, run_id: UUID) -> dict:
+        """Read run-scoped telemetry from the new tables.
+
+        Returns a dict with keys:
+        total_tokens, token_source, cache_lookups, cache_hits, cache_misses,
+        embedding_throughput, embedding_total_texts, embedding_elapsed_seconds,
+        cpu_samples, cpu_mean_percent, gpu_samples, gpu_mean_memory_mb.
+        """
+        result = {
+            "total_tokens": 0,
+            "token_source": "unavailable",
+            "cache_lookups": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "embedding_throughput": 0.0,
+            "embedding_total_texts": 0,
+            "embedding_elapsed_seconds": 0.0,
+            "cpu_samples": 0,
+            "cpu_mean_percent": None,
+            "gpu_samples": 0,
+            "gpu_mean_memory_mb": None,
+        }
+
+        # 1. Read aggregated summary from run_performance_telemetry.
+        try:
+            cur = self._connection.execute(
+                """SELECT total_tokens, token_source,
+                          cache_lookups, cache_hits, cache_misses,
+                          embedding_throughput,
+                          COALESCE(SUM(rte.total_texts), 0),
+                          COALESCE(SUM(rte.elapsed_seconds), 0.0),
+                          COALESCE(AVG(rs.value) FILTER (WHERE rs.device_type = 'cpu' AND rs.status = 'measured'), 0),
+                          COUNT(rs.id) FILTER (WHERE rs.device_type = 'cpu' AND rs.status = 'measured'),
+                          COALESCE(AVG(rs.value) FILTER (WHERE rs.device_type = 'gpu' AND rs.status = 'measured'), 0),
+                          COUNT(rs.id) FILTER (WHERE rs.device_type = 'gpu' AND rs.status = 'measured')
+                   FROM run_performance_telemetry t
+                   LEFT JOIN run_embedding_throughput rte ON rte.run_id = t.run_id
+                   LEFT JOIN run_resource_samples rs ON rs.run_id = t.run_id
+                   WHERE t.run_id = %s
+                   GROUP BY t.total_tokens, t.token_source,
+                            t.cache_lookups, t.cache_hits, t.cache_misses,
+                            t.embedding_throughput""",
+                (str(run_id),),
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                result["total_tokens"] = row[0] or 0
+                result["token_source"] = row[1] or "unavailable"
+                result["cache_lookups"] = row[2] or 0
+                result["cache_hits"] = row[3] or 0
+                result["cache_misses"] = row[4] or 0
+                result["embedding_throughput"] = row[5] or 0.0
+                result["embedding_total_texts"] = row[6] or 0
+                result["embedding_elapsed_seconds"] = row[7] or 0.0
+                cpu_mean = row[8]
+                cpu_cnt = row[9] or 0
+                gpu_mean = row[10]
+                gpu_cnt = row[11] or 0
+                if cpu_mean is not None and cpu_cnt > 0:
+                    result["cpu_mean_percent"] = round(float(cpu_mean), 2)
+                if gpu_mean is not None and gpu_cnt > 0:
+                    result["gpu_mean_memory_mb"] = round(float(gpu_mean), 2)
+                result["cpu_samples"] = cpu_cnt
+                result["gpu_samples"] = gpu_cnt
+        except Exception:  # noqa: BLE001
+            # Rollback the failed transaction so legacy queries can execute.
+            try:
+                self._connection.rollback()
+            except Exception:  # noqa: S110, BLE001
+                pass
+            # Telemetry tables don't exist — fall through to legacy.
+            logger.debug(
+                "run_performance_telemetry table not found — "
+                "falling back to legacy metric extraction"
+            )
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Legacy fallbacks (pre-migration 0036)
+    # ------------------------------------------------------------------
+
+    def _legacy_cache_hit_rate(self) -> tuple[float, str]:
+        """Legacy cache hit rate from global semantic_cache (no run_id)."""
+        with self._connection.cursor() as cur:
+            cur.execute(
+                """SELECT
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN status = 'valid' THEN 1 ELSE 0 END) AS valid
+                   FROM semantic_cache""",
+            )
+            row = cur.fetchone()
+        total = row[0] or 0
+        valid = row[1] or 0
+        rate = valid / total if total > 0 else 0.0
+        return (
+            round(rate, 6),
+            f"semantic_cache: valid({valid}) / total({total}) (no run_id filter)",
+        )
+
+    def _legacy_cpu_percent(self) -> float:
+        """Legacy CPU percent: single psutil sample."""
+        if _HAS_PSUTIL:
+            try:
+                return round(psutil.cpu_percent(interval=0.1), 2)
+            except Exception:  # noqa: BLE001
+                return 0.0
+        return 0.0
+
+    def _legacy_gpu_memory(self) -> float | None:
+        """Legacy GPU memory: single NVML sample."""
+        if not _HAS_PYNVML:
+            return None
+        try:
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            result = round(info.used / (1024 * 1024), 2)
+            pynvml.nvmlShutdown()
+            return result
+        except Exception:  # noqa: BLE001
+            try:
+                pynvml.nvmlShutdown()
+            except Exception:  # noqa: S110, BLE001
+                pass
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -1192,6 +1372,17 @@ class ReleaseBenchmarkRunner:
                 spec=spec,
                 search_plan=search_plan,
             )
+
+            # Wire telemetry collection: aggregate run-scoped telemetry
+            # so that extract_performance_metrics reads from populated tables
+            # instead of falling back to legacy heuristics.
+            if metric_engine is not None:
+                from research_store.telemetry_service import (
+                    PerformanceTelemetryService,
+                )
+
+                telemetry_svc = PerformanceTelemetryService(metric_engine._connection)
+                telemetry_svc.build_summary(UUID(run_id))
 
             # Extract real metrics from persisted state (if engine available)
             if metric_engine is not None:

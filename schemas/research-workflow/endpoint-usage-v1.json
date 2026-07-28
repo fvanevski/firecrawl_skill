@@ -1,0 +1,61 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/endpoint-usage-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "call_id": {
+      "type": "string"
+    },
+    "completion_tokens": {
+      "type": "integer"
+    },
+    "endpoint_type": {
+      "type": "string"
+    },
+    "metric_version": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "model_revision": {
+      "type": "string"
+    },
+    "prompt_tokens": {
+      "type": "integer"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "endpoint-usage-v1",
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "total_tokens": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "call_id",
+    "endpoint_type",
+    "provider",
+    "model",
+    "model_revision",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "source",
+    "metric_version"
+  ],
+  "title": "EndpointUsageRecord",
+  "type": "object"
+}

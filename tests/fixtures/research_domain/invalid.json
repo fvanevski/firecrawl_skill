@@ -163,5 +163,45 @@
       ],
       "value": "invalid"
     }
+  ],
+  "token-accounting-v1": [
+    {
+      "path": [
+        "source"
+      ],
+      "value": "unknown_source"
+    }
+  ],
+  "cache-event-v1": [
+    {
+      "path": [
+        "event_type"
+      ],
+      "value": "unknown_event"
+    }
+  ],
+  "resource-sample-v1": [
+    {
+      "path": [
+        "status"
+      ],
+      "value": "unknown_status"
+    }
+  ],
+  "endpoint-usage-v1": [
+    {
+      "path": [
+        "source"
+      ],
+      "value": "unknown_source"
+    }
+  ],
+  "performance-telemetry-summary-v1": [
+    {
+      "path": [
+        "token_source"
+      ],
+      "value": "unknown_source"
+    }
   ]
 }

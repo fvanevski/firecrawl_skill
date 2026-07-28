@@ -1,0 +1,52 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/cache-event-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "event_type": {
+      "type": "string"
+    },
+    "hit": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "key_hash": {
+      "type": "string"
+    },
+    "metric_version": {
+      "type": "string"
+    },
+    "model_fingerprint": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "cache-event-v1",
+      "type": "string"
+    },
+    "stage": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "stage",
+    "event_type",
+    "key_hash",
+    "model_fingerprint",
+    "hit",
+    "metric_version"
+  ],
+  "title": "CacheEvent",
+  "type": "object"
+}

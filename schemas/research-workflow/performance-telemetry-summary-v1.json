@@ -1,0 +1,136 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/performance-telemetry-summary-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cache_hit_rate": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cache_hits": {
+      "type": "integer"
+    },
+    "cache_lookups": {
+      "type": "integer"
+    },
+    "cache_misses": {
+      "type": "integer"
+    },
+    "cpu_max_percent": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cpu_mean_percent": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cpu_samples": {
+      "type": "integer"
+    },
+    "embedding_batch_count": {
+      "type": "integer"
+    },
+    "embedding_elapsed_seconds": {
+      "type": "number"
+    },
+    "embedding_throughput": {
+      "type": "number"
+    },
+    "embedding_vector_count": {
+      "type": "integer"
+    },
+    "gpu_max_memory_mb": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "gpu_mean_memory_mb": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "gpu_samples": {
+      "type": "integer"
+    },
+    "gpu_unavailable": {
+      "type": "boolean"
+    },
+    "metric_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "performance-telemetry-summary-v1",
+      "type": "string"
+    },
+    "semantic_calls": {
+      "type": "integer"
+    },
+    "strict_pass": {
+      "type": "boolean"
+    },
+    "token_source": {
+      "type": "string"
+    },
+    "total_tokens": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "total_tokens",
+    "token_source",
+    "semantic_calls",
+    "cache_lookups",
+    "cache_hits",
+    "cache_misses",
+    "cache_hit_rate",
+    "embedding_batch_count",
+    "embedding_vector_count",
+    "embedding_elapsed_seconds",
+    "embedding_throughput",
+    "cpu_samples",
+    "cpu_mean_percent",
+    "cpu_max_percent",
+    "gpu_samples",
+    "gpu_mean_memory_mb",
+    "gpu_max_memory_mb",
+    "gpu_unavailable",
+    "strict_pass",
+    "metric_version"
+  ],
+  "title": "PerformanceTelemetrySummary",
+  "type": "object"
+}
