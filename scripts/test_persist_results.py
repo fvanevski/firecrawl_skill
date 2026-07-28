@@ -314,7 +314,12 @@ class TestBuildIngestRequest:
     def test_fsearch_missing_scratch(self, tmp_path):
         from persist_results import _build_ingest_request
 
-        candidate = {"rank": 1, "url": "https://x.com", "scratch_file": "/nonexistent"}
+        candidate = {
+            "rank": 1,
+            "url": "https://x.com",
+            "scratch_file": "/nonexistent",
+            "scrape_status": "ok",
+        }
         ingest_request, error = _build_ingest_request(candidate, tmp_path)
         assert ingest_request is None
         assert "scratch file not found" in error
@@ -328,6 +333,7 @@ class TestBuildIngestRequest:
             "url": "https://example.com",
             "title": "Example",
             "scratch_file": str(scratch),
+            "status": "ok",
         }
         ingest_request, error = _build_scrape_ingest_request(result, tmp_path)
         assert error is None

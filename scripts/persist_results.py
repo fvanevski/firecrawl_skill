@@ -97,6 +97,35 @@ def parser() -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
+# MIME type mapping
+# ---------------------------------------------------------------------------
+
+
+def _format_to_mime_type(format_str: str) -> str:
+    """Map the fscrape ``format`` field to a MIME type.
+
+    Args:
+        format_str: The format string from the manifest (e.g. "markdown",
+            "html", "json", "links", "images", "summary").
+
+    Returns:
+        A MIME type string suitable for ``IngestRequest.mime_type``.
+    """
+    fmt = format_str.lower().strip()
+    mapping: dict[str, str] = {
+        "markdown": "text/markdown",
+        "md": "text/markdown",
+        "html": "text/html",
+        "rawhtml": "text/html",
+        "json": "application/json",
+        "links": "text/html",
+        "images": "text/html",
+        "summary": "text/markdown",
+    }
+    return mapping.get(fmt, "text/markdown")
+
+
+# ---------------------------------------------------------------------------
 # Manifest parsing
 # ---------------------------------------------------------------------------
 
@@ -164,7 +193,15 @@ def _resolve_run_id(
     except (ValueError, KeyError):
         pass
 
-    # Try resolving by external ID.
+    # Try resolving by external ID — use the full value (with prefix) first,
+    # then the stripped suffix as a fallback for legacy callers.
+    try:
+        with uow_factory() as uow:
+            status = uow.runs.get_run_status(external_id=run_id)
+            return UUID(status["id"])
+    except KeyError:
+        pass
+
     try:
         with uow_factory() as uow:
             status = uow.runs.get_run_status(external_id=cleaned)
@@ -181,6 +218,7 @@ def _resolve_run_id(
 def _build_ingest_request(
     candidate: dict[str, Any],
     scratch_root: Path,
+    mime_type: str = "text/markdown",
 ) -> tuple[Any, str | None]:
     """Build an ``IngestRequest`` from a manifest candidate entry.
 
@@ -192,6 +230,11 @@ def _build_ingest_request(
     url = candidate.get("url", "")
     if not url:
         return None, "missing URL"
+
+    # Only ingest candidates that were actually scraped.
+    scrape_status = candidate.get("scrape_status", "")
+    if scrape_status != "ok":
+        return None, f"scrape_status={scrape_status} — skipping unscripted candidate"
 
     scratch_file = candidate.get("scratch_file", "")
     if not scratch_file:
@@ -225,7 +268,7 @@ def _build_ingest_request(
         requested_url=url,
         final_url=url,
         content=content,
-        mime_type="text/markdown",
+        mime_type=mime_type,
         title=title,
         metadata=metadata,
     )
@@ -235,6 +278,7 @@ def _build_ingest_request(
 def _build_scrape_ingest_request(
     result: dict[str, Any],
     scratch_root: Path,
+    mime_type: str = "text/markdown",
 ) -> tuple[Any, str | None]:
     """Build an ``IngestRequest`` from an fscrape result entry.
 
@@ -244,6 +288,11 @@ def _build_scrape_ingest_request(
     url = result.get("url", "")
     if not url:
         return None, "missing URL"
+
+    # Only ingest results that were actually scraped successfully.
+    status = result.get("status", "")
+    if status != "ok":
+        return None, f"status={status} — skipping unscripted result"
 
     scratch_file = result.get("scratch_file", "")
     if not scratch_file:
@@ -274,7 +323,7 @@ def _build_scrape_ingest_request(
         requested_url=url,
         final_url=url,
         content=content,
-        mime_type="text/markdown",
+        mime_type=mime_type,
         title=title,
         metadata=metadata,
     )
@@ -292,6 +341,7 @@ def _persist_search_manifest(
     uow_factory,
 ) -> list[dict[str, Any]]:
     """Persist candidates from an fsearch manifest through the corpus service."""
+    from research_store.blob import ContentAddressedBlobStore
     from research_store.config import StoreConfig
     from research_store.service import CorpusService
 
@@ -318,17 +368,30 @@ def _persist_search_manifest(
     config = StoreConfig.from_env()
     config.require_database()
 
-    # Resolve the external run ID to an internal UUID for provenance linkage.
-    resolved_run_id = None
-    if run_id is not None:
-        resolved_run_id = _resolve_run_id(run_id, uow_factory)
+    # Build a real blob store so ingest does not fail with AttributeError.
+    blob_store = ContentAddressedBlobStore(config.blob_root)
+
+    # Build the service with a parser registry so non-Markdown MIME types
+    # are handled correctly.
+    from research_store.parsing import get_registry
+
+    parser_registry = get_registry()
 
     service = CorpusService(
         config,
         uow_factory,
-        blob_store=None,
+        blob_store=blob_store,
+        parser_registry=parser_registry,
     )
 
+    # Use the batch ingestion contract for proper provenance tracking.
+    invocation_id = manifest.get(
+        "invocation_id", f"legacy-{manifest.get('invocation_id', str(UUID(int=0)))}"
+    )
+    operation = "fsearch"
+
+    # Build ingest requests for successfully scraped candidates only.
+    ingest_items: list[Any] = []
     for idx, cand in enumerate(candidates, start=1):
         url = cand.get("url", "")
         if not url:
@@ -340,6 +403,22 @@ def _persist_search_manifest(
                     "status": "error",
                     "error": "missing URL",
                     "persisted": False,
+                }
+            )
+            continue
+
+        scrape_status = cand.get("scrape_status", "")
+        if scrape_status != "ok":
+            # Unscripted candidate — record as non-error but skip ingestion.
+            records.append(
+                {
+                    "index": idx,
+                    "url": url,
+                    "title": cand.get("title", ""),
+                    "status": "ok",
+                    "persisted": False,
+                    "scratch_file": cand.get("scratch_file", ""),
+                    "reason": "not_scraped",
                 }
             )
             continue
@@ -358,37 +437,53 @@ def _persist_search_manifest(
             )
             continue
 
+        ingest_items.append(ingest_request)
+
+    # Batch ingest all successfully scraped candidates.
+    if ingest_items:
         try:
-            result = service.ingest(
-                ingest_request,
-                run_id=resolved_run_id,
-                external_run_id=run_id,
+            manifest_result = service.ingest_batch(
+                invocation_id,
+                operation,
+                ingest_items,
+                research_run_external_id=run_id,
+                metadata={
+                    "invocation_id": invocation_id,
+                    "operation": operation,
+                    "source": "persist_results",
+                },
             )
-            records.append(
-                {
-                    "index": idx,
-                    "url": url,
-                    "title": cand.get("title", ""),
-                    "status": "ok",
-                    "persisted": True,
-                    "source_id": str(result.source_id),
-                    "document_id": str(result.document_id),
-                    "chunk_ids": [str(cid) for cid in result.chunk_ids],
-                    "content_sha256": result.content_sha256,
-                }
-            )
+            # Map batch results back to records.
+            for asset in manifest_result.get("assets", []):
+                ordinal = asset.get("ordinal", 0)
+                record_idx = ordinal + 1  # 1-based index
+                for rec in records:
+                    if (
+                        rec.get("index") == record_idx
+                        and rec.get("status") == "ok"
+                        and rec.get("persisted") is False
+                    ):
+                        if asset["status"] == "complete":
+                            rec["persisted"] = True
+                            rec["status"] = "ok"
+                            rec["source_id"] = str(asset["source_id"])
+                            rec["snapshot_id"] = str(asset["snapshot_id"])
+                            rec["document_id"] = str(asset["document_id"])
+                            rec["chunk_ids"] = [str(cid) for cid in asset["chunk_ids"]]
+                            rec["content_sha256"] = asset["content_sha256"]
+                        elif asset["status"] == "failed":
+                            rec["persisted"] = False
+                            rec["status"] = "error"
+                            rec["error"] = asset.get("error", "unknown")
+                        break
         except Exception as exc:  # noqa: BLE001
-            logger.warning("failed to ingest candidate %d (%s): %s", idx, url, exc)
-            records.append(
-                {
-                    "index": idx,
-                    "url": url,
-                    "title": cand.get("title", ""),
-                    "status": "error",
-                    "error": str(exc),
-                    "persisted": False,
-                }
-            )
+            logger.error("batch ingestion failed: %s", exc)
+            # Mark all items as failed.
+            for rec in records:
+                if rec.get("persisted") is False and rec.get("status") == "ok":
+                    rec["persisted"] = False
+                    rec["status"] = "error"
+                    rec["error"] = str(exc)
 
     return records
 
@@ -399,6 +494,7 @@ def _persist_scrape_manifest(
     uow_factory,
 ) -> list[dict[str, Any]]:
     """Persist results from an fscrape manifest through the corpus service."""
+    from research_store.blob import ContentAddressedBlobStore
     from research_store.config import StoreConfig
     from research_store.service import CorpusService
 
@@ -424,17 +520,34 @@ def _persist_scrape_manifest(
     config = StoreConfig.from_env()
     config.require_database()
 
-    # Resolve the external run ID to an internal UUID for provenance linkage.
-    resolved_run_id = None
-    if run_id is not None:
-        resolved_run_id = _resolve_run_id(run_id, uow_factory)
+    # Build a real blob store so ingest does not fail with AttributeError.
+    blob_store = ContentAddressedBlobStore(config.blob_root)
+
+    # Build the service with a parser registry so non-Markdown MIME types
+    # are handled correctly.
+    from research_store.parsing import get_registry
+
+    parser_registry = get_registry()
 
     service = CorpusService(
         config,
         uow_factory,
-        blob_store=None,
+        blob_store=blob_store,
+        parser_registry=parser_registry,
     )
 
+    # Use the batch ingestion contract for proper provenance tracking.
+    invocation_id = manifest.get(
+        "invocation_id", f"legacy-{manifest.get('invocation_id', str(UUID(int=0)))}"
+    )
+    operation = "fscrape"
+
+    # Determine MIME type from the manifest format field.
+    format_str = manifest.get("format", "markdown")
+    mime_type = _format_to_mime_type(format_str)
+
+    # Build ingest requests for successfully scraped results only.
+    ingest_items: list[Any] = []
     for idx, res in enumerate(results, start=1):
         url = res.get("url", "")
         if not url:
@@ -450,7 +563,25 @@ def _persist_scrape_manifest(
             )
             continue
 
-        ingest_request, error = _build_scrape_ingest_request(res, config.scratch_root)
+        status = res.get("status", "")
+        if status != "ok":
+            # Unscripted result — record as non-error but skip ingestion.
+            records.append(
+                {
+                    "index": idx,
+                    "url": url,
+                    "title": res.get("title", ""),
+                    "status": "ok",
+                    "persisted": False,
+                    "scratch_file": res.get("scratch_file", ""),
+                    "reason": "not_ok",
+                }
+            )
+            continue
+
+        ingest_request, error = _build_scrape_ingest_request(
+            res, config.scratch_root, mime_type=mime_type
+        )
         if ingest_request is None:
             records.append(
                 {
@@ -464,37 +595,53 @@ def _persist_scrape_manifest(
             )
             continue
 
+        ingest_items.append(ingest_request)
+
+    # Batch ingest all successfully scraped results.
+    if ingest_items:
         try:
-            result = service.ingest(
-                ingest_request,
-                run_id=resolved_run_id,
-                external_run_id=run_id,
+            manifest_result = service.ingest_batch(
+                invocation_id,
+                operation,
+                ingest_items,
+                research_run_external_id=run_id,
+                metadata={
+                    "invocation_id": invocation_id,
+                    "operation": operation,
+                    "source": "persist_results",
+                },
             )
-            records.append(
-                {
-                    "index": idx,
-                    "url": url,
-                    "title": res.get("title", ""),
-                    "status": "ok",
-                    "persisted": True,
-                    "source_id": str(result.source_id),
-                    "document_id": str(result.document_id),
-                    "chunk_ids": [str(cid) for cid in result.chunk_ids],
-                    "content_sha256": result.content_sha256,
-                }
-            )
+            # Map batch results back to records.
+            for asset in manifest_result.get("assets", []):
+                ordinal = asset.get("ordinal", 0)
+                record_idx = ordinal + 1  # 1-based index
+                for rec in records:
+                    if (
+                        rec.get("index") == record_idx
+                        and rec.get("status") == "ok"
+                        and rec.get("persisted") is False
+                    ):
+                        if asset["status"] == "complete":
+                            rec["persisted"] = True
+                            rec["status"] = "ok"
+                            rec["source_id"] = str(asset["source_id"])
+                            rec["snapshot_id"] = str(asset["snapshot_id"])
+                            rec["document_id"] = str(asset["document_id"])
+                            rec["chunk_ids"] = [str(cid) for cid in asset["chunk_ids"]]
+                            rec["content_sha256"] = asset["content_sha256"]
+                        elif asset["status"] == "failed":
+                            rec["persisted"] = False
+                            rec["status"] = "error"
+                            rec["error"] = asset.get("error", "unknown")
+                        break
         except Exception as exc:  # noqa: BLE001
-            logger.warning("failed to ingest scrape result %d (%s): %s", idx, url, exc)
-            records.append(
-                {
-                    "index": idx,
-                    "url": url,
-                    "title": res.get("title", ""),
-                    "status": "error",
-                    "error": str(exc),
-                    "persisted": False,
-                }
-            )
+            logger.error("batch ingestion failed: %s", exc)
+            # Mark all items as failed.
+            for rec in records:
+                if rec.get("persisted") is False and rec.get("status") == "ok":
+                    rec["persisted"] = False
+                    rec["status"] = "error"
+                    rec["error"] = str(exc)
 
     return records
 
