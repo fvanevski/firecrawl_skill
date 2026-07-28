@@ -43,10 +43,41 @@ class CorpusService:
         self.queue = queue
         self.parser_registry = parser_registry
 
-    def ingest(self, request: IngestRequest) -> IngestResult:
+    def ingest(
+        self,
+        request: IngestRequest,
+        *,
+        run_id: UUID | None = None,
+        external_run_id: str | None = None,
+    ) -> IngestResult:
+        """Ingest content and optionally associate it with a research run.
+
+        Args:
+            request: The ingestion request containing content and metadata.
+            run_id: Optional research run UUID to associate with the
+                ingested content.  When provided a ``research_run_assets``
+                row is created linking the source to the run.
+            external_run_id: Optional external run ID (e.g. ``fr_<hex>``)
+                to use when linking.  Takes precedence over *run_id* for
+                the asset linkage.
+
+        Returns:
+            The ``IngestResult`` containing source, snapshot, document,
+            and chunk identities.
+        """
         prepared = self._prepare_ingest(request)
         with self.uow_factory() as uow:
             result = uow.snapshots.persist_ingest(*prepared)
+
+        # Associate with a research run when requested.
+        if run_id is not None or external_run_id is not None:
+            self._link_to_run(
+                request,
+                result,
+                run_id,
+                external_run_id=external_run_id,
+            )
+
         self._notify(result.chunk_ids)
         return result
 
@@ -55,6 +86,52 @@ class CorpusService:
             for identifier in identifiers:
                 self.queue.notify(identifier)
                 break
+
+    def _link_to_run(
+        self,
+        request: IngestRequest,
+        result: IngestResult,
+        run_id: UUID | None,
+        *,
+        external_run_id: str | None = None,
+    ) -> None:
+        """Create a research_run_assets row linking the ingested content to a run.
+
+        The asset record links the snapshot (content) to the research run
+        so that downstream queries can find all content associated with a
+        specific run.
+
+        Args:
+            request: The original ingestion request.
+            result: The result containing source/snapshot/document IDs.
+            run_id: The internal research run UUID.
+            external_run_id: Optional external run ID (e.g. ``fr_<hex>``)
+                to use for the linkage.  Takes precedence over *run_id*.
+        """
+        # Determine the external run ID to use for linkage.
+        link_external_id = external_run_id
+        if link_external_id is None and run_id is not None:
+            # Resolve internal UUID to external ID via the run service.
+            try:
+                with self.uow_factory() as uow:
+                    status = uow.runs.get_run_status(run_id=run_id)
+                    link_external_id = status.get("external_id")
+            except KeyError:
+                pass
+
+        if link_external_id is None:
+            return  # No external run ID available — skip linkage.
+
+        try:
+            self.uow_factory().runs.link_run_asset(
+                external_run_id=link_external_id,
+                snapshot_id=result.snapshot_id,
+                role="acquired",
+                metadata=request.metadata,
+            )
+        except KeyError:
+            # Run not found or not in a running state — skip silently.
+            pass
 
     def _prepare_ingest(self, request: IngestRequest):
         canonical = canonicalize_url(request.final_url or request.requested_url)

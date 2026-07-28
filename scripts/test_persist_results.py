@@ -882,6 +882,79 @@ class TestStableIdentities:
         # content_sha256 should be identical (content-addressed dedup)
         assert corpus1[0]["content_sha256"] == corpus2[0]["content_sha256"]
 
+    @pytest.mark.skipif(
+        not TEST_DSN or not psycopg, reason="Requires PostgreSQL and psycopg"
+    )
+    def test_ingest_links_to_run_via_research_run_assets(self, tmp_path, monkeypatch):
+        """Ingest with run_id creates a research_run_assets linkage."""
+        from uuid import uuid4 as _uuid4
+
+        monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+        from functools import partial
+
+        from research_store.config import StoreConfig
+        from research_store.postgres import PostgresUnitOfWork
+
+        config = StoreConfig.from_env()
+        uow_factory = partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
+
+        run_id = _uuid4()
+        with uow_factory() as uow:
+            uow.runs.start_run(
+                "Integration test",
+                {
+                    "external_run_id": f"fr_test_link_{run_id.hex[:16]}",
+                    "execution_mode": "autonomous_local",
+                },
+            )
+            uow.commit()
+
+        scratch = _write_scratch_file(tmp_path, "result_000.md", "content")
+        manifest = {
+            "invocation_id": "fc_test",
+            "operation": "search",
+            "query": "test",
+            "candidates": [
+                {
+                    "rank": 1,
+                    "url": "https://example.com",
+                    "title": "Example",
+                    "scratch_file": str(scratch),
+                    "scrape_status": "ok",
+                }
+            ],
+        }
+        path = _write_manifest(tmp_path, manifest)
+        output = tmp_path / "_corpus.json"
+        _run_persist(path, output=output, run_id=f"fr_test_link_{run_id.hex[:16]}")
+
+        corpus = json.loads(output.read_text())
+        assert corpus[0]["persisted"] is True
+
+        # Verify the run_assets linkage exists.
+        with uow_factory() as uow:
+            # Query research_run_assets for the run.
+            cur = uow.connection.cursor()
+            cur.execute(
+                """SELECT COUNT(*) FROM research_run_assets
+                WHERE run_id=%s AND role='acquired'""",
+                (run_id,),
+            )
+            count = cur.fetchone()[0]
+            assert count == 1
+            cur.close()
+
 
 class TestCliIntegration:
     """CLI-level integration tests."""

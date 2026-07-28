@@ -318,10 +318,10 @@ def _persist_search_manifest(
     config = StoreConfig.from_env()
     config.require_database()
 
-    # Resolve run ID for validation — CorpusService.ingest() does not take
-    # a run_id but we still want to fail early if the external ID is invalid.
+    # Resolve the external run ID to an internal UUID for provenance linkage.
+    resolved_run_id = None
     if run_id is not None:
-        _resolve_run_id(run_id, uow_factory)
+        resolved_run_id = _resolve_run_id(run_id, uow_factory)
 
     service = CorpusService(
         config,
@@ -359,7 +359,11 @@ def _persist_search_manifest(
             continue
 
         try:
-            result = service.ingest(ingest_request)
+            result = service.ingest(
+                ingest_request,
+                run_id=resolved_run_id,
+                external_run_id=run_id,
+            )
             records.append(
                 {
                     "index": idx,
@@ -420,10 +424,10 @@ def _persist_scrape_manifest(
     config = StoreConfig.from_env()
     config.require_database()
 
-    # Resolve run ID for validation — CorpusService.ingest() does not take
-    # a run_id but we still want to fail early if the external ID is invalid.
+    # Resolve the external run ID to an internal UUID for provenance linkage.
+    resolved_run_id = None
     if run_id is not None:
-        _resolve_run_id(run_id, uow_factory)
+        resolved_run_id = _resolve_run_id(run_id, uow_factory)
 
     service = CorpusService(
         config,
@@ -461,7 +465,11 @@ def _persist_scrape_manifest(
             continue
 
         try:
-            result = service.ingest(ingest_request)
+            result = service.ingest(
+                ingest_request,
+                run_id=resolved_run_id,
+                external_run_id=run_id,
+            )
             records.append(
                 {
                     "index": idx,
