@@ -383,6 +383,9 @@ class ResearchRunService:
             unresolved_gap: Human-readable gap description.
             policy_version: Policy version string.
             idempotency_key: Deduplication key — shared by both operations.
+                The terminal-decision INSERT uses this key for its own
+                idempotency lookup (via ``record_terminal_decision``); the
+                lifecycle transition event also records the key for audit.
             created_at: Timestamp.
             next_state: Target run state (e.g. ``"failed"``, ``"partial"``).
             expected_revision: Expected lifecycle revision (CAS).

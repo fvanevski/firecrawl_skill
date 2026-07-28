@@ -69,7 +69,9 @@ jobs:
             scripts/test_report_validator.py \
             scripts/test_semantic_cache.py \
             scripts/test_resource_governor.py \
-            scripts/test_documentation.py
+            scripts/test_documentation.py \
+            scripts/test_terminal_decision.py \
+            scripts/test_terminal_decision_authority.py
 
   lint:
     name: Ruff

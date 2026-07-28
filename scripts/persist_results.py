@@ -73,6 +73,18 @@ def _extract_domain(url: str) -> str:
     return parsed.netloc or ""
 
 
+def _resolve_run_uuid(run_id: str | None) -> UUID | None:
+    """Convert an external run ID to a UUID.
+
+    Handles both raw UUID literals (``<32hex>``) and the
+    ``fr_<32hex>`` prefix used by ``frun`` and other wrappers.
+    """
+    if run_id is None:
+        return None
+    cleaned = run_id.removeprefix("fr_")
+    return UUID(cleaned)
+
+
 def _persist_search_manifest(
     manifest: dict[str, Any],
     run_id: str | None,
@@ -112,7 +124,7 @@ def _persist_search_manifest(
             )
         return records
 
-    run_uuid = UUID(run_id) if run_id else None
+    run_uuid = _resolve_run_uuid(run_id)
 
     try:
         conn = psycopg.connect(database_url)
@@ -245,7 +257,7 @@ def _persist_scrape_manifest(
             }
         ]
 
-    run_uuid = UUID(run_id) if run_id else None
+    run_uuid = _resolve_run_uuid(run_id)
 
     try:
         conn = psycopg.connect(database_url)
@@ -336,6 +348,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Determine whether this is a search or scrape manifest
     if manifest.get("candidates"):
+        records = _persist_search_manifest(manifest, args.research_run_id, database_url)
+    elif manifest.get("results"):
+        # fscrape _meta.json: URLs stored in the results array
         records = _persist_search_manifest(manifest, args.research_run_id, database_url)
     elif manifest.get("url"):
         records = _persist_scrape_manifest(manifest, args.research_run_id, database_url)
