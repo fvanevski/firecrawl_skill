@@ -93,7 +93,7 @@
           "type": "number"
         },
         "schema_version": {
-          "const": "quality-measurement-v1",
+          "const": "quality-measurement-v2",
           "type": "string"
         },
         "source_quality_score": {

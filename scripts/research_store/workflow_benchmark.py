@@ -975,7 +975,7 @@ class WorkflowBenchmarkRunner:
         adjustment = (obj_hash % 100) / 1000.0
 
         return QualityMeasurement(
-            schema_version="quality-measurement-v1",
+            schema_version="quality-measurement-v2",
             candidate_recall=min(1.0, base_recall + adjustment),
             source_quality_score=min(1.0, base_source_quality + adjustment),
             coverage_completeness=min(1.0, base_coverage + adjustment),
@@ -1077,7 +1077,7 @@ class WorkflowBenchmarkRunner:
         adjustment = (obj_hash % 100) / 1000.0  # 0.0–0.099
 
         return QualityMeasurement(
-            schema_version="quality-measurement-v1",
+            schema_version="quality-measurement-v2",
             candidate_recall=min(1.0, base_recall + adjustment),
             source_quality_score=min(1.0, base_source_quality + adjustment),
             coverage_completeness=min(1.0, base_coverage + adjustment),
@@ -1223,7 +1223,7 @@ class WorkflowBenchmarkRunner:
             return None
         n = len(results)
         return QualityMeasurement(
-            schema_version="quality-measurement-v1",
+            schema_version="quality-measurement-v2",
             candidate_recall=sum(r.quality.candidate_recall for r in results) / n,
             source_quality_score=sum(r.quality.source_quality_score for r in results)
             / n,
