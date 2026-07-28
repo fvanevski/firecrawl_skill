@@ -59,9 +59,7 @@ def _write_scratch_file(tmp_path: Path, name: str, content: str = "hello") -> Pa
 
 def _corpus_output_path(manifest_path: Path) -> Path:
     """Compute the default output path for a given manifest."""
-    return manifest_path.with_suffix(
-        manifest_path.suffix + "_corpus.json"
-    )
+    return manifest_path.with_suffix(manifest_path.suffix + "_corpus.json")
 
 
 def _run_persist(manifest_path: Path, **kwargs) -> subprocess.CompletedProcess:

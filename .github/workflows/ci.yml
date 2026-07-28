@@ -71,7 +71,8 @@ jobs:
             scripts/test_resource_governor.py \
             scripts/test_documentation.py \
             scripts/test_terminal_decision.py \
-            scripts/test_terminal_decision_authority.py
+            scripts/test_terminal_decision_authority.py \
+            scripts/test_persist_results.py
 
   lint:
     name: Ruff
