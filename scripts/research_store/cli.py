@@ -266,7 +266,8 @@ def parser():
     prune.add_argument("--keep-last", type=int, default=2)
     prune.add_argument("--index-id")
     sub.add_parser("reconcile-qdrant")
-    sub.add_parser("index-reconcile")
+    reconcile = sub.add_parser("index-reconcile")
+    reconcile.add_argument("--repair", action="store_true")
     sub.add_parser("prune-cache")
 
     rederive = sub.add_parser("rederive")
@@ -1470,6 +1471,17 @@ def _index_build(config, document_id=None):
                 f"are pending.  Manifests may be orphaned or have mismatched "
                 f"index_definition_id."
             )
+        # Cache the verified Qdrant point count for doctor/reconcile.
+        point_count = len(indexed_ids)
+        cur.execute(
+            """INSERT INTO index_point_counts(
+            index_definition_id,point_count,last_verified_at)
+            VALUES(%s,%s,now())
+            ON CONFLICT(index_definition_id) DO UPDATE SET
+            point_count=excluded.point_count,
+            last_verified_at=excluded.last_verified_at""",
+            (definition["id"], point_count),
+        )
     queue = ValkeyQueue(config.valkey_url)
     if manifest_ids:
         queue.notify(manifest_ids[0])
@@ -1481,11 +1493,14 @@ def _index_build(config, document_id=None):
     }
 
 
-def _index_reconcile(config):
+def _index_reconcile(config, repair=False):
     """Reconcile manifests, jobs, Qdrant points, and aliases.
 
     Returns a structured report with every count and a list of discrepancies
     so that doctor/CI can assert correctness.
+
+    When ``repair=True``, automatically re-runs ``index-build`` for any
+    definition that has discrepancies.
     """
     with _db(config) as conn, conn.cursor() as cur:
         cur.execute(
@@ -1560,6 +1575,16 @@ def _index_reconcile(config):
                 }
             )
 
+        # Read cached Qdrant point counts.
+        cur.execute(
+            """SELECT index_definition_id,point_count,last_verified_at
+            FROM index_point_counts ORDER BY index_definition_id"""
+        )
+        point_counts = {
+            str(row[0]): {"count": row[1], "verified_at": row[2]}
+            for row in cur.fetchall()
+        }
+
     # Qdrant reconciliation
     aliases = _qdrant(config).list_aliases()
     qdrant = {"ok": True, "aliases": aliases, "collections": {}}
@@ -1583,6 +1608,9 @@ def _index_reconcile(config):
             row = rows[0]
             index = _qdrant(config, collection_name, None, None)
             schema = index.inspect_schema()
+            cached = point_counts.get(row["id"])
+            cached_count = cached["count"] if cached else None
+            # Live scroll for missing/orphaned point-ID check.
             point_ids, offset = set(), None
             while True:
                 page = index.point_ids(offset, filters=_derivation_filter(config))
@@ -1594,6 +1622,7 @@ def _index_reconcile(config):
                 "alias": alias_name,
                 "schema": schema,
                 "point_count": len(point_ids),
+                "cached_point_count": cached_count,
             }
             manifest_info = manifests_by_def.get(row["id"], {})
             job_info = jobs_by_def.get(row["id"], {})
@@ -1623,6 +1652,20 @@ def _index_reconcile(config):
             }
             discrepancies.append(f"Qdrant collection {collection_name}: {exc}")
 
+    # Repair: re-run index-build for definitions with discrepancies.
+    repaired = []
+    if repair and discrepancies:
+        for defn in definitions:
+            def_id = defn["id"]
+            # Only repair definitions that have manifests/jobs
+            if def_id not in manifests_by_def and def_id not in jobs_by_def:
+                continue
+            try:
+                _index_build(config, document_id=None)
+                repaired.append(def_id)
+            except Exception as exc:  # noqa: BLE001
+                discrepancies.append(f"repair failed for {def_id}: {exc}")
+
     return {
         "total_active_chunks": total_chunks,
         "definitions": definitions,
@@ -1631,6 +1674,7 @@ def _index_reconcile(config):
         "qdrant": qdrant,
         "discrepancies": discrepancies,
         "ok": not discrepancies,
+        "repaired": repaired,
     }
 
 
@@ -1899,7 +1943,7 @@ def _doctor(config):
 
     try:
         if checks.get("schema", {}).get("at_head"):
-            reconcile = _index_reconcile(config)
+            reconcile = _index_reconcile(config, repair=False)
             checks["index_reconcile"] = {
                 "ok": reconcile["ok"],
                 "total_active_chunks": reconcile["total_active_chunks"],
@@ -2411,7 +2455,7 @@ def main(argv=None):
         )
         return 0 if qdrant_ids == postgres_ids else 1
     if args.command == "index-reconcile":
-        print(dumps(_index_reconcile(config)))
+        print(dumps(_index_reconcile(config, repair=args.repair)))
         return 0
     if args.command == "prune-cache":
         print(dumps({"deleted": ValkeyQueue(config.valkey_url).prune_cache()}))

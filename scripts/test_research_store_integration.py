@@ -4141,3 +4141,210 @@ class TestIndexRebuildRecovery:
         assert "index_reconcile" in checks
         assert checks["index_reconcile"]["ok"] is True
         assert checks["index_reconcile"]["total_active_chunks"] >= 1
+
+    def test_index_reconcile_repair_flag(self, service):
+        """The --repair flag re-runs index-build for definitions with
+        discrepancies and reports what was repaired."""
+        from research_store.cli import _index_build, _index_reconcile
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+
+        # Insert test data
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://repair.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://repair.example/test", "p" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "repair test",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "q" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (doc_id, "repair chunk", "r" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            embedding_dimension=4,
+        )
+
+        # Run index-build to create a clean state
+        result = _index_build(config)
+        assert result["scheduled"] == 1
+
+        # Corrupt: delete a job to create a discrepancy
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """DELETE FROM index_jobs
+                WHERE index_definition_id=%s AND status='pending'
+                LIMIT 1""",
+                (result["index_definition"]["id"],),
+            )
+
+        # Without repair: should detect discrepancy
+        reconcile_result = _index_reconcile(config, repair=False)
+        assert reconcile_result["ok"] is False
+        assert len(reconcile_result["discrepancies"]) > 0
+        assert reconcile_result["repaired"] == []
+
+        # With repair: should re-run index-build and repair
+        reconcile_result = _index_reconcile(config, repair=True)
+        assert reconcile_result["ok"] is True
+        assert len(reconcile_result["repaired"]) > 0
+
+    def test_index_point_counts_cached(self, service):
+        """After index-build, the Qdrant point count is cached in PostgreSQL."""
+        from research_store.cli import _index_build
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+
+        # Insert test data
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://cache.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://cache.example/test", "s" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "cache test",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "t" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (doc_id, "cache chunk", "u" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            embedding_dimension=4,
+        )
+
+        # Run index-build
+        result = _index_build(config)
+
+        # Verify point count was cached
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT point_count,last_verified_at
+                FROM index_point_counts WHERE index_definition_id=%s""",
+                (result["index_definition"]["id"],),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            assert row[0] == 1  # One chunk indexed
+            assert row[1] is not None  # Has a timestamp
+
+    def test_index_reconcile_reads_from_cache(self, service):
+        """_index_reconcile reads cached point counts from PostgreSQL."""
+        from research_store.cli import _index_build, _index_reconcile
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+
+        # Insert test data
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://reconcile-cache.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://reconcile-cache.example/test", "v" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "reconcile cache test",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "w" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (
+                    doc_id,
+                    "reconcile cache chunk",
+                    "x" * 64,
+                    "structural",
+                    "structural-v1",
+                ),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            embedding_dimension=4,
+        )
+
+        # Run index-build to create a clean state with cached point count
+        _index_build(config)
+
+        # Reconcile should include cached_point_count in its output
+        reconcile_result = _index_reconcile(config, repair=False)
+        assert reconcile_result["ok"] is True
+        # The qdrant.collections should include cached_point_count
+        for collection_info in reconcile_result["qdrant"]["collections"].values():
+            assert "cached_point_count" in collection_info
+            assert collection_info["cached_point_count"] == 1
