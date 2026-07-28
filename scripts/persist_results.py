@@ -2,25 +2,65 @@
 """Persist scratch results into the PostgreSQL research store.
 
 Reads a ``_meta.json`` manifest written by ``fsearch`` or ``fscrape`` and
-persists each candidate/source into the research store.  Writes back corpus
-IDs to ``--output``.
+persists each candidate/source through the authoritative corpus ingestion
+service.  Writes back corpus identities to ``--output``.
 
 Usage::
 
-    persist_results.py <_meta.json> --output <_corpus.json> [--research-run-id <UUID>]
+    persist_results.py <_meta.json> --output <_corpus.json> [--research-run-id <ID>]
+
+Manifest types
+--------------
+
+``fsearch`` — top-level ``candidates`` array::
+
+    {
+      "invocation_id": "...",
+      "operation": "search",
+      "query": "...",
+      "candidates": [
+        {
+          "rank": 1,
+          "url": "https://example.com",
+          "title": "Example",
+          "snippet": "...",
+          "scratch_file": "/tmp/.../result_000.md",
+          "scrape_status": "ok",
+          "word_count": 420
+        }
+      ]
+    }
+
+``fscrape`` — top-level ``results`` array::
+
+    {
+      "invocation_id": "...",
+      "operation": "scrape",
+      "results": [
+        {
+          "index": 0,
+          "url": "https://example.com",
+          "title": "Example",
+          "scratch_file": "/tmp/.../url_000.md",
+          "status": "ok",
+          "word_count": 420
+        }
+      ]
+    }
+
+The legacy ``url`` key (single-scraper manifest) is no longer supported.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
 import sys
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 logger = logging.getLogger("persist_results")
 
@@ -28,7 +68,10 @@ logger = logging.getLogger("persist_results")
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="persist-results",
-        description="Persist scratch results into the research store.",
+        description=(
+            "Persist scratch results into the research store "
+            "through the authoritative corpus ingestion service."
+        ),
     )
     result.add_argument(
         "manifest",
@@ -37,14 +80,25 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--output",
         default=None,
-        help="Path to write the corpus IDs JSON (default: <manifest>_corpus.json).",
+        help=(
+            "Path to write the corpus identities JSON "
+            "(default: <manifest>_corpus.json)."
+        ),
     )
     result.add_argument(
         "--research-run-id",
         default=None,
-        help="Research run UUID to associate with the persisted results.",
+        help=(
+            "Research run external ID (``fr_<hex>``) or internal UUID "
+            "to associate with the persisted results."
+        ),
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Manifest parsing
+# ---------------------------------------------------------------------------
 
 
 def _load_manifest(path: str) -> dict[str, Any]:
@@ -52,50 +106,202 @@ def _load_manifest(path: str) -> dict[str, Any]:
     meta_path = Path(path)
     if not meta_path.is_file():
         raise FileNotFoundError(f"manifest not found: {meta_path}")
-    return json.loads(meta_path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise TypeError(f"manifest is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise TypeError("manifest top-level value must be a JSON object")
+    return data
 
 
-def _canonicalize_url(url: str) -> str:
-    """Normalize a URL for deduplication."""
-    return url.rstrip("/")
+def _detect_manifest_type(manifest: dict[str, Any]) -> str:
+    """Return ``'search'``, ``'scrape'``, or ``'unknown'``."""
+    if manifest.get("operation") == "search" or "candidates" in manifest:
+        return "search"
+    if manifest.get("operation") == "scrape" or "results" in manifest:
+        return "scrape"
+    return "unknown"
 
 
-def _url_sha256(url: str) -> str:
-    """SHA-256 hex digest of a URL for the canonical_url_sha256 column."""
-    return hashlib.sha256(url.encode("utf-8")).hexdigest()
+# ---------------------------------------------------------------------------
+# Run ID resolution
+# ---------------------------------------------------------------------------
 
 
-def _extract_domain(url: str) -> str:
-    """Extract the domain from a URL."""
-    from urllib.parse import urlparse
+def _resolve_run_id(
+    run_id: str | None,
+    uow_factory,
+) -> UUID | None:
+    """Resolve an external run ID to an internal run UUID.
 
-    parsed = urlparse(url)
-    return parsed.netloc or ""
+    Handles both raw UUID literals and the ``fr_<hex>`` prefix used by
+    ``frun`` and other wrappers.  When the external ID cannot be found
+    in the database the function raises ``ValueError`` so the caller can
+    decide whether to fail or fall back to scratch-only.
 
+    Args:
+        run_id: External run ID string or ``None``.
+        uow_factory: Callable returning a ``PostgresUnitOfWork``.
 
-def _resolve_run_uuid(run_id: str | None) -> UUID | None:
-    """Convert an external run ID to a UUID.
+    Returns:
+        The internal run UUID, or ``None`` when *run_id* is ``None``.
 
-    Handles both raw UUID literals (``<32hex>``) and the
-    ``fr_<32hex>`` prefix used by ``frun`` and other wrappers.
+    Raises:
+        ValueError: When the external ID is not found in the database.
     """
     if run_id is None:
         return None
+
     cleaned = run_id.removeprefix("fr_")
-    return UUID(cleaned)
+
+    # Try to resolve as an internal UUID first.
+    try:
+        internal_uuid = UUID(cleaned)
+        with uow_factory() as uow:
+            status = uow.runs.get_run_status(run_id=internal_uuid)
+            return UUID(status["id"])
+    except (ValueError, KeyError):
+        pass
+
+    # Try resolving by external ID.
+    try:
+        with uow_factory() as uow:
+            status = uow.runs.get_run_status(external_id=cleaned)
+            return UUID(status["id"])
+    except KeyError:
+        raise ValueError(f"research run {run_id!r} not found in the database") from None
+
+
+# ---------------------------------------------------------------------------
+# Authoritative ingestion
+# ---------------------------------------------------------------------------
+
+
+def _build_ingest_request(
+    candidate: dict[str, Any],
+    scratch_root: Path,
+) -> tuple[Any, str | None]:
+    """Build an ``IngestRequest`` from a manifest candidate entry.
+
+    Returns:
+        A tuple of ``(ingest_request, error)``.  On success *error* is
+        ``None``; on failure *ingest_request* is ``None`` and *error*
+        describes why the candidate could not be ingested.
+    """
+    url = candidate.get("url", "")
+    if not url:
+        return None, "missing URL"
+
+    scratch_file = candidate.get("scratch_file", "")
+    if not scratch_file:
+        return None, "missing scratch_file"
+
+    scratch_path = Path(scratch_file)
+    if not scratch_path.is_file():
+        return None, f"scratch file not found: {scratch_file}"
+
+    try:
+        content = scratch_path.read_bytes()
+    except OSError as exc:
+        return None, f"cannot read scratch file: {exc}"
+
+    if not content:
+        return None, "scratch file is empty"
+
+    from research_store.domain import IngestRequest
+
+    title = candidate.get("title") or None
+    snippet = candidate.get("snippet", "") or None
+    metadata: dict[str, Any] = {
+        "rank": candidate.get("rank"),
+        "scrape_status": candidate.get("scrape_status"),
+        "word_count": candidate.get("word_count"),
+    }
+    if snippet:
+        metadata["snippet"] = snippet
+
+    ingest_request = IngestRequest(
+        requested_url=url,
+        final_url=url,
+        content=content,
+        mime_type="text/markdown",
+        title=title,
+        metadata=metadata,
+    )
+    return ingest_request, None
+
+
+def _build_scrape_ingest_request(
+    result: dict[str, Any],
+    scratch_root: Path,
+) -> tuple[Any, str | None]:
+    """Build an ``IngestRequest`` from an fscrape result entry.
+
+    Returns:
+        A tuple of ``(ingest_request, error)``.
+    """
+    url = result.get("url", "")
+    if not url:
+        return None, "missing URL"
+
+    scratch_file = result.get("scratch_file", "")
+    if not scratch_file:
+        return None, "missing scratch_file"
+
+    scratch_path = Path(scratch_file)
+    if not scratch_path.is_file():
+        return None, f"scratch file not found: {scratch_file}"
+
+    try:
+        content = scratch_path.read_bytes()
+    except OSError as exc:
+        return None, f"cannot read scratch file: {exc}"
+
+    if not content:
+        return None, "scratch file is empty"
+
+    from research_store.domain import IngestRequest
+
+    title = result.get("title") or None
+    metadata: dict[str, Any] = {
+        "format": result.get("format"),
+        "status": result.get("status"),
+        "word_count": result.get("word_count"),
+    }
+
+    ingest_request = IngestRequest(
+        requested_url=url,
+        final_url=url,
+        content=content,
+        mime_type="text/markdown",
+        title=title,
+        metadata=metadata,
+    )
+    return ingest_request, None
+
+
+# ---------------------------------------------------------------------------
+# Persistence entry point
+# ---------------------------------------------------------------------------
 
 
 def _persist_search_manifest(
     manifest: dict[str, Any],
     run_id: str | None,
-    database_url: str | None,
+    uow_factory,
 ) -> list[dict[str, Any]]:
-    """Persist candidates from a search manifest into PostgreSQL."""
+    """Persist candidates from an fsearch manifest through the corpus service."""
+    from research_store.config import StoreConfig
+    from research_store.service import CorpusService
+
     candidates = manifest.get("candidates", [])
-    records = []
+    records: list[dict[str, Any]] = []
 
+    # When no database is configured, return scratch-only records.
+    database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        logger.info("no DATABASE_URL — skipping DB persistence (scratch remains valid)")
+        logger.info("no DATABASE_URL — returning scratch-only identities")
         for idx, cand in enumerate(candidates, start=1):
             records.append(
                 {
@@ -104,110 +310,75 @@ def _persist_search_manifest(
                     "title": cand.get("title", ""),
                     "status": "ok",
                     "persisted": False,
+                    "scratch_file": cand.get("scratch_file", ""),
                 }
             )
         return records
 
-    try:
-        import psycopg
-    except ImportError:
-        logger.warning("psycopg not available — skipping DB persistence")
-        for idx, cand in enumerate(candidates, start=1):
+    config = StoreConfig.from_env()
+    config.require_database()
+
+    # Resolve run ID for validation — CorpusService.ingest() does not take
+    # a run_id but we still want to fail early if the external ID is invalid.
+    if run_id is not None:
+        _resolve_run_id(run_id, uow_factory)
+
+    service = CorpusService(
+        config,
+        uow_factory,
+        blob_store=None,
+    )
+
+    for idx, cand in enumerate(candidates, start=1):
+        url = cand.get("url", "")
+        if not url:
             records.append(
                 {
                     "index": idx,
-                    "url": cand.get("url", ""),
+                    "url": "",
                     "title": cand.get("title", ""),
-                    "status": "ok",
+                    "status": "error",
+                    "error": "missing URL",
                     "persisted": False,
                 }
             )
-        return records
+            continue
 
-    run_uuid = _resolve_run_uuid(run_id)
-
-    try:
-        conn = psycopg.connect(database_url)
-        cur = conn.cursor()
-
-        for idx, cand in enumerate(candidates, start=1):
-            url = cand.get("url", "")
-            if not url:
-                logger.warning("candidate %d missing URL, skipping", idx)
-                records.append(
-                    {
-                        "index": idx,
-                        "url": "",
-                        "status": "error",
-                        "error": "missing URL",
-                        "persisted": False,
-                    }
-                )
-                continue
-
-            canonical = _canonicalize_url(url)
-            domain = _extract_domain(url)
-            title = cand.get("title", "")
-            snippet = cand.get("snippet", "")
-            backend = cand.get("backend", "firecrawl")
-            original_url = url
-
-            try:
-                cur.execute(
-                    """INSERT INTO search_candidates
-                       (id, run_id, canonical_url, canonical_url_sha256,
-                        original_url, title, snippet, domain, backend,
-                        backend_metadata, recurrence_count)
-                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
-                     ON CONFLICT (run_id, canonical_url_sha256) DO UPDATE
-                     SET last_seen_at = now(), title = EXCLUDED.title,
-                         snippet = EXCLUDED.snippet""",
-                    (
-                        str(uuid4()),
-                        str(run_uuid) if run_uuid else None,
-                        canonical,
-                        _url_sha256(canonical),
-                        original_url,
-                        title,
-                        snippet,
-                        domain,
-                        backend,
-                        json.dumps(cand.get("metadata", {})),
-                    ),
-                )
-                conn.commit()
-                records.append(
-                    {
-                        "index": idx,
-                        "url": url,
-                        "title": title,
-                        "status": "ok",
-                        "persisted": True,
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                conn.rollback()
-                logger.warning("failed to persist candidate %d (%s): %s", idx, url, exc)
-                records.append(
-                    {
-                        "index": idx,
-                        "url": url,
-                        "title": title,
-                        "status": "error",
-                        "error": str(exc),
-                        "persisted": False,
-                    }
-                )
-
-        cur.close()
-        conn.close()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("database persistence failed: %s", exc)
-        for idx, cand in enumerate(candidates, start=1):
+        ingest_request, error = _build_ingest_request(cand, config.scratch_root)
+        if ingest_request is None:
             records.append(
                 {
                     "index": idx,
-                    "url": cand.get("url", ""),
+                    "url": url,
+                    "title": cand.get("title", ""),
+                    "status": "error",
+                    "error": error,
+                    "persisted": False,
+                }
+            )
+            continue
+
+        try:
+            result = service.ingest(ingest_request)
+            records.append(
+                {
+                    "index": idx,
+                    "url": url,
+                    "title": cand.get("title", ""),
+                    "status": "ok",
+                    "persisted": True,
+                    "source_id": str(result.source_id),
+                    "document_id": str(result.document_id),
+                    "chunk_ids": [str(cid) for cid in result.chunk_ids],
+                    "content_sha256": result.content_sha256,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("failed to ingest candidate %d (%s): %s", idx, url, exc)
+            records.append(
+                {
+                    "index": idx,
+                    "url": url,
                     "title": cand.get("title", ""),
                     "status": "error",
                     "error": str(exc),
@@ -221,113 +392,108 @@ def _persist_search_manifest(
 def _persist_scrape_manifest(
     manifest: dict[str, Any],
     run_id: str | None,
-    database_url: str | None,
+    uow_factory,
 ) -> list[dict[str, Any]]:
-    """Persist a scrape result from the manifest into PostgreSQL."""
-    url = manifest.get("url", "")
-    title = manifest.get("title", "")
+    """Persist results from an fscrape manifest through the corpus service."""
+    from research_store.config import StoreConfig
+    from research_store.service import CorpusService
 
-    if not url:
-        return [{"status": "error", "error": "missing URL", "persisted": False}]
+    results = manifest.get("results", [])
+    records: list[dict[str, Any]] = []
 
+    database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        logger.info("no DATABASE_URL — skipping DB persistence (scratch remains valid)")
-        return [
-            {
-                "index": 1,
-                "url": url,
-                "title": title,
-                "status": "ok",
-                "persisted": False,
-            }
-        ]
-
-    records = []
-    try:
-        import psycopg
-    except ImportError:
-        logger.warning("psycopg not available — skipping DB persistence")
-        return [
-            {
-                "index": 1,
-                "url": url,
-                "title": title,
-                "status": "ok",
-                "persisted": False,
-            }
-        ]
-
-    run_uuid = _resolve_run_uuid(run_id)
-
-    try:
-        conn = psycopg.connect(database_url)
-        cur = conn.cursor()
-
-        canonical = _canonicalize_url(url)
-        domain = _extract_domain(url)
-
-        try:
-            cur.execute(
-                """INSERT INTO search_candidates
-                   (id, run_id, canonical_url, canonical_url_sha256,
-                    original_url, title, snippet, domain, backend,
-                    backend_metadata, recurrence_count)
-                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
-                 ON CONFLICT (run_id, canonical_url_sha256) DO UPDATE
-                 SET last_seen_at = now(), title = EXCLUDED.title""",
-                (
-                    str(uuid4()),
-                    str(run_uuid) if run_uuid else None,
-                    canonical,
-                    _url_sha256(canonical),
-                    url,
-                    title,
-                    manifest.get("snippet", ""),
-                    domain,
-                    "firecrawl",
-                    json.dumps({}),
-                ),
-            )
-            conn.commit()
+        logger.info("no DATABASE_URL — returning scratch-only identities")
+        for idx, res in enumerate(results, start=1):
             records.append(
                 {
-                    "index": 1,
+                    "index": idx,
+                    "url": res.get("url", ""),
+                    "title": res.get("title", ""),
+                    "status": "ok",
+                    "persisted": False,
+                    "scratch_file": res.get("scratch_file", ""),
+                }
+            )
+        return records
+
+    config = StoreConfig.from_env()
+    config.require_database()
+
+    # Resolve run ID for validation — CorpusService.ingest() does not take
+    # a run_id but we still want to fail early if the external ID is invalid.
+    if run_id is not None:
+        _resolve_run_id(run_id, uow_factory)
+
+    service = CorpusService(
+        config,
+        uow_factory,
+        blob_store=None,
+    )
+
+    for idx, res in enumerate(results, start=1):
+        url = res.get("url", "")
+        if not url:
+            records.append(
+                {
+                    "index": idx,
+                    "url": "",
+                    "title": res.get("title", ""),
+                    "status": "error",
+                    "error": "missing URL",
+                    "persisted": False,
+                }
+            )
+            continue
+
+        ingest_request, error = _build_scrape_ingest_request(res, config.scratch_root)
+        if ingest_request is None:
+            records.append(
+                {
+                    "index": idx,
                     "url": url,
-                    "title": title,
+                    "title": res.get("title", ""),
+                    "status": "error",
+                    "error": error,
+                    "persisted": False,
+                }
+            )
+            continue
+
+        try:
+            result = service.ingest(ingest_request)
+            records.append(
+                {
+                    "index": idx,
+                    "url": url,
+                    "title": res.get("title", ""),
                     "status": "ok",
                     "persisted": True,
+                    "source_id": str(result.source_id),
+                    "document_id": str(result.document_id),
+                    "chunk_ids": [str(cid) for cid in result.chunk_ids],
+                    "content_sha256": result.content_sha256,
                 }
             )
         except Exception as exc:  # noqa: BLE001
-            conn.rollback()
-            logger.warning("failed to persist scrape (%s): %s", url, exc)
+            logger.warning("failed to ingest scrape result %d (%s): %s", idx, url, exc)
             records.append(
                 {
-                    "index": 1,
+                    "index": idx,
                     "url": url,
-                    "title": title,
+                    "title": res.get("title", ""),
                     "status": "error",
                     "error": str(exc),
                     "persisted": False,
                 }
             )
 
-        cur.close()
-        conn.close()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("database persistence failed: %s", exc)
-        records.append(
-            {
-                "index": 1,
-                "url": url,
-                "title": title,
-                "status": "error",
-                "error": str(exc),
-                "persisted": False,
-            }
-        )
-
     return records
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -335,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         manifest = _load_manifest(args.manifest)
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
+    except (FileNotFoundError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
@@ -344,20 +510,52 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.manifest).with_suffix(Path(args.manifest).suffix + "_corpus.json")
     )
 
-    database_url = os.environ.get("DATABASE_URL")
+    # Determine manifest type
+    manifest_type = _detect_manifest_type(manifest)
+    if manifest_type == "unknown":
+        records: list[dict[str, Any]] = [{"status": "ok", "persisted": False}]
+        Path(output_path).write_text(json.dumps(records, indent=2), encoding="utf-8")
+        return 0
 
-    # Determine whether this is a search or scrape manifest
-    if manifest.get("candidates"):
-        records = _persist_search_manifest(manifest, args.research_run_id, database_url)
-    elif manifest.get("results"):
-        # fscrape _meta.json: URLs stored in the results array
-        records = _persist_search_manifest(manifest, args.research_run_id, database_url)
-    elif manifest.get("url"):
-        records = _persist_scrape_manifest(manifest, args.research_run_id, database_url)
+    # Build a minimal uow_factory for run-ID resolution.
+    # When no database is configured we skip resolution entirely.
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        from functools import partial
+
+        from research_store.config import StoreConfig
+        from research_store.postgres import PostgresUnitOfWork
+
+        config = StoreConfig.from_env()
+        config.require_database()
+        uow_factory = partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
     else:
-        records = [{"status": "ok", "persisted": False}]
+        uow_factory = None
+
+    # Dispatch to the correct persistence path.
+    if manifest_type == "search":
+        records = _persist_search_manifest(manifest, args.research_run_id, uow_factory)
+    else:
+        records = _persist_scrape_manifest(manifest, args.research_run_id, uow_factory)
 
     Path(output_path).write_text(json.dumps(records, indent=2), encoding="utf-8")
+
+    # Exit nonzero when any requested authoritative operation failed.
+    if database_url and any(rec.get("status") == "error" for rec in records):
+        error_count = sum(1 for rec in records if rec.get("status") == "error")
+        logger.error("%d of %d items failed to persist", error_count, len(records))
+        return 1
+
     return 0
 
 
