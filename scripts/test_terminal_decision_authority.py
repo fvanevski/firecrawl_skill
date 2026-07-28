@@ -344,9 +344,10 @@ class TestCommitTerminalDecision(unittest.TestCase):
         """A database failure during commit must raise — not return None."""
         from research_store.run_service import ResearchRunService
 
-        run_svc = MockRunService(initial_state="acquiring", revision=5)
+        call_count = [0]
 
         def failing_uow_factory():
+            call_count[0] += 1
             raise RuntimeError("database unavailable")
 
         service = ResearchRunService(failing_uow_factory)
@@ -371,15 +372,15 @@ class TestCommitTerminalDecision(unittest.TestCase):
                 actor_type="orchestrator",
             )
 
-        # No transition should have occurred
-        self.assertEqual(run_svc._state, "acquiring")
-        self.assertEqual(len(run_svc.transitions), 0)
+        # The UoW factory was called exactly once (the DB error occurred
+        # before any INSERT or transition could complete).
+        self.assertEqual(call_count[0], 1)
 
     def test_raises_on_transition_failure(self):
         """A transition failure during commit must raise and rollback INSERT."""
         from research_store.run_service import ResearchRunService
 
-        run_svc = MockRunService(initial_state="acquiring", revision=5)
+        call_count = [0]
 
         def failing_transition_uow_factory():
             mock_uow = MagicMock()
@@ -388,8 +389,6 @@ class TestCommitTerminalDecision(unittest.TestCase):
             mock_uow.__exit__ = MagicMock(return_value=False)
 
             # Simulate: record_terminal_decision succeeds, apply_run_transition fails
-            call_count = [0]
-
             def mock_apply_run_transition(*args, **kwargs):
                 call_count[0] += 1
                 if call_count[0] == 1:
@@ -421,9 +420,9 @@ class TestCommitTerminalDecision(unittest.TestCase):
                 actor_type="orchestrator",
             )
 
-        # No transition should have occurred (rollback)
-        self.assertEqual(run_svc._state, "acquiring")
-        self.assertEqual(len(run_svc.transitions), 0)
+        # The transition function was called exactly once (it failed);
+        # the UoW context manager was entered and exited (rollback).
+        self.assertEqual(call_count[0], 1)
 
 
 # ===================================================================
