@@ -993,7 +993,12 @@ class TestAuthoritativeCoverageCompleteness:
     """Tests for authoritative coverage completeness (issue #142)."""
 
     def test_coverage_status_classification(self):
-        """Coverage statuses are correctly classified as satisfied/applicable."""
+        """Coverage statuses are correctly classified as satisfied/applicable.
+
+        Matches the PostgreSQL coverage_item_status enum: 'supported' (not
+        'unsupported') is the correct value.  'supported' is applicable but
+        not satisfied.
+        """
         # Verify the status vocabulary used by the metric engine
         satisfied_statuses = {"satisfied", "partially_supported"}
         applicable_statuses = {
@@ -1001,7 +1006,7 @@ class TestAuthoritativeCoverageCompleteness:
             "partially_supported",
             "contradicted",
             "qualified",
-            "unsupported",
+            "supported",
             "blocked",
             "waived",
         }
@@ -1158,7 +1163,10 @@ class TestHeuristicsRemoved:
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         # The old heuristic: "0.0 when no packets, 0.1 otherwise"
         assert "0.1 otherwise" not in source
-        assert "0.1" not in source or "0.15" in source  # 0.15 is tolerance, not metric
+        # No bare "= 0.1" assignment — the old code used `unsupported = 0.0 if
+        # packet_count == 0 else 0.1`.  Allow only values that are part of
+        # unrelated constants (e.g. rubric weights like 0.15).
+        assert "else 0.1" not in source
 
     def test_no_semantic_call_citation(self):
         """Citation accuracy no longer uses semantic call success rate."""
@@ -1227,10 +1235,6 @@ class TestMetricProvenance:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL"),
-    reason="requires explicit disposable PostgreSQL test DSN",
-)
 @pytest.mark.skipif(
     not os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL"),
     reason="requires explicit disposable PostgreSQL test DSN",
