@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -673,7 +673,7 @@ class TestReleaseBenchmarkIntegration:
         assert modes_in_runs == {"agent_led", "autonomous_local", "deterministic_debug"}
 
     def test_release_benchmark_has_real_run_ids(self):
-        """Each campaign run has a real research run ID."""
+        """Each campaign run has a real research run ID and campaign ID."""
         database_url = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         loader = _make_minimal_loader()
 
@@ -686,8 +686,12 @@ class TestReleaseBenchmarkIntegration:
         result = runner.run()
 
         for run in result.runs:
-            assert run.run_id.startswith("fr_")
-            assert len(run.run_id) > 5  # Real UUID-based ID
+            # campaign_id is the fr_* prefixed identifier for the campaign
+            assert run.campaign_id.startswith("fr_")
+            assert len(run.campaign_id) > 5
+            # run_id is the internal UUID for the research run
+            assert UUID(run.run_id)  # Valid UUID
+            assert len(run.run_id) > 5
 
 
 # ---------------------------------------------------------------------------
