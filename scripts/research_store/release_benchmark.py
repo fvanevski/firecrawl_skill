@@ -1335,7 +1335,7 @@ class ReleaseBenchmarkRunner:
                 return None
             n = len(modes_results)
             return QualityMeasurement(
-                schema_version="quality-measurement-v1",
+                schema_version="quality-measurement-v2",
                 candidate_recall=sum(r.quality.candidate_recall for r in modes_results)
                 / n,
                 source_quality_score=sum(

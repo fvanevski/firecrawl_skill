@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/quality-measurement-v2.json",
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/quality-measurement-v1.json",
   "title": "QualityMeasurement",
   "type": "object",
   "additionalProperties": false,
