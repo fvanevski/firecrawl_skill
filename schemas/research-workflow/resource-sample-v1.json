@@ -1,0 +1,65 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/resource-sample-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "collector": {
+      "type": "string"
+    },
+    "collector_version": {
+      "type": "string"
+    },
+    "device_index": {
+      "type": "integer"
+    },
+    "device_type": {
+      "type": "string"
+    },
+    "device_uuid": {
+      "type": "string"
+    },
+    "metric_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "sample_at": {
+      "type": "string"
+    },
+    "sample_number": {
+      "type": "integer"
+    },
+    "sample_type": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "resource-sample-v1",
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "value": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "device_type",
+    "device_index",
+    "device_uuid",
+    "sample_type",
+    "value",
+    "sample_at",
+    "collector",
+    "collector_version",
+    "sample_number",
+    "metric_version",
+    "status"
+  ],
+  "title": "ResourceSample",
+  "type": "object"
+}

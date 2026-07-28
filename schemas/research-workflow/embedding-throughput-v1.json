@@ -1,0 +1,68 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/embedding-throughput-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "batch_count": {
+      "type": "integer"
+    },
+    "dimension": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "elapsed_seconds": {
+      "type": "number"
+    },
+    "endpoint_model": {
+      "type": "string"
+    },
+    "endpoint_url": {
+      "type": "string"
+    },
+    "failed_count": {
+      "type": "integer"
+    },
+    "metric_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "embedding-throughput-v1",
+      "type": "string"
+    },
+    "stage": {
+      "type": "string"
+    },
+    "total_texts": {
+      "type": "integer"
+    },
+    "vector_count": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "stage",
+    "batch_count",
+    "vector_count",
+    "failed_count",
+    "total_texts",
+    "elapsed_seconds",
+    "endpoint_url",
+    "endpoint_model",
+    "dimension",
+    "metric_version"
+  ],
+  "title": "EmbeddingThroughputRecord",
+  "type": "object"
+}
