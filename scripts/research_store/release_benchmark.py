@@ -39,6 +39,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID, uuid4
 
+# ---------------------------------------------------------------------------
+# Optional system-level instrumentation (psutil + NVML)
+# ---------------------------------------------------------------------------
+try:
+    import psutil  # type: ignore[import-not-found,import-untyped]
+
+    _HAS_PSUTIL = True
+except ImportError:
+    _HAS_PSUTIL = False
+
+try:
+    import pynvml  # type: ignore[import-not-found,import-untyped]
+
+    _HAS_PYNVML = True
+except ImportError:
+    _HAS_PYNVML = False
+
 from research_domain.models import (
     BenchmarkDataset,
     BenchmarkObjective,
@@ -383,8 +400,10 @@ class MetricEngine:
         end_time = time.monotonic()
         latency_ms = (end_time - start_time) * 1000
 
+        # ----------------------------------------------------------------
+        # 1. Semantic call count
+        # ----------------------------------------------------------------
         with self._connection.cursor() as cur:
-            # 1. Semantic call count and token usage
             cur.execute(
                 """SELECT
                        COUNT(*) AS total_calls,
@@ -398,9 +417,10 @@ class MetricEngine:
             )
             row = cur.fetchone()
             semantic_calls = row[0] or 0
-            _ = row[1] or 0  # successful_calls — not used
 
+            # ----------------------------------------------------------------
             # 2. Semantic cache stats
+            # ----------------------------------------------------------------
             cur.execute(
                 """SELECT
                        COUNT(*) AS total,
@@ -413,7 +433,26 @@ class MetricEngine:
             cache_total = cache_row[0] or 0
             cache_hits = cache_row[1] or 0
 
-            # 3. Model endpoint latency (from model_endpoints table)
+            # ----------------------------------------------------------------
+            # 3. Real token counts from model_endpoints table
+            #    (endpoint-level token counting — replaces estimation)
+            # ----------------------------------------------------------------
+            cur.execute(
+                """SELECT
+                       COALESCE(SUM(prompt_tokens), 0)  AS prompt_tokens,
+                       COALESCE(SUM(completion_tokens), 0) AS completion_tokens
+                   FROM model_endpoints
+                   WHERE run_id = %s""",
+                (run_id,),
+            )
+            token_row = cur.fetchone()
+            db_prompt_tokens = token_row[0] or 0
+            db_completion_tokens = token_row[1] or 0
+            db_total_tokens = db_prompt_tokens + db_completion_tokens
+
+            # ----------------------------------------------------------------
+            # 4. Model endpoint latency
+            # ----------------------------------------------------------------
             cur.execute(
                 """SELECT AVG(response_time_ms)
                    FROM model_endpoints
@@ -423,9 +462,38 @@ class MetricEngine:
             )
             _ = cur.fetchone()[0] or 0.0  # avg_latency — not used
 
-            # 4. Resource usage: approximate from semantic call volume
-            #    (real GPU/CPU would require system-level instrumentation)
-            estimated_tokens = semantic_calls * 500  # rough per-call estimate
+        # ----------------------------------------------------------------
+        # 5. Real system-level CPU + GPU metrics (psutil / NVML)
+        # ----------------------------------------------------------------
+        cpu_pct = 0.0
+        gpu_mem_mb = 0.0
+        if _HAS_PSUTIL:
+            try:
+                cpu_pct = round(psutil.cpu_percent(interval=0.1), 2)
+            except Exception:  # noqa: BLE001
+                cpu_pct = 0.0
+
+        if _HAS_PYNVML:
+            try:
+                pynvml.nvmlInit()
+                handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                gpu_mem_mb = round(info.used / (1024 * 1024), 2)
+                pynvml.nvmlShutdown()
+            except Exception:  # noqa: BLE001
+                try:
+                    pynvml.nvmlShutdown()
+                except Exception:
+                    logger.debug("NVML shutdown failed", exc_info=True)
+                gpu_mem_mb = 0.0
+
+        # ----------------------------------------------------------------
+        # 6. Token total: real DB count with estimation fallback
+        # ----------------------------------------------------------------
+        if db_total_tokens > 0:
+            total_tokens = db_total_tokens
+        else:
+            total_tokens = semantic_calls * 500
 
         # Compute performance scores
         cache_hit_rate = cache_hits / cache_total if cache_total > 0 else 0.0
@@ -433,13 +501,13 @@ class MetricEngine:
         performance = PerformanceMeasurement(
             schema_version="performance-measurement-v1",
             total_latency_ms=round(latency_ms, 2),
-            total_tokens=estimated_tokens,
+            total_tokens=total_tokens,
             semantic_calls=semantic_calls,
             cache_hit_rate=round(cache_hit_rate, 6),
             cache_miss_rate=round(1.0 - cache_hit_rate, 6),
             embedding_throughput=max(0.0, 1000.0 / max(1, latency_ms / 100)),
-            gpu_memory_mb=0.0,  # CPU-based embedding/reranking
-            cpu_percent=min(100.0, max(10.0, latency_ms / 1000)),
+            gpu_memory_mb=gpu_mem_mb,
+            cpu_percent=round(max(0.0, min(100.0, cpu_pct)), 2),
         )
 
         metrics = (
@@ -464,6 +532,22 @@ class MetricEngine:
                     method="count",
                 ),
                 formula="COUNT(*) FROM semantic_calls WHERE run_id = ?",
+            ),
+            PerformanceMetric(
+                name="total_tokens",
+                value=float(performance.total_tokens),
+                source=MetricSource(
+                    table="model_endpoints",
+                    column="prompt_tokens + completion_tokens",
+                    run_id=str(run_id),
+                    method="sum" if db_total_tokens > 0 else "estimated",
+                ),
+                formula=(
+                    "SUM(prompt_tokens + completion_tokens) "
+                    "FROM model_endpoints WHERE run_id = ?"
+                    if db_total_tokens > 0
+                    else "estimated: semantic_calls * 500 (fallback)"
+                ),
             ),
             PerformanceMetric(
                 name="cache_hit_rate",
@@ -491,12 +575,31 @@ class MetricEngine:
                 name="cpu_percent",
                 value=performance.cpu_percent,
                 source=MetricSource(
-                    table="research_runs",
-                    column="duration",
+                    table="psutil",
+                    column="cpu_percent(interval=0.1)",
                     run_id=str(run_id),
-                    method="estimated",
+                    method="sample" if _HAS_PSUTIL else "unavailable",
                 ),
-                formula="min(100, latency_ms / 1000) — estimated from duration",
+                formula=(
+                    "psutil.cpu_percent(interval=0.1) — real system metric"
+                    if _HAS_PSUTIL
+                    else "0.0 — psutil not available"
+                ),
+            ),
+            PerformanceMetric(
+                name="gpu_memory_mb",
+                value=performance.gpu_memory_mb,
+                source=MetricSource(
+                    table="pynvml",
+                    column="nvmlDeviceGetMemoryInfo",
+                    run_id=str(run_id),
+                    method="nvml" if _HAS_PYNVML else "unavailable",
+                ),
+                formula=(
+                    "pynvml.nvmlDeviceGetMemoryInfo(0).used / 1MB"
+                    if _HAS_PYNVML
+                    else "0.0 — NVML not available"
+                ),
             ),
         )
 
@@ -1232,6 +1335,7 @@ class ReleaseBenchmarkRunner:
                     "semantic_calls",
                     "cache_hit_rate",
                     "cpu_percent",
+                    "gpu_memory_mb",
                 ]:
                     val_a = getattr(run_a.performance, field_name)
                     val_b = getattr(run_b.performance, field_name)

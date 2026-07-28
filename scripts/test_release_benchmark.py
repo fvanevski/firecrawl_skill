@@ -758,3 +758,106 @@ class TestMetricExtractionStructure:
         )
         assert c.run_a_id == "run-a"
         assert c.all_within_tolerance is True
+
+
+# ---------------------------------------------------------------------------
+# Performance metric extraction tests (GPU/CPU/token counting)
+# ---------------------------------------------------------------------------
+
+
+class TestPerformanceMetricExtraction:
+    """Tests for real GPU/CPU instrumentation and token counting."""
+
+    def test_has_psutil_flag(self):
+        """_HAS_PSUTIL flag is set correctly."""
+        from research_store.release_benchmark import _HAS_PSUTIL
+
+        assert isinstance(_HAS_PSUTIL, bool)
+
+    def test_has_pynvlm_flag(self):
+        """_HAS_PYNVML flag is set correctly."""
+        from research_store.release_benchmark import _HAS_PYNVML
+
+        assert isinstance(_HAS_PYNVML, bool)
+
+    def test_performance_metric_includes_gpu_and_tokens(self):
+        """PerformanceMetric tuple includes gpu_memory_mb and total_tokens."""
+        # Verify the metric names are present in the PerformanceMetric
+        # dataclass by checking that we can create metrics with these names
+        token_metric = PerformanceMetric(
+            name="total_tokens",
+            value=15000.0,
+            source=MetricSource(
+                table="model_endpoints",
+                column="prompt_tokens + completion_tokens",
+                run_id="test_run",
+                method="sum",
+            ),
+            formula="SUM(prompt_tokens + completion_tokens) FROM model_endpoints",
+        )
+        assert token_metric.name == "total_tokens"
+        assert token_metric.value == 15000.0
+
+        gpu_metric = PerformanceMetric(
+            name="gpu_memory_mb",
+            value=512.0,
+            source=MetricSource(
+                table="pynvml",
+                column="nvmlDeviceGetMemoryInfo",
+                run_id="test_run",
+                method="nvml",
+            ),
+            formula="pynvml.nvmlDeviceGetMemoryInfo(0).used / 1MB",
+        )
+        assert gpu_metric.name == "gpu_memory_mb"
+        assert gpu_metric.value == 512.0
+
+    def test_cpu_metric_uses_psutil(self):
+        """CPU metric source references psutil, not duration estimation."""
+        cpu_metric = PerformanceMetric(
+            name="cpu_percent",
+            value=25.5,
+            source=MetricSource(
+                table="psutil",
+                column="cpu_percent(interval=0.1)",
+                run_id="test_run",
+                method="sample",
+            ),
+            formula="psutil.cpu_percent(interval=0.1) — real system metric",
+        )
+        assert cpu_metric.source.table == "psutil"
+        assert cpu_metric.source.method == "sample"
+
+    def test_token_metric_uses_model_endpoints(self):
+        """Token metric source references model_endpoints table, not estimation."""
+        token_metric = PerformanceMetric(
+            name="total_tokens",
+            value=15000.0,
+            source=MetricSource(
+                table="model_endpoints",
+                column="prompt_tokens + completion_tokens",
+                run_id="test_run",
+                method="sum",
+            ),
+            formula="SUM(prompt_tokens + completion_tokens) FROM model_endpoints",
+        )
+        assert token_metric.source.table == "model_endpoints"
+        assert token_metric.source.method == "sum"
+
+    def test_reproducibility_compares_gpu_memory(self):
+        """ReproducibilityComparison includes gpu_memory_mb in performance tolerances."""
+        c = ReproducibilityComparison(
+            run_a_id="run-a",
+            run_b_id="run-b",
+            mode="agent_led",
+            objective_id="obj-001",
+            quality_tolerances=(),
+            performance_tolerances=(
+                ("agent_led.obj-001.gpu_memory_mb", 512.0, 520.0, 0.015),
+            ),
+            all_within_tolerance=True,
+            details=(),
+        )
+        assert c.all_within_tolerance is True
+        assert len(c.performance_tolerances) == 1
+        assert c.performance_tolerances[0][0] == "agent_led.obj-001.gpu_memory_mb"

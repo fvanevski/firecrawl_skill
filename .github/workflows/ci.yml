@@ -73,7 +73,8 @@ jobs:
             scripts/test_documentation.py \
             scripts/test_terminal_decision.py \
             scripts/test_terminal_decision_authority.py \
-            scripts/test_persist_results.py
+            scripts/test_persist_results.py \
+            scripts/test_release_benchmark.py
 
   lint:
     name: Ruff

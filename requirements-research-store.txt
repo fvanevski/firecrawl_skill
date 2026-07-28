@@ -1,4 +1,5 @@
 alembic==1.16.4
+psutil==6.1.1
 psycopg[binary]==3.2.10
 qdrant-client==1.15.1
 redis==6.4.0
