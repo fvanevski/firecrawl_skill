@@ -314,69 +314,58 @@ class TestSimulationMode:
         """Each mode produces distinct quality measurements in simulation."""
         loader = _make_minimal_loader()
 
-        results = {}
-        for mode in RELEASE_MODES:
-            config = ReleaseBenchmarkConfig(
-                execution_modes=(mode,),
-                database_url="",  # No DB — forces simulation path
-                strict=False,
-            )
-            runner = ReleaseBenchmarkRunner(loader, config)
-            # In simulation mode (no DB), the runner should produce results
-            # even without a database connection
-            try:
-                result = runner.run()
-                results[mode] = result
-            except RuntimeError as e:
-                # If real execution is attempted but DB is missing,
-                # strict=False should still allow partial results
-                if "not connected" in str(e) or "DATABASE_URL" in str(e):
-                    # This is expected — no DB available
-                    pass
+        result = run_benchmark(
+            loader,
+            workflow_modes=RELEASE_MODES,
+            dry_run=True,
+        )
+        assert result is not None
+        assert result.comparison is not None
 
-        # Verify that modes produce different quality if results exist
-        if len(results) >= 2:
-            modes = list(results.keys())
-            r0 = results[modes[0]]
-            r1 = results[modes[1]]
-            if r0.recommendation and r1.recommendation:
-                # Different modes should have different quality baselines
-                pass  # Actual comparison requires real execution
+        # Index quality by mode
+        quality_by_mode: dict[str, QualityMeasurement] = {}
+        for r in result.comparison.results:
+            quality_by_mode[r.workflow_mode] = r.quality
+
+        # All three modes must produce results
+        assert set(quality_by_mode.keys()) == set(RELEASE_MODES)
+
+        # deterministic_debug has the lowest recall, agent_led the highest
+        debug_recall = quality_by_mode["deterministic_debug"].candidate_recall
+        agent_recall = quality_by_mode["agent_led"].candidate_recall
+        local_recall = quality_by_mode["autonomous_local"].candidate_recall
+
+        assert debug_recall < local_recall < agent_recall
+        # Verify they are genuinely distinct (not all equal)
+        assert debug_recall != local_recall
+        assert local_recall != agent_recall
+        assert debug_recall != agent_recall
 
     def test_deterministic_debug_has_lowest_quality(self):
         """deterministic_debug mode has the lowest quality in simulation."""
         loader = _make_minimal_loader()
-        config = ReleaseBenchmarkConfig(
-            execution_modes=("deterministic_debug",),
-            database_url="",
-            strict=False,
+        result = run_benchmark(
+            loader,
+            workflow_modes=RELEASE_MODES,
+            dry_run=True,
         )
-        runner = ReleaseBenchmarkRunner(loader, config)
-        try:
-            result = runner.run()
-            # In simulation, deterministic_debug should have low quality
-            for run in result.runs:
-                if run.quality:
-                    assert run.quality.candidate_recall < 0.5
-        except RuntimeError:
-            pytest.skip("No database available for real execution")
+        assert result is not None
+        for r in result.comparison.results:
+            if r.workflow_mode == "deterministic_debug":
+                assert r.quality.candidate_recall < 0.5
 
     def test_agent_led_has_highest_quality(self):
         """agent_led mode has the highest quality in simulation."""
         loader = _make_minimal_loader()
-        config = ReleaseBenchmarkConfig(
-            execution_modes=("agent_led",),
-            database_url="",
-            strict=False,
+        result = run_benchmark(
+            loader,
+            workflow_modes=RELEASE_MODES,
+            dry_run=True,
         )
-        runner = ReleaseBenchmarkRunner(loader, config)
-        try:
-            result = runner.run()
-            for run in result.runs:
-                if run.quality:
-                    assert run.quality.candidate_recall >= 0.5
-        except RuntimeError:
-            pytest.skip("No database available for real execution")
+        assert result is not None
+        for r in result.comparison.results:
+            if r.workflow_mode == "agent_led":
+                assert r.quality.candidate_recall >= 0.5
 
 
 # ---------------------------------------------------------------------------

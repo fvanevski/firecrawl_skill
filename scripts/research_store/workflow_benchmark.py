@@ -172,7 +172,9 @@ def _build_dataset(data: dict[str, Any]) -> BenchmarkDataset:
         evaluation_set=data.get("evaluation_set", False),
         objectives=objectives,
         quality_thresholds=data.get("quality_thresholds", {}),
-        workflow_modes=tuple(data.get("workflow_modes", ["legacy", "agent_led"])),
+        workflow_modes=tuple(
+            data.get("workflow_modes", ["agent_led", "autonomous_local"])
+        ),
         deterministic_integrity_checks=tuple(
             data.get("deterministic_integrity_checks", [])
         ),
@@ -1158,12 +1160,11 @@ class WorkflowBenchmarkRunner:
     ) -> WorkflowComparison:
         """Build a workflow comparison from results.
 
-        Baseline: ``legacy`` is the reference mode.  When legacy is absent
-        from the results, ``quality_vs_baseline`` and ``performance_vs_baseline``
-        default to ``1.0`` for all modes — this means "no baseline available"
-        rather than "equal to baseline".  Consumers should check whether
-        ``"legacy"`` is present in the results to determine if the ratios are
-        meaningful.
+        Baseline: the first mode in the results is used as the reference mode.
+        ``quality_vs_baseline`` and ``performance_vs_baseline`` express the
+        relative quality/performance of every other mode compared to that first
+        mode.  A ratio of ``1.0`` means "equal to baseline"; values above ``1.0``
+        indicate better quality (for recall) or worse performance (for latency).
         """
         # Group results by workflow mode
         mode_results: dict[str, list[WorkflowRunResult]] = {}
