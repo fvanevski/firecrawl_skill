@@ -54,6 +54,7 @@ try:
 
     _HAS_PYNVML = True
 except ImportError:
+    # pynvml is optional — GPU memory metrics fall back to 0.0 when absent.
     _HAS_PYNVML = False
 
 from research_domain.models import (
@@ -296,11 +297,10 @@ class MetricEngine:
             # Fallback: use candidate count as proxy when no labeled sources
             candidate_recall = min(1.0, candidate_count / max(1, candidate_count + 5))
 
-        # Compute quality scores from real counts
-        # candidate_recall: proportion of expected sources that yielded candidates
-        # (conservative: use candidate_count as proxy when expected count unknown)
-        candidate_recall = min(1.0, candidate_count / max(1, candidate_count + 5))
-
+        # Compute quality scores from real counts.
+        # candidate_recall: already set above — prefer labeled-source recall
+        # (matched_relevant / total_relevant) when known_relevant_sources are
+        # provided; fall back to count-based heuristic otherwise.
         # source_quality_score: domain diversity relative to candidate count
         source_quality = (
             min(1.0, domain_count / max(1, candidate_count))

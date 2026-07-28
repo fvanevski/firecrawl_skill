@@ -12,10 +12,10 @@ This module provides:
 * ``run_benchmark`` — the primary entry point for programmatic access.
 * ``load_benchmark_dataset`` — convenience function for loading datasets.
 
-The benchmark runner exercises each workflow mode (legacy, agent_led,
-autonomous_local) against a fixed benchmark dataset and produces
-structured comparison output with quality, performance, and deterministic
-integrity measurements.
+The benchmark runner exercises each workflow mode (agent_led,
+autonomous_local, deterministic_debug) against a fixed benchmark dataset and
+produces structured comparison output with quality, performance, and
+deterministic integrity measurements.
 
 Two execution modes:
 

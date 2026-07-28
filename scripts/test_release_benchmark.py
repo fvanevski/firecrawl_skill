@@ -653,7 +653,8 @@ class TestReleaseBenchmarkIntegration:
 
         config = ReleaseBenchmarkConfig(
             database_url=database_url,
-            execution_modes=("deterministic_debug",),  # Fastest mode for tests
+            # Need at least 2 modes for comparison; deterministic_debug is fastest.
+            execution_modes=("deterministic_debug", "autonomous_local"),
             strict=False,
         )
         runner = ReleaseBenchmarkRunner(loader, config)
@@ -661,10 +662,10 @@ class TestReleaseBenchmarkIntegration:
 
         assert result.campaign_id.startswith("fr_bench_")
         assert len(result.runs) > 0
-        # deterministic_debug should produce at least a minimal run
-        for run in result.runs:
-            assert run.mode == "deterministic_debug"
-            assert run.campaign_id == result.campaign_id
+        # Both modes should produce runs
+        modes_seen = {run.mode for run in result.runs}
+        assert modes_seen == {"deterministic_debug", "autonomous_local"}
+        assert result.campaign_id == result.runs[0].campaign_id
 
     def test_release_benchmark_mode_distinction(self):
         """Each mode produces a different execution_mode in the run."""
@@ -689,7 +690,7 @@ class TestReleaseBenchmarkIntegration:
 
         config = ReleaseBenchmarkConfig(
             database_url=database_url,
-            execution_modes=("deterministic_debug",),
+            execution_modes=("deterministic_debug", "autonomous_local"),
             strict=False,
         )
         runner = ReleaseBenchmarkRunner(loader, config)
@@ -774,8 +775,8 @@ class TestPerformanceMetricExtraction:
 
         assert isinstance(_HAS_PSUTIL, bool)
 
-    def test_has_pynvlm_flag(self):
-        """_HAS_PYNVML flag is set correctly."""
+    def test_has_pynvml_flag(self):
+        """_HAS_PYNVML flag is set correctly (optional GPU instrumentation)."""
         from research_store.release_benchmark import _HAS_PYNVML
 
         assert isinstance(_HAS_PYNVML, bool)
