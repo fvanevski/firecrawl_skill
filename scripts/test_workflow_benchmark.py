@@ -8,7 +8,7 @@ Coverage of required test cases for issue #67:
 - Benchmark dataset loading and validation
 - Domain model validation (QualityMeasurement, PerformanceMeasurement, etc.)
 - Deterministic integrity checks
-- Workflow mode simulation (legacy, agent_led, autonomous_local)
+- Workflow mode simulation (autonomous_local, agent_led, deterministic_debug)
 - Quality metric computation
 - Performance metric computation
 - Release recommendation logic (GO, GO_WITH_CONDITIONS, NO_GO)
@@ -97,7 +97,7 @@ def _make_minimal_dataset():
             "max_unsupported_claim_rate": 0.15,
             "min_citation_accuracy": 0.8,
         },
-        workflow_modes=("legacy", "agent_led"),
+        workflow_modes=("autonomous_local", "agent_led"),
         deterministic_integrity_checks=("state_machine_transitions",),
     )
 
@@ -307,7 +307,7 @@ class TestBenchmarkDataset:
                 evaluation_set=True,
                 objectives=(),
                 quality_thresholds={},
-                workflow_modes=("legacy",),
+                workflow_modes=("autonomous_local",),
                 deterministic_integrity_checks=(),
             )
 
@@ -526,7 +526,7 @@ class TestWorkflowComparison:
         results = (
             WorkflowRunResult(
                 schema_version="workflow-run-result-v1",
-                workflow_mode="legacy",
+                workflow_mode="autonomous_local",
                 quality=QualityMeasurement(
                     schema_version="quality-measurement-v1",
                     candidate_recall=0.45,
@@ -616,7 +616,7 @@ class TestReleaseRecommendation:
         results = (
             WorkflowRunResult(
                 schema_version="workflow-run-result-v1",
-                workflow_mode="legacy",
+                workflow_mode="autonomous_local",
                 quality=QualityMeasurement(
                     schema_version="quality-measurement-v1",
                     candidate_recall=0.45,
@@ -852,12 +852,12 @@ class TestWorkflowBenchmarkRunner:
         """Running with multiple modes produces results for each."""
         loader = _make_minimal_loader()
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led", "autonomous_local"),
+            workflow_modes=("autonomous_local", "agent_led", "deterministic_debug"),
         )
         runner = WorkflowBenchmarkRunner(loader, config)
         result = runner.run()
         modes = {r.workflow_mode for r in result.comparison.results}
-        assert "legacy" in modes
+        assert "autonomous_local" in modes
         assert "agent_led" in modes
         assert "autonomous_local" in modes
 
@@ -873,7 +873,7 @@ class TestWorkflowBenchmarkRunner:
         """Same input produces same output on rerun."""
         loader = _make_minimal_loader()
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
         )
         runner1 = WorkflowBenchmarkRunner(loader, config)
         runner2 = WorkflowBenchmarkRunner(loader, config)
@@ -895,47 +895,49 @@ class TestWorkflowBenchmarkRunner:
             assert r1.quality.citation_accuracy == r2.quality.citation_accuracy
             assert r1.quality.report_quality_score == r2.quality.report_quality_score
 
-    def test_legacy_produces_lower_quality(self):
-        """Legacy mode produces lower quality than agent-led."""
+    def test_autonomous_local_produces_lower_quality(self):
+        """autonomous_local mode produces lower quality than agent-led."""
         loader = _make_minimal_loader()
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
         )
         runner = WorkflowBenchmarkRunner(loader, config)
         result = runner.run()
 
-        legacy_results = [
-            r for r in result.comparison.results if r.workflow_mode == "legacy"
+        base_results = [
+            r
+            for r in result.comparison.results
+            if r.workflow_mode == "autonomous_local"
         ]
         agent_results = [
             r for r in result.comparison.results if r.workflow_mode == "agent_led"
         ]
 
-        assert legacy_results
+        assert base_results
         assert agent_results
 
         # Legacy should have lower recall
-        avg_legacy_recall = sum(
-            r.quality.candidate_recall for r in legacy_results
-        ) / len(legacy_results)
+        avg_base_recall = sum(r.quality.candidate_recall for r in base_results) / len(
+            base_results
+        )
         avg_agent_recall = sum(r.quality.candidate_recall for r in agent_results) / len(
             agent_results
         )
-        assert avg_legacy_recall < avg_agent_recall
+        assert avg_base_recall < avg_agent_recall
 
     def test_agent_led_lower_unsupported_claims(self):
-        """Agent-led has fewer unsupported claims than legacy."""
+        """Agent-led has fewer unsupported claims than autonomous_local."""
         loader = _make_minimal_loader()
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
         )
         runner = WorkflowBenchmarkRunner(loader, config)
         result = runner.run()
 
-        legacy_unsupported = sum(
+        base_unsupported = sum(
             r.quality.unsupported_claim_rate
             for r in result.comparison.results
-            if r.workflow_mode == "legacy"
+            if r.workflow_mode == "autonomous_local"
         )
         agent_unsupported = sum(
             r.quality.unsupported_claim_rate
@@ -943,7 +945,7 @@ class TestWorkflowBenchmarkRunner:
             if r.workflow_mode == "agent_led"
         )
 
-        assert legacy_unsupported > agent_unsupported
+        assert base_unsupported > agent_unsupported
 
     def test_integrity_checks_run(self):
         """Integrity checks run and all pass."""
@@ -963,23 +965,23 @@ class TestWorkflowBenchmarkRunner:
         assert result.comparison.integrity_regression is False
 
     def test_quality_vs_baseline_computed(self):
-        """Quality vs baseline is computed for non-legacy modes."""
+        """Quality vs baseline is computed for non-baseline modes."""
         loader = _make_minimal_loader()
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
         )
         runner = WorkflowBenchmarkRunner(loader, config)
         result = runner.run()
 
         assert "agent_led" in result.comparison.quality_vs_baseline
-        # Agent-led should be better than legacy baseline
+        # agent_led should be better than autonomous_local baseline
         assert result.comparison.quality_vs_baseline["agent_led"] > 1.0
 
     def test_performance_vs_baseline_computed(self):
-        """Performance vs baseline is computed for non-legacy modes."""
+        """Performance vs baseline is computed for non-baseline modes."""
         loader = _make_minimal_loader()
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
         )
         runner = WorkflowBenchmarkRunner(loader, config)
         result = runner.run()
@@ -1013,7 +1015,7 @@ class TestWorkflowBenchmarkRunner:
         modes = {r.workflow_mode for r in result.comparison.results}
         assert "agent_led" in modes
         assert "autonomous_local" in modes
-        assert "legacy" not in modes
+        assert "deterministic_debug" not in modes
 
 
 class TestRunBenchmark:
@@ -1054,7 +1056,7 @@ class TestBenchmarkIntegration:
         """Full pipeline: load → run → compare → recommend."""
         loader = load_benchmark_dataset(BENCHMARK_FIXTURE)
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led", "autonomous_local"),
+            workflow_modes=("autonomous_local", "agent_led", "deterministic_debug"),
         )
         runner = WorkflowBenchmarkRunner(loader, config)
         result = runner.run()
@@ -1067,7 +1069,7 @@ class TestBenchmarkIntegration:
 
         # Verify comparison
         modes = {r.workflow_mode for r in result.comparison.results}
-        assert modes == {"legacy", "agent_led", "autonomous_local"}
+        assert modes == {"autonomous_local", "agent_led", "deterministic_debug"}
 
         # Verify recommendation
         assert result.recommendation.outcome in ("go", "go_with_conditions", "no_go")
@@ -1077,7 +1079,7 @@ class TestBenchmarkIntegration:
         """Full pipeline is reproducible."""
         loader = load_benchmark_dataset(BENCHMARK_FIXTURE)
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
         )
 
         result1 = WorkflowBenchmarkRunner(loader, config).run()
@@ -1278,7 +1280,7 @@ class TestKnownLimitations:
         """Default limitations are used when none are provided."""
         loader = _make_minimal_loader()
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
         )
         runner = WorkflowBenchmarkRunner(loader, config)
         result = runner.run()
@@ -1290,7 +1292,7 @@ class TestKnownLimitations:
         loader = _make_minimal_loader()
         custom = ("Custom limitation 1", "Custom limitation 2")
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
             known_limitations=custom,
         )
         runner = WorkflowBenchmarkRunner(loader, config)
@@ -1303,7 +1305,7 @@ class TestKnownLimitations:
         custom = ("Custom limitation",)
         result = run_benchmark(
             dataset,
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
             known_limitations=custom,
         )
         assert result.recommendation.known_limitations == custom
@@ -1332,7 +1334,7 @@ class TestRealWorkflowExecution:
             {"prior_state": "planning", "next_state": "corpus_review"},
         ]
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
             evidence_packets=[packet],
             run_transitions=transitions,
         )
@@ -1354,7 +1356,7 @@ class TestRealWorkflowExecution:
         """Runner with strict integrity checker fails when no real state."""
         loader = _make_minimal_loader()
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led"),
+            workflow_modes=("autonomous_local", "agent_led"),
         )
         # Create a runner with strict integrity checker
         runner = WorkflowBenchmarkRunner(loader, config)
@@ -1385,7 +1387,7 @@ class TestDeterministicDebugMode:
         """deterministic_debug mode produces lower quality than all other modes."""
         loader = _make_minimal_loader()
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("deterministic_debug", "legacy", "agent_led"),
+            workflow_modes=("deterministic_debug", "autonomous_local", "agent_led"),
         )
         runner = WorkflowBenchmarkRunner(loader, config)
         result = runner.run()
@@ -1395,29 +1397,31 @@ class TestDeterministicDebugMode:
             for r in result.comparison.results
             if r.workflow_mode == "deterministic_debug"
         ]
-        legacy_results = [
-            r for r in result.comparison.results if r.workflow_mode == "legacy"
+        base_results = [
+            r
+            for r in result.comparison.results
+            if r.workflow_mode == "autonomous_local"
         ]
         agent_results = [
             r for r in result.comparison.results if r.workflow_mode == "agent_led"
         ]
 
         assert debug_results
-        assert legacy_results
+        assert base_results
         assert agent_results
 
         # deterministic_debug should have the lowest recall
         avg_debug_recall = sum(r.quality.candidate_recall for r in debug_results) / len(
             debug_results
         )
-        avg_legacy_recall = sum(
-            r.quality.candidate_recall for r in legacy_results
-        ) / len(legacy_results)
+        avg_base_recall = sum(r.quality.candidate_recall for r in base_results) / len(
+            base_results
+        )
         avg_agent_recall = sum(r.quality.candidate_recall for r in agent_results) / len(
             agent_results
         )
 
-        assert avg_debug_recall < avg_legacy_recall < avg_agent_recall
+        assert avg_debug_recall < avg_base_recall < avg_agent_recall
 
     def test_deterministic_debug_performance(self):
         """deterministic_debug mode has minimal resource usage."""
@@ -1455,16 +1459,16 @@ class TestDeterministicDebugMode:
 class TestRecommendationOutcome:
     """Tests for recommendation outcome logic."""
 
-    def test_full_pipeline_produces_no_go_with_legacy(self):
-        """Full pipeline with legacy mode produces NO_GO because legacy fails thresholds."""
+    def test_full_pipeline_produces_no_go_with_low_quality(self):
+        """Full pipeline with low-quality mode produces NO_GO because it fails thresholds."""
         loader = load_benchmark_dataset(BENCHMARK_FIXTURE)
         config = WorkflowBenchmarkConfig(
-            workflow_modes=("legacy", "agent_led", "autonomous_local"),
+            workflow_modes=("deterministic_debug", "agent_led"),
         )
         runner = WorkflowBenchmarkRunner(loader, config)
         result = runner.run()
 
-        # Legacy mode recall (0.45) < min_candidate_recall (0.6) → withdrawn claim
+        # deterministic_debug recall (0.30) < min_candidate_recall (0.6) → withdrawn claim
         assert result.recommendation.outcome == "no_go"
         assert len(result.recommendation.withdrawn_claims) > 0
         # Verify the withdrawn claim mentions candidate_recall
@@ -1473,8 +1477,8 @@ class TestRecommendationOutcome:
             for claim in result.recommendation.withdrawn_claims
         )
 
-    def test_no_legacy_produces_go(self):
-        """Without legacy mode, agent-led and autonomous_local pass thresholds → GO."""
+    def test_no_low_quality_produces_go(self):
+        """Without low-quality mode, agent-led and autonomous_local pass thresholds → GO."""
         loader = _make_minimal_loader()
         config = WorkflowBenchmarkConfig(
             workflow_modes=("agent_led", "autonomous_local"),

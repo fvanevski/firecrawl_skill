@@ -3662,15 +3662,15 @@ class PostgresUnitOfWork:
                 f"""SELECT {",".join(fields)}
                     FROM retrieval_events
                     WHERE retrieval_execution_id=%s
-                    ORDER BY 
-                        created_at, 
-                        CASE stage 
-                            WHEN 'lexical' THEN 1 
-                            WHEN 'semantic' THEN 2 
-                            WHEN 'fused' THEN 3 
-                            WHEN 'reranked' THEN 4 
-                            ELSE 5 
-                        END, 
+                    ORDER BY
+                        created_at,
+                        CASE stage
+                            WHEN 'lexical' THEN 1
+                            WHEN 'semantic' THEN 2
+                            WHEN 'fused' THEN 3
+                            WHEN 'reranked' THEN 4
+                            ELSE 5
+                        END,
                         rank""",
                 (execution_id,),
             )
@@ -7522,6 +7522,12 @@ class PostgresUnitOfWork:
         Returns:
             Dict with ``decision_id``, ``id``, ``created_at``.
         """
+        # Convert tuple to list so psycopg3 binds it as a PostgreSQL array
+        # rather than converting it to a string repr like "(a,b,c)".
+        no_progress_signals_list = (
+            list(no_progress_signals) if no_progress_signals else []
+        )
+
         with self.connection.cursor() as cur:
             # Check for existing decision with same idempotency key
             cur.execute(
@@ -7554,7 +7560,7 @@ class PostgresUnitOfWork:
                     run_revision,
                     coverage_revision,
                     outcome,
-                    no_progress_signals,
+                    no_progress_signals_list,
                     unresolved_gap,
                     policy_version,
                     idempotency_key,
