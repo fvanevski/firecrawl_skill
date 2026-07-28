@@ -591,6 +591,86 @@ class TestStrictModeRejection:
         )
         assert summary.cpu_samples == 0
 
+    def test_strict_mode_raises_when_telemetry_tables_absent(self):
+        """Strict mode must raise when telemetry tables do not exist.
+
+        This verifies the fix for the legacy-fallback bypass: when migration
+        0036 has not been applied, _read_telemetry returns
+        telemetry_tables_exist=False, and strict mode must reject the run.
+        """
+        import time
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            ReleaseBenchmarkConfig,
+        )
+
+        mock_conn = mock.Mock()
+        # Query fails (pre-migration DB) → telemetry_tables_exist=False.
+        mock_conn.execute.side_effect = Exception("table does not exist")
+        engine = MetricEngine("postgresql://fake")
+        engine._connection = mock_conn
+        engine.config = ReleaseBenchmarkConfig(
+            database_url="postgresql://fake",
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        # Strict mode raises — the exact error depends on which check fires
+        # first (token_source is unavailable when query fails).
+        with pytest.raises(RuntimeError, match="Strict mode:"):
+            engine.extract_performance_metrics(uuid4(), time.monotonic())
+
+    def test_strict_mode_passes_when_telemetry_tables_exist(self):
+        """Strict mode proceeds when telemetry tables exist and data is present."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import MetricEngine
+
+        engine = MetricEngine("postgresql://fake")
+
+        # When the query succeeds, telemetry_tables_exist must be True.
+        # We mock the connection so the query succeeds with a valid row.
+        mock_cursor = mock.Mock()
+        mock_cursor.fetchone.return_value = (
+            1000,
+            "endpoint",
+            10,
+            3,
+            7,
+            50.0,
+            48,
+            2.5,
+            45.0,
+            5,
+            1024.0,
+            3,
+        )
+        mock_conn = mock.Mock()
+        mock_conn.execute.return_value = mock_cursor
+
+        engine._connection = mock_conn
+        result = engine._read_telemetry(uuid4())
+        assert result["telemetry_tables_exist"] is True
+        assert result["total_tokens"] == 1000
+        assert result["token_source"] == "endpoint"
+
+    def test_read_telemetry_sets_false_when_query_fails(self):
+        """_read_telemetry must leave telemetry_tables_exist=False on failure."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import MetricEngine
+
+        mock_conn = mock.Mock()
+        mock_conn.execute.side_effect = Exception("table does not exist")
+        engine = MetricEngine("postgresql://fake")
+        engine._connection = mock_conn
+
+        result = engine._read_telemetry(uuid4())
+        assert result["telemetry_tables_exist"] is False
+        assert result["token_source"] == "unavailable"
+
 
 class TestCacheCounting:
     """Tests that cache lookup outcomes are counted from lookup rows."""

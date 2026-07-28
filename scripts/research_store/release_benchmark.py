@@ -675,6 +675,12 @@ class MetricEngine:
                     "Strict mode: cache telemetry unavailable for run_id "
                     f"{run_id}. Cannot compute release-quality cache metrics."
                 )
+            if not telemetry.get("telemetry_tables_exist"):
+                raise RuntimeError(
+                    "Strict mode: telemetry tables (migration 0036) are absent "
+                    f"for run_id {run_id}. Cannot produce release-quality metrics "
+                    "without run-scoped telemetry."
+                )
 
         # ----------------------------------------------------------------
         # Semantic calls — always available from semantic_calls table.
@@ -892,6 +898,7 @@ class MetricEngine:
             "cpu_mean_percent": None,
             "gpu_samples": 0,
             "gpu_mean_memory_mb": None,
+            "telemetry_tables_exist": False,
         }
 
         # 1. Read aggregated summary from run_performance_telemetry.
@@ -916,6 +923,8 @@ class MetricEngine:
                 (str(run_id),),
             )
             row = cur.fetchone()
+            # Mark that the telemetry tables exist and the query succeeded.
+            result["telemetry_tables_exist"] = True
             if row and row[0] is not None:
                 result["total_tokens"] = row[0] or 0
                 result["token_source"] = row[1] or "unavailable"

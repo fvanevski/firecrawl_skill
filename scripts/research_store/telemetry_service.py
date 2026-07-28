@@ -520,6 +520,7 @@ class PerformanceTelemetryService:
 
         summary = PerformanceTelemetrySummary(
             run_id=str(run_id),
+            schema_version="performance-telemetry-summary-v1",
             total_tokens=token_summary["total_tokens"],
             token_source=token_summary["token_source"],
             semantic_calls=semantic_calls,
