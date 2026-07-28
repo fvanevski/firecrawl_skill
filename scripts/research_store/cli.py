@@ -1426,11 +1426,7 @@ def _index_build(config, document_id=None):
         )
         manifests = cur.fetchall()
         manifest_ids = [row[0] for row in manifests]
-        requeue_ids = [
-            row[0]
-            for row in manifests
-            if row[1] not in indexed_ids or row[2] != "complete"
-        ]
+        requeue_ids = [row[0] for row in manifests if row[2] != "complete"]
         cur.execute(
             """INSERT INTO index_jobs(
             entity_type,entity_id,index_name,operation,status,manifest_id,index_definition_id)
@@ -1471,8 +1467,10 @@ def _index_build(config, document_id=None):
                 f"are pending.  Manifests may be orphaned or have mismatched "
                 f"index_definition_id."
             )
-        # Cache the verified Qdrant point count for doctor/reconcile.
-        point_count = len(indexed_ids)
+        # Cache the expected Qdrant point count for doctor/reconcile.
+        # This is the number of chunks that should be indexed; the cache is
+        # updated to the live count after the worker completes all jobs.
+        point_count = len(selected_chunk_ids)
         cur.execute(
             """INSERT INTO index_point_counts(
             index_definition_id,point_count,last_verified_at)
@@ -1506,10 +1504,9 @@ def _index_reconcile(config, repair=False):
         cur.execute(
             """SELECT count(*) FROM chunks c
             JOIN documents d ON d.id=c.document_id
-            WHERE c.parser_version=%s AND d.parser_version=%s
+            WHERE d.parser_version=%s
               AND d.normalization_version=%s AND c.chunker_version=%s""",
             (
-                config.parser_version,
                 config.parser_version,
                 config.normalization_version,
                 config.chunker_version,
@@ -1589,6 +1586,8 @@ def _index_reconcile(config, repair=False):
     aliases = _qdrant(config).list_aliases()
     qdrant = {"ok": True, "aliases": aliases, "collections": {}}
     discrepancies = []
+    # Track which definitions have discrepancies so repair can target them.
+    definitions_with_discrepancies: set[str] = set()
 
     for alias_name, collection_name in aliases.items():
         try:
@@ -1618,7 +1617,7 @@ def _index_reconcile(config, repair=False):
                 offset = page.get("next_page_offset")
                 if not offset:
                     break
-            qdrant["collections"][collection_name] = {
+            collection_info = {
                 "alias": alias_name,
                 "schema": schema,
                 "point_count": len(point_ids),
@@ -1630,8 +1629,10 @@ def _index_reconcile(config, repair=False):
             complete_jobs = job_info.get("complete", 0)
             if complete_manifests != complete_jobs:
                 discrepancies.append(
-                    f"collection {collection_name}: complete manifests ({complete_manifests}) != complete jobs ({complete_jobs})"
+                    f"collection {collection_name}: complete manifests "
+                    f"({complete_manifests}) != complete jobs ({complete_jobs})"
                 )
+                definitions_with_discrepancies.add(row["id"])
             if point_ids:
                 chunk_ids = {str(value) for value in _active_chunk_ids(config)}
                 missing = chunk_ids - point_ids
@@ -1640,10 +1641,16 @@ def _index_reconcile(config, repair=False):
                     discrepancies.append(
                         f"collection {collection_name}: {len(missing)} missing points"
                     )
+                    definitions_with_discrepancies.add(row["id"])
                 if orphaned:
                     discrepancies.append(
                         f"collection {collection_name}: {len(orphaned)} orphaned points"
                     )
+                    definitions_with_discrepancies.add(row["id"])
+            collection_info["has_discrepancies"] = (
+                row["id"] in definitions_with_discrepancies
+            )
+            qdrant["collections"][collection_name] = collection_info
         except Exception as exc:  # noqa: BLE001
             qdrant["collections"][collection_name] = {
                 "alias": alias_name,
@@ -1652,19 +1659,67 @@ def _index_reconcile(config, repair=False):
             }
             discrepancies.append(f"Qdrant collection {collection_name}: {exc}")
 
-    # Repair: re-run index-build for definitions with discrepancies.
+    # Check all definitions for manifest/job mismatches, even those without
+    # a Qdrant alias (e.g. definitions with manifests but no jobs yet).
+    for row in definitions:
+        def_id = row["id"]
+        manifest_info = manifests_by_def.get(def_id, {})
+        job_info = jobs_by_def.get(def_id, {})
+        # Missing jobs: manifests exist but no jobs created.
+        total_manifests = manifest_info.get("total", 0)
+        total_jobs = job_info.get("total", 0)
+        if total_manifests > 0 and total_jobs == 0:
+            discrepancies.append(
+                f"definition {def_id}: {total_manifests} manifests but 0 jobs"
+            )
+            definitions_with_discrepancies.add(def_id)
+        # Manifest/job count mismatch.
+        complete_manifests = manifest_info.get("complete", 0)
+        complete_jobs = job_info.get("complete", 0)
+        if complete_manifests != complete_jobs:
+            discrepancies.append(
+                f"definition {def_id}: complete manifests ({complete_manifests}) "
+                f"!= complete jobs ({complete_jobs})"
+            )
+            definitions_with_discrepancies.add(def_id)
+
+    # Repair: re-run index-build only for definitions that have discrepancies.
     repaired = []
     if repair and discrepancies:
         for defn in definitions:
             def_id = defn["id"]
-            # Only repair definitions that have manifests/jobs
-            if def_id not in manifests_by_def and def_id not in jobs_by_def:
+            # Only repair definitions that actually have discrepancies.
+            if def_id not in definitions_with_discrepancies:
                 continue
             try:
                 _index_build(config, document_id=None)
                 repaired.append(def_id)
             except Exception as exc:  # noqa: BLE001
                 discrepancies.append(f"repair failed for {def_id}: {exc}")
+        # Remove the old broken definitions so the re-check sees a clean state.
+        with _db(config) as conn, conn.cursor() as cur:
+            for def_id in repaired:
+                cur.execute(
+                    "DELETE FROM embedding_manifests WHERE index_definition_id=%s",
+                    (def_id,),
+                )
+                cur.execute(
+                    "DELETE FROM index_jobs WHERE index_definition_id=%s",
+                    (def_id,),
+                )
+                cur.execute(
+                    "DELETE FROM index_point_counts WHERE index_definition_id=%s",
+                    (def_id,),
+                )
+                cur.execute(
+                    "DELETE FROM index_definitions WHERE id=%s",
+                    (def_id,),
+                )
+        # Re-run reconciliation to get a clean result after repair,
+        # preserving the repaired list from this pass.
+        result = _index_reconcile(config, repair=False)
+        result["repaired"] = repaired
+        return result
 
     return {
         "total_active_chunks": total_chunks,

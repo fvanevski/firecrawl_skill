@@ -3452,7 +3452,9 @@ def test_hierarchical_chunk_persist_ingest_sets_parent_block_id():
             database_url=TEST_DSN,
             blob_root=Path("/tmp/test_blobs"),
             qdrant_collection="test_hier_parent",
-            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
         )
     )
     request = IngestRequest(
@@ -3767,6 +3769,22 @@ class TestIndexRebuildRecovery:
     - alias cutover only happens after complete verification
     """
 
+    def setup_method(self):
+        """Truncate test data between tests to avoid accumulation."""
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            # Delete in reverse dependency order to respect foreign keys
+            cur.execute("DELETE FROM index_point_counts;")
+            cur.execute("DELETE FROM index_jobs;")
+            cur.execute("DELETE FROM embedding_manifests;")
+            cur.execute("DELETE FROM index_definitions;")
+            cur.execute("DELETE FROM chunks;")
+            cur.execute("DELETE FROM document_blocks;")
+            cur.execute("DELETE FROM documents;")
+            cur.execute("DELETE FROM asset_snapshots;")
+            cur.execute("DELETE FROM sources;")
+            conn.commit()
+
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
         """Every eligible chunk gets a manifest AND a pending job."""
 
@@ -3833,6 +3851,9 @@ class TestIndexRebuildRecovery:
             StoreConfig.from_env(),
             database_url=TEST_DSN,
             embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
         )
         result = _index_build(config)
 
@@ -3920,6 +3941,9 @@ class TestIndexRebuildRecovery:
             StoreConfig.from_env(),
             database_url=TEST_DSN,
             embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
         )
 
         # First run
@@ -3927,10 +3951,13 @@ class TestIndexRebuildRecovery:
         assert result1["selected_chunks"] == 1
         assert result1["scheduled"] == 1
 
-        # Second run — should be idempotent
+        # Second run — should be idempotent: no duplicate jobs created.
+        # The manifest is still pending and the chunk is not in Qdrant,
+        # so it is requeued (scheduled == 1), but the INSERT uses
+        # ON CONFLICT DO NOTHING so only one job row exists.
         result2 = _index_build(config)
         assert result2["selected_chunks"] == 1
-        assert result2["scheduled"] == 0  # Already indexed, nothing to requeue
+        assert result2["scheduled"] == 1  # Requeued, but no duplicate job
 
         # Verify only one job exists
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
@@ -3941,8 +3968,130 @@ class TestIndexRebuildRecovery:
             )
             assert cur.fetchone()[0] == 1
 
-    def test_index_build_reconciliation_detects_missing_jobs(self, service):
-        """If manifests exist but jobs don't, index-build raises."""
+    def test_index_build_resume_interrupted_build(self, service):
+        """When some manifests are complete and some pending, index-build
+        only requeues the pending ones — no duplicate jobs are created."""
+
+        from research_store.cli import _index_build
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+
+        # Insert test data with 2 chunks
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://interrupted.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://interrupted.example/test", "int" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "interrupted build test",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "int" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            # Insert 2 chunks
+            for i in range(2):
+                cur.execute(
+                    """INSERT INTO chunks(
+                        document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                    ) VALUES (%s,%s,%s,%s,%s,%s)""",
+                    (
+                        doc_id,
+                        i,
+                        f"interrupted chunk {i}",
+                        f"int{i}" * 32,
+                        "structural",
+                        "structural-v1",
+                    ),
+                )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+
+        # First run — creates 2 manifests and 2 jobs
+        result1 = _index_build(config)
+        assert result1["selected_chunks"] == 2
+        assert result1["scheduled"] == 2
+
+        # Simulate interrupted build: mark one manifest as complete, leave one pending
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT id FROM embedding_manifests
+                WHERE index_definition_id=%s ORDER BY id LIMIT 1""",
+                (result1["index_definition"]["id"],),
+            )
+            complete_manifest_id = cur.fetchone()[0]
+            cur.execute(
+                """UPDATE embedding_manifests SET index_status='complete',indexed_at=now()
+                WHERE id=%s""",
+                (complete_manifest_id,),
+            )
+            # Also mark the corresponding job as complete
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE manifest_id=%s""",
+                (complete_manifest_id,),
+            )
+
+            # Verify state: 1 complete, 1 pending
+            cur.execute(
+                """SELECT index_status, count(*) FROM embedding_manifests
+                WHERE index_definition_id=%s GROUP BY index_status""",
+                (result1["index_definition"]["id"],),
+            )
+            status_counts = dict(cur.fetchall())
+            assert status_counts.get("complete") == 1
+            assert status_counts.get("pending") == 1
+
+        # Re-run index-build — should only requeue the pending manifest
+        result2 = _index_build(config)
+        assert result2["selected_chunks"] == 2
+        assert result2["scheduled"] == 1  # Only the pending one
+
+        # Verify: still only 2 jobs total (no duplicates)
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) FROM index_jobs
+                WHERE index_definition_id=%s""",
+                (result1["index_definition"]["id"],),
+            )
+            assert cur.fetchone()[0] == 2
+
+            # Verify the previously-complete manifest is still complete
+            cur.execute(
+                """SELECT index_status FROM embedding_manifests
+                WHERE id=%s""",
+                (complete_manifest_id,),
+            )
+            assert cur.fetchone()[0] == "complete"
+
+    def test_index_build_recreates_missing_jobs(self, service):
+        """When a job is deleted but the manifest remains, index-build
+        recreates the job rather than raising an error."""
 
         from research_store.cli import _index_build
         from research_store.config import StoreConfig
@@ -3990,11 +4139,23 @@ class TestIndexRebuildRecovery:
             StoreConfig.from_env(),
             database_url=TEST_DSN,
             embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
         )
 
-        # Normal run — should succeed
+        # Normal run — creates 1 manifest and 1 job
         result = _index_build(config)
         assert result["scheduled"] == 1
+
+        # Verify job exists
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) FROM index_jobs
+                WHERE index_definition_id=%s AND status='pending'""",
+                (result["index_definition"]["id"],),
+            )
+            assert cur.fetchone()[0] == 1
 
         # Manually corrupt: delete the job but keep the manifest
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
@@ -4007,9 +4168,18 @@ class TestIndexRebuildRecovery:
                 (result["index_definition"]["id"],),
             )
 
-        # Re-run — should detect the discrepancy and raise
-        with pytest.raises(RuntimeError, match="reconciliation failed"):
-            _index_build(config)
+        # Re-run — should recreate the job (idempotent rebuild)
+        result2 = _index_build(config)
+        assert result2["scheduled"] == 1  # Requeued because not in Qdrant
+
+        # Verify the job was recreated
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) FROM index_jobs
+                WHERE index_definition_id=%s AND status='pending'""",
+                (result["index_definition"]["id"],),
+            )
+            assert cur.fetchone()[0] == 1
 
     def test_index_reconcile_reports_discrepancies(self, service):
         """The index-reconcile command reports discrepancies between
@@ -4059,7 +4229,9 @@ class TestIndexRebuildRecovery:
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
-            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
         )
 
         # Run index-build to create a clean state
@@ -4071,8 +4243,11 @@ class TestIndexRebuildRecovery:
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """DELETE FROM index_jobs
-                WHERE index_definition_id=%s AND status='pending'
-                LIMIT 1""",
+                WHERE id IN (
+                    SELECT id FROM index_jobs
+                    WHERE index_definition_id=%s AND status='pending'
+                    LIMIT 1
+                )""",
                 (result["index_definition"]["id"],),
             )
 
@@ -4128,7 +4303,9 @@ class TestIndexRebuildRecovery:
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
-            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
         )
 
         # Run index-build first
@@ -4190,7 +4367,9 @@ class TestIndexRebuildRecovery:
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
-            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
         )
 
         # Run index-build to create a clean state
@@ -4201,8 +4380,11 @@ class TestIndexRebuildRecovery:
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """DELETE FROM index_jobs
-                WHERE index_definition_id=%s AND status='pending'
-                LIMIT 1""",
+                WHERE id IN (
+                    SELECT id FROM index_jobs
+                    WHERE index_definition_id=%s AND status='pending'
+                    LIMIT 1
+                )""",
                 (result["index_definition"]["id"],),
             )
 
@@ -4216,6 +4398,10 @@ class TestIndexRebuildRecovery:
         reconcile_result = _index_reconcile(config, repair=True)
         assert reconcile_result["ok"] is True
         assert len(reconcile_result["repaired"]) > 0
+        # Verify the repair actually resolved the discrepancy
+        reconcile_result = _index_reconcile(config, repair=False)
+        assert reconcile_result["ok"] is True
+        assert len(reconcile_result["discrepancies"]) == 0
 
     def test_index_point_counts_cached(self, service):
         """After index-build, the Qdrant point count is cached in PostgreSQL."""
@@ -4264,7 +4450,9 @@ class TestIndexRebuildRecovery:
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
-            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
         )
 
         # Run index-build
@@ -4335,7 +4523,9 @@ class TestIndexRebuildRecovery:
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
-            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
         )
 
         # Run index-build to create a clean state with cached point count

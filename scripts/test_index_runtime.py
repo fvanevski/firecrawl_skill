@@ -252,7 +252,7 @@ def test_qdrant_schema_rejects_unexpected_sparse_vectors():
     assert result["expected"]["sparse"] is False
 
 
-def test_qdrant_ensure_schema_raises_on_unexpected_sparse_vectors():
+def test_qdrant_ensure_schema_drops_and_recreates_sparse_vector_collection():
     """ensure_schema no longer raises on sparse vectors — it drops and
     recreates the collection instead (Qdrant is a rebuildable projection)."""
     qdrant = FakeQdrant(
@@ -1216,3 +1216,54 @@ def test_ensure_schema_compatible_collection():
 
 # Full integration tests for _index_build reconciliation and _index_reconcile
 # are in test_research_store_integration.py (see TestIndexRebuildRecovery).
+
+
+# ---------------------------------------------------------------------------
+# C03: Sparse-vector negative tests (issue #136)
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_uses_dense_only_vectors():
+    """The upsert path builds points with dense vectors only — no sparse
+    vector keys are ever sent to Qdrant."""
+
+    call_log = []
+
+    class TrackingQdrant(QdrantIndex):
+        def _request(self, method, path, payload=None):
+            call_log.append((method, path, payload))
+            return {"result": {"status": "ok"}}
+
+    qdrant = TrackingQdrant("http://qdrant", "", "sparse-negative", 3, "Cosine")
+    qdrant.upsert([{"id": "abc", "vector": {"dense": [0.1, 0.2, 0.3]}, "payload": {}}])
+
+    # Find the PUT /points request
+    upsert_req = [r for r in call_log if r[0] == "PUT" and "/points" in r[1]]
+    assert len(upsert_req) == 1
+    payload = upsert_req[0][2]
+    # The payload must contain "points" with dense vectors only.
+    for point in payload["points"]:
+        vec = point.get("vector", {})
+        assert "sparse" not in vec
+        assert "dense" in vec
+
+
+def test_search_uses_dense_only_query():
+    """The search path uses the 'dense' named vector — no sparse query."""
+
+    call_log = []
+
+    class TrackingQdrant(QdrantIndex):
+        def _request(self, method, path, payload=None):
+            call_log.append((method, path, payload))
+            return {"result": {"points": []}}
+
+    qdrant = TrackingQdrant("http://qdrant", "", "search-negative", 3, "Cosine")
+    qdrant.search([0.1, 0.2, 0.3], {}, 10)
+
+    search_req = [r for r in call_log if r[0] == "POST" and "/query" in r[1]]
+    assert len(search_req) == 1
+    payload = search_req[0][2]
+    assert payload.get("using") == "dense"
+    # No sparse_vectors key in the query payload.
+    assert "sparse_vectors" not in payload
