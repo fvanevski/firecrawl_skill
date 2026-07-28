@@ -331,7 +331,7 @@ class TestBuildIngestRequest:
             "scratch_file": str(scratch),
             "scrape_status": "ok",
         }
-        ingest_request, error = _build_ingest_request(candidate, tmp_path)
+        ingest_request, error = _build_ingest_request(candidate)
         assert error is None
         assert ingest_request is not None
         assert ingest_request.requested_url == "https://example.com"
@@ -341,7 +341,7 @@ class TestBuildIngestRequest:
         from persist_results import _build_ingest_request
 
         candidate = {"rank": 1, "title": "No URL", "scratch_file": "/tmp/x"}
-        ingest_request, error = _build_ingest_request(candidate, tmp_path)
+        ingest_request, error = _build_ingest_request(candidate)
         assert ingest_request is None
         assert error == "missing URL"
 
@@ -354,7 +354,7 @@ class TestBuildIngestRequest:
             "scratch_file": "/nonexistent",
             "scrape_status": "ok",
         }
-        ingest_request, error = _build_ingest_request(candidate, tmp_path)
+        ingest_request, error = _build_ingest_request(candidate)
         assert ingest_request is None
         assert "scratch file not found" in error
 
@@ -369,7 +369,7 @@ class TestBuildIngestRequest:
             "scratch_file": str(scratch),
             "status": "ok",
         }
-        ingest_request, error = _build_scrape_ingest_request(result, tmp_path)
+        ingest_request, error = _build_scrape_ingest_request(result)
         assert error is None
         assert ingest_request is not None
         assert ingest_request.requested_url == "https://example.com"
@@ -1194,3 +1194,136 @@ class TestFailurePaths:
         assert result.returncode == 0
         corpus = json.loads(_corpus_output_path(path).read_text())
         assert corpus == []
+
+
+class TestMainPathIntegration:
+    """Integration tests that exercise the full main() path with a database.
+
+    These tests invoke persist_results.py as a subprocess with DATABASE_URL set,
+    verifying the complete main() → _persist_search_manifest → ingest_batch
+    → research_run_assets path.
+    """
+
+    @pytest.mark.skipif(
+        not TEST_DSN or not psycopg, reason="Requires PostgreSQL and psycopg"
+    )
+    def test_main_with_database_and_valid_run_id(self, tmp_path, monkeypatch):
+        """Full main() path with DATABASE_URL and valid external run ID."""
+        monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+        from functools import partial
+        from uuid import uuid4 as _uuid4
+
+        from research_store.config import StoreConfig
+        from research_store.postgres import PostgresUnitOfWork
+
+        config = StoreConfig.from_env()
+        uow_factory = partial(
+            PostgresUnitOfWork,
+            config.database_url,
+            config.physical_collection,
+            config.embedding_model,
+            config.embedding_revision,
+            config.embedding_dimension,
+            config.parser_version,
+            config.normalization_version,
+            config.chunker_version,
+        )
+
+        # Create a research run with an external ID.
+        external_run_id = f"fr_test_main_{_uuid4().hex[:16]}"
+        with uow_factory() as uow:
+            internal_run_id = uow.runs.start_run(
+                "Integration test main path",
+                {
+                    "external_run_id": external_run_id,
+                    "execution_mode": "autonomous_local",
+                },
+            )
+            uow.commit()
+
+        # Create a valid scratch file.
+        scratch = _write_scratch_file(
+            tmp_path, "result_000.md", "# Title\n\nParagraph one.\n"
+        )
+        manifest = {
+            "invocation_id": f"fc_test_main_{_uuid4().hex[:8]}",
+            "operation": "search",
+            "query": "test query",
+            "candidates": [
+                {
+                    "rank": 1,
+                    "url": "https://example.com",
+                    "title": "Example",
+                    "snippet": "A snippet",
+                    "scratch_file": str(scratch),
+                    "scrape_status": "ok",
+                    "word_count": 6,
+                }
+            ],
+        }
+        path = _write_manifest(tmp_path, manifest)
+        output = tmp_path / "_corpus.json"
+
+        # Run via subprocess (exercises main() directly).
+        result = _run_persist(
+            path,
+            output=output,
+            run_id=external_run_id,
+            database_url=TEST_DSN,
+        )
+        assert result.returncode == 0, result.stderr
+
+        corpus = json.loads(output.read_text())
+        assert len(corpus) == 1
+        assert corpus[0]["persisted"] is True
+        assert corpus[0]["status"] == "ok"
+        assert corpus[0]["source_id"] is not None
+        assert corpus[0]["document_id"] is not None
+        assert len(corpus[0]["chunk_ids"]) > 0
+
+        # Verify the research_run_assets linkage was created.
+        with uow_factory() as uow:
+            cur = uow.connection.cursor()
+            cur.execute(
+                """SELECT COUNT(*) FROM research_run_assets
+                WHERE run_id=%s AND role='acquired'""",
+                (internal_run_id,),
+            )
+            count = cur.fetchone()[0]
+            assert count == 1
+            cur.close()
+
+    @pytest.mark.skipif(
+        not TEST_DSN or not psycopg, reason="Requires PostgreSQL and psycopg"
+    )
+    def test_main_with_invalid_run_id_fails(self, tmp_path, monkeypatch):
+        """main() with DATABASE_URL and invalid external run ID exits nonzero."""
+        monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+
+        scratch = _write_scratch_file(tmp_path, "result_000.md", "content")
+        manifest = {
+            "invocation_id": "fc_test_invalid",
+            "operation": "search",
+            "query": "test",
+            "candidates": [
+                {
+                    "rank": 1,
+                    "url": "https://example.com",
+                    "title": "Example",
+                    "scratch_file": str(scratch),
+                    "scrape_status": "ok",
+                }
+            ],
+        }
+        path = _write_manifest(tmp_path, manifest)
+        output = tmp_path / "_corpus.json"
+
+        # Run via subprocess with an invalid external run ID.
+        result = _run_persist(
+            path,
+            output=output,
+            run_id="fr_nonexistent_run",
+            database_url=TEST_DSN,
+        )
+        # Should exit nonzero because the run doesn't exist.
+        assert result.returncode != 0

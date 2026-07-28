@@ -217,7 +217,6 @@ def _resolve_run_id(
 
 def _build_ingest_request(
     candidate: dict[str, Any],
-    scratch_root: Path,
     mime_type: str = "text/markdown",
 ) -> tuple[Any, str | None]:
     """Build an ``IngestRequest`` from a manifest candidate entry.
@@ -277,7 +276,6 @@ def _build_ingest_request(
 
 def _build_scrape_ingest_request(
     result: dict[str, Any],
-    scratch_root: Path,
     mime_type: str = "text/markdown",
 ) -> tuple[Any, str | None]:
     """Build an ``IngestRequest`` from an fscrape result entry.
@@ -338,7 +336,6 @@ def _build_scrape_ingest_request(
 def _persist_search_manifest(
     manifest: dict[str, Any],
     run_id: str | None,
-    uow_factory,
 ) -> list[dict[str, Any]]:
     """Persist candidates from an fsearch manifest through the corpus service."""
     from research_store.blob import ContentAddressedBlobStore
@@ -367,6 +364,23 @@ def _persist_search_manifest(
 
     config = StoreConfig.from_env()
     config.require_database()
+
+    # Build the uow_factory needed for CorpusService.
+    from functools import partial
+
+    from research_store.postgres import PostgresUnitOfWork
+
+    uow_factory = partial(
+        PostgresUnitOfWork,
+        config.database_url,
+        config.physical_collection,
+        config.embedding_model,
+        config.embedding_revision,
+        config.embedding_dimension,
+        config.parser_version,
+        config.normalization_version,
+        config.chunker_version,
+    )
 
     # Build a real blob store so ingest does not fail with AttributeError.
     blob_store = ContentAddressedBlobStore(config.blob_root)
@@ -423,7 +437,7 @@ def _persist_search_manifest(
             )
             continue
 
-        ingest_request, error = _build_ingest_request(cand, config.scratch_root)
+        ingest_request, error = _build_ingest_request(cand)
         if ingest_request is None:
             records.append(
                 {
@@ -502,7 +516,6 @@ def _persist_search_manifest(
 def _persist_scrape_manifest(
     manifest: dict[str, Any],
     run_id: str | None,
-    uow_factory,
 ) -> list[dict[str, Any]]:
     """Persist results from an fscrape manifest through the corpus service."""
     from research_store.blob import ContentAddressedBlobStore
@@ -530,6 +543,23 @@ def _persist_scrape_manifest(
 
     config = StoreConfig.from_env()
     config.require_database()
+
+    # Build the uow_factory needed for CorpusService.
+    from functools import partial
+
+    from research_store.postgres import PostgresUnitOfWork
+
+    uow_factory = partial(
+        PostgresUnitOfWork,
+        config.database_url,
+        config.physical_collection,
+        config.embedding_model,
+        config.embedding_revision,
+        config.embedding_dimension,
+        config.parser_version,
+        config.normalization_version,
+        config.chunker_version,
+    )
 
     # Build a real blob store so ingest does not fail with AttributeError.
     blob_store = ContentAddressedBlobStore(config.blob_root)
@@ -590,9 +620,7 @@ def _persist_scrape_manifest(
             )
             continue
 
-        ingest_request, error = _build_scrape_ingest_request(
-            res, config.scratch_root, mime_type=mime_type
-        )
+        ingest_request, error = _build_scrape_ingest_request(res, mime_type=mime_type)
         if ingest_request is None:
             records.append(
                 {
@@ -704,35 +732,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    # Build a minimal uow_factory for run-ID resolution.
-    # When no database is configured we skip resolution entirely.
-    if database_url:
-        from functools import partial
-
-        from research_store.config import StoreConfig
-        from research_store.postgres import PostgresUnitOfWork
-
-        config = StoreConfig.from_env()
-        config.require_database()
-        uow_factory = partial(
-            PostgresUnitOfWork,
-            config.database_url,
-            config.physical_collection,
-            config.embedding_model,
-            config.embedding_revision,
-            config.embedding_dimension,
-            config.parser_version,
-            config.normalization_version,
-            config.chunker_version,
-        )
-    else:
-        uow_factory = None
-
     # Dispatch to the correct persistence path.
     if manifest_type == "search":
-        records = _persist_search_manifest(manifest, args.research_run_id, uow_factory)
+        records = _persist_search_manifest(manifest, args.research_run_id)
     else:
-        records = _persist_scrape_manifest(manifest, args.research_run_id, uow_factory)
+        records = _persist_scrape_manifest(manifest, args.research_run_id)
 
     Path(output_path).write_text(json.dumps(records, indent=2), encoding="utf-8")
 
