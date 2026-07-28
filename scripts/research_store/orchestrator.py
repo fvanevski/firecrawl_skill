@@ -1600,7 +1600,7 @@ class ResearchOrchestrator:
         )
         self._next_action = NextActionStage(run_service, strategy_service)
         self._synthesis = SynthesisStage(
-            run_service, config, resource_governor=orchestrator_config.resource_governor
+            run_service, config, resource_governor=self.orchestrator_config.resource_governor
         )
         self._terminal = TerminalStage(run_service)
 
