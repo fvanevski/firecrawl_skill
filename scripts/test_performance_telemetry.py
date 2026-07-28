@@ -768,3 +768,105 @@ class TestRegression:
         assert "endpoint_usage_records" in source, (
             "release_benchmark.py should read tokens from endpoint_usage_records"
         )
+
+
+class TestBenchmarkTelemetryWiring:
+    """Tests for telemetry wiring in ReleaseBenchmarkRunner."""
+
+    def test_populate_endpoint_usage_from_semantic_calls(self):
+        """_populate_endpoint_usage extracts token usage from semantic calls."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import ReleaseBenchmarkRunner
+
+        # Create a mock runner with the method.
+        runner = ReleaseBenchmarkRunner.__new__(ReleaseBenchmarkRunner)
+
+        mock_conn = mock.Mock()
+        mock_cursor = mock.Mock()
+        mock_conn.cursor.return_value.__enter__ = mock.Mock(return_value=mock_cursor)
+        mock_conn.cursor.return_value.__exit__ = mock.Mock(return_value=False)
+
+        # Mock semantic_calls with response_metadata containing usage.
+        call_id = uuid4()
+        mock_cursor.fetchall.return_value = [
+            (
+                str(call_id),
+                {
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 50,
+                        "total_tokens": 150,
+                    }
+                },
+            )
+        ]
+
+        mock_telemetry_svc = mock.Mock()
+
+        runner._populate_endpoint_usage(mock_telemetry_svc, uuid4(), mock_conn)
+
+        # Verify record_endpoint_usage was called.
+        assert mock_telemetry_svc.record_endpoint_usage.called
+        call_args = mock_telemetry_svc.record_endpoint_usage.call_args
+        record = call_args[0][0]
+        assert record.source == "endpoint"
+        assert record.prompt_tokens == 100
+        assert record.completion_tokens == 50
+        assert record.total_tokens == 150
+
+    def test_populate_endpoint_usage_skips_unavailable(self):
+        """_populate_endpoint_usage skips calls without token usage."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import ReleaseBenchmarkRunner
+
+        runner = ReleaseBenchmarkRunner.__new__(ReleaseBenchmarkRunner)
+
+        mock_conn = mock.Mock()
+        mock_cursor = mock.Mock()
+        mock_conn.cursor.return_value.__enter__ = mock.Mock(return_value=mock_cursor)
+        mock_conn.cursor.return_value.__exit__ = mock.Mock(return_value=False)
+
+        # Mock semantic_calls with no usage info.
+        call_id = uuid4()
+        mock_cursor.fetchall.return_value = [(str(call_id), {"provenance": {}})]
+
+        mock_telemetry_svc = mock.Mock()
+
+        runner._populate_endpoint_usage(mock_telemetry_svc, uuid4(), mock_conn)
+
+        # No record_endpoint_usage call when source is unavailable.
+        assert not mock_telemetry_svc.record_endpoint_usage.called
+
+    def test_collect_resource_samples_cpu(self):
+        """_collect_resource_samples collects CPU samples when available."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import ReleaseBenchmarkRunner
+
+        runner = ReleaseBenchmarkRunner.__new__(ReleaseBenchmarkRunner)
+
+        mock_telemetry_svc = mock.Mock()
+
+        with mock.patch(
+            "research_store.resource_sampler.ResourceSampler"
+        ) as MockSampler:
+            mock_sampler = mock.Mock()
+            mock_sampler.cpu_available = True
+            mock_sampler.gpu_available = False
+            mock_sampler.collect_cpu_sample.return_value = mock.Mock(
+                run_id="", sample_number=0
+            )
+            mock_sampler.collect_gpu_sample.return_value = None
+            MockSampler.return_value = mock_sampler
+
+            runner._collect_resource_samples(
+                mock_telemetry_svc,
+                uuid4(),
+                5000.0,  # 5 seconds
+            )
+
+            # Should collect up to 5 samples (min of 5 and duration in seconds)
+            assert mock_sampler.collect_cpu_sample.call_count == 5
+            assert mock_telemetry_svc.record_resource_sample.call_count == 5

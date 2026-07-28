@@ -1382,17 +1382,6 @@ class ReleaseBenchmarkRunner:
                 search_plan=search_plan,
             )
 
-            # Wire telemetry collection: aggregate run-scoped telemetry
-            # so that extract_performance_metrics reads from populated tables
-            # instead of falling back to legacy heuristics.
-            if metric_engine is not None:
-                from research_store.telemetry_service import (
-                    PerformanceTelemetryService,
-                )
-
-                telemetry_svc = PerformanceTelemetryService(metric_engine._connection)
-                telemetry_svc.build_summary(UUID(run_id))
-
             # Extract real metrics from persisted state (if engine available)
             if metric_engine is not None:
                 quality, quality_metrics = metric_engine.extract_quality_metrics(
@@ -1439,6 +1428,27 @@ class ReleaseBenchmarkRunner:
         end = time.monotonic()
         duration_ms = (end - start) * 1000
 
+        # Wire telemetry collection: populate telemetry tables and aggregate.
+        # This must happen after the orchestrator completes so that all
+        # semantic calls, cache events, and resource samples are available.
+        if metric_engine is not None and run_id:
+            from research_store.telemetry_service import (
+                PerformanceTelemetryService,
+            )
+
+            telemetry_svc = PerformanceTelemetryService(metric_engine._connection)
+
+            # Populate endpoint_usage_records from semantic_calls.
+            self._populate_endpoint_usage(
+                telemetry_svc, UUID(run_id), metric_engine._connection
+            )
+
+            # Collect CPU/GPU samples during the run window.
+            self._collect_resource_samples(telemetry_svc, UUID(run_id), duration_ms)
+
+            # Build and persist the aggregated summary.
+            telemetry_svc.build_summary(UUID(run_id))
+
         return CampaignRun(
             campaign_id=campaign_id,
             run_id=run_id,
@@ -1452,6 +1462,84 @@ class ReleaseBenchmarkRunner:
             errors=tuple(errors),
             duration_ms=duration_ms,
         )
+
+    # ------------------------------------------------------------------
+    # Telemetry population helpers
+    # ------------------------------------------------------------------
+
+    def _populate_endpoint_usage(
+        self,
+        telemetry_svc,
+        run_id: UUID,
+        connection,
+    ) -> None:
+        """Populate endpoint_usage_records from semantic_calls for a run.
+
+        Reads completed semantic calls, extracts token usage from
+        response_metadata, and writes EndpointUsageRecord rows.
+        """
+        from research_store.telemetry_service import EndpointUsageRecord
+        from research_store.token_accounting import extract_endpoint_usage
+
+        with connection.cursor() as cur:
+            cur.execute(
+                """SELECT id, response_metadata FROM semantic_calls
+                   WHERE run_id = %s AND status = 'complete'""",
+                (str(run_id),),
+            )
+            for call_id, response_metadata in cur.fetchall():
+                accounting = extract_endpoint_usage(response_metadata or {})
+                if accounting.source == "unavailable":
+                    continue
+                record = EndpointUsageRecord(
+                    run_id=str(run_id),
+                    call_id=str(call_id),
+                    endpoint_type="generative",
+                    provider="openai-compatible",
+                    model="",
+                    model_revision="",
+                    prompt_tokens=accounting.prompt_tokens or 0,
+                    completion_tokens=accounting.completion_tokens or 0,
+                    total_tokens=accounting.total_tokens or 0,
+                    source=accounting.source,
+                )
+                telemetry_svc.record_endpoint_usage(record)
+
+    def _collect_resource_samples(
+        self,
+        telemetry_svc,
+        run_id: UUID,
+        duration_ms: float,
+    ) -> None:
+        """Collect CPU/GPU resource samples over the run window.
+
+        Uses ResourceSampler to collect samples at a fixed interval.
+        If psutil/pynvml are unavailable, samples are marked unavailable.
+        """
+
+        from research_store.resource_sampler import ResourceSampler
+
+        sampler = ResourceSampler(interval_seconds=1.0, max_samples=10)
+
+        # Collect CPU samples.
+        if sampler.cpu_available:
+            for i in range(min(5, max(1, int(duration_ms / 1000)))):
+                sample = sampler.collect_cpu_sample()
+                if sample is None:
+                    break
+                sample.run_id = str(run_id)
+                sample.sample_number = i
+                telemetry_svc.record_resource_sample(sample)
+
+        # Collect GPU samples.
+        if sampler.gpu_available:
+            for i in range(min(5, max(1, int(duration_ms / 1000)))):
+                sample = sampler.collect_gpu_sample()
+                if sample is None:
+                    break
+                sample.run_id = str(run_id)
+                sample.sample_number = i
+                telemetry_svc.record_resource_sample(sample)
 
     def _campaign_to_workflow_results(
         self, runs: list[CampaignRun]

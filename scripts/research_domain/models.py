@@ -2193,7 +2193,11 @@ class PerformanceTelemetrySummary:
         gpu_mean_memory_mb: Mean GPU memory, or None when no samples.
         gpu_max_memory_mb: Maximum GPU memory, or None when no samples.
         gpu_unavailable: Whether GPU telemetry is unavailable.
+            GPU is optional — unavailability does not cause strict_pass
+            to be False. This accommodates CPU-only environments where
+            NVML is absent or the GPU is reserved for the local LLM agent.
         strict_pass: Whether all required metrics are measured (not estimated).
+            GPU unavailability does not affect strict_pass.
         metric_version: Version of the summary schema.
     """
 

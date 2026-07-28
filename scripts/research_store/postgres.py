@@ -110,6 +110,7 @@ class PostgresUnitOfWork:
         parser_version: str = "markdown-v1",
         normalization_version: str = "cleanup-v1",
         chunker_version: str = "structural-v1",
+        telemetry_service: Any = None,
     ):
         self.database_url = database_url
         self.index_name = index_name
@@ -120,6 +121,7 @@ class PostgresUnitOfWork:
         self.normalization_version = normalization_version
         self.chunker_version = chunker_version
         self.connection = None
+        self._telemetry_service = telemetry_service
 
     def __enter__(self):
         self.connection = connect(self.database_url)
@@ -3057,7 +3059,52 @@ class PostgresUnitOfWork:
                 WHERE id=%s AND run_id=%s RETURNING id""",
                 (status, response_json, error, call_id, run_id),
             )
-            return cur.fetchone()[0]
+            cur.fetchone()
+
+        # Wire telemetry: record endpoint usage for token accounting.
+        self._record_endpoint_telemetry(run_id, call_id, response_metadata)
+
+        return call_id
+
+    def _record_endpoint_telemetry(self, run_id, call_id, response_metadata):
+        """Record endpoint usage telemetry for token accounting.
+
+        Extracts token usage from the response metadata and records it
+        in the ``endpoint_usage_records`` table via the telemetry service.
+        This is a best-effort operation — failures are logged but do not
+        raise, so that semantic call finalization is never blocked by
+        telemetry recording.
+        """
+        if self._telemetry_service is None:
+            return
+        try:
+            from research_store.telemetry_service import (
+                EndpointUsageRecord,
+            )
+            from research_store.token_accounting import (
+                extract_endpoint_usage,
+            )
+
+            accounting = extract_endpoint_usage(response_metadata or {})
+            if accounting.source == "unavailable":
+                return
+
+            record = EndpointUsageRecord(
+                run_id=str(run_id),
+                call_id=str(call_id),
+                endpoint_type="generative",
+                provider=accounting.prompt_tokens and "openai-compatible",
+                model="",
+                model_revision="",
+                prompt_tokens=accounting.prompt_tokens or 0,
+                completion_tokens=accounting.completion_tokens or 0,
+                total_tokens=accounting.total_tokens or 0,
+                source=accounting.source,
+            )
+            self._telemetry_service.record_endpoint_usage(record)
+        except Exception:  # noqa: BLE001, S110
+            # Telemetry recording is best-effort — never block semantic calls.
+            pass
 
     def annotate_semantic_call(self, run_id, call_id, metadata):
         with self.connection.cursor() as cur:

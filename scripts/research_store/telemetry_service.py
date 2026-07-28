@@ -369,7 +369,7 @@ class PerformanceTelemetryService:
                 gpu_samples, gpu_mean_memory_mb, gpu_max_memory_mb,
                 gpu_unavailable, strict_pass, created_at, updated_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (run_id)
                DO UPDATE SET
                  schema_version = EXCLUDED.schema_version,
