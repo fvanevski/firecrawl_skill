@@ -3526,8 +3526,11 @@ class PostgresUnitOfWork:
             )
             result = dict(zip(keys, row))
             cur.execute(
-                """SELECT ordinal,requested_url,status,source_id,snapshot_id,document_id,chunk_ids,error,metadata
-                FROM ingestion_batch_assets WHERE batch_id=%s ORDER BY ordinal""",
+                """SELECT ordinal,requested_url,status,source_id,
+                a.snapshot_id,document_id,chunk_ids,error,a.metadata,d.document_sha256
+                FROM ingestion_batch_assets a
+                LEFT JOIN documents d ON d.id=a.document_id
+                WHERE a.batch_id=%s ORDER BY a.ordinal""",
                 (row[0],),
             )
             asset_keys = (
@@ -3540,6 +3543,7 @@ class PostgresUnitOfWork:
                 "chunk_ids",
                 "error",
                 "metadata",
+                "content_sha256",
             )
             result["assets"] = [
                 dict(zip(asset_keys, asset)) for asset in cur.fetchall()
