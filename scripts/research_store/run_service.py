@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -7,6 +8,9 @@ from typing import Any
 from uuid import UUID
 
 from .execution_policy import ExecutionModePolicy
+from .terminal_decision_service import TerminalDecisionError
+
+logger = logging.getLogger(__name__)
 
 RUN_STATES = frozenset(
     {
@@ -337,6 +341,112 @@ class ResearchRunService:
 
     def fail(self, run_id: UUID, **command: Any) -> TransitionResult:
         return self.transition(run_id, "failed", **command)
+
+    def commit_terminal_decision(
+        self,
+        run_id: UUID,
+        *,
+        decision_id: UUID,
+        run_revision: int,
+        coverage_revision: int,
+        outcome: str,
+        no_progress_signals: tuple[str, ...],
+        unresolved_gap: str,
+        policy_version: str,
+        idempotency_key: str,
+        created_at: Any,
+        next_state: str,
+        expected_revision: int,
+        actor_type: str,
+        actor_identifier: str | None = None,
+        reason: str | None = None,
+        error: str | None = None,
+        completion: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Atomically persist a terminal decision and apply the lifecycle transition.
+
+        Both the terminal-decision INSERT and the lifecycle transition execute
+        within a single UoW transaction. If either operation fails, the entire
+        transaction is rolled back — no partial state is left.
+
+        The same ``idempotency_key`` is used for both operations, making the
+        combined call idempotent: retrying with the same key returns the
+        existing results without creating duplicates.
+
+        Args:
+            run_id: The research run UUID.
+            decision_id: The terminal decision UUID.
+            run_revision: Current run lifecycle revision.
+            coverage_revision: Current coverage revision.
+            outcome: The terminal outcome string (e.g. ``"failed"``, ``"partial"``).
+            no_progress_signals: Tuple of signal strings.
+            unresolved_gap: Human-readable gap description.
+            policy_version: Policy version string.
+            idempotency_key: Deduplication key — shared by both operations.
+                The terminal-decision INSERT uses this key for its own
+                idempotency lookup (via ``record_terminal_decision``); the
+                lifecycle transition event also records the key for audit.
+            created_at: Timestamp.
+            next_state: Target run state (e.g. ``"failed"``, ``"partial"``).
+            expected_revision: Expected lifecycle revision (CAS).
+            actor_type: Actor type string.
+            actor_identifier: Optional actor identifier.
+            reason: Optional reason string.
+            error: Optional error string.
+            completion: Optional completion dict.
+
+        Returns:
+            Dict with ``transition_id``, ``event_id``, ``lifecycle_revision``,
+            ``prior_state``, ``next_state``, ``reused``.
+        """
+        permitted_prior_states = frozenset(
+            state
+            for state, destinations in PERMITTED_TRANSITIONS.items()
+            if next_state in destinations
+        )
+        try:
+            with self.uow_factory() as uow:
+                # 1. Persist terminal decision (idempotent — returns existing if found)
+                uow.record_terminal_decision(
+                    run_id=str(run_id),
+                    decision_id=str(decision_id),
+                    run_revision=run_revision,
+                    coverage_revision=coverage_revision,
+                    outcome=outcome,
+                    no_progress_signals=no_progress_signals,
+                    unresolved_gap=unresolved_gap,
+                    policy_version=policy_version,
+                    idempotency_key=idempotency_key,
+                    created_at=created_at,
+                )
+
+                # 2. Apply lifecycle transition (idempotent — returns existing if found)
+                result = uow.runs.apply_run_transition(
+                    run_id,
+                    next_state,
+                    expected_revision,
+                    idempotency_key,
+                    actor_type,
+                    self.policy_version,
+                    permitted_prior_states=permitted_prior_states,
+                    actor_identifier=actor_identifier,
+                    event_type=f"run.transitioned.{next_state}",
+                    reason=reason,
+                    outcome=outcome,
+                    error=error,
+                    completion=completion or {},
+                )
+                return result
+        except (RunStateError, StaleRunRevisionError):
+            raise
+        except Exception as exc:
+            logger.error(
+                "terminal decision atomic commit FAILED — aborting transition: %s",
+                exc,
+            )
+            raise TerminalDecisionError(
+                f"Failed to commit terminal decision for run {run_id}: {exc}"
+            ) from exc
 
     def cancel(
         self,

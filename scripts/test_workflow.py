@@ -240,6 +240,8 @@ def fake_cli(tmp_path):
     env["FIRECRAWL_CATALOG_DIR"] = str(tmp_path / "catalog")
     env["FIRECRAWL_AUDIT_AUTO_SEMANTIC"] = "0"
     env["FIRECRAWL_RESEARCH_AUTO_ENV"] = "0"
+    env["FIRECRAWL_RESEARCH_PERSIST"] = "off"
+    env["DATABASE_URL"] = ""
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env, tmp_path
 

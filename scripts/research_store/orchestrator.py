@@ -51,9 +51,11 @@ from .stages import (
 )
 from .strategy_service import StrategyRevisionService
 from .terminal_decision import (
+    TerminalDecision,
     TerminalDecisionConfig,
     TerminalDecisionOutcome,
     TerminalDecisionPolicy,
+    TerminalDecisionPolicyError,
 )
 from .terminal_decision_service import TerminalDecisionService
 
@@ -1598,7 +1600,9 @@ class ResearchOrchestrator:
         )
         self._next_action = NextActionStage(run_service, strategy_service)
         self._synthesis = SynthesisStage(
-            run_service, config, resource_governor=orchestrator_config.resource_governor
+            run_service,
+            config,
+            resource_governor=self.orchestrator_config.resource_governor,
         )
         self._terminal = TerminalStage(run_service)
 
@@ -1960,50 +1964,73 @@ class ResearchOrchestrator:
                 ctx["_unsatisfiable_source"] = _unsatisfiable_source
 
                 # Evaluate terminal decision policy
-                terminal_outcome = self._evaluate_terminal_decision(
+                terminal_decision = self._evaluate_terminal_decision(
                     ctx, run_id, current_revision, coverage_revision_num
                 )
-                if terminal_outcome is not None:
-                    # Policy returned a terminal outcome — use it
-                    ctx["_terminal_outcome"] = terminal_outcome.value
-                    ctx["_terminal_reason"] = ctx.get(
-                        "_terminal_reason",
-                        "terminal decision policy triggered",
-                    )
+                if terminal_decision is not None:
+                    # Policy returned a terminal decision — atomically persist
+                    # the decision and apply the lifecycle transition in a
+                    # single PostgreSQL transaction.
                     TERMINAL_STATES = ("completed", "partial", "failed", "cancelled")
                     if current_state not in TERMINAL_STATES:
                         try:
-                            if terminal_outcome == TerminalDecisionOutcome.FAILED:
-                                self.run_service.fail(
-                                    run_id,
-                                    expected_revision=current_revision,
-                                    idempotency_key=f"terminal:failed:{run_id}:{coverage_revision_num}:{uuid4()}",
-                                    actor_type="orchestrator",
-                                    actor_identifier="ResearchOrchestrator",
-                                    reason=ctx["_terminal_reason"],
-                                    outcome="failed",
-                                )
-                            elif terminal_outcome in (
+                            idempotency_key = f"terminal:{run_id}:r{current_revision}:c{coverage_revision_num}"
+                            if (
+                                terminal_decision.outcome
+                                == TerminalDecisionOutcome.FAILED
+                            ):
+                                next_state = "failed"
+                            elif terminal_decision.outcome in (
                                 TerminalDecisionOutcome.PARTIAL,
                                 TerminalDecisionOutcome.BLOCKED,
                             ):
-                                self.run_service.partial(
-                                    run_id,
-                                    expected_revision=current_revision,
-                                    idempotency_key=f"terminal:partial:{run_id}:{coverage_revision_num}:{uuid4()}",
-                                    actor_type="orchestrator",
-                                    actor_identifier="ResearchOrchestrator",
-                                    reason=ctx["_terminal_reason"],
-                                    outcome="partial",
-                                )
+                                next_state = "partial"
+                            else:
+                                next_state = "completed"
+
+                            result = self.run_service.commit_terminal_decision(
+                                run_id,
+                                decision_id=terminal_decision.decision_id,
+                                run_revision=current_revision,
+                                coverage_revision=coverage_revision_num,
+                                outcome=terminal_decision.outcome.value,
+                                no_progress_signals=tuple(
+                                    s.value
+                                    for s in terminal_decision.no_progress_signals
+                                ),
+                                unresolved_gap=terminal_decision.unresolved_gap,
+                                policy_version=terminal_decision.policy_version,
+                                idempotency_key=idempotency_key,
+                                created_at=terminal_decision.created_at,
+                                next_state=next_state,
+                                expected_revision=current_revision,
+                                actor_type="orchestrator",
+                                actor_identifier="ResearchOrchestrator",
+                                reason=ctx.get(
+                                    "_terminal_reason",
+                                    "terminal decision policy triggered",
+                                ),
+                            )
+
+                            # Update context after successful atomic commit
+                            ctx["_terminal_signals"] = [
+                                s.value for s in terminal_decision.no_progress_signals
+                            ]
+                            ctx["_terminal_outcome"] = terminal_decision.outcome.value
+                            ctx["_terminal_reason"] = (
+                                terminal_decision.unresolved_gap
+                                or ctx.get("_terminal_reason", "")
+                            )
+
                             run_status = self.run_service.status(run_id=run_id)
                             current_revision = run_status.lifecycle_revision
                             current_state = run_status.state
                         except (RunStateError, StaleRunRevisionError) as exc:
                             logger.warning(
-                                "terminal decision policy state transition failed: %s",
+                                "terminal decision atomic commit failed: %s",
                                 exc,
                             )
+                            raise
                     break
 
                 # Fix: Update revision dynamically after cycle
@@ -2264,16 +2291,25 @@ class ResearchOrchestrator:
         run_id: UUID,
         run_revision: int,
         coverage_revision: int,
-    ) -> TerminalDecisionOutcome | None:
-        """Evaluate the terminal decision policy and update context.
+    ) -> TerminalDecision | None:
+        """Evaluate the terminal decision policy.
 
-        Returns the terminal outcome if a terminal decision is reached,
-        or None if the run should continue.
+        Returns the ``TerminalDecision`` if a terminal decision is reached,
+        or ``None`` if the run should continue.
+
+        Exception handling:
+
+        * ``TerminalDecisionPolicyError`` (policy evaluation failure) is
+          non-fatal — the orchestrator falls back to the budget check.
+
+        This method does **not** persist the decision or update context —
+        those are handled by ``ResearchRunService.commit_terminal_decision``
+        in a single atomic transaction with the lifecycle transition.
         """
         try:
             policy = TerminalDecisionPolicy(self._terminal_config)
 
-            decision = policy.evaluate(
+            return policy.evaluate(
                 run_id=run_id,
                 run_revision=run_revision,
                 coverage_revision=coverage_revision,
@@ -2297,29 +2333,11 @@ class ResearchOrchestrator:
                 unresolved_gap=context.get("_unresolved_gap", ""),
                 unsatisfiable_source=context.get("_unsatisfiable_source", False),
             )
-
-            # Store signals in context for observability
-            context["_terminal_signals"] = [
-                s.value for s in decision.no_progress_signals
-            ]
-            context["_terminal_outcome"] = decision.outcome.value
-            context["_terminal_reason"] = decision.unresolved_gap
-
-            # B5: Persist the terminal decision to the database
-            if self._terminal_decision_service is not None:
-                idempotency_key = (
-                    f"terminal:{run_id}:r{run_revision}:c{coverage_revision}"
-                )
-                self._terminal_decision_service.record(
-                    run_id=run_id,
-                    decision=decision,
-                    idempotency_key=idempotency_key,
-                )
-
-            return decision.outcome
-        except Exception as exc:  # noqa: BLE001
+        except TerminalDecisionPolicyError as exc:
+            # Policy evaluation errors are non-fatal — fall back to budget check.
             logger.warning(
-                "terminal decision evaluation failed, falling back to budget check: %s",
+                "terminal decision policy evaluation failed, falling back to "
+                "budget check: %s",
                 exc,
             )
             return None
