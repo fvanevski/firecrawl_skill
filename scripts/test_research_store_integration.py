@@ -3749,3 +3749,395 @@ def _utcnow():
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# C03: Index rebuild and cutover recovery (issue #136)
+# ---------------------------------------------------------------------------
+
+
+class TestIndexRebuildRecovery:
+    """End-to-end tests for index rebuild, reconciliation, and recovery.
+
+    These tests verify that:
+    - index-build creates jobs for every eligible manifest
+    - scheduled counts reconcile with actual pending jobs
+    - doctor/index-reconcile detect discrepancies
+    - interrupted builds can resume without duplicate work
+    - alias cutover only happens after complete verification
+    """
+
+    def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
+        """Every eligible chunk gets a manifest AND a pending job."""
+
+        from research_store.cli import _index_build
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        # Insert test chunks and documents
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            # Insert source
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://recovery.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+
+            # Insert snapshot
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://recovery.example/test", "a" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+
+            # Insert document
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "test recovery document",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "b" * 64,
+                ),
+            )
+            document_id = cur.fetchone()[0]
+
+            # Insert 3 chunks
+            chunk_ids = []
+            for i in range(3):
+                cur.execute(
+                    """INSERT INTO chunks(
+                        document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                    ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                    (
+                        document_id,
+                        i,
+                        f"chunk text {i}",
+                        f"{'c' * 64}",
+                        "structural",
+                        "structural-v1",
+                    ),
+                )
+                chunk_ids.append(cur.fetchone()[0])
+
+        # Run index-build
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            embedding_dimension=4,
+        )
+        result = _index_build(config)
+
+        # Verify manifests and jobs were created
+        assert result["selected_chunks"] == 3
+        assert result["scheduled"] == 3
+
+        # Verify all 3 manifests exist
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM embedding_manifests WHERE index_definition_id=%s",
+                (result["index_definition"]["id"],),
+            )
+            assert cur.fetchone()[0] == 3
+
+            # Verify all 3 jobs are pending
+            cur.execute(
+                """SELECT count(*) FROM index_jobs
+                WHERE index_definition_id=%s AND status='pending'""",
+                (result["index_definition"]["id"],),
+            )
+            assert cur.fetchone()[0] == 3
+
+            # Verify scheduled == pending
+            cur.execute(
+                """SELECT count(*) FROM index_jobs
+                WHERE index_definition_id=%s AND status='pending'
+                AND manifest_id IN (
+                    SELECT id FROM embedding_manifests
+                    WHERE index_definition_id=%s
+                )""",
+                (
+                    result["index_definition"]["id"],
+                    result["index_definition"]["id"],
+                ),
+            )
+            assert cur.fetchone()[0] == 3
+
+    def test_index_build_idempotent_resume_no_duplicates(self, service):
+        """Running index-build twice does not create duplicate jobs."""
+
+        from research_store.cli import _index_build
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+
+        # Insert test data
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://idempotent.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://idempotent.example/test", "d" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "idempotent test",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "e" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (doc_id, "idempotent chunk", "f" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            embedding_dimension=4,
+        )
+
+        # First run
+        result1 = _index_build(config)
+        assert result1["selected_chunks"] == 1
+        assert result1["scheduled"] == 1
+
+        # Second run — should be idempotent
+        result2 = _index_build(config)
+        assert result2["selected_chunks"] == 1
+        assert result2["scheduled"] == 0  # Already indexed, nothing to requeue
+
+        # Verify only one job exists
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) FROM index_jobs
+                WHERE index_definition_id=%s""",
+                (result1["index_definition"]["id"],),
+            )
+            assert cur.fetchone()[0] == 1
+
+    def test_index_build_reconciliation_detects_missing_jobs(self, service):
+        """If manifests exist but jobs don't, index-build raises."""
+
+        from research_store.cli import _index_build
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+
+        # Insert test data
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://recon.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://recon.example/test", "g" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "reconciliation test",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "h" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (doc_id, "recon chunk", "i" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            embedding_dimension=4,
+        )
+
+        # Normal run — should succeed
+        result = _index_build(config)
+        assert result["scheduled"] == 1
+
+        # Manually corrupt: delete the job but keep the manifest
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """DELETE FROM index_jobs
+                WHERE manifest_id IN (
+                    SELECT id FROM embedding_manifests
+                    WHERE index_definition_id=%s
+                )""",
+                (result["index_definition"]["id"],),
+            )
+
+        # Re-run — should detect the discrepancy and raise
+        with pytest.raises(RuntimeError, match="reconciliation failed"):
+            _index_build(config)
+
+    def test_index_reconcile_reports_discrepancies(self, service):
+        """The index-reconcile command reports discrepancies between
+        manifests, jobs, and Qdrant points."""
+        from research_store.cli import _index_reconcile
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+
+        # Insert test data with a manifest that has no job
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://reconcile.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://reconcile.example/test", "j" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "reconcile test",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "k" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (doc_id, "reconcile chunk", "l" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            embedding_dimension=4,
+        )
+
+        # Run index-build to create a clean state
+        from research_store.cli import _index_build
+
+        result = _index_build(config)
+
+        # Corrupt: delete a job to create a discrepancy
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """DELETE FROM index_jobs
+                WHERE index_definition_id=%s AND status='pending'
+                LIMIT 1""",
+                (result["index_definition"]["id"],),
+            )
+
+        # Reconcile should detect the discrepancy
+        reconcile_result = _index_reconcile(config)
+        assert reconcile_result["ok"] is False
+        assert len(reconcile_result["discrepancies"]) > 0
+
+    def test_doctor_includes_index_reconcile(self, service):
+        """The doctor command includes index reconciliation checks."""
+        from research_store.cli import _doctor
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+
+        # Insert test data
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://doctor.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://doctor.example/test", "m" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "doctor test",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "n" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
+                (doc_id, "doctor chunk", "o" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            embedding_dimension=4,
+        )
+
+        # Run index-build first
+        from research_store.cli import _index_build
+
+        _index_build(config)
+
+        # Doctor should include index_reconcile
+        checks, _failed = _doctor(config)
+        assert "index_reconcile" in checks
+        assert checks["index_reconcile"]["ok"] is True
+        assert checks["index_reconcile"]["total_active_chunks"] >= 1
