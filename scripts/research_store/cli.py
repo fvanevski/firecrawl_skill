@@ -266,6 +266,8 @@ def parser():
     prune.add_argument("--keep-last", type=int, default=2)
     prune.add_argument("--index-id")
     sub.add_parser("reconcile-qdrant")
+    reconcile = sub.add_parser("index-reconcile")
+    reconcile.add_argument("--repair", action="store_true")
     sub.add_parser("prune-cache")
 
     rederive = sub.add_parser("rederive")
@@ -1424,11 +1426,7 @@ def _index_build(config, document_id=None):
         )
         manifests = cur.fetchall()
         manifest_ids = [row[0] for row in manifests]
-        requeue_ids = [
-            row[0]
-            for row in manifests
-            if row[1] not in indexed_ids or row[2] != "complete"
-        ]
+        requeue_ids = [row[0] for row in manifests if row[2] != "complete"]
         cur.execute(
             """INSERT INTO index_jobs(
             entity_type,entity_id,index_name,operation,status,manifest_id,index_definition_id)
@@ -1450,6 +1448,38 @@ def _index_build(config, document_id=None):
                 indexed_at=NULL,error=NULL WHERE id=ANY(%s)""",
                 (requeue_ids,),
             )
+        # Authoritative reconciliation: verify that every requeued manifest
+        # actually has a pending job.  The INSERT uses ON CONFLICT DO NOTHING
+        # so existing jobs are silently skipped — the UPDATE must bring them
+        # back to pending.  If the UPDATE affected fewer rows than expected
+        # we surface the discrepancy so the caller can act.
+        cur.execute(
+            """SELECT count(*) FROM index_jobs
+            WHERE manifest_id=ANY(%s) AND operation='upsert'
+            AND status='pending'""",
+            (requeue_ids,),
+        )
+        pending_verified = cur.fetchone()[0]
+        if pending_verified != len(requeue_ids):
+            raise RuntimeError(
+                f"index-build reconciliation failed: expected {len(requeue_ids)} "
+                f"pending jobs for requeued manifests, but only {pending_verified} "
+                f"are pending.  Manifests may be orphaned or have mismatched "
+                f"index_definition_id."
+            )
+        # Cache the expected Qdrant point count for doctor/reconcile.
+        # This is the number of chunks that should be indexed; the cache is
+        # updated to the live count after the worker completes all jobs.
+        point_count = len(selected_chunk_ids)
+        cur.execute(
+            """INSERT INTO index_point_counts(
+            index_definition_id,point_count,last_verified_at)
+            VALUES(%s,%s,now())
+            ON CONFLICT(index_definition_id) DO UPDATE SET
+            point_count=excluded.point_count,
+            last_verified_at=excluded.last_verified_at""",
+            (definition["id"], point_count),
+        )
     queue = ValkeyQueue(config.valkey_url)
     if manifest_ids:
         queue.notify(manifest_ids[0])
@@ -1458,6 +1488,248 @@ def _index_build(config, document_id=None):
         "selected_chunks": len(manifest_ids),
         "scheduled": len(requeue_ids),
         "qdrant_schema": schema,
+    }
+
+
+def _index_reconcile(config, repair=False):
+    """Reconcile manifests, jobs, Qdrant points, and aliases.
+
+    Returns a structured report with every count and a list of discrepancies
+    so that doctor/CI can assert correctness.
+
+    When ``repair=True``, automatically re-runs ``index-build`` for any
+    definition that has discrepancies.
+    """
+    with _db(config) as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT count(*) FROM chunks c
+            JOIN documents d ON d.id=c.document_id
+            WHERE d.parser_version=%s
+              AND d.normalization_version=%s AND c.chunker_version=%s""",
+            (
+                config.parser_version,
+                config.normalization_version,
+                config.chunker_version,
+            ),
+        )
+        total_chunks = cur.fetchone()[0]
+
+        cur.execute(
+            """SELECT m.index_definition_id,
+               count(*) FILTER(WHERE m.index_status='complete') AS complete,
+               count(*) FILTER(WHERE m.index_status='pending') AS pending,
+               count(*) FILTER(WHERE m.index_status='failed') AS failed,
+               count(*) AS total
+            FROM embedding_manifests m
+            GROUP BY m.index_definition_id"""
+        )
+        manifests_by_def = {}
+        for row in cur.fetchall():
+            def_id, complete, pending, failed, total = row
+            manifests_by_def[str(def_id)] = {
+                "complete": complete,
+                "pending": pending,
+                "failed": failed,
+                "total": total,
+            }
+
+        cur.execute(
+            """SELECT index_definition_id,
+               count(*) FILTER(WHERE status='complete') AS complete,
+               count(*) FILTER(WHERE status='pending') AS pending,
+               count(*) FILTER(WHERE status='running') AS running,
+               count(*) FILTER(WHERE status='failed') AS failed,
+               count(*) FILTER(WHERE status='dead') AS dead,
+               count(*) AS total
+            FROM index_jobs
+            GROUP BY index_definition_id"""
+        )
+        jobs_by_def = {}
+        for row in cur.fetchall():
+            def_id, complete, pending, running, failed, dead, total = row
+            jobs_by_def[str(def_id)] = {
+                "complete": complete,
+                "pending": pending,
+                "running": running,
+                "failed": failed,
+                "dead": dead,
+                "total": total,
+            }
+
+        cur.execute(
+            """SELECT id,fingerprint,physical_collection,lifecycle_status,
+               activated_at FROM index_definitions ORDER BY created_at"""
+        )
+        definitions = []
+        for row in cur.fetchall():
+            definitions.append(
+                {
+                    "id": str(row[0]),
+                    "fingerprint": row[1],
+                    "physical_collection": row[2],
+                    "lifecycle_status": row[3],
+                    "activated_at": row[4],
+                }
+            )
+
+        # Read cached Qdrant point counts.
+        cur.execute(
+            """SELECT index_definition_id,point_count,last_verified_at
+            FROM index_point_counts ORDER BY index_definition_id"""
+        )
+        point_counts = {
+            str(row[0]): {"count": row[1], "verified_at": row[2]}
+            for row in cur.fetchall()
+        }
+
+    # Qdrant reconciliation
+    aliases = _qdrant(config).list_aliases()
+    qdrant = {"ok": True, "aliases": aliases, "collections": {}}
+    discrepancies = []
+    # Track which definitions have discrepancies so repair can target them.
+    definitions_with_discrepancies: set[str] = set()
+
+    for alias_name, collection_name in aliases.items():
+        try:
+            rows = [
+                r for r in definitions if r["physical_collection"] == collection_name
+            ]
+            if not rows:
+                qdrant["collections"][collection_name] = {
+                    "alias": alias_name,
+                    "status": "orphaned",
+                    "error": "no PostgreSQL index definition",
+                }
+                discrepancies.append(
+                    f"orphaned Qdrant collection {collection_name} (alias {alias_name})"
+                )
+                continue
+            row = rows[0]
+            index = _qdrant(config, collection_name, None, None)
+            schema = index.inspect_schema()
+            cached = point_counts.get(row["id"])
+            cached_count = cached["count"] if cached else None
+            # Live scroll for missing/orphaned point-ID check.
+            point_ids, offset = set(), None
+            while True:
+                page = index.point_ids(offset, filters=_derivation_filter(config))
+                point_ids.update(str(item["id"]) for item in page.get("points", []))
+                offset = page.get("next_page_offset")
+                if not offset:
+                    break
+            collection_info = {
+                "alias": alias_name,
+                "schema": schema,
+                "point_count": len(point_ids),
+                "cached_point_count": cached_count,
+            }
+            manifest_info = manifests_by_def.get(row["id"], {})
+            job_info = jobs_by_def.get(row["id"], {})
+            complete_manifests = manifest_info.get("complete", 0)
+            complete_jobs = job_info.get("complete", 0)
+            if complete_manifests != complete_jobs:
+                discrepancies.append(
+                    f"collection {collection_name}: complete manifests "
+                    f"({complete_manifests}) != complete jobs ({complete_jobs})"
+                )
+                definitions_with_discrepancies.add(row["id"])
+            if point_ids:
+                chunk_ids = {str(value) for value in _active_chunk_ids(config)}
+                missing = chunk_ids - point_ids
+                orphaned = point_ids - chunk_ids
+                if missing:
+                    discrepancies.append(
+                        f"collection {collection_name}: {len(missing)} missing points"
+                    )
+                    definitions_with_discrepancies.add(row["id"])
+                if orphaned:
+                    discrepancies.append(
+                        f"collection {collection_name}: {len(orphaned)} orphaned points"
+                    )
+                    definitions_with_discrepancies.add(row["id"])
+            collection_info["has_discrepancies"] = (
+                row["id"] in definitions_with_discrepancies
+            )
+            qdrant["collections"][collection_name] = collection_info
+        except Exception as exc:  # noqa: BLE001
+            qdrant["collections"][collection_name] = {
+                "alias": alias_name,
+                "status": "error",
+                "error": str(exc),
+            }
+            discrepancies.append(f"Qdrant collection {collection_name}: {exc}")
+
+    # Check all definitions for manifest/job mismatches, even those without
+    # a Qdrant alias (e.g. definitions with manifests but no jobs yet).
+    for row in definitions:
+        def_id = row["id"]
+        manifest_info = manifests_by_def.get(def_id, {})
+        job_info = jobs_by_def.get(def_id, {})
+        # Missing jobs: manifests exist but no jobs created.
+        total_manifests = manifest_info.get("total", 0)
+        total_jobs = job_info.get("total", 0)
+        if total_manifests > 0 and total_jobs == 0:
+            discrepancies.append(
+                f"definition {def_id}: {total_manifests} manifests but 0 jobs"
+            )
+            definitions_with_discrepancies.add(def_id)
+        # Manifest/job count mismatch.
+        complete_manifests = manifest_info.get("complete", 0)
+        complete_jobs = job_info.get("complete", 0)
+        if complete_manifests != complete_jobs:
+            discrepancies.append(
+                f"definition {def_id}: complete manifests ({complete_manifests}) "
+                f"!= complete jobs ({complete_jobs})"
+            )
+            definitions_with_discrepancies.add(def_id)
+
+    # Repair: re-run index-build only for definitions that have discrepancies.
+    repaired = []
+    if repair and discrepancies:
+        for defn in definitions:
+            def_id = defn["id"]
+            # Only repair definitions that actually have discrepancies.
+            if def_id not in definitions_with_discrepancies:
+                continue
+            try:
+                _index_build(config, document_id=None)
+                repaired.append(def_id)
+            except Exception as exc:  # noqa: BLE001
+                discrepancies.append(f"repair failed for {def_id}: {exc}")
+        # Remove the old broken definitions so the re-check sees a clean state.
+        with _db(config) as conn, conn.cursor() as cur:
+            for def_id in repaired:
+                cur.execute(
+                    "DELETE FROM embedding_manifests WHERE index_definition_id=%s",
+                    (def_id,),
+                )
+                cur.execute(
+                    "DELETE FROM index_jobs WHERE index_definition_id=%s",
+                    (def_id,),
+                )
+                cur.execute(
+                    "DELETE FROM index_point_counts WHERE index_definition_id=%s",
+                    (def_id,),
+                )
+                cur.execute(
+                    "DELETE FROM index_definitions WHERE id=%s",
+                    (def_id,),
+                )
+        # Re-run reconciliation to get a clean result after repair,
+        # preserving the repaired list from this pass.
+        result = _index_reconcile(config, repair=False)
+        result["repaired"] = repaired
+        return result
+
+    return {
+        "total_active_chunks": total_chunks,
+        "definitions": definitions,
+        "manifests": manifests_by_def,
+        "jobs": jobs_by_def,
+        "qdrant": qdrant,
+        "discrepancies": discrepancies,
+        "ok": not discrepancies,
+        "repaired": repaired,
     }
 
 
@@ -1722,6 +1994,23 @@ def _doctor(config):
         checks["qdrant"] = qdrant
     except Exception as exc:  # noqa: BLE001
         checks["qdrant"] = {"ok": False, "error": str(exc)}
+        failed = True
+
+    try:
+        if checks.get("schema", {}).get("at_head"):
+            reconcile = _index_reconcile(config, repair=False)
+            checks["index_reconcile"] = {
+                "ok": reconcile["ok"],
+                "total_active_chunks": reconcile["total_active_chunks"],
+                "definitions": len(reconcile["definitions"]),
+                "discrepancies": reconcile["discrepancies"],
+            }
+            if not reconcile["ok"]:
+                failed = True
+        else:
+            checks["index_reconcile"] = {"ok": False, "reason": "migration required"}
+    except Exception as exc:  # noqa: BLE001
+        checks["index_reconcile"] = {"ok": False, "error": str(exc)}
         failed = True
 
     try:
@@ -2220,6 +2509,9 @@ def main(argv=None):
             )
         )
         return 0 if qdrant_ids == postgres_ids else 1
+    if args.command == "index-reconcile":
+        print(dumps(_index_reconcile(config, repair=args.repair)))
+        return 0
     if args.command == "prune-cache":
         print(dumps({"deleted": ValkeyQueue(config.valkey_url).prune_cache()}))
         return 0

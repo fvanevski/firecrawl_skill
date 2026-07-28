@@ -92,6 +92,13 @@ class QdrantIndex:
         }
 
     def ensure_schema(self):
+        """Ensure the collection exists with a dense-only schema.
+
+        Qdrant is a rebuildable projection.  When the existing collection
+        carries obsolete vector configuration (e.g. ``sparse_vectors``), drop
+        and recreate it so the authoritative PostgreSQL state can drive a
+        clean rebuild.
+        """
         status = self.inspect_schema()
         if not status["exists"]:
             self._request(
@@ -105,10 +112,26 @@ class QdrantIndex:
             )
             return {**status, "created": True, "compatible": True}
         if not status["compatible"]:
-            raise RuntimeError(
-                f"Qdrant collection {self.collection!r} schema is incompatible: "
-                f"expected {status['expected']}, found {status['actual']}"
+            # Sparse-vector or otherwise incompatible collection — drop and
+            # recreate.  Qdrant is a rebuildable projection; PostgreSQL owns
+            # the authoritative chunk state.
+            self._request("DELETE", f"/collections/{quote(self.collection, safe='')}")
+            self._request(
+                "PUT",
+                f"/collections/{quote(self.collection, safe='')}",
+                {
+                    "vectors": {
+                        "dense": {"size": self.dimension, "distance": self.distance}
+                    },
+                },
             )
+            return {
+                **status,
+                "created": True,
+                "compatible": True,
+                "recreated": True,
+                "reason": "dropped incompatible collection and recreated with dense-only schema",
+            }
         return {**status, "created": False}
 
     def upsert(self, points: list[dict], attempts: int = 5):

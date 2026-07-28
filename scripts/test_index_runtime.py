@@ -252,7 +252,9 @@ def test_qdrant_schema_rejects_unexpected_sparse_vectors():
     assert result["expected"]["sparse"] is False
 
 
-def test_qdrant_ensure_schema_raises_on_unexpected_sparse_vectors():
+def test_qdrant_ensure_schema_drops_and_recreates_sparse_vector_collection():
+    """ensure_schema no longer raises on sparse vectors — it drops and
+    recreates the collection instead (Qdrant is a rebuildable projection)."""
     qdrant = FakeQdrant(
         [
             {
@@ -264,11 +266,20 @@ def test_qdrant_ensure_schema_raises_on_unexpected_sparse_vectors():
                         }
                     }
                 }
-            }
+            },
+            {"result": {"status": "ok"}},
+            {"result": {"status": "ok"}},
         ]
     )
-    with pytest.raises(RuntimeError, match="incompatible"):
-        qdrant.ensure_schema()
+    result = qdrant.ensure_schema()
+    assert result["compatible"] is True
+    assert result["created"] is True
+    assert result["recreated"] is True
+    # Verify DELETE then PUT happened
+    assert ("DELETE", "/collections/physical", None) in qdrant.requests
+    assert any(
+        req[0] == "PUT" and "/collections/physical" in req[1] for req in qdrant.requests
+    )
 
 
 def test_qdrant_alias_switch_is_single_atomic_request():
@@ -1105,3 +1116,154 @@ def test_missing_chunk_job_is_explicitly_failed():
     # The job should have been explicitly failed in PostgreSQL.
     assert len(state.finishes) == 1
     assert state.finishes[0][2] == "embedding failed"
+
+
+# ---------------------------------------------------------------------------
+# C03: Sparse-vector collection recreation (issue #136)
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_schema_drops_sparse_vector_collection():
+    """When a collection exists with sparse_vectors, ensure_schema drops and
+    recreates it with dense-only configuration."""
+    call_log = []
+
+    class TrackingQdrant(QdrantIndex):
+        def _request(self, method, path, payload=None):
+            call_log.append((method, path))
+            if method == "GET" and "/collections/sparse" in path.lower():
+                return {
+                    "result": {
+                        "config": {
+                            "params": {
+                                "vectors": {"dense": {"size": 3, "distance": "Cosine"}},
+                                "sparse_vectors": {"sparse": {}},
+                            }
+                        }
+                    }
+                }
+            if method == "DELETE" and "/collections/sparse" in path:
+                return {"result": {"status": "ok"}}
+            if method == "PUT" and "/collections/sparse" in path:
+                return {"result": {"status": "ok"}}
+            return {"result": {"status": "ok"}}
+
+    qdrant = TrackingQdrant("http://qdrant", "", "sparse", 3, "Cosine")
+    result = qdrant.ensure_schema()
+
+    assert result["compatible"] is True
+    assert result["created"] is True
+    assert result["recreated"] is True
+    # Verify DELETE then PUT happened
+    assert ("DELETE", "/collections/sparse") in call_log
+    assert ("PUT", "/collections/sparse") in call_log
+
+
+def test_ensure_schema_new_collection():
+    """When a collection does not exist, ensure_schema creates it."""
+    from urllib.error import HTTPError
+
+    call_log = []
+
+    class TrackingQdrant(QdrantIndex):
+        def _request(self, method, path, payload=None):
+            call_log.append((method, path))
+            if method == "GET" and "/collections/new" in path:
+                raise HTTPError("http://qdrant", 404, "not found", {}, None)
+            if method == "PUT" and "/collections/new" in path:
+                return {"result": {"status": "ok"}}
+            return {"result": {"status": "ok"}}
+
+    qdrant = TrackingQdrant("http://qdrant", "", "new", 3, "Cosine")
+    result = qdrant.ensure_schema()
+
+    assert result["compatible"] is True
+    assert result["created"] is True
+    assert not result.get("recreated", False)
+    assert ("PUT", "/collections/new") in call_log
+
+
+def test_ensure_schema_compatible_collection():
+    """When a collection already has the correct schema, ensure_schema is a no-op."""
+    call_log = []
+
+    class TrackingQdrant(QdrantIndex):
+        def _request(self, method, path, payload=None):
+            call_log.append((method, path))
+            return {
+                "result": {
+                    "config": {
+                        "params": {
+                            "vectors": {"dense": {"size": 3, "distance": "Cosine"}}
+                        }
+                    }
+                }
+            }
+
+    qdrant = TrackingQdrant("http://qdrant", "", "compatible", 3, "Cosine")
+    result = qdrant.ensure_schema()
+
+    assert result["compatible"] is True
+    assert result["created"] is False
+    assert not result.get("recreated", False)
+    # Only GET called — no DELETE or PUT
+    assert call_log == [("GET", "/collections/compatible")]
+
+
+# ---------------------------------------------------------------------------
+# C03: Index reconciliation (issue #136)
+# ---------------------------------------------------------------------------
+
+# Full integration tests for _index_build reconciliation and _index_reconcile
+# are in test_research_store_integration.py (see TestIndexRebuildRecovery).
+
+
+# ---------------------------------------------------------------------------
+# C03: Sparse-vector negative tests (issue #136)
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_uses_dense_only_vectors():
+    """The upsert path builds points with dense vectors only — no sparse
+    vector keys are ever sent to Qdrant."""
+
+    call_log = []
+
+    class TrackingQdrant(QdrantIndex):
+        def _request(self, method, path, payload=None):
+            call_log.append((method, path, payload))
+            return {"result": {"status": "ok"}}
+
+    qdrant = TrackingQdrant("http://qdrant", "", "sparse-negative", 3, "Cosine")
+    qdrant.upsert([{"id": "abc", "vector": {"dense": [0.1, 0.2, 0.3]}, "payload": {}}])
+
+    # Find the PUT /points request
+    upsert_req = [r for r in call_log if r[0] == "PUT" and "/points" in r[1]]
+    assert len(upsert_req) == 1
+    payload = upsert_req[0][2]
+    # The payload must contain "points" with dense vectors only.
+    for point in payload["points"]:
+        vec = point.get("vector", {})
+        assert "sparse" not in vec
+        assert "dense" in vec
+
+
+def test_search_uses_dense_only_query():
+    """The search path uses the 'dense' named vector — no sparse query."""
+
+    call_log = []
+
+    class TrackingQdrant(QdrantIndex):
+        def _request(self, method, path, payload=None):
+            call_log.append((method, path, payload))
+            return {"result": {"points": []}}
+
+    qdrant = TrackingQdrant("http://qdrant", "", "search-negative", 3, "Cosine")
+    qdrant.search([0.1, 0.2, 0.3], {}, 10)
+
+    search_req = [r for r in call_log if r[0] == "POST" and "/query" in r[1]]
+    assert len(search_req) == 1
+    payload = search_req[0][2]
+    assert payload.get("using") == "dense"
+    # No sparse_vectors key in the query payload.
+    assert "sparse_vectors" not in payload
