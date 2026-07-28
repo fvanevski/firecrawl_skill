@@ -231,14 +231,13 @@ class MetricEngine:
                 "MetricEngine not connected. Call connect() first or use as context manager."
             )
 
-        strict = self.config.strict if hasattr(self, "config") else False
+        strict = self.config.strict if self.config else False
 
         # ------------------------------------------------------------------
         # 1. Candidate recall — versioned benchmark ground truth
         # ------------------------------------------------------------------
         relevant_paths: set[str] = set()
         distractor_paths: set[str] = set()
-        expected_source_classes: set[str] = set()
         if objective is not None:
             relevant_paths = {
                 src.file_path
@@ -250,7 +249,6 @@ class MetricEngine:
                 for src in objective.known_distractor_sources
                 if src.relevance
             }
-            expected_source_classes = set(objective.expected_source_classes)
 
         with self._connection.cursor() as cur:
             # All distinct candidate URLs for this run
@@ -306,39 +304,44 @@ class MetricEngine:
             recall_source_table = "none"
 
         # ------------------------------------------------------------------
-        # 2. Source quality — versioned benchmark source annotations
+        # 2. Source quality — URL matching against benchmark annotations
         # ------------------------------------------------------------------
         domain_count = len({d for _, d in candidates}) if candidates else 0
 
-        # Count expected-class vs. distractor hits
-        expected_hits = 0
+        # Match candidate URLs against known_relevant_sources and
+        # known_distractor_sources file_paths.  A candidate "matches" a
+        # relevant source when the source file_path appears as a substring
+        # in the candidate URL (or the URL's path component matches the
+        # file_path's basename).  This is the same matching logic used for
+        # recall, ensuring consistency.
+        relevant_hits = 0
         distractor_hits = 0
         other_hits = 0
-        for _url, domain in candidates:
-            # Use domain as a proxy for source class when expected_source_classes
-            # is available.  In a production system this would join against a
-            # source_class mapping table.
-            if expected_source_classes:
-                # Domain-based heuristic: if domain matches any expected class
-                # name (case-insensitive substring), count as expected.
-                domain_lower = domain.lower() if domain else ""
-                if any(ec.lower() in domain_lower for ec in expected_source_classes):
-                    expected_hits += 1
-                elif any(
-                    dp.split("/")[-1].lower() in domain_lower for dp in distractor_paths
-                ):
-                    distractor_hits += 1
-                else:
-                    other_hits += 1
+        for url, _domain in candidates:
+            matched_relevant = False
+            matched_distractor = False
+            for path in relevant_paths:
+                if path in url or path.split("/")[-1] in url:
+                    matched_relevant = True
+                    break
+            if matched_relevant:
+                relevant_hits += 1
+                continue
+            for path in distractor_paths:
+                if path in url or path.split("/")[-1] in url:
+                    matched_distractor = True
+                    break
+            if matched_distractor:
+                distractor_hits += 1
             else:
                 other_hits += 1
 
-        total_classified = expected_hits + distractor_hits + other_hits
+        total_classified = relevant_hits + distractor_hits + other_hits
         if total_classified > 0:
-            # Source quality = (expected_hits - distractor_penalty) / total
+            # Source quality = (relevant_hits - distractor_penalty) / total
             # Distractor hits penalize by 2× to discourage them.
             distractor_penalty = distractor_hits * 2
-            numerator = max(0, expected_hits - distractor_penalty)
+            numerator = max(0, relevant_hits - distractor_penalty)
             source_quality = min(1.0, numerator / total_classified)
         elif candidate_count > 0:
             # No source-class information — use domain diversity as weak signal
@@ -347,53 +350,47 @@ class MetricEngine:
             source_quality = 0.0
 
         source_quality_formula = (
-            f"max(0, expected_hits-{distractor_hits}*2) / total_classified"
+            f"max(0, relevant_hits-{distractor_hits}*2) / total_classified"
             if total_classified > 0
             else "domain_diversity fallback"
         )
 
         # ------------------------------------------------------------------
-        # 3. Coverage completeness — coverage event ledger
+        # 3. Coverage completeness — reconstruct projection from ALL revisions
         # ------------------------------------------------------------------
         with self._connection.cursor() as cur:
-            # Get the latest coverage revision for this run
+            # Reconstruct the final status of every coverage item by
+            # scanning ALL revisions (not just the latest).  Each event
+            # increments the coverage revision, so filtering to a single
+            # revision would miss items whose last status change occurred
+            # in an earlier revision.
             cur.execute(
-                """SELECT COALESCE(MAX(coverage_revision), 0)
+                """SELECT DISTINCT ON (item_id)
+                      item_id, new_status
                    FROM coverage_events
-                   WHERE run_id = %s""",
+                   WHERE run_id = %s
+                     AND event_type = 'item_status_changed'
+                   ORDER BY item_id, coverage_revision DESC, created_at DESC""",
                 (run_id,),
             )
-            latest_revision = cur.fetchone()[0] or 0
+            item_statuses = cur.fetchall()
 
-            if latest_revision > 0:
-                # Get the final status of each coverage item from the latest
-                # revision's item_status_changed events.
-                cur.execute(
-                    """SELECT DISTINCT ON (item_id)
-                          item_id, new_status
-                       FROM coverage_events
-                       WHERE run_id = %s
-                         AND coverage_revision = %s
-                         AND event_type = 'item_status_changed'
-                       ORDER BY item_id, created_at DESC""",
-                    (run_id, latest_revision),
-                )
-                item_statuses = cur.fetchall()
-            else:
-                item_statuses = []
-
-        # Classify items by status
+        # Classify items by status.
         # Satisfied statuses: satisfied, partially_supported
         # Applicable statuses: satisfied, partially_supported, contradicted,
-        #   qualified, unsupported, blocked, waived
+        #   qualified, supported, blocked, waived
         # Inapplicable: missing, candidate_identified, acquired, unassessed
+        #
+        # Note: "supported" is the correct PostgreSQL enum value
+        # (coverage_item_status enum has 'supported', not 'unsupported').
+        # A supported item counts as applicable but not satisfied.
         satisfied_statuses = {"satisfied", "partially_supported"}
         applicable_statuses = {
             "satisfied",
             "partially_supported",
             "contradicted",
             "qualified",
-            "unsupported",
+            "supported",
             "blocked",
             "waived",
         }
@@ -1288,7 +1285,7 @@ class ReleaseBenchmarkRunner:
                         schema_version="workflow-run-result-v1",
                         workflow_mode=run.mode,
                         quality=QualityMeasurement(
-                            schema_version="quality-measurement-v1",
+                            schema_version="quality-measurement-v2",
                             candidate_recall=0.0,
                             source_quality_score=0.0,
                             coverage_completeness=0.0,
