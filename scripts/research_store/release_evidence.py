@@ -954,7 +954,7 @@ class ReleaseEvidenceVerifier:
         return required_categories.issubset(found_categories)
 
     def _find_tracked_recovery_files(self) -> list[str]:
-        """Return tracked file paths in the repository that match recovery patterns.
+        """Return tracked ``recovery-report.txt`` in the repository index.
 
         Uses ``git ls-files`` to inspect the candidate repository's index,
         so the requirement is authoritative rather than derived from the
@@ -972,7 +972,7 @@ class ReleaseEvidenceVerifier:
         tracked: list[str] = []
         for line in result.stdout.splitlines():
             path = line.strip()
-            if "recovery" in path.lower():
+            if path == "recovery-report.txt":
                 tracked.append(path)
         return tracked
 

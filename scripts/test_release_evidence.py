@@ -2056,6 +2056,151 @@ class TestIntegration:
             assert vresult.artifacts_valid is False
             assert not vresult.passed
 
+    def test_verify_does_not_require_unrelated_recovery_files(self):
+        """A tracked file with 'recovery' in the path but not
+        ``recovery-report.txt`` does NOT trigger the recovery requirement.
+
+        Regression test: the original implementation used
+        ``"recovery" in path.lower()`` which would spuriously require a
+        recovery artifact for any tracked file matching that substring.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            # Create tracked files including a non-recovery-report file
+            # whose path contains "recovery"
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github" / "workflows").mkdir()
+            (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
+            (repo / "tests").mkdir(parents=True)
+            (repo / "tests" / "fixtures").mkdir(parents=True)
+            (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
+            (
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+            ).write_text("{}")
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "scripts" / "research_store").mkdir(parents=True)
+            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
+                "# benchmark"
+            )
+            (repo / "scripts" / "research_store" / "recovery_utils.py").write_text(
+                "# unrelated recovery helper"
+            )
+            # Create requirements file and fingerprint config for fingerprints
+            (repo / "requirements-research-store.txt").write_text(
+                "pytest==8.0.0\npsycopg==3.1.0\nqdrant-client==1.7.0\n"
+            )
+            (repo / "fingerprint-config.json").write_text(
+                json.dumps(
+                    {
+                        "service:postgresql": "postgres:16-alpine",
+                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "tokenizer:tiktoken": "tiktoken==0.7.0",
+                        "dataset:benchmark-v1": "benchmark-release-v1",
+                        "ground_truth:ground-truth-v1": "gt-v1",
+                        "hardware:cpu": "x86_64",
+                    }
+                )
+            )
+            # Commit everything — recovery_utils.py is tracked but is NOT
+            # recovery-report.txt
+            subprocess.run(
+                ["git", "add", "."], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+            sha = _current_sha(repo)
+
+            # Build a manifest without any recovery artifact
+            # (simulates a manifest that omitted the recovery entry)
+            from research_store.release_evidence import (
+                ArtifactReference,
+                Fingerprint,
+                _file_sha256,
+            )
+
+            required_fingerprints = (
+                Fingerprint(name="python", value="3.12", category="environment"),
+                Fingerprint(
+                    name="dependency:pytest",
+                    value="pytest==8.0.0",
+                    category="dependency",
+                ),
+                Fingerprint(
+                    name="service:postgresql",
+                    value="postgres:16-alpine",
+                    category="service",
+                ),
+                Fingerprint(
+                    name="model:nomic-embed-text",
+                    value="nomic-embed-text-v1.5",
+                    category="model",
+                ),
+                Fingerprint(
+                    name="tokenizer:tiktoken",
+                    value="tiktoken==0.7.0",
+                    category="tokenizer",
+                ),
+                Fingerprint(
+                    name="dataset:benchmark-v1",
+                    value="benchmark-release-v1",
+                    category="dataset",
+                ),
+                Fingerprint(
+                    name="ground_truth:ground-truth-v1",
+                    value="gt-v1",
+                    category="ground_truth",
+                ),
+                Fingerprint(name="hardware:cpu", value="x86_64", category="hardware"),
+            )
+
+            artifacts = (
+                ArtifactReference(
+                    name="ci.yml",
+                    sha256=_file_sha256(repo / ".github" / "workflows" / "ci.yml"),
+                    path=".github/workflows/ci.yml",
+                ),
+                ArtifactReference(
+                    name="benchmark-v1.json",
+                    sha256=_file_sha256(
+                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                    ),
+                    path="tests/fixtures/benchmark/benchmark-v1.json",
+                ),
+                ArtifactReference(
+                    name="release_benchmark.py",
+                    sha256=_file_sha256(
+                        repo / "scripts" / "research_store" / "release_benchmark.py"
+                    ),
+                    path="scripts/research_store/release_benchmark.py",
+                ),
+            )
+
+            manifest = _make_manifest(
+                candidate_sha=sha,
+                artifacts=artifacts,
+                fingerprints=required_fingerprints,
+            )
+            verifier = ReleaseEvidenceVerifier(manifest, repo=repo)
+            vresult = verifier.verify()
+
+            # Should PASS — recovery_utils.py is not recovery-report.txt
+            assert vresult.artifacts_valid is True
+            assert vresult.passed is True
+
     def test_required_ci_jobs_constant(self):
         """REQUIRED_CI_JOBS contains all expected job names."""
         assert "Test — Python 3.11" in REQUIRED_CI_JOBS
