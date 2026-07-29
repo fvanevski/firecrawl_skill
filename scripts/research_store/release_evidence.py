@@ -38,6 +38,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+try:
+    import yaml
+except ImportError:  # pragma: no cover
+    yaml = None  # type: ignore[assignment,misc]
+
 # ---------------------------------------------------------------------------
 # Manifest schema version
 # ---------------------------------------------------------------------------
@@ -46,6 +51,13 @@ MANIFEST_SCHEMA_VERSION = "release-evidence-manifest-v1"
 
 # ---------------------------------------------------------------------------
 # Required CI job names — every job must appear and conclude "success"
+#
+# COUPLING: These names must match the ``name:`` fields in
+# ``.github/workflows/ci.yml`` exactly (including matrix expansion).
+# Any rename, addition, or removal of a required job requires changes in
+# both files.  The ``compute_required_ci_jobs()`` function derives this
+# list from the CI YAML at runtime; this constant is provided as a
+# fallback for environments where the YAML cannot be read.
 # ---------------------------------------------------------------------------
 
 REQUIRED_CI_JOBS = (
@@ -55,6 +67,104 @@ REQUIRED_CI_JOBS = (
     "Strict Campaign (issue #144) — Python 3.11",
     "Strict Campaign (issue #144) — Python 3.12",
 )
+
+
+# ---------------------------------------------------------------------------
+# CI YAML derivation
+# ---------------------------------------------------------------------------
+
+
+def compute_required_ci_jobs(repo_path: str | Path | None = None) -> tuple[str, ...]:
+    """Derive required CI job names from ``.github/workflows/ci.yml``.
+
+    Parses the CI YAML, extracts each job's ``name:`` field, and expands
+    GitHub Actions matrix variables (e.g. ``${{ matrix.python-version }}``)
+    using the job's ``strategy.matrix`` definition.
+
+    Args:
+        repo_path: Path to the repository root.  Defaults to the directory
+            containing ``ci.yml`` (``.github/workflows/ci.yml`` relative to
+            the current working directory).
+
+    Returns:
+        A tuple of fully-expanded CI job display names.
+
+    When ``yaml`` is not installed or the CI YAML cannot be read, falls
+    back to the hardcoded ``REQUIRED_CI_JOBS`` constant.
+    """
+    if yaml is None:
+        return REQUIRED_CI_JOBS
+
+    if repo_path is None:
+        repo_path = Path.cwd()
+    ci_path = Path(repo_path) / ".github" / "workflows" / "ci.yml"
+    if not ci_path.is_file():
+        return REQUIRED_CI_JOBS
+
+    try:
+        with ci_path.open() as fh:
+            ci = yaml.safe_load(fh)
+    except (yaml.YAMLError, OSError):  # pragma: no cover
+        return REQUIRED_CI_JOBS
+
+    jobs = ci.get("jobs", {})
+    if not isinstance(jobs, dict):
+        return REQUIRED_CI_JOBS
+
+    names: list[str] = []
+    for job_def in jobs.values():
+        if not isinstance(job_def, dict):
+            continue
+        display_name = job_def.get("name")
+        if not isinstance(display_name, str):
+            continue
+
+        # Expand matrix variables in the display name.
+        matrix_vars = _extract_matrix_vars(job_def)
+        if not matrix_vars:
+            names.append(display_name)
+        else:
+            for combo in _matrix_combinations(matrix_vars):
+                expanded = display_name
+                for key, value in combo.items():
+                    expanded = expanded.replace(f"${{{{ matrix.{key} }}}}", value)
+                names.append(expanded)
+
+    return tuple(names)
+
+
+def _extract_matrix_vars(job_def: dict) -> dict[str, list[str]]:
+    """Extract matrix variable names and values from a job definition."""
+    strategy = job_def.get("strategy")
+    if not isinstance(strategy, dict):
+        return {}
+    matrix = strategy.get("matrix")
+    if not isinstance(matrix, dict):
+        return {}
+    result: dict[str, list[str]] = {}
+    for key, value in matrix.items():
+        if isinstance(value, list):
+            result[key] = [str(v) for v in value]
+    return result
+
+
+def _matrix_combinations(
+    matrix_vars: dict[str, list[str]],
+) -> list[dict[str, str]]:
+    """Generate all combinations of matrix variable values."""
+    if not matrix_vars:
+        return [{}]
+    keys = list(matrix_vars.keys())
+    combos: list[dict[str, str]] = [{}]
+    for key in keys:
+        new_combos: list[dict[str, str]] = []
+        for value in matrix_vars[key]:
+            for combo in combos:
+                new_combo = dict(combo)
+                new_combo[key] = value
+                new_combos.append(new_combo)
+        combos = new_combos
+    return combos
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +469,13 @@ class ReleaseEvidenceGenerator:
             _git(["checkout", "--quiet", original_head], self.repo)
 
     def _fetch_ci_jobs(self) -> list[dict[str, Any]]:
-        """Attempt to fetch CI job results via ``gh`` CLI."""
+        """Attempt to fetch CI job results via ``gh`` CLI.
+
+        Extracts per-job conclusions from the latest workflow run's
+        ``check_runs`` array instead of applying the overall run conclusion
+        to every job.  Jobs that do not have a matching check_run fall back
+        to the overall run conclusion.
+        """
         jobs: list[dict[str, Any]] = []
         try:
             result = subprocess.run(
@@ -387,13 +503,26 @@ class ReleaseEvidenceGenerator:
             runs = json.loads(out)
             if runs:
                 run_id = runs[0]["id"]
-                conclusion = runs[0]["conclusion"]
-                # Map to required job names
+                run_conclusion = runs[0].get("conclusion") or "pending"
+
+                # Build a mapping from check_run name -> conclusion.
+                # The check_run name matches the job's ``name:`` display name.
+                check_runs = runs[0].get("check_runs") or []
+                run_jobs: dict[str, str] = {}
+                for cr in check_runs:
+                    if isinstance(cr, dict):
+                        name = cr.get("name")
+                        conclusion = cr.get("conclusion")
+                        if name and conclusion:
+                            run_jobs[name] = conclusion
+
+                # Map to required job names, using per-job conclusions
+                # when available, falling back to the overall run conclusion.
                 for job_name in REQUIRED_CI_JOBS:
                     jobs.append(
                         {
                             "name": job_name,
-                            "conclusion": conclusion or "pending",
+                            "conclusion": run_jobs.get(job_name, run_conclusion),
                             "run_id": run_id,
                         }
                     )

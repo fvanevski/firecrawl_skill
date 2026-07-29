@@ -86,7 +86,7 @@ jobs:
             scripts/test_release_evidence.py
 
   strict-campaign:
-    name: Strict Campaign (issue #144) — Python ${{ matrix.python-version }}
+    name: "Strict Campaign (issue #144) — Python ${{ matrix.python-version }}"
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
@@ -170,7 +170,7 @@ jobs:
         run: ruff format --check --diff .
 
   release-evidence:
-    name: Release evidence (issue #145)
+    name: "Release evidence (issue #145)"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'

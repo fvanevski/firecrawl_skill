@@ -38,9 +38,12 @@ from research_store.release_evidence import (
     VerificationResult,
     _commit_count_since,
     _current_sha,
+    _extract_matrix_vars,
     _git_safe,
     _manifest_from_dict,
     _manifest_to_dict,
+    _matrix_combinations,
+    compute_required_ci_jobs,
 )
 
 # ---------------------------------------------------------------------------
@@ -1410,7 +1413,12 @@ class TestEdgeCases:
         assert vresult.ci_complete is False
 
     def test_verify_no_artifacts(self):
-        """Verification does not fail when no artifacts are recorded (optional)."""
+        """Verification marks artifacts_valid False when no artifacts are recorded.
+
+        Note: the overall ``passed`` flag is still ``False`` because the
+        required artifact categories (ci, benchmark, source, recovery) cannot
+        be satisfied without artifacts.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
@@ -1612,6 +1620,50 @@ class TestEdgeCases:
         with tempfile.TemporaryDirectory() as tmp:
             result = _git_safe(["rev-parse", "nonexistent-ref"], Path(tmp))
             assert result is None
+
+    def test_extract_matrix_vars(self):
+        """_extract_matrix_vars extracts matrix variables from a job definition."""
+        job = {"strategy": {"matrix": {"python-version": ["3.11", "3.12"]}}}
+        result = _extract_matrix_vars(job)
+        assert result == {"python-version": ["3.11", "3.12"]}
+
+    def test_extract_matrix_vars_no_strategy(self):
+        """_extract_matrix_vars returns empty dict when no strategy."""
+        assert _extract_matrix_vars({}) == {}
+
+    def test_extract_matrix_vars_no_matrix(self):
+        """_extract_matrix_vars returns empty dict when no matrix."""
+        assert _extract_matrix_vars({"strategy": {}}) == {}
+
+    def test_matrix_combinations_single_key(self):
+        """_matrix_combinations generates all values for a single key."""
+        result = _matrix_combinations({"python-version": ["3.11", "3.12"]})
+        assert len(result) == 2
+        assert {"python-version": "3.11"} in result
+        assert {"python-version": "3.12"} in result
+
+    def test_matrix_combinations_empty(self):
+        """_matrix_combinations returns [{}] for empty input."""
+        result = _matrix_combinations({})
+        assert result == [{}]
+
+    def test_compute_required_ci_jobs_from_yaml(self):
+        """compute_required_ci_jobs derives job names from ci.yml."""
+        result = compute_required_ci_jobs()
+        # Should include all jobs from the CI YAML
+        assert "Test — Python 3.11" in result
+        assert "Test — Python 3.12" in result
+        assert "Ruff" in result
+        assert "Strict Campaign (issue #144) — Python 3.11" in result
+        assert "Strict Campaign (issue #144) — Python 3.12" in result
+        assert "Release evidence (issue #145)" in result
+
+    def test_compute_required_ci_jobs_fallback(self):
+        """compute_required_ci_jobs falls back to hardcoded constant."""
+        # When called with a path that has no ci.yml, it should fall back
+        with tempfile.TemporaryDirectory() as tmp:
+            result = compute_required_ci_jobs(tmp)
+            assert result == REQUIRED_CI_JOBS
 
 
 # ---------------------------------------------------------------------------
