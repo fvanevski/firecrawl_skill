@@ -1374,13 +1374,6 @@ class TestStrictMetricCompletenessMissing:
 
         # Replicate _build_recommendation logic with strict=True.
         withdrawn: list[str] = []
-        thresholds = {
-            "min_candidate_recall": 0.5,
-            "min_source_quality_score": 0.7,
-            "min_coverage_completeness": 0.5,
-            "max_unsupported_claim_rate": 0.15,
-            "min_citation_accuracy": 0.8,
-        }
 
         mode_results: dict[str, list[WorkflowRunResult]] = {}
         for result in comparison.results:
@@ -1481,13 +1474,6 @@ class TestStrictMetricCompletenessMissing:
         )
 
         withdrawn: list[str] = []
-        thresholds = {
-            "min_candidate_recall": 0.5,
-            "min_source_quality_score": 0.7,
-            "min_coverage_completeness": 0.5,
-            "max_unsupported_claim_rate": 0.15,
-            "min_citation_accuracy": 0.8,
-        }
 
         mode_results: dict[str, list[WorkflowRunResult]] = {}
         for result in comparison.results:
