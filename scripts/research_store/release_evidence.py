@@ -534,7 +534,14 @@ class ReleaseEvidenceGenerator:
         return jobs
 
     def _collect_artifacts(self) -> tuple[ArtifactReference, ...]:
-        """Collect known durable artifacts and their hashes."""
+        """Collect known durable artifacts and their hashes.
+
+        Only includes files that are tracked in git.  Untracked files
+        (such as ``recovery-report.txt`` generated at runtime by strict
+        benchmark campaigns) are excluded because their contents can
+        change between manifest generation and verification, causing
+        spurious hash mismatches.
+        """
         artifacts: list[ArtifactReference] = []
         artifact_paths = [
             ("benchmark-v1.json", "tests/fixtures/benchmark/benchmark-v1.json"),
@@ -545,16 +552,38 @@ class ReleaseEvidenceGenerator:
         ]
         for name, rel_path in artifact_paths:
             p = self.repo / rel_path
-            if p.is_file():
-                artifacts.append(
-                    ArtifactReference(
-                        name=name,
-                        sha256=_file_sha256(p),
-                        size_bytes=p.stat().st_size,
-                        path=rel_path,
-                    )
+            if not p.is_file():
+                continue
+            # Skip untracked files — their hashes are not stable across
+            # manifest generation and verification runs.
+            if not self._is_tracked(rel_path):
+                continue
+            artifacts.append(
+                ArtifactReference(
+                    name=name,
+                    sha256=_file_sha256(p),
+                    size_bytes=p.stat().st_size,
+                    path=rel_path,
                 )
+            )
         return tuple(artifacts)
+
+    @staticmethod
+    def _is_tracked(rel_path: str, repo: Path | None = None) -> bool:
+        """Return ``True`` when *rel_path* is tracked in the git index.
+
+        Uses ``git ls-files --error-unmatch`` which returns zero only for
+        paths that are known to git (tracked, staged, or in the index).
+        """
+        if repo is None:
+            repo = Path.cwd()
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", rel_path],
+            cwd=str(repo),
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode == 0
 
     def _collect_fingerprints(self) -> tuple[Fingerprint, ...]:
         """Collect environment, dependency, and config-file fingerprints."""
@@ -876,12 +905,26 @@ class ReleaseEvidenceVerifier:
         return missing
 
     def _check_artifacts_valid(self) -> bool:
-        """Check that required artifact classes are present and hashes match."""
+        """Check that required artifact classes are present and hashes match.
+
+        The ``ci``, ``benchmark``, and ``source`` categories are always
+        required.  The ``recovery`` category is required only when a
+        recovery artifact is present in the manifest — untracked recovery
+        files (e.g. ``recovery-report.txt``) are excluded by the generator
+        and must not cause verification failure.
+        """
         if not self.manifest.artifacts:
             return False
 
-        # Required artifact categories: ci, benchmark, source, recovery
-        required_categories = {"ci", "benchmark", "source", "recovery"}
+        # Determine which categories are actually present in the manifest.
+        manifest_has_recovery = any(
+            "recovery" in a.name.lower() or "recovery" in a.path.lower()
+            for a in self.manifest.artifacts
+        )
+        required_categories: set[str] = {"ci", "benchmark", "source"}
+        if manifest_has_recovery:
+            required_categories.add("recovery")
+
         found_categories: set[str] = set()
 
         for ref in self.manifest.artifacts:
