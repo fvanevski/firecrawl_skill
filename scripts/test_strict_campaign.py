@@ -469,17 +469,20 @@ class TestStrictCampaignIntegration:
     """Integration tests that require a real PostgreSQL database."""
 
     def test_strict_campaign_with_real_db(self):
-        """Strict campaign executes against real PostgreSQL.
+        """Strict campaign fails on empty DB — no coverage metrics available.
 
         Strict mode requires complete quality metrics (coverage events, etc.).
-        When these are missing, strict mode raises RuntimeError — this is the
-        correct fail-closed behavior. We catch and verify it.
+        With an empty database, strict mode raises RuntimeError — this is the
+        correct fail-closed behavior.
         """
         database_url = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
 
         # Run with only deterministic_debug (fastest mode)
-        try:
-            rc = main(
+        with pytest.raises(
+            RuntimeError,
+            match="strict|coverage|metrics",
+        ):
+            main(
                 [
                     "--campaign-dir",
                     "/tmp/test_strict_campaign",
@@ -493,11 +496,6 @@ class TestStrictCampaignIntegration:
                     "0.15",
                 ]
             )
-            # If it succeeds, strict mode was satisfied
-            assert rc in (0, 1)
-        except RuntimeError as exc:
-            # Strict mode correctly rejects missing required metrics
-            assert "strict" in str(exc).lower() or "coverage" in str(exc).lower()
 
     @pytest.mark.skip(reason="requires full infrastructure; skip by default")
     def test_strict_campaign_artifacts_written(self):

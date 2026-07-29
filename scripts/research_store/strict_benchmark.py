@@ -306,6 +306,7 @@ def _compare_campaigns(
     result_b: ReleaseBenchmarkResult,
     campaign_dir: Path,
     reproducibility_tolerance: float,
+    dataset_path: Path,
 ) -> ReproducibilityComparison:
     """Compare two campaign runs for reproducibility.
 
@@ -314,15 +315,14 @@ def _compare_campaigns(
         result_b: Campaign B result.
         campaign_dir: Directory to write comparison artifacts to.
         reproducibility_tolerance: Tolerance to use for the comparison.
+        dataset_path: Path to the benchmark dataset used by both campaigns.
 
     Returns:
         ReproducibilityComparison.
     """
     print("[Reproducibility] Comparing Campaign A and Campaign B...")
 
-    loader = load_benchmark_dataset(
-        SCRIPTS.parent.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
-    )
+    loader = load_benchmark_dataset(dataset_path)
     config = ReleaseBenchmarkConfig(
         reproducibility_tolerance=reproducibility_tolerance,
     )
@@ -584,7 +584,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # ── Reproducibility comparison ───────────────────────────────────────
-    comparison = _compare_campaigns(result_a, result_b, campaign_dir, args.tolerance)
+    comparison = _compare_campaigns(
+        result_a, result_b, campaign_dir, args.tolerance, args.dataset
+    )
 
     # ── Build and write manifest ─────────────────────────────────────────
     manifest = _build_manifest(

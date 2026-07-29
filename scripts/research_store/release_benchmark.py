@@ -1903,8 +1903,31 @@ class ReleaseBenchmarkRunner:
         details: list[str] = []
         all_within = True
 
+        # Reject when mode/objective sets differ — strict reproducibility
+        # requires both campaigns to exercise the same (mode, objective) pairs.
+        keys_a = set(idx_a.keys())
+        keys_b = set(idx_b.keys())
+        if keys_a != keys_b:
+            all_within = False
+            only_a = keys_a - keys_b
+            only_b = keys_b - keys_a
+            if only_a:
+                details.append(
+                    f"mode/objective sets differ: missing from B: {sorted(only_a)}"
+                )
+            if only_b:
+                details.append(
+                    f"mode/objective sets differ: missing from A: {sorted(only_b)}"
+                )
+        elif not keys_a:
+            # Both empty — no runs to compare
+            all_within = False
+            details.append(
+                "no runs in either campaign — cannot compare reproducibility"
+            )
+
         # Compare all (mode, objective) pairs present in both runs
-        common_keys = set(idx_a.keys()) & set(idx_b.keys())
+        common_keys = keys_a & keys_b
         for mode, objective_id in sorted(common_keys):
             run_a = idx_a[(mode, objective_id)]
             run_b = idx_b[(mode, objective_id)]

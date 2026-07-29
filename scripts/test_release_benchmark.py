@@ -487,8 +487,8 @@ class TestReproducibilityComparison:
         assert comparison.all_within_tolerance is False
         assert len(comparison.details) > 0
 
-    def test_mismatched_modes_not_compared(self):
-        """Runs with different modes are not compared."""
+    def test_mismatched_modes_fail_reproducibility(self):
+        """Runs with different modes cause reproducibility to fail."""
         quality_a = _make_quality()
         perf_a = _make_performance()
         quality_b = _make_quality()
@@ -519,8 +519,10 @@ class TestReproducibilityComparison:
         runner = ReleaseBenchmarkRunner(loader, config)
         comparison = runner.compare_campaigns(result_a, result_b)
 
-        # No common (mode, objective) pairs — should be empty comparison
-        assert comparison.all_within_tolerance is True
+        # Mismatched modes cause reproducibility failure
+        assert comparison.all_within_tolerance is False
+        assert len(comparison.details) > 0
+        assert any("mode/objective sets differ" in d for d in comparison.details)
 
 
 # ---------------------------------------------------------------------------
