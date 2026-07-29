@@ -26,8 +26,9 @@ reproducibility, and produces a release recommendation.
 **Strict mode is mandatory and cannot be disabled.** There is no `--no-strict`
 or `--simulate` flag. When strict mode is active:
 
-- Missing, partial, estimated, or stale quality or performance metrics cause an
-  explicit `RuntimeError` rather than falling back to heuristics.
+- Missing, partial, estimated, or stale quality or performance metrics produce
+  `0.0` values with `unavailable` status and clear formulas documenting the
+  empty source, rather than falling back to heuristics.
 - Failed deterministic integrity checks force a `NO_GO` recommendation.
 - A campaign that recommends `NO_GO` causes the CLI to exit with status `1`.
 - Reproducibility differences outside the configured tolerance cause the CLI to

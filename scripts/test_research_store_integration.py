@@ -3558,52 +3558,36 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     """Verify that retrieval stage events are persisted in batch and ordered correctly by stage."""
     from types import SimpleNamespace
 
-    from scripts.research_store.service import CorpusService
+    from research_store.domain import IngestRequest
+    from research_store.service import CorpusService
 
     with service.uow_factory() as uow:
         run_id = uow.start_run("trace persistence test", {})
 
-        # Create a document and blocks/chunks so we can retrieve something
-        doc_id = uow.documents.create_document("trace_test.md")
-        block_id = uow.documents.create_block(doc_id, None, 0, "root", "h1")
-        chunk_id = uow.documents.create_chunk(
-            doc_id,
-            block_id,
-            block_id,
-            0,
-            "test chunk",
-            "hash",
-            "structural",
-            "structural-v1",
+    # Create a document with multiple chunks via the ingest path so real
+    # chunk_ids exist.  Two heading sections with enough text each exceed the
+    # 1,000-token chunk limit, guaranteeing n >= 2.
+    asset = service.ingest(
+        IngestRequest(
+            "https://trace.example/test",
+            b"# Section A\n\n" + b"A" * 600 + b"\n\n# Section B\n\n" + b"B" * 600,
         )
-        chunk_id_2 = uow.documents.create_chunk(
-            doc_id,
-            block_id,
-            block_id,
-            1,
-            "test chunk 2",
-            "hash2",
-            "structural",
-            "structural-v1",
-        )
+    )
+    chunk_ids = list(asset.chunk_ids)
 
     class IntegrationTestIndex:
         def list_aliases(self):
             return {"active": "test_collection"}
 
         def search(self, *_args):
-            # Return both chunks from semantic
+            # Return one result per chunk from semantic
             return [
                 {
                     "id": str(uuid4()),
                     "score": 0.9,
-                    "payload": {"chunk_id": str(chunk_id), "title": "Test"},
-                },
-                {
-                    "id": str(uuid4()),
-                    "score": 0.8,
-                    "payload": {"chunk_id": str(chunk_id_2), "title": "Test 2"},
-                },
+                    "payload": {"chunk_id": str(cid), "title": "Test"},
+                }
+                for cid in chunk_ids
             ]
 
     config = SimpleNamespace(
@@ -3636,20 +3620,25 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     # Verify trace order and rejection reasons
     trace = corpus_service.get_retrieval_trace(execution.execution_id)
 
-    # We should have 2 semantic and 2 fused events (since limit is 1, 1 fused selected, 1 fused rejected)
-    assert len(trace) == 4
+    # We should have N semantic and N fused events (N = number of chunks)
+    # semantic events come first, then fused events
+    n = len(chunk_ids)
+    assert len(trace) == 2 * n
 
     # Verify ordering: semantic should come before fused
-    assert trace[0]["stage"] == "semantic"
-    assert trace[1]["stage"] == "semantic"
-    assert trace[2]["stage"] == "fused"
-    assert trace[3]["stage"] == "fused"
+    for i in range(n):
+        assert trace[i]["stage"] == "semantic"
+    for i in range(n, 2 * n):
+        assert trace[i]["stage"] == "fused"
 
-    # Verify rejection reason on the second fused event
-    assert trace[2]["selected"] is True
-    assert trace[2]["rejection_reason"] is None
-    assert trace[3]["selected"] is False
-    assert trace[3]["rejection_reason"] == "below_candidate_limit"
+    # Verify candidate-limit rejection on fused entries.
+    # With candidate_limit=1 the first fused event (trace[n]) is selected,
+    # and the second fused event (trace[n + 1]) is rejected.
+    assert n >= 2, "fixture must produce at least 2 chunks"
+    assert trace[n]["selected"] is True
+    assert trace[n]["rejection_reason"] is None
+    assert trace[n + 1]["selected"] is False
+    assert trace[n + 1]["rejection_reason"] == "below_candidate_limit"
 
 
 def test_validation_stage_persistence(service):
@@ -3670,14 +3659,13 @@ def test_validation_stage_persistence(service):
     from research_store.domain import SynthesisStageRecord
 
     now = _utcnow()
-    run_id = uuid4()
     stage_id = uuid4()
 
     # --- Domain model validation ---
     # The frozenset _SYNTHESIS_STAGE_NAMES must include "validation".
     record = SynthesisStageRecord(
         id=stage_id,
-        run_id=run_id,
+        run_id=uuid4(),  # placeholder, overwritten below
         stage_name="validation",
         stage_status="completed",
         semantic_call_id=None,
@@ -3706,6 +3694,10 @@ def test_validation_stage_persistence(service):
     assert record.stage_name == "validation"
 
     # --- Database CHECK constraint ---
+    # Create a real run so the FK constraint is satisfied.
+    with service.uow_factory() as uow:
+        run_id = uow.start_run("validation stage persistence test", {})
+
     with service.uow_factory() as uow:
         # Insert via the raw dict path (what ReportArtifactService uses).
         uow.insert_synthesis_stage(

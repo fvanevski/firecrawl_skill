@@ -3649,12 +3649,14 @@ class PostgresUnitOfWork:
             "selected",
             "rejection_reason",
         )
-        placeholders = ",".join(["%s"] * len(fields))
         column_list = ",".join(fields)
+        # retrieval_execution_id is filled by execution_id (first %s);
+        # the remaining 12 fields are filled by row_values.
+        field_placeholders = ",".join(["%s"] * (len(fields) - 1))
         with self.connection.cursor() as cur:
             cur.executemany(
                 f"""INSERT INTO retrieval_events(run_id, {column_list})
-                    SELECT %s, {placeholders}
+                    SELECT research_runs.id, %s, {field_placeholders}
                     FROM research_runs WHERE id=%s AND status='running'""",
                 [
                     (
@@ -3727,14 +3729,15 @@ class PostgresUnitOfWork:
         with self.connection.cursor() as cur:
             cur.execute(
                 """INSERT INTO retrieval_executions(
-                run_id, requested_mode, executed_mode, mechanical_status,
+                id, run_id, requested_mode, executed_mode, mechanical_status,
                 component_health, errors, warnings, stage_counts,
                 index_fingerprint, filters,
                 skipped_stages, timing, config_identity
                 ) VALUES(
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )""",
                 (
+                    execution.execution_id,
                     run_id,
                     execution.requested_mode,
                     execution.executed_mode,
