@@ -107,7 +107,9 @@ jobs:
         run: |
           docker run --name pg -d -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16-alpine
           sleep 5
-          psql -h localhost -U postgres -c "CREATE DATABASE firecrawl_test;" 2>/dev/null || true
+          for i in $(seq 1 10); do
+            PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE firecrawl_test;" 2>/dev/null && break || sleep 1
+          done
 
       - name: Run strict campaign unit tests
         run: |
@@ -118,7 +120,7 @@ jobs:
 
       - name: Run strict campaign integration tests
         env:
-          RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@localhost/firecrawl_test"
+          RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_test"
           RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_test"
         run: |
           python -m pytest \
