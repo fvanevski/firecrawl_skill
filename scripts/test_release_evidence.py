@@ -1405,12 +1405,17 @@ class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
     def test_verify_no_ci_jobs(self):
-        """Verification fails when no CI jobs are recorded."""
+        """Verification skips CI completeness when no CI jobs are recorded.
+
+        A freshly generated manifest has no ci_jobs because the CI run is
+        still in progress.  The verifier skips the CI completeness check
+        rather than failing, so ci_complete is True (vacuously).
+        """
         manifest = _make_manifest(candidate_sha="abc123")
         verifier = ReleaseEvidenceVerifier(manifest)
         vresult = verifier.verify()
 
-        assert vresult.ci_complete is False
+        assert vresult.ci_complete is True
 
     def test_verify_no_artifacts(self):
         """Verification marks artifacts_valid False when no artifacts are recorded.

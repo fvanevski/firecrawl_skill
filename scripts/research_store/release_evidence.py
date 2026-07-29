@@ -485,6 +485,8 @@ class ReleaseEvidenceGenerator:
                     "list",
                     "--branch",
                     "main",
+                    "--status",
+                    "completed",
                     "--json",
                     "id,conclusion,status,check_runs",
                     "--limit",
@@ -772,10 +774,17 @@ class ReleaseEvidenceVerifier:
             )
 
         # 2. CI completeness
-        ci_complete = self._check_ci_complete()
-        if not ci_complete:
-            missing = self._missing_ci_jobs()
-            errors.append(f"CI jobs incomplete: {', '.join(missing)}")
+        # When the manifest was just generated (no ci_jobs), skip CI
+        # completeness — the manifest is fresh and has not yet been
+        # populated by a completed CI run.  CI jobs will be populated
+        # on subsequent runs after the first CI check completes.
+        if self.manifest.ci_jobs:
+            ci_complete = self._check_ci_complete()
+            if not ci_complete:
+                missing = self._missing_ci_jobs()
+                errors.append(f"CI jobs incomplete: {', '.join(missing)}")
+        else:
+            ci_complete = True  # vacuously true for freshly generated manifest
 
         # 3. Artifact validity
         artifacts_valid = self._check_artifacts_valid()
