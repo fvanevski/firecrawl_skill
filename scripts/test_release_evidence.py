@@ -1199,9 +1199,21 @@ class TestVerification:
             )
             sha = _current_sha(repo)
 
-            # Create an annotated tag (not lightweight)
+            # Create an annotated tag (not lightweight) — needs user config
             subprocess.run(
-                ["git", "tag", "-a", "v1.0.0", sha, "-m", "release tag"],
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "tag",
+                    "-a",
+                    "v1.0.0",
+                    sha,
+                    "-m",
+                    "release tag",
+                ],
                 cwd=repo,
                 capture_output=True,
                 check=True,
