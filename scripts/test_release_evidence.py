@@ -173,6 +173,61 @@ class TestManifestGeneration:
             assert "ci.yml" in artifact_names
             assert "release_benchmark.py" in artifact_names
 
+    def test_generate_excludes_untracked_files(self):
+        """Untracked files (e.g. recovery-report.txt) are excluded from artifacts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            # Create tracked files
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github" / "workflows").mkdir()
+            (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
+            (repo / "scripts").mkdir()
+            (repo / "scripts" / "research_store").mkdir(parents=True)
+            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
+                "# benchmark"
+            )
+            (repo / "scripts" / "research_store" / "workflow_benchmark.py").write_text(
+                "# workflow"
+            )
+            (repo / "tests").mkdir(parents=True)
+            (repo / "tests" / "fixtures").mkdir(parents=True)
+            (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
+            (
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+            ).write_text("{}")
+            # Create an untracked file that matches a known artifact path
+            (repo / "recovery-report.txt").write_text("untracked recovery")
+            # Commit only the tracked files
+            subprocess.run(
+                ["git", "add", "."], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+
+            gen = ReleaseEvidenceGenerator(repo, generated_by="test")
+            manifest = gen.generate()
+
+            artifact_names = {a.name for a in manifest.artifacts}
+            # Tracked files are included
+            assert "ci.yml" in artifact_names
+            assert "release_benchmark.py" in artifact_names
+            # Untracked file is excluded
+            assert "recovery-report.txt" not in artifact_names
+
     def test_generate_includes_fingerprints(self):
         """Generated manifest includes environment, dependency, and config fingerprints."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1702,8 +1757,6 @@ class TestIntegration:
             (
                 repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
             ).write_text("{}")
-            # Create recovery artifact
-            (repo / "recovery-report.txt").write_text("recovery")
             # Create a requirements file for fingerprints
             (repo / "requirements-research-store.txt").write_text(
                 "pytest==8.0.0\npsycopg==3.1.0\nqdrant-client==1.7.0\n"
@@ -1789,10 +1842,364 @@ class TestIntegration:
             # Clean up
             Path(manifest_path).unlink()
 
+    def test_full_pipeline_untracked_recovery(self):
+        """Generate + verify succeeds when recovery file is untracked.
+
+        Simulates the CI push-to-main scenario where
+        ``recovery-report.txt`` exists on disk but is not tracked in git.
+        The generator must exclude it, and the verifier must accept the
+        manifest without a recovery category.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            # Create tracked files
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github" / "workflows").mkdir()
+            (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
+            (repo / "scripts").mkdir()
+            (repo / "scripts" / "research_store").mkdir(parents=True)
+            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
+                "# benchmark"
+            )
+            (repo / "scripts" / "research_store" / "workflow_benchmark.py").write_text(
+                "# workflow"
+            )
+            (repo / "tests").mkdir(parents=True)
+            (repo / "tests" / "fixtures").mkdir(parents=True)
+            (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
+            (
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+            ).write_text("{}")
+            # Create requirements file and fingerprint config for fingerprints
+            (repo / "requirements-research-store.txt").write_text(
+                "pytest==8.0.0\npsycopg==3.1.0\nqdrant-client==1.7.0\n"
+            )
+            (repo / "fingerprint-config.json").write_text(
+                json.dumps(
+                    {
+                        "service:postgresql": "postgres:16-alpine",
+                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "tokenizer:tiktoken": "tiktoken==0.7.0",
+                        "dataset:benchmark-v1": "benchmark-release-v1",
+                        "ground_truth:ground-truth-v1": "gt-v1",
+                        "hardware:cpu": "x86_64",
+                    }
+                )
+            )
+            # Create untracked recovery file (simulates strict_benchmark output)
+            (repo / "recovery-report.txt").write_text(
+                "Recovery Report — Strict Benchmark Campaign\n"
+                "Commit: abc123\n"
+                "Campaign A: fr_test_a\n"
+                "Campaign B: fr_test_b\n"
+                "Reproducibility: PASS\n"
+            )
+            # Stage all files, then unstage the recovery file so it stays
+            # on disk but is NOT committed (simulates a runtime-generated file).
+            subprocess.run(
+                ["git", "add", "."], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                ["git", "rm", "--cached", "recovery-report.txt"],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+
+            # Generate manifest
+            ci_jobs = [
+                {
+                    "name": name,
+                    "conclusion": "success",
+                    "run_id": i + 1,
+                }
+                for i, name in enumerate(REQUIRED_CI_JOBS)
+            ]
+            gen = ReleaseEvidenceGenerator(repo, generated_by="integration-test")
+            manifest = gen.generate(ci_jobs=ci_jobs)
+
+            # Untracked recovery file must NOT be in the manifest
+            artifact_names = {a.name for a in manifest.artifacts}
+            assert "recovery-report.txt" not in artifact_names
+
+            # Update candidate_sha to current HEAD
+            current_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+                text=True,
+            ).stdout.strip()
+            manifest = ReleaseEvidenceManifest(
+                schema_version=manifest.schema_version,
+                candidate_sha=current_sha,
+                tree_hash=manifest.tree_hash,
+                generated_at=manifest.generated_at,
+                generated_by=manifest.generated_by,
+                ci_jobs=manifest.ci_jobs,
+                artifacts=manifest.artifacts,
+                fingerprints=manifest.fingerprints,
+                environment=manifest.environment,
+                post_candidate_commits=manifest.post_candidate_commits,
+                tag=manifest.tag,
+                verification_notes=manifest.verification_notes,
+            )
+
+            # Verify should PASS even though recovery-report.txt exists on disk
+            verifier = ReleaseEvidenceVerifier(manifest, repo=repo)
+            vresult = verifier.verify()
+            assert vresult.passed is True, vresult.errors
+            assert vresult.artifacts_valid is True
+
     def test_manifest_contains_required_schema_version(self):
         """The manifest always carries the correct schema version."""
         manifest = ReleaseEvidenceManifest()
         assert manifest.schema_version == "release-evidence-manifest-v1"
+
+    def test_verify_requires_tracked_recovery(self):
+        """Verification fails when the repo tracks a recovery file but the
+        manifest omits it — the requirement is derived from the repository
+        index, not from the manifest contents.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            # Create tracked files including a recovery file
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github" / "workflows").mkdir()
+            (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
+            (repo / "tests").mkdir(parents=True)
+            (repo / "tests" / "fixtures").mkdir(parents=True)
+            (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
+            (
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+            ).write_text("{}")
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "scripts" / "research_store").mkdir(parents=True)
+            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
+                "# benchmark"
+            )
+            (repo / "recovery-report.txt").write_text("tracked recovery")
+            # Commit EVERYTHING including the recovery file
+            subprocess.run(
+                ["git", "add", "."], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+            sha = _current_sha(repo)
+
+            # Create a manifest WITHOUT the recovery artifact
+            # (simulates a tampered manifest that removed the recovery entry)
+            from research_store.release_evidence import (
+                ArtifactReference,
+                _file_sha256,
+            )
+
+            artifacts = (
+                ArtifactReference(
+                    name="ci.yml",
+                    sha256=_file_sha256(repo / ".github" / "workflows" / "ci.yml"),
+                    path=".github/workflows/ci.yml",
+                ),
+                ArtifactReference(
+                    name="benchmark-v1.json",
+                    sha256=_file_sha256(
+                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                    ),
+                    path="tests/fixtures/benchmark/benchmark-v1.json",
+                ),
+                ArtifactReference(
+                    name="release_benchmark.py",
+                    sha256=_file_sha256(
+                        repo / "scripts" / "research_store" / "release_benchmark.py"
+                    ),
+                    path="scripts/research_store/release_benchmark.py",
+                ),
+                # Deliberately omit recovery-report.txt
+            )
+
+            manifest = _make_manifest(candidate_sha=sha, artifacts=artifacts)
+            verifier = ReleaseEvidenceVerifier(manifest, repo=repo)
+            vresult = verifier.verify()
+
+            # Should FAIL because the repo tracks recovery-report.txt
+            # but the manifest omits it
+            assert vresult.artifacts_valid is False
+            assert not vresult.passed
+
+    def test_verify_does_not_require_unrelated_recovery_files(self):
+        """A tracked file with 'recovery' in the path but not
+        ``recovery-report.txt`` does NOT trigger the recovery requirement.
+
+        Regression test: the original implementation used
+        ``"recovery" in path.lower()`` which would spuriously require a
+        recovery artifact for any tracked file matching that substring.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            # Create tracked files including a non-recovery-report file
+            # whose path contains "recovery"
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github" / "workflows").mkdir()
+            (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
+            (repo / "tests").mkdir(parents=True)
+            (repo / "tests" / "fixtures").mkdir(parents=True)
+            (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
+            (
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+            ).write_text("{}")
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "scripts" / "research_store").mkdir(parents=True)
+            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
+                "# benchmark"
+            )
+            (repo / "scripts" / "research_store" / "recovery_utils.py").write_text(
+                "# unrelated recovery helper"
+            )
+            # Create requirements file and fingerprint config for fingerprints
+            (repo / "requirements-research-store.txt").write_text(
+                "pytest==8.0.0\npsycopg==3.1.0\nqdrant-client==1.7.0\n"
+            )
+            (repo / "fingerprint-config.json").write_text(
+                json.dumps(
+                    {
+                        "service:postgresql": "postgres:16-alpine",
+                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "tokenizer:tiktoken": "tiktoken==0.7.0",
+                        "dataset:benchmark-v1": "benchmark-release-v1",
+                        "ground_truth:ground-truth-v1": "gt-v1",
+                        "hardware:cpu": "x86_64",
+                    }
+                )
+            )
+            # Commit everything — recovery_utils.py is tracked but is NOT
+            # recovery-report.txt
+            subprocess.run(
+                ["git", "add", "."], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+            sha = _current_sha(repo)
+
+            # Build a manifest without any recovery artifact
+            # (simulates a manifest that omitted the recovery entry)
+            from research_store.release_evidence import (
+                ArtifactReference,
+                Fingerprint,
+                _file_sha256,
+            )
+
+            required_fingerprints = (
+                Fingerprint(name="python", value="3.12", category="environment"),
+                Fingerprint(
+                    name="dependency:pytest",
+                    value="pytest==8.0.0",
+                    category="dependency",
+                ),
+                Fingerprint(
+                    name="service:postgresql",
+                    value="postgres:16-alpine",
+                    category="service",
+                ),
+                Fingerprint(
+                    name="model:nomic-embed-text",
+                    value="nomic-embed-text-v1.5",
+                    category="model",
+                ),
+                Fingerprint(
+                    name="tokenizer:tiktoken",
+                    value="tiktoken==0.7.0",
+                    category="tokenizer",
+                ),
+                Fingerprint(
+                    name="dataset:benchmark-v1",
+                    value="benchmark-release-v1",
+                    category="dataset",
+                ),
+                Fingerprint(
+                    name="ground_truth:ground-truth-v1",
+                    value="gt-v1",
+                    category="ground_truth",
+                ),
+                Fingerprint(name="hardware:cpu", value="x86_64", category="hardware"),
+            )
+
+            artifacts = (
+                ArtifactReference(
+                    name="ci.yml",
+                    sha256=_file_sha256(repo / ".github" / "workflows" / "ci.yml"),
+                    path=".github/workflows/ci.yml",
+                ),
+                ArtifactReference(
+                    name="benchmark-v1.json",
+                    sha256=_file_sha256(
+                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                    ),
+                    path="tests/fixtures/benchmark/benchmark-v1.json",
+                ),
+                ArtifactReference(
+                    name="release_benchmark.py",
+                    sha256=_file_sha256(
+                        repo / "scripts" / "research_store" / "release_benchmark.py"
+                    ),
+                    path="scripts/research_store/release_benchmark.py",
+                ),
+            )
+
+            manifest = _make_manifest(
+                candidate_sha=sha,
+                artifacts=artifacts,
+                fingerprints=required_fingerprints,
+            )
+            verifier = ReleaseEvidenceVerifier(manifest, repo=repo)
+            vresult = verifier.verify()
+
+            # Should PASS — recovery_utils.py is not recovery-report.txt
+            assert vresult.artifacts_valid is True
+            assert vresult.passed is True
 
     def test_required_ci_jobs_constant(self):
         """REQUIRED_CI_JOBS contains all expected job names."""

@@ -534,27 +534,56 @@ class ReleaseEvidenceGenerator:
         return jobs
 
     def _collect_artifacts(self) -> tuple[ArtifactReference, ...]:
-        """Collect known durable artifacts and their hashes."""
+        """Collect known durable artifacts and their hashes.
+
+        Only includes files that are tracked in git.  Untracked files
+        generated at runtime (such as benchmark recovery reports) are
+        excluded because their contents can change between manifest
+        generation and verification, causing spurious hash mismatches.
+        """
         artifacts: list[ArtifactReference] = []
         artifact_paths = [
             ("benchmark-v1.json", "tests/fixtures/benchmark/benchmark-v1.json"),
             ("ci.yml", ".github/workflows/ci.yml"),
             ("release_benchmark.py", "scripts/research_store/release_benchmark.py"),
             ("workflow_benchmark.py", "scripts/research_store/workflow_benchmark.py"),
-            ("recovery-report.txt", "recovery-report.txt"),
         ]
         for name, rel_path in artifact_paths:
             p = self.repo / rel_path
-            if p.is_file():
-                artifacts.append(
-                    ArtifactReference(
-                        name=name,
-                        sha256=_file_sha256(p),
-                        size_bytes=p.stat().st_size,
-                        path=rel_path,
-                    )
+            if not p.is_file():
+                continue
+            # Skip untracked files — their hashes are not stable across
+            # manifest generation and verification runs.
+            if not self._is_tracked(rel_path, self.repo):
+                continue
+            artifacts.append(
+                ArtifactReference(
+                    name=name,
+                    sha256=_file_sha256(p),
+                    size_bytes=p.stat().st_size,
+                    path=rel_path,
                 )
+            )
         return tuple(artifacts)
+
+    @staticmethod
+    def _is_tracked(rel_path: str, repo: Path) -> bool:
+        """Return ``True`` when *rel_path* is tracked in the git index.
+
+        Uses ``git ls-files --error-unmatch`` which returns zero only for
+        paths that are known to git (tracked, staged, or in the index).
+
+        Args:
+            rel_path: Relative file path to check.
+            repo: Path to the git repository root.
+        """
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", rel_path],
+            cwd=str(repo),
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode == 0
 
     def _collect_fingerprints(self) -> tuple[Fingerprint, ...]:
         """Collect environment, dependency, and config-file fingerprints."""
@@ -876,14 +905,20 @@ class ReleaseEvidenceVerifier:
         return missing
 
     def _check_artifacts_valid(self) -> bool:
-        """Check that required artifact classes are present and hashes match."""
+        """Check that required artifact classes are present and hashes match.
+
+        The ``ci``, ``benchmark``, and ``source`` categories are always
+        required.  The ``recovery`` category is required when the candidate
+        repository tracks recovery files — the requirement is derived from
+        the repository's index, not from the manifest being verified, so
+        removing a recovery entry from the manifest cannot bypass its hash
+        validation.
+        """
         if not self.manifest.artifacts:
             return False
 
-        # Required artifact categories: ci, benchmark, source, recovery
-        required_categories = {"ci", "benchmark", "source", "recovery"}
+        # Determine which artifact categories are present in the manifest.
         found_categories: set[str] = set()
-
         for ref in self.manifest.artifacts:
             if not ref.sha256:
                 return False
@@ -907,7 +942,39 @@ class ReleaseEvidenceVerifier:
             elif "recovery" in name_lower or "recovery" in path_lower:
                 found_categories.add("recovery")
 
+        # Required categories: ci, benchmark, source are always required.
+        required_categories: set[str] = {"ci", "benchmark", "source"}
+
+        # Recovery is required only when the candidate repository tracks
+        # recovery files — this prevents the manifest from silently
+        # omitting a tracked recovery artifact to bypass validation.
+        if self._find_tracked_recovery_files():
+            required_categories.add("recovery")
+
         return required_categories.issubset(found_categories)
+
+    def _find_tracked_recovery_files(self) -> list[str]:
+        """Return tracked ``recovery-report.txt`` in the repository index.
+
+        Uses ``git ls-files`` to inspect the candidate repository's index,
+        so the requirement is authoritative rather than derived from the
+        untrusted manifest.
+        """
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=str(self.repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return []
+        tracked: list[str] = []
+        for line in result.stdout.splitlines():
+            path = line.strip()
+            if path == "recovery-report.txt":
+                tracked.append(path)
+        return tracked
 
     def _check_fingerprints_present(self) -> bool:
         """Check that all required provenance fingerprint categories are recorded."""
