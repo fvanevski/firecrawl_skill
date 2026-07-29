@@ -1729,6 +1729,8 @@ class WorkflowRunResult:
         integrity_checks: Deterministic integrity check results.
         run_id: The research run ID (None for dry-run).
         errors: Any errors encountered during the run.
+        quality_metrics: Detailed quality metric records with status.
+        performance_metrics: Detailed performance metric records with status.
     """
 
     schema_version: str
@@ -1738,6 +1740,8 @@ class WorkflowRunResult:
     integrity_checks: tuple[DeterministicIntegrityCheck, ...]
     run_id: UUID | None
     errors: tuple[str, ...]
+    quality_metrics: tuple[object, ...] = ()
+    performance_metrics: tuple[object, ...] = ()
 
     SCHEMA_VERSION = "workflow-run-result-v1"
 

@@ -234,6 +234,19 @@ def _run_campaign(
                     }
                     if run.quality
                     else None,
+                    "quality_metrics": [
+                        {
+                            "name": qm.name,
+                            "value": qm.value,
+                            "status": qm.status.value
+                            if hasattr(qm, "status")
+                            else "measured",
+                            "formula": qm.formula,
+                        }
+                        for qm in run.quality_metrics
+                    ]
+                    if run.quality_metrics
+                    else [],
                     "performance": {
                         "total_latency_ms": run.performance.total_latency_ms
                         if run.performance
@@ -259,6 +272,19 @@ def _run_campaign(
                     }
                     if run.performance
                     else None,
+                    "performance_metrics": [
+                        {
+                            "name": pm.name,
+                            "value": pm.value,
+                            "status": pm.status.value
+                            if hasattr(pm, "status")
+                            else "measured",
+                            "formula": pm.formula,
+                        }
+                        for pm in run.performance_metrics
+                    ]
+                    if run.performance_metrics
+                    else [],
                     "errors": run.errors,
                     "integrity_checks": [
                         {

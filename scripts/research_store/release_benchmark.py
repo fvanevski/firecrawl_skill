@@ -32,6 +32,7 @@ Usage
 
 from __future__ import annotations
 
+import enum
 import logging
 import os
 import time
@@ -75,6 +76,60 @@ from .workflow_benchmark import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Metric status vocabulary — issue #158
+# ---------------------------------------------------------------------------
+
+
+class MetricStatus(str, enum.Enum):
+    """Availability/completeness state of a single metric.
+
+    The status is independent of the numeric value: a metric with value
+    ``0.0`` may be ``measured`` (genuinely zero) or ``unavailable``
+    (no authoritative source).  Strict release policy rejects
+    ``unavailable``, ``incomplete``, ``unevaluated``, ``stale``, and
+    ``invalid`` for mandatory release metrics.
+    """
+
+    #: Authoritative source exists and the value is genuinely measured.
+    MEASURED = "measured"
+    #: No authoritative source exists for this run/stage.
+    UNAVAILABLE = "unavailable"
+    #: Source exists but is incomplete (e.g. partial sample set).
+    INCOMPLETE = "incomplete"
+    #: Source exists but the metric was not evaluated.
+    UNEVALUATED = "unevaluated"
+    #: Source exists but the data is stale.
+    STALE = "stale"
+    #: Source exists but the data is invalid.
+    INVALID = "invalid"
+    #: This metric does not apply to this mode/objective pair.
+    NOT_APPLICABLE = "not_applicable"
+
+
+# Mandatory quality metrics — strict mode rejects any non-measured status.
+MANDATORY_QUALITY_METRICS = frozenset(
+    {
+        "candidate_recall",
+        "source_quality_score",
+        "coverage_completeness",
+        "unsupported_claim_rate",
+        "citation_accuracy",
+        "report_quality_score",
+    }
+)
+
+# Mandatory performance metrics — strict mode rejects any non-measured status.
+MANDATORY_PERFORMANCE_METRICS = frozenset(
+    {
+        "total_tokens",
+        "cache_hit_rate",
+        "embedding_throughput",
+        "cpu_percent",
+        "gpu_memory_mb",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Supported execution modes — genuinely distinct
@@ -125,6 +180,7 @@ class QualityMetric:
     value: float
     source: MetricSource
     formula: str  # human-readable description of how the value was computed
+    status: MetricStatus = MetricStatus.MEASURED  # issue #158
 
 
 @dataclass(frozen=True)
@@ -135,6 +191,7 @@ class PerformanceMetric:
     value: float
     source: MetricSource
     formula: str
+    status: MetricStatus = MetricStatus.MEASURED  # issue #158
 
 
 class MetricEngine:
@@ -468,12 +525,15 @@ class MetricEngine:
             # run.  Return 0.0 with a formula that documents the empty source
             # rather than falling back to a heuristic constant.
             if strict:
-                unsupported_claim_rate = 0.0
+                _unsupported_claim_status = MetricStatus.UNEVALUATED
+            else:
+                _unsupported_claim_status = MetricStatus.UNEVALUATED
+            unsupported_claim_rate = 0.0
+            if strict:
                 unsupported_formula = (
                     "0.0 — research_claims empty (no claims produced by orchestrator)"
                 )
             else:
-                unsupported_claim_rate = 0.0
                 unsupported_formula = "0.0 — no assessed claims"
             unsupported_source_table = "research_claims"
 
@@ -508,13 +568,16 @@ class MetricEngine:
             # joined with research_claims) but it was empty — the orchestrator did
             # not produce assessed claims or evidence links for this run.
             if strict:
-                citation_accuracy = 0.0
+                _citation_accuracy_status = MetricStatus.UNEVALUATED
+            else:
+                _citation_accuracy_status = MetricStatus.UNEVALUATED
+            citation_accuracy = 0.0
+            if strict:
                 citation_formula = (
                     "0.0 — no assessed claims with evidence links "
                     "(orchestrator did not produce claims)"
                 )
             else:
-                citation_accuracy = 0.0
                 citation_formula = "0.0 — no assessed claims with evidence"
             citation_source_table = "claim_evidence_links"
 
@@ -576,6 +639,17 @@ class MetricEngine:
         # ------------------------------------------------------------------
         # Build individual metric records with provenance
         # ------------------------------------------------------------------
+        # Determine status per metric: 0.0 from empty source → UNEVALUATED,
+        # genuine measurement → MEASURED.
+        _recall_status = (
+            MetricStatus.UNEVALUATED
+            if recall_source_table == "none"
+            else MetricStatus.MEASURED
+        )
+        _coverage_status = (
+            MetricStatus.UNEVALUATED if applicable_count == 0 else MetricStatus.MEASURED
+        )
+        # _unsupported_claim_status and _citation_accuracy_status set above.
         metrics = (
             QualityMetric(
                 name="candidate_recall",
@@ -587,6 +661,7 @@ class MetricEngine:
                     method="canonical_identity_match",
                 ),
                 formula=recall_formula,
+                status=_recall_status,
             ),
             QualityMetric(
                 name="source_quality_score",
@@ -598,6 +673,7 @@ class MetricEngine:
                     method="source_class_compliance",
                 ),
                 formula=source_quality_formula,
+                status=MetricStatus.MEASURED,
             ),
             QualityMetric(
                 name="coverage_completeness",
@@ -609,6 +685,7 @@ class MetricEngine:
                     method="satisfied_over_applicable",
                 ),
                 formula=coverage_formula,
+                status=_coverage_status,
             ),
             QualityMetric(
                 name="unsupported_claim_rate",
@@ -620,6 +697,9 @@ class MetricEngine:
                     method="unsupported_over_assessed",
                 ),
                 formula=unsupported_formula,
+                status=_unsupported_claim_status
+                if assessed_claims == 0
+                else MetricStatus.MEASURED,
             ),
             QualityMetric(
                 name="citation_accuracy",
@@ -631,6 +711,9 @@ class MetricEngine:
                     method="claims_with_evidence_over_assessed",
                 ),
                 formula=citation_formula,
+                status=_citation_accuracy_status
+                if total_assessed == 0
+                else MetricStatus.MEASURED,
             ),
             QualityMetric(
                 name="report_quality_score",
@@ -642,6 +725,7 @@ class MetricEngine:
                     method="versioned_rubric_v1",
                 ),
                 formula=report_quality_formula,
+                status=MetricStatus.MEASURED,
             ),
         )
 
@@ -841,6 +925,44 @@ class MetricEngine:
             cpu_percent=round(max(0.0, min(100.0, cpu_pct)), 2),
         )
 
+        # ------------------------------------------------------------------
+        # Build PerformanceMetric records with provenance and status.
+        # ------------------------------------------------------------------
+        # Strict mode: metrics with 0.0 from empty source → UNAVAILABLE.
+        _token_status = (
+            MetricStatus.UNAVAILABLE
+            if _strict_token_unavailable
+            else MetricStatus.MEASURED
+        )
+        _cache_status = (
+            MetricStatus.UNAVAILABLE
+            if _strict_cache_unavailable
+            else MetricStatus.MEASURED
+        )
+        _emb_status = (
+            MetricStatus.UNAVAILABLE
+            if _strict_embedding_unavailable
+            else MetricStatus.MEASURED
+        )
+        _cpu_status = (
+            MetricStatus.UNAVAILABLE
+            if _strict_cpu_unavailable
+            else (
+                MetricStatus.MEASURED
+                if telemetry["cpu_samples"] > 0
+                else MetricStatus.UNAVAILABLE
+            )
+        )
+        _gpu_status = (
+            MetricStatus.UNAVAILABLE
+            if _strict_telemetry_tables_absent
+            else (
+                MetricStatus.MEASURED
+                if telemetry["gpu_samples"] > 0
+                else MetricStatus.UNAVAILABLE
+            )
+        )
+
         metrics = (
             PerformanceMetric(
                 name="total_latency_ms",
@@ -852,6 +974,7 @@ class MetricEngine:
                     method="duration",
                 ),
                 formula="wall_clock_ms(monotonic_start, monotonic_end)",
+                status=MetricStatus.MEASURED,
             ),
             PerformanceMetric(
                 name="semantic_calls",
@@ -863,6 +986,7 @@ class MetricEngine:
                     method="count",
                 ),
                 formula="COUNT(*) FROM semantic_calls WHERE run_id = %s",
+                status=MetricStatus.MEASURED,
             ),
             PerformanceMetric(
                 name="total_tokens",
@@ -878,6 +1002,7 @@ class MetricEngine:
                     method=token_method,
                 ),
                 formula=token_formula,
+                status=_token_status,
             ),
             PerformanceMetric(
                 name="cache_hit_rate",
@@ -891,6 +1016,7 @@ class MetricEngine:
                     method="ratio",
                 ),
                 formula=cache_formula,
+                status=_cache_status,
             ),
             PerformanceMetric(
                 name="embedding_throughput",
@@ -906,6 +1032,7 @@ class MetricEngine:
                     method="ratio" if embedding_throughput > 0 else "unavailable",
                 ),
                 formula=emb_formula,
+                status=_emb_status,
             ),
             PerformanceMetric(
                 name="cpu_percent",
@@ -921,6 +1048,7 @@ class MetricEngine:
                     method="mean" if telemetry["cpu_samples"] > 0 else "sample",
                 ),
                 formula=cpu_formula,
+                status=_cpu_status,
             ),
             PerformanceMetric(
                 name="gpu_memory_mb",
@@ -936,6 +1064,7 @@ class MetricEngine:
                     method="mean" if telemetry["gpu_samples"] > 0 else "nvml",
                 ),
                 formula=gpu_formula,
+                status=_gpu_status,
             ),
         )
 
@@ -1648,6 +1777,8 @@ class ReleaseBenchmarkRunner:
                         integrity_checks=run.integrity_checks,
                         run_id=run.run_id or None,
                         errors=run.errors,
+                        quality_metrics=run.quality_metrics,
+                        performance_metrics=run.performance_metrics,
                     )
                 )
             else:
@@ -1680,6 +1811,8 @@ class ReleaseBenchmarkRunner:
                         integrity_checks=run.integrity_checks,
                         run_id=run.run_id or None,
                         errors=run.errors,
+                        quality_metrics=run.quality_metrics,
+                        performance_metrics=run.performance_metrics,
                     )
                 )
         return results
@@ -1862,6 +1995,38 @@ class ReleaseBenchmarkRunner:
                         f"citation_accuracy >= {min_citation} — "
                         f"{mode} achieved {result.quality.citation_accuracy:.3f}"
                     )
+
+        # P7-R09 / #158: strict fail-closed — reject when mandatory metrics
+        # are unavailable.  A metric with value 0.0 from an empty source must
+        # not be treated as a valid measurement.
+        for mode, mode_results_list in mode_results.items():
+            for result in mode_results_list:
+                # Check quality metric statuses
+                for qm in result.quality_metrics:
+                    if (
+                        qm.name in MANDATORY_QUALITY_METRICS
+                        and qm.status != MetricStatus.MEASURED
+                    ):
+                        withdrawn.append(
+                            f"quality metric {qm.name} is {qm.status.value} "
+                            f"(not measured) — {mode} cannot satisfy release policy"
+                        )
+                        break
+                else:
+                    # Check performance metric statuses
+                    for pm in result.performance_metrics:
+                        if (
+                            pm.name in MANDATORY_PERFORMANCE_METRICS
+                            and pm.status != MetricStatus.MEASURED
+                        ):
+                            withdrawn.append(
+                                f"performance metric {pm.name} is {pm.status.value} "
+                                f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+                            break
+                    else:
+                        continue
+                    break
 
         # P6: Enforce performance thresholds
         max_latency_ratio = thresholds.get("max_latency_ratio_vs_baseline")

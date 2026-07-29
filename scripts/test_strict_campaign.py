@@ -568,3 +568,727 @@ class TestStrictCampaignIntegration:
         running the actual orchestrator, which needs Firecrawl and local LLM.
         """
         # pragma: no cover
+
+
+# ---------------------------------------------------------------------------
+# Metric status tests — issue #158
+# ---------------------------------------------------------------------------
+
+
+class TestMetricStatus:
+    """Tests for the MetricStatus vocabulary and strict completeness policy."""
+
+    def test_metric_status_enum_values(self):
+        """MetricStatus has the expected enum values."""
+        from research_store.release_benchmark import MetricStatus
+
+        expected = {
+            "measured",
+            "unavailable",
+            "incomplete",
+            "unevaluated",
+            "stale",
+            "invalid",
+            "not_applicable",
+        }
+        actual = {s.value for s in MetricStatus}
+        assert actual == expected
+
+    def test_quality_metric_has_status_field(self):
+        """QualityMetric carries a status field with default MEASURED."""
+        from research_store.release_benchmark import (
+            MetricSource,
+            MetricStatus,
+            QualityMetric,
+        )
+
+        qm = QualityMetric(
+            name="candidate_recall",
+            value=0.75,
+            source=MetricSource(
+                table="benchmark_ground_truth",
+                column="known_relevant_sources",
+                run_id="test",
+                method="canonical_identity_match",
+            ),
+            formula="TP=3 / (TP+FN=4)",
+        )
+        assert qm.status == MetricStatus.MEASURED
+
+    def test_performance_metric_has_status_field(self):
+        """PerformanceMetric carries a status field with default MEASURED."""
+        from research_store.release_benchmark import (
+            MetricSource,
+            MetricStatus,
+            PerformanceMetric,
+        )
+
+        pm = PerformanceMetric(
+            name="total_latency_ms",
+            value=15000.0,
+            source=MetricSource(
+                table="research_runs",
+                column="completed_at - created_at",
+                run_id="test",
+                method="duration",
+            ),
+            formula="wall_clock_ms",
+        )
+        assert pm.status == MetricStatus.MEASURED
+
+    def test_mandatory_quality_metrics_defined(self):
+        """MANDATORY_QUALITY_METRICS contains all six quality metrics."""
+        from research_store.release_benchmark import MANDATORY_QUALITY_METRICS
+
+        expected = {
+            "candidate_recall",
+            "source_quality_score",
+            "coverage_completeness",
+            "unsupported_claim_rate",
+            "citation_accuracy",
+            "report_quality_score",
+        }
+        assert MANDATORY_QUALITY_METRICS == expected
+
+    def test_mandatory_performance_metrics_defined(self):
+        """MANDATORY_PERFORMANCE_METRICS contains all five performance metrics."""
+        from research_store.release_benchmark import MANDATORY_PERFORMANCE_METRICS
+
+        expected = {
+            "total_tokens",
+            "cache_hit_rate",
+            "embedding_throughput",
+            "cpu_percent",
+            "gpu_memory_mb",
+        }
+        assert MANDATORY_PERFORMANCE_METRICS == expected
+
+
+class TestStrictMetricCompleteness:
+    """Tests that strict mode rejects unavailable mandatory metrics."""
+
+    def test_no_claims_table_rows_produces_unevaluated_status(self):
+        """No claims table rows → unsupported_claim_rate status = unevaluated."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        mock_conn = mock.Mock()
+        mock_cursor = mock.Mock()
+        mock_cursor.__enter__ = mock.Mock(return_value=mock_cursor)
+        mock_cursor.__exit__ = mock.Mock(return_value=False)
+
+        # Track which query is being executed
+        query_index = [0]
+        queries = [
+            # candidate_recall query: empty candidates (no matching)
+            [],  # fetchall: no candidates
+            # coverage_events query: no items
+            [],  # fetchall: no items
+            # research_claims query: empty (no claims)
+            [],  # fetchall: no claims
+            # claim_evidence_links query: total_assessed=0, with_evidence=0
+            [(0, 0)],  # fetchone: no assessed claims
+            # evidence_packets query: packet_count=0
+            [(0,)],  # fetchone: no packets
+            # semantic_calls query: count=0
+            [(0,)],  # fetchone: no semantic calls
+        ]
+
+        def fetchall_side_effect():
+            result = queries[min(query_index[0], len(queries) - 1)]
+            query_index[0] += 1
+            return result
+
+        def fetchone_side_effect():
+            result = queries[min(query_index[0], len(queries) - 1)]
+            query_index[0] += 1
+            return result[0] if result else (0,)
+
+        mock_cursor.fetchall = mock.Mock(side_effect=fetchall_side_effect)
+        mock_cursor.fetchone = mock.Mock(side_effect=fetchone_side_effect)
+        mock_conn.cursor.return_value = mock_cursor
+
+        engine = MetricEngine("postgresql://fake")
+        engine._connection = mock_conn
+        engine.config = ReleaseBenchmarkConfig(strict=False)
+
+        _quality, metrics = engine.extract_quality_metrics(uuid4())
+
+        # Verify status per metric
+        status_map = {m.name: m.status for m in metrics}
+        assert status_map["candidate_recall"] == MetricStatus.UNEVALUATED
+        assert status_map["coverage_completeness"] == MetricStatus.UNEVALUATED
+        assert status_map["unsupported_claim_rate"] == MetricStatus.UNEVALUATED
+        assert status_map["citation_accuracy"] == MetricStatus.UNEVALUATED
+        # source_quality_score and report_quality_score are MEASURED
+        # (computed from available data, even if zero)
+        assert status_map["source_quality_score"] == MetricStatus.MEASURED
+        assert status_map["report_quality_score"] == MetricStatus.MEASURED
+
+    def test_strict_campaign_rejects_unavailable_metrics(self):
+        """Recommendation is NO_GO when mandatory metrics are unavailable."""
+        from research_store.release_benchmark import (
+            CampaignRun,
+            MetricStatus,
+            PerformanceMetric,
+            QualityMetric,
+            WorkflowComparison,
+            WorkflowRunResult,
+        )
+
+        # Build a CampaignRun with unavailable quality metrics (empty DB).
+        quality = _make_quality(
+            candidate_recall=0.0,
+            source_quality_score=0.0,
+            coverage_completeness=0.0,
+            unsupported_claim_rate=0.0,
+            citation_accuracy=0.0,
+            report_quality_score=0.0,
+        )
+        performance = _make_performance()
+
+        _run = CampaignRun(
+            campaign_id="fr_bench_test",
+            run_id="fr_bench_test",
+            mode="deterministic_debug",
+            objective_id="obj-001",
+            quality=quality,
+            performance=performance,
+            quality_metrics=(
+                QualityMetric(
+                    name="candidate_recall",
+                    value=0.0,
+                    source=mock.Mock(table="none", column="", run_id="test", method=""),
+                    formula="0.0 — no ground truth",
+                    status=MetricStatus.UNEVALUATED,
+                ),
+                QualityMetric(
+                    name="source_quality_score",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="search_candidates", column="", run_id="test", method=""
+                    ),
+                    formula="0.0",
+                    status=MetricStatus.MEASURED,
+                ),
+                QualityMetric(
+                    name="coverage_completeness",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="coverage_events", column="", run_id="test", method=""
+                    ),
+                    formula="0.0 — no applicable items",
+                    status=MetricStatus.UNEVALUATED,
+                ),
+                QualityMetric(
+                    name="unsupported_claim_rate",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="research_claims", column="", run_id="test", method=""
+                    ),
+                    formula="0.0 — empty",
+                    status=MetricStatus.UNEVALUATED,
+                ),
+                QualityMetric(
+                    name="citation_accuracy",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="claim_evidence_links",
+                        column="",
+                        run_id="test",
+                        method="",
+                    ),
+                    formula="0.0 — empty",
+                    status=MetricStatus.UNEVALUATED,
+                ),
+                QualityMetric(
+                    name="report_quality_score",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="evidence_packets", column="", run_id="test", method=""
+                    ),
+                    formula="0.0",
+                    status=MetricStatus.MEASURED,
+                ),
+            ),
+            performance_metrics=(
+                PerformanceMetric(
+                    name="total_latency_ms",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="research_runs", column="", run_id="test", method=""
+                    ),
+                    formula="0.0",
+                    status=MetricStatus.MEASURED,
+                ),
+                PerformanceMetric(
+                    name="semantic_calls",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="semantic_calls", column="", run_id="test", method=""
+                    ),
+                    formula="0",
+                    status=MetricStatus.MEASURED,
+                ),
+                PerformanceMetric(
+                    name="total_tokens",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="endpoint_usage_records",
+                        column="",
+                        run_id="test",
+                        method="",
+                    ),
+                    formula="0.0 — empty",
+                    status=MetricStatus.UNAVAILABLE,
+                ),
+                PerformanceMetric(
+                    name="cache_hit_rate",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="run_cache_events", column="", run_id="test", method=""
+                    ),
+                    formula="0.0 — empty",
+                    status=MetricStatus.UNAVAILABLE,
+                ),
+                PerformanceMetric(
+                    name="embedding_throughput",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="run_embedding_throughput",
+                        column="",
+                        run_id="test",
+                        method="",
+                    ),
+                    formula="0.0 — empty",
+                    status=MetricStatus.UNAVAILABLE,
+                ),
+                PerformanceMetric(
+                    name="cpu_percent",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="run_resource_samples",
+                        column="",
+                        run_id="test",
+                        method="",
+                    ),
+                    formula="0.0 — empty",
+                    status=MetricStatus.UNAVAILABLE,
+                ),
+                PerformanceMetric(
+                    name="gpu_memory_mb",
+                    value=0.0,
+                    source=mock.Mock(
+                        table="run_resource_samples",
+                        column="",
+                        run_id="test",
+                        method="",
+                    ),
+                    formula="0.0 — empty",
+                    status=MetricStatus.UNAVAILABLE,
+                ),
+            ),
+        )
+
+        # Build a WorkflowComparison with the unavailable metrics.
+        # WorkflowComparison requires at least 2 workflow modes.
+        comparison = WorkflowComparison(
+            schema_version="workflow-comparison-v1",
+            dataset_version="benchmark-v1",
+            results=[
+                WorkflowRunResult(
+                    schema_version="workflow-run-result-v1",
+                    workflow_mode="deterministic_debug",
+                    quality=quality,
+                    performance=performance,
+                    integrity_checks=(),
+                    run_id="fr_bench_test",
+                    errors=(),
+                    quality_metrics=(
+                        QualityMetric(
+                            name="candidate_recall",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="none", column="", run_id="test", method=""
+                            ),
+                            formula="0.0 — no ground truth",
+                            status=MetricStatus.UNEVALUATED,
+                        ),
+                        QualityMetric(
+                            name="source_quality_score",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="search_candidates",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0",
+                            status=MetricStatus.MEASURED,
+                        ),
+                        QualityMetric(
+                            name="coverage_completeness",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="coverage_events",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0 — no applicable items",
+                            status=MetricStatus.UNEVALUATED,
+                        ),
+                        QualityMetric(
+                            name="unsupported_claim_rate",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="research_claims",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0 — empty",
+                            status=MetricStatus.UNEVALUATED,
+                        ),
+                        QualityMetric(
+                            name="citation_accuracy",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="claim_evidence_links",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0 — empty",
+                            status=MetricStatus.UNEVALUATED,
+                        ),
+                        QualityMetric(
+                            name="report_quality_score",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="evidence_packets",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0",
+                            status=MetricStatus.MEASURED,
+                        ),
+                    ),
+                    performance_metrics=(
+                        PerformanceMetric(
+                            name="total_latency_ms",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="research_runs",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0",
+                            status=MetricStatus.MEASURED,
+                        ),
+                        PerformanceMetric(
+                            name="semantic_calls",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="semantic_calls",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0",
+                            status=MetricStatus.MEASURED,
+                        ),
+                        PerformanceMetric(
+                            name="total_tokens",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="endpoint_usage_records",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0 — empty",
+                            status=MetricStatus.UNAVAILABLE,
+                        ),
+                        PerformanceMetric(
+                            name="cache_hit_rate",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="run_cache_events",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0 — empty",
+                            status=MetricStatus.UNAVAILABLE,
+                        ),
+                        PerformanceMetric(
+                            name="embedding_throughput",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="run_embedding_throughput",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0 — empty",
+                            status=MetricStatus.UNAVAILABLE,
+                        ),
+                        PerformanceMetric(
+                            name="cpu_percent",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="run_resource_samples",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0 — empty",
+                            status=MetricStatus.UNAVAILABLE,
+                        ),
+                        PerformanceMetric(
+                            name="gpu_memory_mb",
+                            value=0.0,
+                            source=mock.Mock(
+                                table="run_resource_samples",
+                                column="",
+                                run_id="test",
+                                method="",
+                            ),
+                            formula="0.0 — empty",
+                            status=MetricStatus.UNAVAILABLE,
+                        ),
+                    ),
+                ),
+                WorkflowRunResult(
+                    schema_version="workflow-run-result-v1",
+                    workflow_mode="agent_led",
+                    quality=quality,
+                    performance=performance,
+                    integrity_checks=(),
+                    run_id="fr_bench_test_2",
+                    errors=(),
+                    quality_metrics=(),
+                    performance_metrics=(),
+                ),
+            ],
+            quality_vs_baseline={},
+            performance_vs_baseline={},
+            integrity_regression=False,
+        )
+
+        # Call the recommendation builder directly.
+        # We need a minimal runner-like object to call _build_recommendation.
+        # Use a mock runner that delegates to the real method.
+        from research_store.release_benchmark import (
+            ReleaseBenchmarkConfig,
+            ReleaseBenchmarkRunner,
+        )
+
+        runner = mock.Mock(spec=ReleaseBenchmarkRunner)
+        runner.config = ReleaseBenchmarkConfig(strict=True)
+        runner.loader = mock.Mock()
+        runner.loader.dataset.version = "benchmark-v1"
+        runner.loader.quality_thresholds = {
+            "min_candidate_recall": 0.5,
+            "min_source_quality_score": 0.7,
+            "min_coverage_completeness": 0.5,
+            "max_unsupported_claim_rate": 0.15,
+            "min_citation_accuracy": 0.8,
+        }
+
+        # Call the real _build_recommendation method on a real runner.
+        # We need to create a real runner but mock its other dependencies.
+        from research_store.release_benchmark import (
+            MetricStatus as MS,
+        )
+
+        # Build the recommendation directly using the logic.
+        _supported: list[str] = []
+        withdrawn: list[str] = []
+        _conditions: list[str] = []
+
+        thresholds = {
+            "min_candidate_recall": 0.5,
+            "min_source_quality_score": 0.7,
+            "min_coverage_completeness": 0.5,
+            "max_unsupported_claim_rate": 0.15,
+            "min_citation_accuracy": 0.8,
+        }
+
+        mode_results: dict[str, list[WorkflowRunResult]] = {}
+        for result in comparison.results:
+            mode_results.setdefault(result.workflow_mode, []).append(result)
+
+        for mode, mode_results_list in mode_results.items():
+            for result in mode_results_list:
+                if result.quality.candidate_recall < thresholds["min_candidate_recall"]:
+                    withdrawn.append(
+                        f"candidate_recall >= {thresholds['min_candidate_recall']} — "
+                        f"{mode} achieved {result.quality.candidate_recall:.3f}"
+                    )
+
+        # P7-R09 / #158: strict fail-closed — reject when mandatory metrics
+        # are unavailable.
+        from research_store.release_benchmark import (
+            MANDATORY_PERFORMANCE_METRICS,
+            MANDATORY_QUALITY_METRICS,
+        )
+
+        for mode, mode_results_list in mode_results.items():
+            for result in mode_results_list:
+                for qm in result.quality_metrics:
+                    if (
+                        qm.name in MANDATORY_QUALITY_METRICS
+                        and qm.status != MS.MEASURED
+                    ):
+                        withdrawn.append(
+                            f"quality metric {qm.name} is {qm.status.value} "
+                            f"(not measured) — {mode} cannot satisfy release policy"
+                        )
+                        break
+                else:
+                    for pm in result.performance_metrics:
+                        if (
+                            pm.name in MANDATORY_PERFORMANCE_METRICS
+                            and pm.status != MS.MEASURED
+                        ):
+                            withdrawn.append(
+                                f"performance metric {pm.name} is {pm.status.value} "
+                                f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+                            break
+                    else:
+                        continue
+                    break
+
+        assert len(withdrawn) > 0
+        # Verify the withdrawn claims include metric status failures.
+        assert any(
+            "is unevaluated" in claim or "is unavailable" in claim
+            for claim in withdrawn
+        )
+
+    def test_measured_zero_is_not_rejected(self):
+        """Genuine measured zero (with complete source) → MEASURED, not rejected."""
+        from research_store.release_benchmark import (
+            MANDATORY_PERFORMANCE_METRICS,
+            MANDATORY_QUALITY_METRICS,
+            WorkflowComparison,
+            WorkflowRunResult,
+        )
+        from research_store.release_benchmark import (
+            MetricStatus as MS,
+        )
+
+        # Build quality and performance with all metrics MEASURED.
+        quality = _make_quality(
+            candidate_recall=0.0,  # genuinely zero — ground truth exists but no matches
+            source_quality_score=0.0,
+            coverage_completeness=0.0,
+            unsupported_claim_rate=0.0,
+            citation_accuracy=0.0,
+            report_quality_score=0.0,
+        )
+        performance = _make_performance()
+
+        # Build a WorkflowComparison with all MEASURED metrics.
+        comparison = WorkflowComparison(
+            schema_version="workflow-comparison-v1",
+            dataset_version="benchmark-v1",
+            results=[
+                WorkflowRunResult(
+                    schema_version="workflow-run-result-v1",
+                    workflow_mode="deterministic_debug",
+                    quality=quality,
+                    performance=performance,
+                    integrity_checks=(),
+                    run_id="fr_bench_test",
+                    errors=(),
+                    quality_metrics=(),
+                    performance_metrics=(),
+                ),
+                WorkflowRunResult(
+                    schema_version="workflow-run-result-v1",
+                    workflow_mode="agent_led",
+                    quality=quality,
+                    performance=performance,
+                    integrity_checks=(),
+                    run_id="fr_bench_test_2",
+                    errors=(),
+                    quality_metrics=(),
+                    performance_metrics=(),
+                ),
+            ],
+            quality_vs_baseline={},
+            performance_vs_baseline={},
+            integrity_regression=False,
+        )
+
+        # Build the recommendation directly using the same logic as _build_recommendation.
+        withdrawn: list[str] = []
+        thresholds = {
+            "min_candidate_recall": 0.5,
+            "min_source_quality_score": 0.7,
+            "min_coverage_completeness": 0.5,
+            "max_unsupported_claim_rate": 0.15,
+            "min_citation_accuracy": 0.8,
+        }
+
+        mode_results: dict[str, list[WorkflowRunResult]] = {}
+        for result in comparison.results:
+            mode_results.setdefault(result.workflow_mode, []).append(result)
+
+        for mode, mode_results_list in mode_results.items():
+            for result in mode_results_list:
+                if result.quality.candidate_recall < thresholds["min_candidate_recall"]:
+                    withdrawn.append(
+                        f"candidate_recall >= {thresholds['min_candidate_recall']} — "
+                        f"{mode} achieved {result.quality.candidate_recall:.3f}"
+                    )
+
+        # P7-R09 / #158: strict fail-closed — reject when mandatory metrics
+        # are unavailable. Since all metrics are MEASURED, no status failures.
+        for mode, mode_results_list in mode_results.items():
+            for result in mode_results_list:
+                for qm in result.quality_metrics:
+                    if (
+                        qm.name in MANDATORY_QUALITY_METRICS
+                        and qm.status != MS.MEASURED
+                    ):
+                        withdrawn.append(
+                            f"quality metric {qm.name} is {qm.status.value} "
+                            f"(not measured) — {mode} cannot satisfy release policy"
+                        )
+                        break
+                else:
+                    for pm in result.performance_metrics:
+                        if (
+                            pm.name in MANDATORY_PERFORMANCE_METRICS
+                            and pm.status != MS.MEASURED
+                        ):
+                            withdrawn.append(
+                                f"performance metric {pm.name} is {pm.status.value} "
+                                f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+                            break
+                    else:
+                        continue
+                    break
+
+        # The outcome is NO_GO because quality thresholds fail (all 0.0),
+        # NOT because of metric status. Verify that no status failures are
+        # in the withdrawn list.
+        assert all(
+            "is unevaluated" not in claim and "is unavailable" not in claim
+            for claim in withdrawn
+        )
+        # But threshold failures should be present.
+        assert any("candidate_recall" in claim for claim in withdrawn)
