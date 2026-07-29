@@ -164,7 +164,11 @@ class TestTelemetryLifecycle:
         assert summary.strict_pass is False  # No embedding telemetry
 
     def test_strict_mode_rejects_empty_telemetry(self, telemetry_connection):
-        """Strict mode must fail when telemetry tables exist but are empty."""
+        """Strict mode must produce 0.0 metrics with UNAVAILABLE status.
+
+        Strict mode no longer raises RuntimeError for empty telemetry.
+        Instead it produces 0.0 metrics with clear UNAVAILABLE status.
+        """
         run_id = uuid4()
 
         # Create a research run row.
@@ -193,9 +197,11 @@ class TestTelemetryLifecycle:
             strict=True,
         )
 
-        # Strict mode should raise because token_source is unavailable.
-        with pytest.raises(RuntimeError, match="Strict mode:"):
-            engine.extract_performance_metrics(run_id, 0.0)
+        # Strict mode produces 0.0 metrics with UNAVAILABLE status.
+        performance, metrics = engine.extract_performance_metrics(run_id, 0.0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+        assert cache_metric.status == MetricStatus.UNAVAILABLE
+        assert cache_metric.value == 0.0
 
     def test_cache_stats_query(self, telemetry_connection):
         """Cache stats correctly count lookups, hits, and misses."""
@@ -364,6 +370,7 @@ class TestRunScopedCacheIsolation:
             )
 
         engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
         engine.config = ReleaseBenchmarkConfig(
             database_url=TEST_DSN,
             blob_root=Path("/tmp"),
@@ -429,6 +436,7 @@ class TestRunScopedCacheIsolation:
             )
 
         engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
         engine.config = ReleaseBenchmarkConfig(
             database_url=TEST_DSN,
             blob_root=Path("/tmp"),
@@ -486,6 +494,7 @@ class TestRunScopedCacheIsolation:
                 )
 
         engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
         engine.config = ReleaseBenchmarkConfig(
             database_url=TEST_DSN,
             blob_root=Path("/tmp"),
