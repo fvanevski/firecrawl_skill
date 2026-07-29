@@ -1537,6 +1537,10 @@ class TestStrictMetricCompletenessMissing:
 class TestStatusSerialization:
     """Integration test verifying status fields are serialized in result.json."""
 
+    @pytest.mark.skipif(
+        not os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL"),
+        reason="requires real PostgreSQL (set RESEARCH_STORE_TEST_DATABASE_URL)",
+    )
     def test_status_fields_serialized_in_result_json(self):
         """Strict campaign produces result.json with quality/perf metrics arrays.
 
