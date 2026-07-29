@@ -3564,11 +3564,13 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     with service.uow_factory() as uow:
         run_id = uow.start_run("trace persistence test", {})
 
-    # Create a document with chunks via the ingest path so real chunk_ids exist.
+    # Create a document with multiple chunks via the ingest path so real
+    # chunk_ids exist.  Two heading sections with enough text each exceed the
+    # 1,000-token chunk limit, guaranteeing n >= 2.
     asset = service.ingest(
         IngestRequest(
             "https://trace.example/test",
-            b"# Trace test\n\nTwo chunks here.",
+            b"# Section A\n\n" + b"A" * 600 + b"\n\n# Section B\n\n" + b"B" * 600,
         )
     )
     chunk_ids = list(asset.chunk_ids)
@@ -3629,12 +3631,14 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     for i in range(n, 2 * n):
         assert trace[i]["stage"] == "fused"
 
-    # Verify rejection reason on the second fused event (if there are >= 2 chunks)
-    if n >= 2:
-        assert trace[n - 1]["selected"] is True
-        assert trace[n - 1]["rejection_reason"] is None
-        assert trace[n]["selected"] is False
-        assert trace[n]["rejection_reason"] == "below_candidate_limit"
+    # Verify candidate-limit rejection on fused entries.
+    # With candidate_limit=1 the first fused event (trace[n]) is selected,
+    # and the second fused event (trace[n + 1]) is rejected.
+    assert n >= 2, "fixture must produce at least 2 chunks"
+    assert trace[n]["selected"] is True
+    assert trace[n]["rejection_reason"] is None
+    assert trace[n + 1]["selected"] is False
+    assert trace[n + 1]["rejection_reason"] == "below_candidate_limit"
 
 
 def test_validation_stage_persistence(service):
