@@ -42,20 +42,7 @@
       "type": "integer"
     }
   },
-  "required": [
-    "schema_version",
-    "run_id",
-    "call_id",
-    "endpoint_type",
-    "provider",
-    "model",
-    "model_revision",
-    "prompt_tokens",
-    "completion_tokens",
-    "total_tokens",
-    "source",
-    "metric_version"
-  ],
+  "required": [],
   "title": "EndpointUsageRecord",
   "type": "object"
 }

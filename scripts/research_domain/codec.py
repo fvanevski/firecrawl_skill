@@ -235,11 +235,17 @@ def schema_for(model_type) -> dict:
         version = getattr(annotation, "SCHEMA_VERSION", None)
         if version and "schema_version" in properties:
             properties["schema_version"] = {"type": "string", "const": version}
+        # Only fields without defaults are required in JSON Schema.
+        required = [
+            item.name
+            for item in fields(annotation)
+            if item.default is MISSING and item.default_factory is MISSING
+        ]
         return {
             "type": "object",
             "additionalProperties": False,
             "properties": properties,
-            "required": [item.name for item in fields(annotation)],
+            "required": required,
         }
 
     root = build(model_type, root=True)

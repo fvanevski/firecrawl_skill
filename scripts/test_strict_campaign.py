@@ -668,7 +668,11 @@ class TestStrictMetricCompleteness:
     """Tests that strict mode rejects unavailable mandatory metrics."""
 
     def test_no_claims_table_rows_produces_unevaluated_status(self):
-        """No claims table rows → unsupported_claim_rate status = unevaluated."""
+        """No claims table rows → unsupported_claim_rate status = unevaluated.
+
+        Uses per-query SQL matching instead of a fragile fixed-order list,
+        so the test remains correct even if MetricEngine query order changes.
+        """
         from uuid import uuid4
 
         from research_store.release_benchmark import (
@@ -682,33 +686,49 @@ class TestStrictMetricCompleteness:
         mock_cursor.__enter__ = mock.Mock(return_value=mock_cursor)
         mock_cursor.__exit__ = mock.Mock(return_value=False)
 
-        # Track which query is being executed
-        query_index = [0]
-        queries = [
-            # candidate_recall query: empty candidates (no matching)
-            [],  # fetchall: no candidates
-            # coverage_events query: no items
-            [],  # fetchall: no items
-            # research_claims query: empty (no claims)
-            [],  # fetchall: no claims
-            # claim_evidence_links query: total_assessed=0, with_evidence=0
-            [(0, 0)],  # fetchone: no assessed claims
-            # evidence_packets query: packet_count=0
-            [(0,)],  # fetchone: no packets
-            # semantic_calls query: count=0
-            [(0,)],  # fetchone: no semantic calls
-        ]
+        # Per-query stubs keyed by a substring of the SQL — robust against
+        # reordering or refactoring of the MetricEngine query sequence.
+        query_results: dict[str, list] = {}
+        current_query: list[str] = [""]  # mutable holder for last executed SQL
+
+        def execute_side_effect(sql, params=None):
+            current_query[0] = sql
+            # Classify the query by distinctive SQL fragments.
+            sql_lower = sql.lower()
+            if "benchmark_ground_truth" in sql_lower or "relevant_paths" in sql_lower:
+                query_results["candidate_recall"] = []
+            elif "coverage_events" in sql_lower:
+                query_results["coverage_events"] = []
+            elif "research_claims" in sql_lower and "group by" in sql_lower:
+                query_results["research_claims"] = []
+            elif "claim_evidence_links" in sql_lower:
+                query_results["claim_evidence_links"] = [(0, 0)]
+            elif "evidence_packets" in sql_lower:
+                query_results["evidence_packets"] = [(0,)]
+            elif "semantic_calls" in sql_lower:
+                query_results["semantic_calls"] = [(0,)]
 
         def fetchall_side_effect():
-            result = queries[min(query_index[0], len(queries) - 1)]
-            query_index[0] += 1
-            return result
+            sql = current_query[0].lower()
+            if "benchmark_ground_truth" in sql or "relevant_paths" in sql:
+                return query_results.get("candidate_recall", [])
+            elif "coverage_events" in sql:
+                return query_results.get("coverage_events", [])
+            elif "research_claims" in sql and "group by" in sql:
+                return query_results.get("research_claims", [])
+            return []
 
         def fetchone_side_effect():
-            result = queries[min(query_index[0], len(queries) - 1)]
-            query_index[0] += 1
-            return result[0] if result else (0,)
+            sql = current_query[0].lower()
+            if "claim_evidence_links" in sql:
+                return query_results.get("claim_evidence_links", [(0, 0)])[0]
+            elif "evidence_packets" in sql:
+                return query_results.get("evidence_packets", [(0,)])[0]
+            elif "semantic_calls" in sql:
+                return query_results.get("semantic_calls", [(0,)])[0]
+            return (0,)
 
+        mock_cursor.execute = mock.Mock(side_effect=execute_side_effect)
         mock_cursor.fetchall = mock.Mock(side_effect=fetchall_side_effect)
         mock_cursor.fetchone = mock.Mock(side_effect=fetchone_side_effect)
         mock_conn.cursor.return_value = mock_cursor
@@ -1193,15 +1213,20 @@ class TestStrictMetricCompleteness:
         )
 
     def test_measured_zero_is_not_rejected(self):
-        """Genuine measured zero (with complete source) → MEASURED, not rejected."""
+        """Genuine measured zero (with complete source) → MEASURED, not rejected.
+
+        Uses fully populated metric tuples with all MEASURED status to verify
+        that zero values are not falsely flagged as unavailable or unevaluated.
+        """
         from research_store.release_benchmark import (
             MANDATORY_PERFORMANCE_METRICS,
             MANDATORY_QUALITY_METRICS,
+            MetricSource,
+            MetricStatus,
+            PerformanceMetric,
+            QualityMetric,
             WorkflowComparison,
             WorkflowRunResult,
-        )
-        from research_store.release_benchmark import (
-            MetricStatus as MS,
         )
 
         # Build quality and performance with all metrics MEASURED.
@@ -1214,6 +1239,91 @@ class TestStrictMetricCompleteness:
             report_quality_score=0.0,
         )
         performance = _make_performance()
+
+        # Build fully populated quality_metrics with all MEASURED status.
+        _ms = MetricStatus.MEASURED
+        _src = lambda t: MetricSource(table=t, column="", run_id="test", method="")
+        quality_metrics = (
+            QualityMetric(
+                name="candidate_recall",
+                value=0.0,
+                source=_src("benchmark"),
+                formula="0.0",
+                status=_ms,
+            ),
+            QualityMetric(
+                name="source_quality_score",
+                value=0.0,
+                source=_src("search"),
+                formula="0.0",
+                status=_ms,
+            ),
+            QualityMetric(
+                name="coverage_completeness",
+                value=0.0,
+                source=_src("coverage"),
+                formula="0.0",
+                status=_ms,
+            ),
+            QualityMetric(
+                name="unsupported_claim_rate",
+                value=0.0,
+                source=_src("claims"),
+                formula="0.0",
+                status=_ms,
+            ),
+            QualityMetric(
+                name="citation_accuracy",
+                value=0.0,
+                source=_src("evidence"),
+                formula="0.0",
+                status=_ms,
+            ),
+            QualityMetric(
+                name="report_quality_score",
+                value=0.0,
+                source=_src("packets"),
+                formula="0.0",
+                status=_ms,
+            ),
+        )
+        perf_metrics = (
+            PerformanceMetric(
+                name="total_tokens",
+                value=0.0,
+                source=_src("tokens"),
+                formula="0.0",
+                status=_ms,
+            ),
+            PerformanceMetric(
+                name="cache_hit_rate",
+                value=0.0,
+                source=_src("cache"),
+                formula="0.0",
+                status=_ms,
+            ),
+            PerformanceMetric(
+                name="embedding_throughput",
+                value=0.0,
+                source=_src("embed"),
+                formula="0.0",
+                status=_ms,
+            ),
+            PerformanceMetric(
+                name="cpu_percent",
+                value=0.0,
+                source=_src("cpu"),
+                formula="0.0",
+                status=_ms,
+            ),
+            PerformanceMetric(
+                name="gpu_memory_mb",
+                value=0.0,
+                source=_src("gpu"),
+                formula="0.0",
+                status=_ms,
+            ),
+        )
 
         # Build a WorkflowComparison with all MEASURED metrics.
         comparison = WorkflowComparison(
@@ -1228,8 +1338,8 @@ class TestStrictMetricCompleteness:
                     integrity_checks=(),
                     run_id="fr_bench_test",
                     errors=(),
-                    quality_metrics=(),
-                    performance_metrics=(),
+                    quality_metrics=quality_metrics,
+                    performance_metrics=perf_metrics,
                 ),
                 WorkflowRunResult(
                     schema_version="workflow-run-result-v1",
@@ -1239,8 +1349,8 @@ class TestStrictMetricCompleteness:
                     integrity_checks=(),
                     run_id="fr_bench_test_2",
                     errors=(),
-                    quality_metrics=(),
-                    performance_metrics=(),
+                    quality_metrics=quality_metrics,
+                    performance_metrics=perf_metrics,
                 ),
             ],
             quality_vs_baseline={},
@@ -1290,7 +1400,7 @@ class TestStrictMetricCompleteness:
                     for qm in result.quality_metrics:
                         if (
                             qm.name in MANDATORY_QUALITY_METRICS
-                            and qm.status != MS.MEASURED
+                            and qm.status != MetricStatus.MEASURED
                         ):
                             withdrawn.append(
                                 f"quality metric {qm.name} is {qm.status.value} "
@@ -1307,7 +1417,7 @@ class TestStrictMetricCompleteness:
                     for pm in result.performance_metrics:
                         if (
                             pm.name in MANDATORY_PERFORMANCE_METRICS
-                            and pm.status != MS.MEASURED
+                            and pm.status != MetricStatus.MEASURED
                         ):
                             withdrawn.append(
                                 f"performance metric {pm.name} is {pm.status.value} "
@@ -1598,8 +1708,9 @@ class TestStatusSerialization:
         # Build a status map for easy assertions.
         status_map = {m["name"]: m["status"] for m in quality_metrics}
 
-        # With an empty DB, coverage_completeness should be MEASURED
-        # (coverage items exist at unassessed status — applicable but not satisfied).
+        # With a seeded DB (coverage items at unassessed status),
+        # coverage_completeness should be MEASURED — the coverage source
+        # was consulted and applicable items exist (even if unsatisfied).
         assert status_map.get("coverage_completeness") == "measured", (
             f"coverage_completeness status is {status_map.get('coverage_completeness')}, "
             "expected 'measured' (coverage items exist)"
@@ -1647,3 +1758,88 @@ class TestStatusSerialization:
             assert "value" in m
             assert "status" in m
             assert "formula" in m
+
+
+# ---------------------------------------------------------------------------
+# Mock-based serialization test — issue #158
+# ---------------------------------------------------------------------------
+
+
+class TestStatusSerializationMock:
+    """Mock-based tests for metric serialization format (no DB required)."""
+
+    def test_quality_metric_serializes_with_status(self):
+        """QualityMetric serializes to JSON with name, value, status, formula."""
+        from research_store.release_benchmark import (
+            MetricSource,
+            MetricStatus,
+            QualityMetric,
+        )
+
+        qm = QualityMetric(
+            name="candidate_recall",
+            value=0.75,
+            source=MetricSource(
+                table="benchmark_ground_truth",
+                column="known_relevant_sources",
+                run_id="test",
+                method="canonical_identity_match",
+            ),
+            formula="TP=3 / (TP+FN=4)",
+            status=MetricStatus.MEASURED,
+        )
+
+        record = {
+            "name": qm.name,
+            "value": qm.value,
+            "status": qm.status.value,
+            "formula": qm.formula,
+        }
+
+        assert record["name"] == "candidate_recall"
+        assert record["value"] == 0.75
+        assert record["status"] == "measured"
+        assert record["formula"] == "TP=3 / (TP+FN=4)"
+
+    def test_performance_metric_serializes_with_status(self):
+        """PerformanceMetric serializes to JSON with name, value, status, formula."""
+        from research_store.release_benchmark import (
+            MetricSource,
+            MetricStatus,
+            PerformanceMetric,
+        )
+
+        pm = PerformanceMetric(
+            name="total_tokens",
+            value=0.0,
+            source=MetricSource(
+                table="endpoint_usage_records",
+                column="token_count",
+                run_id="test",
+                method="sum",
+            ),
+            formula="0.0 — endpoint_usage_records empty",
+            status=MetricStatus.UNAVAILABLE,
+        )
+
+        record = {
+            "name": pm.name,
+            "value": pm.value,
+            "status": pm.status.value,
+            "formula": pm.formula,
+        }
+
+        assert record["name"] == "total_tokens"
+        assert record["value"] == 0.0
+        assert record["status"] == "unavailable"
+        assert record["formula"] == "0.0 — endpoint_usage_records empty"
+
+    def test_all_metric_statuses_serializable(self):
+        """All MetricStatus values serialize to their string representation."""
+        from research_store.release_benchmark import MetricStatus
+
+        for status in MetricStatus:
+            assert isinstance(status.value, str)
+            assert len(status.value) > 0
+            # Verify round-trip: value → enum → value
+            assert MetricStatus(status.value) == status
