@@ -27,9 +27,9 @@ from .indexing import IndexWorker, OpenAICompatibleEmbedder
 from .normalization import NORMALIZATION_VERSION
 from .postgres import PostgresUnitOfWork, connect
 from .qdrant import QdrantIndex
-from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
 from .service import dumps, json_default
+from .valkey_queue import ValkeyQueue
 
 _KNOWN_PREFIXES = ("result_", "url_")
 

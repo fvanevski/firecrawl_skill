@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# strict_benchmark — Strict release benchmark campaign (issue #144)
+#
+# Usage:
+#   strict_benchmark [--campaign-dir DIR] [--dataset PATH] [--database-url URL]
+#                    [--blob-root PATH] [--qdrant-url URL] [--qdrant-api-key KEY]
+#                    [--objectives OBJ1,OBJ2,...] [--tolerance FLOAT]
+#                    [--manifest PATH] [--dry-run]
+#
+# Strict mode is mandatory and cannot be disabled.
+# Simulation and workflow substitution are impossible in release campaigns.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env" ]]; then
+  source "$SCRIPT_DIR/research-env"
+fi
+RESEARCH_PYTHON="${FIRECRAWL_RESEARCH_PYTHON:-python3}"
+exec env PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$RESEARCH_PYTHON" "$SCRIPT_DIR/research_store/strict_benchmark.py" "$@"

@@ -76,7 +76,64 @@ jobs:
             scripts/test_persist_results.py \
             scripts/test_release_benchmark.py \
             scripts/test_performance_telemetry.py \
-            scripts/test_performance_telemetry_integration.py
+            scripts/test_performance_telemetry_integration.py \
+            scripts/test_strict_campaign.py
+
+  strict-campaign:
+    name: Strict Campaign (issue #144) — Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements-research-store.txt \
+            pytest
+
+      - name: Start disposable PostgreSQL
+        run: |
+          docker run --name pg -d -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16-alpine
+          sleep 5
+          for i in $(seq 1 10); do
+            PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE firecrawl_test;" 2>/dev/null && break || sleep 1
+          done
+
+      - name: Run strict campaign unit tests
+        run: |
+          python -m pytest \
+            -q \
+            -p no:cacheprovider \
+            scripts/test_strict_campaign.py
+
+      - name: Run strict campaign integration tests
+        env:
+          RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_test"
+          RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_test"
+        run: |
+          python -m pytest \
+            -q \
+            -p no:cacheprovider \
+            scripts/test_strict_campaign.py::TestStrictCampaignIntegration
 
   lint:
     name: Ruff

@@ -11,12 +11,12 @@ from .indexing import OpenAICompatibleEmbedder
 from .legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from .postgres import PostgresUnitOfWork
 from .qdrant import QdrantIndex
-from .queue import ValkeyQueue
 from .retrieval import CohereCompatibleReranker
 from .run_service import ResearchRunService
 from .semantic_service import SemanticCallService
 from .service import CorpusService
 from .strategy_service import StrategyRevisionService
+from .valkey_queue import ValkeyQueue
 
 
 def build_service(config: StoreConfig | None = None) -> CorpusService:

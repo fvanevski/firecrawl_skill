@@ -13,7 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 import research_store.indexing as indexing_module
 from research_store.indexing import IndexWorker, OpenAICompatibleEmbedder
 from research_store.qdrant import QdrantIndex
-from research_store.queue import ValkeyQueue
+from research_store.valkey_queue import ValkeyQueue
 
 
 class FakeRepository:

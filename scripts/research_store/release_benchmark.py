@@ -1382,6 +1382,34 @@ class ReleaseBenchmarkRunner:
                 search_plan=search_plan,
             )
 
+            # Compute run duration early — needed for resource sample collection.
+            _run_duration_ms = (time.monotonic() - start) * 1000
+
+            # ── Wire telemetry collection BEFORE metric extraction ────────
+            # This must happen after the orchestrator completes so that all
+            # semantic calls, cache events, and resource samples are
+            # available. Strict mode requires these tables to exist before
+            # extract_quality_metrics / extract_performance_metrics run.
+            if metric_engine is not None and run_id:
+                from research_store.telemetry_service import (
+                    PerformanceTelemetryService,
+                )
+
+                telemetry_svc = PerformanceTelemetryService(metric_engine._connection)
+
+                # Populate endpoint_usage_records from semantic_calls.
+                self._populate_endpoint_usage(
+                    telemetry_svc, UUID(run_id), metric_engine._connection
+                )
+
+                # Collect CPU/GPU samples during the run window.
+                self._collect_resource_samples(
+                    telemetry_svc, UUID(run_id), _run_duration_ms
+                )
+
+                # Build and persist the aggregated summary.
+                telemetry_svc.build_summary(UUID(run_id))
+
             # Extract real metrics from persisted state (if engine available)
             if metric_engine is not None:
                 quality, quality_metrics = metric_engine.extract_quality_metrics(
@@ -1427,27 +1455,6 @@ class ReleaseBenchmarkRunner:
 
         end = time.monotonic()
         duration_ms = (end - start) * 1000
-
-        # Wire telemetry collection: populate telemetry tables and aggregate.
-        # This must happen after the orchestrator completes so that all
-        # semantic calls, cache events, and resource samples are available.
-        if metric_engine is not None and run_id:
-            from research_store.telemetry_service import (
-                PerformanceTelemetryService,
-            )
-
-            telemetry_svc = PerformanceTelemetryService(metric_engine._connection)
-
-            # Populate endpoint_usage_records from semantic_calls.
-            self._populate_endpoint_usage(
-                telemetry_svc, UUID(run_id), metric_engine._connection
-            )
-
-            # Collect CPU/GPU samples during the run window.
-            self._collect_resource_samples(telemetry_svc, UUID(run_id), duration_ms)
-
-            # Build and persist the aggregated summary.
-            telemetry_svc.build_summary(UUID(run_id))
 
         return CampaignRun(
             campaign_id=campaign_id,
@@ -1814,6 +1821,12 @@ class ReleaseBenchmarkRunner:
         # Determine outcome
         p0_regressions: list[str] = []
 
+        # P5: Strict fail-closed — reject when integrity checks failed.
+        if comparison.integrity_regression:
+            p0_regressions.append(
+                "deterministic integrity check failed — regression detected"
+            )
+
         if withdrawn:
             outcome = RecommendationOutcome.NO_GO
             supported = ()
@@ -1856,6 +1869,8 @@ class ReleaseBenchmarkRunner:
         self,
         run_a: ReleaseBenchmarkResult,
         run_b: ReleaseBenchmarkResult,
+        *,
+        tolerance: float | None = None,
     ) -> ReproducibilityComparison:
         """Compare two campaign runs for reproducibility.
 
@@ -1867,11 +1882,16 @@ class ReleaseBenchmarkRunner:
         Args:
             run_a: First campaign result.
             run_b: Second campaign result.
+            tolerance: Optional explicit tolerance to use instead of
+                ``self.config.reproducibility_tolerance``.  Useful when the
+                caller already knows the tolerance and does not need a full
+                runner instance.
 
         Returns:
             A ReproducibilityComparison with per-metric tolerances.
         """
-        tolerance = self.config.reproducibility_tolerance
+        if tolerance is None:
+            tolerance = self.config.reproducibility_tolerance
 
         # Index runs by (mode, objective_id)
         def index_runs(
@@ -1890,8 +1910,31 @@ class ReleaseBenchmarkRunner:
         details: list[str] = []
         all_within = True
 
+        # Reject when mode/objective sets differ — strict reproducibility
+        # requires both campaigns to exercise the same (mode, objective) pairs.
+        keys_a = set(idx_a.keys())
+        keys_b = set(idx_b.keys())
+        if keys_a != keys_b:
+            all_within = False
+            only_a = keys_a - keys_b
+            only_b = keys_b - keys_a
+            if only_a:
+                details.append(
+                    f"mode/objective sets differ: missing from B: {sorted(only_a)}"
+                )
+            if only_b:
+                details.append(
+                    f"mode/objective sets differ: missing from A: {sorted(only_b)}"
+                )
+        elif not keys_a:
+            # Both empty — no runs to compare
+            all_within = False
+            details.append(
+                "no runs in either campaign — cannot compare reproducibility"
+            )
+
         # Compare all (mode, objective) pairs present in both runs
-        common_keys = set(idx_a.keys()) & set(idx_b.keys())
+        common_keys = keys_a & keys_b
         for mode, objective_id in sorted(common_keys):
             run_a = idx_a[(mode, objective_id)]
             run_b = idx_b[(mode, objective_id)]
@@ -1927,6 +1970,7 @@ class ReleaseBenchmarkRunner:
                     "total_tokens",
                     "semantic_calls",
                     "cache_hit_rate",
+                    "embedding_throughput",
                     "cpu_percent",
                     "gpu_memory_mb",
                 ]:
