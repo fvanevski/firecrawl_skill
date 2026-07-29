@@ -171,13 +171,37 @@ class TestManifestGeneration:
             assert "release_benchmark.py" in artifact_names
 
     def test_generate_includes_fingerprints(self):
-        """Generated manifest includes environment and dependency fingerprints."""
+        """Generated manifest includes environment, dependency, and config fingerprints."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
             (repo / "README.md").write_text("test")
+            # Create fingerprint config so the generator collects all 8 categories
+            (repo / "fingerprint-config.json").write_text(
+                json.dumps(
+                    {
+                        "service:postgresql": "postgres:16-alpine",
+                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "tokenizer:tiktoken": "tiktoken==0.7.0",
+                        "dataset:benchmark-v1": "benchmark-release-v1",
+                        "ground_truth:ground-truth-v1": "gt-v1",
+                        "hardware:cpu": "x86_64",
+                    }
+                )
+            )
+            # Create requirements file so dependency fingerprints are collected
+            (repo / "requirements-research-store.txt").write_text("pytest==8.0.0\n")
             subprocess.run(
-                ["git", "add", "README.md"], cwd=repo, capture_output=True, check=True
+                [
+                    "git",
+                    "add",
+                    "README.md",
+                    "fingerprint-config.json",
+                    "requirements-research-store.txt",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
             )
             subprocess.run(
                 [
@@ -199,7 +223,17 @@ class TestManifestGeneration:
             manifest = gen.generate()
 
             categories = {f.category for f in manifest.fingerprints}
-            assert "environment" in categories
+            required = {
+                "environment",
+                "dependency",
+                "service",
+                "model",
+                "tokenizer",
+                "dataset",
+                "ground_truth",
+                "hardware",
+            }
+            assert required.issubset(categories)
 
     def test_generate_with_explicit_ci_jobs(self):
         """Manifest includes explicitly provided CI job results."""
@@ -309,6 +343,156 @@ class TestManifestGeneration:
             # Generate for sha2
             manifest2 = gen.generate_from_sha(sha2)
             assert manifest2.candidate_sha == sha2
+
+    def test_generate_collects_config_fingerprints(self):
+        """Generator reads additional fingerprints from fingerprint-config.json."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            (repo / "README.md").write_text("test")
+            # Create fingerprint config
+            (repo / "fingerprint-config.json").write_text(
+                json.dumps(
+                    {
+                        "service:postgresql": "postgres:16-alpine",
+                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "tokenizer:tiktoken": "tiktoken==0.7.0",
+                        "dataset:benchmark-v1": "benchmark-release-v1",
+                        "ground_truth:ground-truth-v1": "gt-v1",
+                        "hardware:cpu": "x86_64",
+                    }
+                )
+            )
+            subprocess.run(
+                ["git", "add", "."], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+
+            gen = ReleaseEvidenceGenerator(repo, generated_by="test")
+            manifest = gen.generate()
+
+            categories = {f.category for f in manifest.fingerprints}
+            required = {
+                "service",
+                "model",
+                "tokenizer",
+                "dataset",
+                "ground_truth",
+                "hardware",
+            }
+            assert required.issubset(categories)
+
+    def test_generate_no_config_file(self):
+        """Generator produces no config fingerprints when config file is absent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            (repo / "README.md").write_text("test")
+            subprocess.run(
+                ["git", "add", "README.md"], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+
+            gen = ReleaseEvidenceGenerator(repo, generated_by="test")
+            manifest = gen.generate()
+
+            categories = {f.category for f in manifest.fingerprints}
+            # No config file means no service/model/etc. fingerprints
+            for cat in (
+                "service",
+                "model",
+                "tokenizer",
+                "dataset",
+                "ground_truth",
+                "hardware",
+            ):
+                assert cat not in categories
+
+    def test_derive_category(self):
+        """_derive_category returns the correct category from name prefix."""
+        assert (
+            ReleaseEvidenceGenerator._derive_category("service:postgresql") == "service"
+        )
+        assert (
+            ReleaseEvidenceGenerator._derive_category("model:nomic-embed-text")
+            == "model"
+        )
+        assert (
+            ReleaseEvidenceGenerator._derive_category("tokenizer:tiktoken")
+            == "tokenizer"
+        )
+        assert (
+            ReleaseEvidenceGenerator._derive_category("dataset:benchmark-v1")
+            == "dataset"
+        )
+        assert (
+            ReleaseEvidenceGenerator._derive_category("ground_truth:ground-truth-v1")
+            == "ground_truth"
+        )
+        assert ReleaseEvidenceGenerator._derive_category("hardware:cpu") == "hardware"
+        # Unknown prefix falls back to environment
+        assert ReleaseEvidenceGenerator._derive_category("unknown:foo") == "environment"
+
+    def test_generate_populates_candidate_sha_in_ci_jobs(self):
+        """Generator populates CiJobResult.candidate_sha from the manifest SHA."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            (repo / "README.md").write_text("test")
+            subprocess.run(
+                ["git", "add", "README.md"], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+            expected_sha = _current_sha(repo)
+
+            gen = ReleaseEvidenceGenerator(repo, generated_by="test")
+            manifest = gen.generate()
+
+            # All CI jobs should have candidate_sha set
+            for job in manifest.ci_jobs:
+                assert job.candidate_sha == expected_sha
 
 
 # ---------------------------------------------------------------------------
@@ -989,6 +1173,54 @@ class TestVerification:
             # Tag resolution fails because tag points to sha1, not sha2
             assert vresult.tag_resolves is False
 
+    def test_verify_annotated_tag_resolution(self):
+        """Verification peels annotated tags to their commit SHA."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            (repo / "README.md").write_text("test")
+            subprocess.run(
+                ["git", "add", "README.md"], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+            sha = _current_sha(repo)
+
+            # Create an annotated tag (not lightweight)
+            subprocess.run(
+                ["git", "tag", "-a", "v1.0.0", sha, "-m", "release tag"],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+
+            ci_jobs = [
+                _make_ci_job(name, "success", f"run-{i}")
+                for i, name in enumerate(REQUIRED_CI_JOBS)
+            ]
+            manifest = _make_manifest(
+                candidate_sha=sha,
+                ci_jobs=ci_jobs,
+                tag="v1.0.0",
+            )
+            verifier = ReleaseEvidenceVerifier(manifest, repo=repo)
+            vresult = verifier.verify()
+
+            assert vresult.tag_resolves is True
+
 
 # ---------------------------------------------------------------------------
 # Serialization tests
@@ -1407,6 +1639,19 @@ class TestIntegration:
             (repo / "requirements-research-store.txt").write_text(
                 "pytest==8.0.0\npsycopg==3.1.0\nqdrant-client==1.7.0\n"
             )
+            # Create fingerprint config for all 8 categories
+            (repo / "fingerprint-config.json").write_text(
+                json.dumps(
+                    {
+                        "service:postgresql": "postgres:16-alpine",
+                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "tokenizer:tiktoken": "tiktoken==0.7.0",
+                        "dataset:benchmark-v1": "benchmark-release-v1",
+                        "ground_truth:ground-truth-v1": "gt-v1",
+                        "hardware:cpu": "x86_64",
+                    }
+                )
+            )
             subprocess.run(
                 ["git", "add", "."], cwd=repo, capture_output=True, check=True
             )
@@ -1456,56 +1701,6 @@ class TestIntegration:
                 ci_jobs=manifest.ci_jobs,
                 artifacts=manifest.artifacts,
                 fingerprints=manifest.fingerprints,
-                environment=manifest.environment,
-                post_candidate_commits=manifest.post_candidate_commits,
-                tag=manifest.tag,
-                verification_notes=manifest.verification_notes,
-            )
-
-            # Add required fingerprint categories that the generator doesn't collect
-            from research_store.release_evidence import Fingerprint
-
-            additional_fps = (
-                Fingerprint(
-                    name="service:postgresql",
-                    value="postgres:16-alpine",
-                    category="service",
-                ),
-                Fingerprint(
-                    name="model:nomic-embed-text",
-                    value="nomic-embed-text-v1.5",
-                    category="model",
-                ),
-                Fingerprint(
-                    name="tokenizer:tiktoken",
-                    value="tiktoken==0.7.0",
-                    category="tokenizer",
-                ),
-                Fingerprint(
-                    name="dataset:benchmark-v1",
-                    value="benchmark-release-v1",
-                    category="dataset",
-                ),
-                Fingerprint(
-                    name="ground_truth:ground-truth-v1",
-                    value="gt-v1",
-                    category="ground_truth",
-                ),
-                Fingerprint(
-                    name="hardware:cpu",
-                    value="x86_64",
-                    category="hardware",
-                ),
-            )
-            manifest = ReleaseEvidenceManifest(
-                schema_version=manifest.schema_version,
-                candidate_sha=manifest.candidate_sha,
-                tree_hash=manifest.tree_hash,
-                generated_at=manifest.generated_at,
-                generated_by=manifest.generated_by,
-                ci_jobs=manifest.ci_jobs,
-                artifacts=manifest.artifacts,
-                fingerprints=tuple(list(manifest.fingerprints) + list(additional_fps)),
                 environment=manifest.environment,
                 post_candidate_commits=manifest.post_candidate_commits,
                 tag=manifest.tag,

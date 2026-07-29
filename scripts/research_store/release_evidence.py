@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -163,7 +164,7 @@ class VerificationResult:
             f"  CI complete: {'yes' if self.ci_complete else 'no'}",
             f"  Artifacts valid: {'yes' if self.artifacts_valid else 'no'}",
             f"  Fingerprints present: {'yes' if self.fingerprints_present else 'no'}",
-            f"  Post-candidate commits: {self.errors_count} error(s)",
+            f"  Post-candidate commits: {'clean' if self.no_post_candidate_commits else 'FAIL'}",
         ]
         if not self.tag_resolves:
             lines.append("  Tag resolution: FAILED")
@@ -309,6 +310,7 @@ class ReleaseEvidenceGenerator:
                 conclusion=j["conclusion"],
                 run_id=str(j["run_id"]),
                 url=j.get("url", ""),
+                candidate_sha=sha,
             )
             for j in ci_jobs
         )
@@ -424,7 +426,7 @@ class ReleaseEvidenceGenerator:
         return tuple(artifacts)
 
     def _collect_fingerprints(self) -> tuple[Fingerprint, ...]:
-        """Collect environment and dependency fingerprints."""
+        """Collect environment, dependency, and config-file fingerprints."""
         fps: list[Fingerprint] = []
 
         # Python
@@ -461,7 +463,65 @@ class ReleaseEvidenceGenerator:
                         )
                     )
 
+        # Read additional fingerprints from config file
+        fps.extend(self._collect_config_fingerprints())
+
         return tuple(fps)
+
+    def _collect_config_fingerprints(self) -> list[Fingerprint]:
+        """Read additional fingerprints from fingerprint-config.json.
+
+        Supports environment-variable overrides for each category.
+        The config file is expected at the repo root with a flat mapping
+        from ``name`` to ``value``.  Environment variables follow the
+        pattern ``FINGERPRINT_<UPPERCASE_NAME>`` where underscores in the
+        name are replaced with double underscores (e.g.
+        ``FINGERPRINT_model__nomic_embed_text`` overrides the model
+        fingerprint).
+        """
+        fps: list[Fingerprint] = []
+        config_path = self.repo / "fingerprint-config.json"
+        if not config_path.is_file():
+            return fps
+
+        try:
+            config = json.loads(config_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return fps
+
+        if not isinstance(config, dict):
+            return fps
+
+        for name, value in config.items():
+            if not isinstance(name, str) or not isinstance(value, str):
+                continue
+
+            # Allow env-var override
+            env_key = f"FINGERPRINT_{name.upper().replace('-', '_')}"
+            env_val = os.environ.get(env_key)
+            if env_val:
+                value = env_val
+
+            # Derive category from the name prefix
+            category = self._derive_category(name)
+            fps.append(Fingerprint(name=name, value=value, category=category))
+
+        return fps
+
+    @staticmethod
+    def _derive_category(name: str) -> str:
+        """Derive the fingerprint category from the name prefix."""
+        for category in (
+            "service",
+            "model",
+            "tokenizer",
+            "dataset",
+            "ground_truth",
+            "hardware",
+        ):
+            if name.startswith(f"{category}:"):
+                return category
+        return "environment"
 
     def _collect_environment(self) -> dict[str, str]:
         """Collect runtime environment metadata."""

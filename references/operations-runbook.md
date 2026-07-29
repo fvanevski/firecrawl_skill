@@ -767,6 +767,38 @@ The CI workflow (`ci.yml` → `release-evidence` job) automates this on every
 `push` to `main` and on `workflow_dispatch` with an optional `candidate-sha`
 input.
 
+### 13.3a Fingerprint configuration
+
+The generator reads additional fingerprint data from
+`fingerprint-config.json` at the repository root. The file is a flat
+JSON mapping from fingerprint name to value:
+
+```json
+{
+    "service:postgresql": "postgres:16-alpine",
+    "model:nomic-embed-text": "nomic-embed-text-v1.5",
+    "tokenizer:tiktoken": "tiktoken==0.7.0",
+    "dataset:benchmark-v1": "benchmark-release-v1",
+    "ground_truth:ground-truth-v1": "gt-v1",
+    "hardware:cpu": "x86_64"
+}
+```
+
+The category is derived from the name prefix (e.g. `service:` →
+`"service"`). Each entry must map to one of the eight required
+categories: `service`, `model`, `tokenizer`, `dataset`, `ground_truth`,
+`hardware`. Entries with unknown prefixes are assigned `"environment"`.
+
+Environment variables override config-file values. The override key is
+`FINGERPRINT_<UPPERCASE_NAME>` where hyphens are replaced with
+double underscores (e.g.
+`FINGERPRINT_model__nomic_embed_text`).
+
+The generator also auto-collects:
+
+- **environment** — Python version and platform from `sys` / `platform`.
+- **dependency** — package versions from `requirements-research-store.txt`.
+
 ### 13.4 Verifying a manifest
 
 ```bash
@@ -780,7 +812,9 @@ The verifier checks:
 1. **SHA match** — current HEAD equals `candidate_sha`.
 2. **CI completeness** — all required jobs present and concluded `success`.
 3. **Artifact validity** — all artifact SHA-256 hashes match current files.
-4. **Fingerprints present** — environment and dependency categories recorded.
+4. **Fingerprints present** — all eight provenance categories recorded
+   (environment, dependency, service, model, tokenizer, dataset,
+   ground_truth, hardware).
 5. **Post-candidate commits** — zero commits added after the candidate SHA.
 6. **Tag resolution** — if a tag is present, it resolves to the candidate SHA.
 

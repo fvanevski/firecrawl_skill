@@ -1,0 +1,8 @@
+{
+    "service:postgresql": "postgres:16-alpine",
+    "model:nomic-embed-text": "nomic-embed-text-v1.5",
+    "tokenizer:tiktoken": "tiktoken==0.7.0",
+    "dataset:benchmark-v1": "benchmark-release-v1",
+    "ground_truth:ground-truth-v1": "gt-v1",
+    "hardware:cpu": "x86_64"
+}
