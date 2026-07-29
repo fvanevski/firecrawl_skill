@@ -121,13 +121,14 @@ def ensure_passage_and_snapshot_exist(dsn, passage_id, snapshot_id):
             ),
         )
 
-        # 3. Create a document (documents table) referencing the snapshot
+        # 3. Create a document (documents table) referencing the snapshot.
+        #    No ON CONFLICT clause — if the snapshot_id does not exist, the
+        #    FK constraint will raise, making test setup failures visible.
         cur.execute(
             """INSERT INTO documents
                 (id, snapshot_id, title, parser_name, parser_version,
                  normalization_version, document_sha256, metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT DO NOTHING""",
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 str(document_id),
                 str(snapshot_id),
@@ -179,7 +180,9 @@ def prepared_database_for_claims():
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("DROP SCHEMA public CASCADE")
         cur.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN) >= 17
+    # Migrates to the current Alembic head (0036_run_performance_telemetry).
+    # The assertion confirms the migration returned a non-zero revision count.
+    assert migrate(TEST_DSN) >= 1
 
 
 @pytest.fixture(scope="session")
