@@ -781,7 +781,6 @@ class MetricEngine:
             _strict_token_unavailable = False
             _strict_embedding_unavailable = False
             _strict_cpu_unavailable = False
-            _strict_cache_unavailable = False
             _strict_telemetry_tables_absent = False
 
             if telemetry["token_source"] == "unavailable":
@@ -790,16 +789,13 @@ class MetricEngine:
                 _strict_embedding_unavailable = True
             if telemetry["cpu_samples"] == 0:
                 _strict_cpu_unavailable = True
-            if telemetry["cache_lookups"] == 0:
-                _strict_cache_unavailable = True
             if not telemetry.get("telemetry_tables_exist"):
                 _strict_telemetry_tables_absent = True
         else:
-            # Non-strict mode: all strict flags are False (legacy fallbacks OK).
+            # Non-strict mode: all strict flags are False.
             _strict_token_unavailable = False
             _strict_embedding_unavailable = False
             _strict_cpu_unavailable = False
-            _strict_cache_unavailable = False
             _strict_telemetry_tables_absent = False
 
         # ----------------------------------------------------------------
@@ -831,7 +827,8 @@ class MetricEngine:
             else "0.0 — endpoint_usage_records empty (no token data from orchestrator)"
         )
 
-        # Cache — run-scoped from run_cache_events, or legacy global.
+        # Cache — run-scoped from run_cache_events.
+        # No legacy fallback: all modes use the authoritative run-scoped table.
         cache_lookups = telemetry["cache_lookups"]
         cache_hits = telemetry["cache_hits"]
         if cache_lookups > 0:
@@ -840,18 +837,11 @@ class MetricEngine:
                 f"run_cache_events: hits({cache_hits}) / lookups({cache_lookups})"
             )
         else:
-            if _strict_cache_unavailable:
-                # Strict mode: do NOT fall back to the global semantic_cache
-                # table. A partial campaign must not inherit cache state from
-                # unrelated prior runs — that would produce spurious cache
-                # hit rates that vary between Campaign A and B.
-                cache_hit_rate = 0.0
-                cache_formula = (
-                    "0.0 — run_cache_events empty (no cache lookups from orchestrator)"
-                )
-            else:
-                # Legacy fallback: global semantic_cache (no run_id filter).
-                cache_hit_rate, cache_formula = self._legacy_cache_hit_rate()
+            # No scoped cache events: produce 0.0 with UNAVAILABLE status.
+            cache_hit_rate = 0.0
+            cache_formula = (
+                "0.0 — run_cache_events empty (no cache lookups from orchestrator)"
+            )
 
         # Embedding throughput — from run_embedding_throughput, or fallback.
         embedding_throughput = telemetry["embedding_throughput"]
@@ -942,9 +932,7 @@ class MetricEngine:
             else MetricStatus.MEASURED
         )
         _cache_status = (
-            MetricStatus.UNAVAILABLE
-            if _strict_cache_unavailable
-            else MetricStatus.MEASURED
+            MetricStatus.UNAVAILABLE if cache_lookups == 0 else MetricStatus.MEASURED
         )
         _emb_status = (
             MetricStatus.UNAVAILABLE
@@ -1163,24 +1151,6 @@ class MetricEngine:
     # ------------------------------------------------------------------
     # Legacy fallbacks (pre-migration 0036)
     # ------------------------------------------------------------------
-
-    def _legacy_cache_hit_rate(self) -> tuple[float, str]:
-        """Legacy cache hit rate from global semantic_cache (no run_id)."""
-        with self._connection.cursor() as cur:
-            cur.execute(
-                """SELECT
-                       COUNT(*) AS total,
-                       SUM(CASE WHEN status = 'valid' THEN 1 ELSE 0 END) AS valid
-                   FROM semantic_cache""",
-            )
-            row = cur.fetchone()
-        total = row[0] or 0
-        valid = row[1] or 0
-        rate = valid / total if total > 0 else 0.0
-        return (
-            round(rate, 6),
-            f"semantic_cache: valid({valid}) / total({total}) (no run_id filter)",
-        )
 
     def _legacy_cpu_percent(self) -> float:
         """Legacy CPU percent: single psutil sample."""

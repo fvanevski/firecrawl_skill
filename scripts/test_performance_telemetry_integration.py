@@ -234,30 +234,6 @@ class TestTelemetryLifecycle:
 class TestLegacyFallback:
     """Tests for legacy fallback paths when telemetry tables are absent."""
 
-    def test_legacy_cache_hit_rate(self, telemetry_connection):
-        """Legacy cache hit rate from global semantic_cache."""
-        from research_store.release_benchmark import MetricEngine
-
-        engine = MetricEngine(TEST_DSN)
-        engine._connection = telemetry_connection
-
-        # Insert some cache entries.
-        with telemetry_connection.cursor() as cur:
-            cur.execute(
-                """INSERT INTO semantic_cache (id, key_hash, status, created_at)
-                   VALUES (%s, %s, %s, now())""",
-                (str(uuid4()), "abc123", "valid"),
-            )
-            cur.execute(
-                """INSERT INTO semantic_cache (id, key_hash, status, created_at)
-                   VALUES (%s, %s, %s, now())""",
-                (str(uuid4()), "def456", "expired"),
-            )
-
-        rate, formula = engine._legacy_cache_hit_rate()
-        assert rate == 0.5
-        assert "semantic_cache" in formula
-
     def test_legacy_cpu_percent(self, telemetry_connection):
         """Legacy CPU percent from psutil."""
         from research_store.release_benchmark import MetricEngine
