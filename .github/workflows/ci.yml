@@ -57,6 +57,10 @@ jobs:
           done
 
       - name: Start disposable Qdrant
+        # Qdrant client-server pair: qdrant-client==1.15.1 (requirements-research-store.txt)
+        # with server v1.18.3.  The client is backward-compatible with newer servers.
+        # READ_ONLY_ACCESS=false disables the read-only mode guard so test writes
+        # (index builds, alias switches) succeed without a separate auth token.
         run: |
           docker run --name qdrant -d -p 6333:6333 \
             -e QDRANT__SERVICE__READ_ONLY_ACCESS=false \
