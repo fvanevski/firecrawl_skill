@@ -26,8 +26,8 @@ sys.path.insert(0, str(SCRIPTS))
 from fixture_replay import load_fixture
 from research_store.blob import ContentAddressedBlobStore
 from research_store.indexing import IndexWorker
-from research_store.queue import ValkeyQueue
 from research_store.service import CorpusService
+from research_store.valkey_queue import ValkeyQueue
 
 
 def load_module(name: str, path: Path):
