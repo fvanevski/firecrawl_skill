@@ -938,6 +938,106 @@ class TestStrictModeRejection:
         assert result["telemetry_tables_exist"] is False
         assert result["token_source"] == "unavailable"
 
+    def test_strict_cpu_rejects_legacy_when_tables_absent(self):
+        """CPU strict flag must fire when telemetry tables are absent.
+
+        Issue #160: the strict CPU flag was only set when ``cpu_samples == 0``,
+        not when the telemetry query itself failed.  When tables are absent the
+        query raises, ``telemetry_tables_exist`` stays ``False``, and the legacy
+        ``_legacy_cpu_percent()`` fallback was called — producing a live
+        host-wide psutil sample whose provenance claimed ``0.0``.
+
+        This regression test verifies that the strict flag now also fires when
+        ``telemetry_tables_exist`` is ``False``, preventing the legacy fallback
+        and ensuring the CPU value is ``0.0`` with the correct formula.
+        """
+        import time
+        from unittest import mock
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        mock_conn = mock.Mock()
+        # Telemetry query fails → telemetry_tables_exist=False.
+        mock_conn.execute.side_effect = Exception("table does not exist")
+        engine = MetricEngine("postgresql://fake")
+        engine._connection = mock_conn
+        engine.config = ReleaseBenchmarkConfig(
+            database_url="postgresql://fake",
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        # Mock cursor for semantic_calls and other queries.
+        mock_cursor = mock.Mock()
+        mock_cursor.__enter__ = mock.Mock(return_value=mock_cursor)
+        mock_cursor.__exit__ = mock.Mock(return_value=False)
+        mock_cursor.fetchone.return_value = (0,)
+        mock_conn.cursor.return_value = mock_cursor
+
+        performance, metrics = engine.extract_performance_metrics(
+            uuid4(), time.monotonic()
+        )
+
+        # CPU must be 0.0 — no legacy fallback allowed.
+        assert performance.cpu_percent == 0.0
+
+        # CPU metric status must be UNAVAILABLE.
+        cpu_metric = next((m for m in metrics if m.name == "cpu_percent"), None)
+        assert cpu_metric is not None
+        assert cpu_metric.status == MetricStatus.UNAVAILABLE
+        assert "run_resource_samples empty" in cpu_metric.formula
+
+        # GPU must also be 0.0.
+        assert performance.gpu_memory_mb == 0.0
+        gpu_metric = next((m for m in metrics if m.name == "gpu_memory_mb"), None)
+        assert gpu_metric is not None
+        assert gpu_metric.status == MetricStatus.UNAVAILABLE
+
+    def test_strict_gpu_rejects_legacy_when_tables_absent(self):
+        """GPU strict flag fires when telemetry tables are absent.
+
+        Issue #160: verifies that the GPU path also produces 0.0 with
+        UNAVAILABLE status when the telemetry tables don't exist,
+        preventing a legacy NVML sample from leaking into the artifact.
+        """
+        import time
+        from unittest import mock
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        mock_conn = mock.Mock()
+        mock_conn.execute.side_effect = Exception("table does not exist")
+        engine = MetricEngine("postgresql://fake")
+        engine._connection = mock_conn
+        engine.config = ReleaseBenchmarkConfig(
+            database_url="postgresql://fake",
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        mock_cursor = mock.Mock()
+        mock_cursor.__enter__ = mock.Mock(return_value=mock_cursor)
+        mock_cursor.__exit__ = mock.Mock(return_value=False)
+        mock_cursor.fetchone.return_value = (0,)
+        mock_conn.cursor.return_value = mock_cursor
+
+        _, metrics = engine.extract_performance_metrics(uuid4(), time.monotonic())
+
+        gpu_metric = next((m for m in metrics if m.name == "gpu_memory_mb"), None)
+        assert gpu_metric is not None
+        assert gpu_metric.status == MetricStatus.UNAVAILABLE
+        assert "run_resource_samples empty" in gpu_metric.formula
+
 
 class TestCacheCounting:
     """Tests that cache lookup outcomes are counted from lookup rows."""

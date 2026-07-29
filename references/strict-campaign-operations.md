@@ -448,6 +448,32 @@ prohibited in strict mode.
 all required infrastructure (Firecrawl, embedding endpoint, reranker) is
 available and responding.
 
+### CPU/GPU telemetry — value-provenance consistency (issue #160)
+
+**Cause:** Prior to issue #160, the strict CPU flag was only set when
+`cpu_samples == 0`.  When the telemetry tables themselves were absent
+(pre-migration database), the query failed, the flag stayed ``False``, and
+the legacy ``_legacy_cpu_percent()`` fallback executed — producing a live
+host-wide ``psutil`` sample whose provenance formula claimed ``0.0``.
+
+**Correction:** The strict CPU flag now also fires when
+``telemetry_tables_exist`` is ``False``, preventing the legacy fallback.
+Both CPU and GPU paths produce ``0.0`` with ``unavailable`` status and a
+formula that documents the empty source when telemetry tables are absent.
+
+**Verification:** Run the regression test:
+
+```bash
+pytest -q -p no:cacheprovider \
+  scripts/test_performance_telemetry.py::TestStrictModeRejection::test_strict_cpu_rejects_legacy_when_tables_absent \
+  scripts/test_performance_telemetry.py::TestStrictModeRejection::test_strict_gpu_rejects_legacy_when_tables_absent
+```
+
+**Expected behavior:** In strict mode with absent telemetry tables, both
+``cpu_percent`` and ``gpu_memory_mb`` must be ``0.0`` with status
+``unavailable`` and a formula containing ``run_resource_samples empty``.
+No legacy ``psutil`` or ``pynvml`` samples may appear in the artifact.
+
 ### Exit 1 — campaign recommends NO_GO
 
 **Cause:** Either campaign produced quality or performance results below
@@ -505,6 +531,19 @@ strict-campaign:
 | `TestNO_GOEnforcement`               | Unit — NO_GO logic       | No          |
 | `TestReproducibilityComparison`      | Unit — comparison logic  | No          |
 | `TestStrictCampaignIntegration`      | Integration              | Yes         |
+
+### Performance telemetry strict-mode tests (issue #160)
+
+| Test | Scope | Infrastructure |
+| ------ | ------- | -------------- |
+| `TestStrictModeRejection.test_strict_mode_produces_zero_metrics_when_telemetry_tables_absent` | Unit — pre-migration DB | No |
+| `TestStrictModeRejection.test_strict_mode_blocks_legacy_fallbacks` | Unit — empty telemetry tables | No |
+| `TestStrictModeRejection.test_strict_cpu_rejects_legacy_when_tables_absent` | Unit — CPU strict flag + tables absent | No |
+| `TestStrictModeRejection.test_strict_gpu_rejects_legacy_when_tables_absent` | Unit — GPU strict flag + tables absent | No |
+| `TestStrictModeRejection.test_strict_cache_metric_status_is_unavailable` | Unit — cache status | No |
+| `TestStrictModeRejection.test_strict_cache_metric_source_never_points_to_semantic_cache` | Unit — cache provenance | No |
+| `TestStrictModeRejection.test_non_strict_cache_metric_status_is_measured_with_lookups` | Unit — non-strict cache | No |
+| `TestStrictModeRejection.test_read_telemetry_sets_false_when_query_fails` | Unit — `_read_telemetry` | No |
 
 ### Integration test behavior
 

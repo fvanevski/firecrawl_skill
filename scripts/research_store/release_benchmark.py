@@ -790,7 +790,9 @@ class MetricEngine:
                 _strict_token_unavailable = True
             if telemetry["embedding_throughput"] <= 0:
                 _strict_embedding_unavailable = True
-            if telemetry["cpu_samples"] == 0:
+            if telemetry["cpu_samples"] == 0 or not telemetry.get(
+                "telemetry_tables_exist"
+            ):
                 _strict_cpu_unavailable = True
             if not telemetry.get("telemetry_tables_exist"):
                 _strict_telemetry_tables_absent = True
