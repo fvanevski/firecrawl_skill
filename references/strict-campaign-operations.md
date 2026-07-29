@@ -243,6 +243,14 @@ Campaign artifacts are written to `<campaign-dir>/<A|B>/<timestamp>/`:
         "citation_accuracy": 0.88,
         "report_quality_score": 0.78
       },
+      "quality_metrics": [
+        {"name": "candidate_recall", "value": 0.75, "status": "measured", "formula": "..."},
+        {"name": "source_quality_score", "value": 0.80, "status": "measured", "formula": "..."},
+        {"name": "coverage_completeness", "value": 0.65, "status": "measured", "formula": "..."},
+        {"name": "unsupported_claim_rate", "value": 0.08, "status": "measured", "formula": "..."},
+        {"name": "citation_accuracy", "value": 0.88, "status": "measured", "formula": "..."},
+        {"name": "report_quality_score", "value": 0.78, "status": "measured", "formula": "..."}
+      ],
       "performance": {
         "total_latency_ms": 15000.0,
         "total_tokens": 15000,
@@ -252,6 +260,15 @@ Campaign artifacts are written to `<campaign-dir>/<A|B>/<timestamp>/`:
         "cpu_percent": 60.0,
         "gpu_memory_mb": 4096.0
       },
+      "performance_metrics": [
+        {"name": "total_latency_ms", "value": 15000.0, "status": "measured", "formula": "..."},
+        {"name": "semantic_calls", "value": 8.0, "status": "measured", "formula": "..."},
+        {"name": "total_tokens", "value": 15000.0, "status": "measured", "formula": "..."},
+        {"name": "cache_hit_rate", "value": 0.3, "status": "measured", "formula": "..."},
+        {"name": "embedding_throughput", "value": 50.0, "status": "measured", "formula": "..."},
+        {"name": "cpu_percent", "value": 60.0, "status": "measured", "formula": "..."},
+        {"name": "gpu_memory_mb", "value": 4096.0, "status": "measured", "formula": "..."}
+      ],
       "errors": [],
       "integrity_checks": [
         {"check": "state_machine_transitions", "passed": true, "details": ""}
@@ -395,13 +412,31 @@ ELSE:
 
 **Cause:** The orchestrator failed partway through and did not produce
 telemetry data (no claims, no evidence, no cache events, no resource
-samples). Strict mode now produces 0.0 metrics with formulas documenting
-the empty source, rather than raising `RuntimeError`.
+samples).
+
+**Correction (issue #158):** Strict mode no longer produces `0.0` metrics
+with formulas documenting the empty source. Instead, each metric carries
+an explicit `status` field:
+
+| Status | Meaning |
+| -------- | --------- |
+| `measured` | Authoritative source exists and the value is genuinely measured |
+| `unavailable` | No authoritative source exists for this run/stage |
+| `unevaluated` | Source exists but the metric was not evaluated |
+| `incomplete` | Source exists but is incomplete |
+| `stale` | Source exists but the data is stale |
+| `invalid` | Source exists but the data is invalid |
+| `not_applicable` | This metric does not apply to this mode/objective pair |
+
+A metric with value `0.0` and status `unavailable` or `unevaluated` is
+**not** a valid measurement. Strict release policy rejects any campaign
+where a mandatory quality or performance metric is not `measured`.
 
 **Recovery:** This is expected when infrastructure (Firecrawl, embedding
 endpoint, reranker) is unavailable. The campaign completes with NO_GO
-recommendation because quality thresholds are not met. Inspect the
-`result.json` for formulas documenting which data sources were empty.
+recommendation because quality thresholds are not met **and** mandatory
+metrics are unavailable. Inspect the `result.json` for the `quality_metrics`
+and `performance_metrics` arrays to see each metric's status.
 
 ### RuntimeError — simulation fallback blocked
 
@@ -473,9 +508,11 @@ strict-campaign:
 ### Integration test behavior
 
 The integration test `test_strict_campaign_with_real_db` connects to a disposable
-PostgreSQL container and verifies that strict mode correctly raises
-`RuntimeError` when the database is empty (no coverage events available). This
-confirms fail-closed behavior.
+PostgreSQL container and verifies that strict mode correctly produces
+`0.0` metrics with explicit `unevaluated`/`unavailable` status when the
+database is empty — not `RuntimeError`. The campaign completes with NO_GO
+because quality thresholds are not met **and** mandatory metrics are
+unavailable.
 
 The `test_strict_campaign_artifacts_written` test is skipped by default because
 it requires full infrastructure (Firecrawl, embedding, reranking, Qdrant, local

@@ -72,8 +72,7 @@
         "cache_hit_rate",
         "embedding_throughput",
         "gpu_memory_mb",
-        "cpu_percent",
-        "cache_miss_rate"
+        "cpu_percent"
       ],
       "type": "object"
     },
@@ -174,8 +173,16 @@
         "performance": {
           "$ref": "#/$defs/PerformanceMeasurement"
         },
+        "performance_metrics": {
+          "items": {},
+          "type": "array"
+        },
         "quality": {
           "$ref": "#/$defs/QualityMeasurement"
+        },
+        "quality_metrics": {
+          "items": {},
+          "type": "array"
         },
         "run_id": {
           "anyOf": [

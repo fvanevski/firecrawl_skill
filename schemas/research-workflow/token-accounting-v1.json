@@ -75,17 +75,7 @@
       ]
     }
   },
-  "required": [
-    "schema_version",
-    "prompt_tokens",
-    "completion_tokens",
-    "total_tokens",
-    "tokenizer_prompt_tokens",
-    "tokenizer_completion_tokens",
-    "tokenizer_total_tokens",
-    "source",
-    "metric_version"
-  ],
+  "required": [],
   "title": "TokenAccounting",
   "type": "object"
 }

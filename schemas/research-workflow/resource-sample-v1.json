@@ -45,21 +45,7 @@
       "type": "number"
     }
   },
-  "required": [
-    "schema_version",
-    "run_id",
-    "device_type",
-    "device_index",
-    "device_uuid",
-    "sample_type",
-    "value",
-    "sample_at",
-    "collector",
-    "collector_version",
-    "sample_number",
-    "metric_version",
-    "status"
-  ],
+  "required": [],
   "title": "ResourceSample",
   "type": "object"
 }

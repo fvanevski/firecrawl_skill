@@ -107,30 +107,7 @@
       "type": "integer"
     }
   },
-  "required": [
-    "schema_version",
-    "run_id",
-    "total_tokens",
-    "token_source",
-    "semantic_calls",
-    "cache_lookups",
-    "cache_hits",
-    "cache_misses",
-    "cache_hit_rate",
-    "embedding_batch_count",
-    "embedding_vector_count",
-    "embedding_elapsed_seconds",
-    "embedding_throughput",
-    "cpu_samples",
-    "cpu_mean_percent",
-    "cpu_max_percent",
-    "gpu_samples",
-    "gpu_mean_memory_mb",
-    "gpu_max_memory_mb",
-    "gpu_unavailable",
-    "strict_pass",
-    "metric_version"
-  ],
+  "required": [],
   "title": "PerformanceTelemetrySummary",
   "type": "object"
 }

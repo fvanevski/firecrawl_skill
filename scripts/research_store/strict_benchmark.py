@@ -30,6 +30,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from research_store.release_benchmark import (
     RELEASE_MODES,
+    MetricStatus,
     ReleaseBenchmarkConfig,
     ReleaseBenchmarkResult,
     ReleaseBenchmarkRunner,
@@ -234,6 +235,19 @@ def _run_campaign(
                     }
                     if run.quality
                     else None,
+                    "quality_metrics": [
+                        {
+                            "name": qm.name,
+                            "value": qm.value,
+                            "status": getattr(
+                                qm, "status", MetricStatus.UNEVALUATED
+                            ).value,
+                            "formula": qm.formula,
+                        }
+                        for qm in run.quality_metrics
+                    ]
+                    if run.quality_metrics
+                    else [],
                     "performance": {
                         "total_latency_ms": run.performance.total_latency_ms
                         if run.performance
@@ -259,6 +273,19 @@ def _run_campaign(
                     }
                     if run.performance
                     else None,
+                    "performance_metrics": [
+                        {
+                            "name": pm.name,
+                            "value": pm.value,
+                            "status": getattr(
+                                pm, "status", MetricStatus.UNEVALUATED
+                            ).value,
+                            "formula": pm.formula,
+                        }
+                        for pm in run.performance_metrics
+                    ]
+                    if run.performance_metrics
+                    else [],
                     "errors": run.errors,
                     "integrity_checks": [
                         {

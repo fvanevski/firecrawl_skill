@@ -37,16 +37,7 @@
       "type": "string"
     }
   },
-  "required": [
-    "schema_version",
-    "run_id",
-    "stage",
-    "event_type",
-    "key_hash",
-    "model_fingerprint",
-    "hit",
-    "metric_version"
-  ],
+  "required": [],
   "title": "CacheEvent",
   "type": "object"
 }

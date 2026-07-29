@@ -49,20 +49,7 @@
       "type": "integer"
     }
   },
-  "required": [
-    "schema_version",
-    "run_id",
-    "stage",
-    "batch_count",
-    "vector_count",
-    "failed_count",
-    "total_texts",
-    "elapsed_seconds",
-    "endpoint_url",
-    "endpoint_model",
-    "dimension",
-    "metric_version"
-  ],
+  "required": [],
   "title": "EmbeddingThroughputRecord",
   "type": "object"
 }

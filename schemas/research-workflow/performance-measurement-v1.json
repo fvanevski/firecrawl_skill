@@ -48,8 +48,7 @@
     "cache_hit_rate",
     "embedding_throughput",
     "gpu_memory_mb",
-    "cpu_percent",
-    "cache_miss_rate"
+    "cpu_percent"
   ],
   "title": "PerformanceMeasurement",
   "type": "object"
