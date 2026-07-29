@@ -152,8 +152,11 @@ def test_uow_assign_duplicate_group_creates_group():
         )
         row = cur.fetchone()
         assert row is not None
-        assert uuid.UUID(row[0]) == group_id
-        assert uuid.UUID(row[1]) == run_id
+        # psycopg 3 returns UUID columns as Python UUID objects
+        db_group_id = uuid.UUID(row[0]) if isinstance(row[0], str) else row[0]
+        db_run_id = uuid.UUID(row[1]) if isinstance(row[1], str) else row[1]
+        assert db_group_id == group_id
+        assert db_run_id == run_id
         assert row[2] == "legacy assignment"
 
         # Verify candidates were linked
@@ -165,8 +168,9 @@ def test_uow_assign_duplicate_group_creates_group():
         rows = cur.fetchall()
         assert len(rows) == 2
         for row in rows:
-            assert row[0] is not None
-            assert uuid.UUID(row[0]) == group_id
+            db_dg_id = uuid.UUID(row[0]) if isinstance(row[0], str) else row[0]
+            assert db_dg_id is not None
+            assert db_dg_id == group_id
 
 
 @INTEGRATION_MARK
@@ -174,6 +178,27 @@ def test_uow_persist_duplicate_group_upserts():
     """persist_duplicate_group upserts duplicate_groups rows."""
     group_id = uuid.uuid4()
     run_id = uuid.uuid4()
+
+    # Create a test run so the FK constraint is satisfied
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs (id, original_request, query_plan, skill_version,
+            llm_model, status, state, execution_mode, objective)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO NOTHING""",
+            (
+                str(run_id),
+                "test request",
+                "{}",
+                "1.0",
+                "test",
+                "running",
+                "created",
+                "agent_led",
+                "test request",
+            ),
+        )
+        conn.commit()
 
     uow = PostgresUnitOfWork(TEST_DSN, "test-index")
     with uow:
@@ -273,6 +298,7 @@ def test_uow_update_candidate_independence():
         )
         row = cur.fetchone()
         assert row is not None
-        stored = json.loads(row[0])
+        # psycopg 3 deserializes jsonb to Python dict automatically
+        stored = row[0] if isinstance(row[0], dict) else json.loads(row[0])
         assert stored["status"] == "independent"
         assert stored["rationale"] == "Publisher owns the specification"

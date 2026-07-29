@@ -193,38 +193,15 @@ def test_build_evidence_packet_zero_budget_all_omitted():
     assert len(group.passage_ids) == 2
 
 
-def ensure_run_exists(dsn, run_id):
-    from research_store.postgres import connect
-
-    with connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute(
-            """INSERT INTO research_runs (id, original_request, query_plan, skill_version, llm_model, status, state, execution_mode, objective)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING""",
-            (
-                str(run_id),
-                "test request",
-                "{}",
-                "1.0",
-                "test",
-                "running",
-                "created",
-                "agent_led",
-                "test request",
-            ),
-        )
-
-
+# Import shared helpers and fixtures from conftest
 from dataclasses import replace
 
+from conftest import (
+    ensure_run_exists,
+    prepared_database_for_claims,  # noqa: F401
+)
 from research_store.config import StoreConfig
 from research_store.container import build_evidence_service
-
-
-@pytest.fixture(scope="session")
-def prepared_database_for_evidence_packets(prepared_database_for_claims):
-    # prepared_database_for_claims already upgrades to head which now includes 0029
-    pass
 
 
 @INTEGRATION_MARK
@@ -324,18 +301,13 @@ def test_evidence_packet_unique_constraint_violation(
     rev1 = svc.persist_packet(packet)
     assert rev1 == 1
 
-    # Build a second packet with the same run_id but same coverage_revision
-    # so it gets revision 1 again — this should violate the UNIQUE constraint.
-    packet2 = svc.build_evidence_packet(
-        run_id=run_id,
-        research_spec_id=spec_id,
-        coverage_revision=1,  # same coverage revision → same packet_revision
-        candidates=[_make_candidate()],
-        retrieval_events=[],
-        effective_caps=caps,
-    )
-    with pytest.raises(Exception):  # noqa: B017, psycopg UniqueViolation
-        svc.persist_packet(packet2)
+    # Verify the UNIQUE constraint on (run_id, packet_revision) by trying to
+    # insert a duplicate row directly via the UoW.
+    from research_store.postgres import PostgresUnitOfWork
+
+    uow = PostgresUnitOfWork(TEST_DSN, "test-index")
+    with uow, pytest.raises(Exception):  # noqa: B017, psycopg UniqueViolation
+        uow.persist_evidence_packet(run_id, spec_id, 1, 1, {"test": "duplicate"})
 
 
 @INTEGRATION_MARK

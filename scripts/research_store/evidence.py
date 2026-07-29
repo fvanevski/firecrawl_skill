@@ -179,7 +179,11 @@ class EvidenceService:
         for g in dup_groups:
             group_passage_ids = []
             for cid in g["candidate_ids"]:
-                pid = cand_to_passage.get(cid)
+                # Normalize candidate_id to UUID for lookup in cand_to_passage
+                # (cand_to_passage keys are UUID objects, but candidate_ids
+                # may be strings from the candidate dicts).
+                cid_uuid = UUID(str(cid)) if not isinstance(cid, UUID) else cid
+                pid = cand_to_passage.get(cid_uuid)
                 if pid:
                     group_passage_ids.append(pid)
 
