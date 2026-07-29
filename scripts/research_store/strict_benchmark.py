@@ -323,12 +323,11 @@ def _compare_campaigns(
     print("[Reproducibility] Comparing Campaign A and Campaign B...")
 
     loader = load_benchmark_dataset(dataset_path)
-    config = ReleaseBenchmarkConfig(
-        reproducibility_tolerance=reproducibility_tolerance,
-    )
-    runner = ReleaseBenchmarkRunner(loader, config)
+    runner = ReleaseBenchmarkRunner(loader, ReleaseBenchmarkConfig())
 
-    comparison = runner.compare_campaigns(result_a, result_b)
+    comparison = runner.compare_campaigns(
+        result_a, result_b, tolerance=reproducibility_tolerance
+    )
 
     print(f"[Reproducibility] All within tolerance: {comparison.all_within_tolerance}")
     for detail in comparison.details:

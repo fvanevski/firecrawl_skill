@@ -80,19 +80,26 @@ jobs:
             scripts/test_strict_campaign.py
 
   strict-campaign:
-    name: Strict Campaign (issue #144)
+    name: Strict Campaign (issue #144) — Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements-research-store.txt
 

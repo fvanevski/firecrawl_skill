@@ -1869,6 +1869,8 @@ class ReleaseBenchmarkRunner:
         self,
         run_a: ReleaseBenchmarkResult,
         run_b: ReleaseBenchmarkResult,
+        *,
+        tolerance: float | None = None,
     ) -> ReproducibilityComparison:
         """Compare two campaign runs for reproducibility.
 
@@ -1880,11 +1882,16 @@ class ReleaseBenchmarkRunner:
         Args:
             run_a: First campaign result.
             run_b: Second campaign result.
+            tolerance: Optional explicit tolerance to use instead of
+                ``self.config.reproducibility_tolerance``.  Useful when the
+                caller already knows the tolerance and does not need a full
+                runner instance.
 
         Returns:
             A ReproducibilityComparison with per-metric tolerances.
         """
-        tolerance = self.config.reproducibility_tolerance
+        if tolerance is None:
+            tolerance = self.config.reproducibility_tolerance
 
         # Index runs by (mode, objective_id)
         def index_runs(

@@ -542,3 +542,27 @@ class TestStrictCampaignIntegration:
         assert "campaign_a" in manifest_data
         assert "campaign_b" in manifest_data
         assert "reproducibility" in manifest_data
+
+    @pytest.mark.skip(
+        reason=(
+            "requires seeding many related tables with correct FK constraints. "
+            "The fail-closed test above validates strict mode behavior; "
+            "a happy-path integration test would require full infrastructure "
+            "(Firecrawl, embedding, reranking, local LLM) or complex seed data."
+        ),
+    )
+    def test_strict_metric_engine_with_seeded_data(self):
+        """MetricEngine produces valid measurements in strict mode with seeded data.
+
+        Seeds minimal valid records in all required tables and verifies that
+        the MetricEngine produces valid quality and performance measurements
+        without raising RuntimeError. This exercises the happy path of metric
+        extraction without requiring full infrastructure (Firecrawl, embedding,
+        reranking, local LLM).
+
+        Note: This test is skipped because it requires seeding many related
+        tables with correct foreign key constraints (chunks, evidence_packets,
+        claim_evidence_links, etc.). A full happy-path test would require
+        running the actual orchestrator, which needs Firecrawl and local LLM.
+        """
+        # pragma: no cover
