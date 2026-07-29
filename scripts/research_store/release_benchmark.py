@@ -170,6 +170,9 @@ class MetricSource:
     column: str
     run_id: str
     method: str  # "count", "sum", "avg", "max", "ratio", "boolean"
+    # Optional provenance fields — populated when available.
+    event_ids: tuple[str, ...] = ()  # UUIDs of source events (e.g. run_cache_events)
+    stages: tuple[str, ...] = ()  # Semantic stages included in the query
 
 
 @dataclass(frozen=True)
@@ -843,6 +846,33 @@ class MetricEngine:
                 "0.0 — run_cache_events empty (no cache lookups from orchestrator)"
             )
 
+        # ------------------------------------------------------------------
+        # Cache event provenance: event IDs and stages from raw events.
+        # ------------------------------------------------------------------
+        _cache_event_ids: tuple[str, ...] = ()
+        _cache_stages: tuple[str, ...] = ()
+        try:
+            cur = self._connection.execute(
+                """SELECT ARRAY_AGG(id::text) AS event_ids,
+                          ARRAY_AGG(DISTINCT stage) AS stages
+                   FROM run_cache_events
+                   WHERE run_id = %s
+                     AND event_type = 'lookup'""",
+                (str(run_id),),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                _cache_event_ids = tuple(row[0])
+            if row and row[1]:
+                _cache_stages = tuple(row[1])
+        except Exception:  # noqa: BLE001
+            # Rollback so legacy queries can still execute.
+            try:
+                self._connection.rollback()
+            except Exception:  # noqa: S110, BLE001
+                pass
+
+        # ------------------------------------------------------------------
         # Embedding throughput — from run_embedding_throughput, or fallback.
         embedding_throughput = telemetry["embedding_throughput"]
         if embedding_throughput > 0:
@@ -1007,6 +1037,8 @@ class MetricEngine:
                     column="event_type, hit",
                     run_id=str(run_id),
                     method="ratio",
+                    event_ids=_cache_event_ids,
+                    stages=_cache_stages,
                 ),
                 formula=cache_formula,
                 status=_cache_status,

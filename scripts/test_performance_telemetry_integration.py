@@ -24,6 +24,7 @@ import pytest
 from research_store.postgres import connect, migrate
 from research_store.release_benchmark import (
     MetricEngine,
+    MetricStatus,
     ReleaseBenchmarkConfig,
 )
 from research_store.telemetry_service import PerformanceTelemetryService
@@ -513,3 +514,269 @@ class TestRunScopedCacheIsolation:
         # The global cache entries must NOT affect the strict metric.
         assert cache_metric.status == MetricStatus.UNAVAILABLE
         assert cache_metric.value == 0.0
+
+
+class TestCacheEventProvenance:
+    """Cache event provenance tests — issue #159.
+
+    Verifies that cache metric source includes event IDs and semantic stages.
+    """
+
+    def test_cache_metric_source_includes_event_ids_and_stages(
+        self, telemetry_connection
+    ):
+        """Cache metric source includes event IDs and semantic stages.
+
+        Issue #159: metric provenance must include source event IDs or an
+        equivalent deterministic query identity.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            ReleaseBenchmarkConfig,
+        )
+        from research_store.telemetry_service import PerformanceTelemetryService
+
+        run_id = uuid4()
+
+        # Create parent run row.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        # Record cache events across multiple stages.
+        svc = PerformanceTelemetryService(telemetry_connection)
+        for i in range(5):
+            stage = "draft" if i < 3 else "outline"
+            svc.record_cache_event(run_id, stage, "lookup", f"key-{i}", "fp", i < 2)
+
+        # Build summary.
+        svc.build_summary(run_id)
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=False,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        # Event IDs must be populated (5 lookup events).
+        assert len(cache_metric.source.event_ids) == 5, (
+            f"Expected 5 event IDs, got {len(cache_metric.source.event_ids)}"
+        )
+        # Stages must be populated (draft and outline).
+        assert set(cache_metric.source.stages) == {"draft", "outline"}, (
+            f"Expected stages {{'draft', 'outline'}}, got {set(cache_metric.source.stages)}"
+        )
+        # Source table must still be run_cache_events.
+        assert cache_metric.source.table == "run_cache_events"
+
+    def test_cache_metric_source_empty_when_no_events(self, telemetry_connection):
+        """Cache metric source has empty event IDs and stages when no events exist."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Create parent run row but no cache events.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        # Event IDs and stages must be empty tuples.
+        assert cache_metric.source.event_ids == ()
+        assert cache_metric.source.stages == ()
+        # Status must be UNAVAILABLE.
+        assert cache_metric.status == MetricStatus.UNAVAILABLE
+
+
+class TestCacheEventClassification:
+    """Stale/invalidated/reused cache event classification — issue #159.
+
+    Verifies that non-lookup event types (invalidation, reuse) are recorded
+    but do not affect the lookup/hit/miss cache hit rate computation.
+    """
+
+    def test_invalidation_and_reuse_events_dont_affect_hit_rate(
+        self, telemetry_connection
+    ):
+        """Stale, invalidated, and reused events are classified correctly.
+
+        Issue #159: only 'lookup' events with hit=True/False contribute to
+        the cache hit rate. 'invalidation' and 'reuse' events are recorded
+        but do not affect the hit/miss ratio.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+        from research_store.telemetry_service import PerformanceTelemetryService
+
+        run_id = uuid4()
+
+        # Create parent run row.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        svc = PerformanceTelemetryService(telemetry_connection)
+
+        # Record 3 lookup events: 2 hits, 1 miss → 2/3 = 0.666... hit rate.
+        for i in range(3):
+            svc.record_cache_event(run_id, "draft", "lookup", f"key-{i}", "fp", i < 2)
+
+        # Record invalidation and reuse events — these should NOT affect hit rate.
+        svc.record_cache_event(run_id, "draft", "invalidation", "key-0", "fp", None)
+        svc.record_cache_event(run_id, "draft", "reuse", "key-1", "fp", None)
+
+        # Build summary.
+        svc.build_summary(run_id)
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=False,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        # Hit rate must be 2/3 (only lookup events count).
+        assert cache_metric.value == pytest.approx(2.0 / 3.0, abs=0.001)
+        assert cache_metric.status == MetricStatus.MEASURED
+        # Source must still point to run_cache_events.
+        assert cache_metric.source.table == "run_cache_events"
+
+    def test_stage_filtering_excludes_unrelated_stages(self, telemetry_connection):
+        """Stage filtering excludes unrelated semantic stages.
+
+        Issue #159: when stages are specified, only events from those stages
+        contribute to the cache hit rate.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+        from research_store.telemetry_service import PerformanceTelemetryService
+
+        run_id = uuid4()
+
+        # Create parent run row.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        svc = PerformanceTelemetryService(telemetry_connection)
+
+        # Record events across multiple stages.
+        # draft: 2 lookups, 1 hit → 0.5 hit rate
+        for i in range(2):
+            svc.record_cache_event(
+                run_id, "draft", "lookup", f"draft-{i}", "fp", i == 0
+            )
+        # outline: 2 lookups, 0 hits → 0.0 hit rate
+        for i in range(2):
+            svc.record_cache_event(
+                run_id, "outline", "lookup", f"outline-{i}", "fp", False
+            )
+
+        # Build summary with stage filter (only draft).
+        svc.build_summary(run_id, stages=("draft",))
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=False,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        # With stage filter, only draft events count: 1/2 = 0.5.
+        assert cache_metric.value == pytest.approx(0.5, abs=0.001)
+        assert cache_metric.status == MetricStatus.MEASURED
+        # Source must include the filtered stage.
+        assert "draft" in cache_metric.source.stages
+        assert "outline" not in cache_metric.source.stages
