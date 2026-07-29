@@ -77,7 +77,8 @@ jobs:
             scripts/test_release_benchmark.py \
             scripts/test_performance_telemetry.py \
             scripts/test_performance_telemetry_integration.py \
-            scripts/test_strict_campaign.py
+            scripts/test_strict_campaign.py \
+            scripts/test_release_evidence.py
 
   strict-campaign:
     name: Strict Campaign (issue #144) — Python ${{ matrix.python-version }}
@@ -162,3 +163,59 @@ jobs:
 
       - name: Check Ruff formatting
         run: ruff format --check --diff .
+
+  release-evidence:
+    name: Release evidence (issue #145)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+
+    inputs:
+      candidate-sha:
+        description: "Exact commit SHA to validate (workflow_dispatch only)"
+        required: false
+        type: string
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate-sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements-research-store.txt
+
+      - name: Generate release-evidence manifest
+        id: generate
+        run: |
+          python -m research_store.release_evidence generate \
+            --repo . \
+            --output release-evidence-manifest.json
+          SHA=$(python -c 'import json,sys; print(json.load(open("release-evidence-manifest.json"))["candidate_sha"])')
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-manifest
+          path: release-evidence-manifest.json
+          retention-days: 90
+
+      - name: Verify manifest against candidate SHA
+        run: |
+          python -m research_store.release_evidence verify \
+            --manifest release-evidence-manifest.json \
+            --repo .

@@ -18,8 +18,9 @@ Complete runbook for deploying, operating, debugging, benchmarking, and recoveri
 10. [Interrupted-run recovery](#10-interrupted-run-recovery)
 11. [Catalog import and export](#11-catalog-import-and-export)
 12. [Benchmarking](#12-benchmarking)
-13. [Destructive commands](#13-destructive-commands)
-14. [Recovery drill checklist](#14-recovery-drill-checklist)
+13. [Release evidence](#13-release-evidence)
+14. [Destructive commands](#14-destructive-commands)
+15. [Recovery drill checklist](#15-recovery-drill-checklist)
 
 ---
 
@@ -716,11 +717,127 @@ FIRECRAWL_LEGACY_ADAPTER_MODE=shadow \
 
 ---
 
-## 13. Destructive commands
+## 13. Release evidence
+
+> New in issue #145. Release evidence binds one exact commit SHA to
+> immutable CI, benchmark, and recovery artifacts. A checked-in manifest
+> is **evidence**, not source of truth — the candidate SHA is the source.
+
+### 13.1 What the manifest records
+
+The manifest (`release-evidence-manifest.json`) is a versioned JSON document
+(`release-evidence-manifest-v1`) containing:
+
+| Field | Description |
+| ------- | ------------- |
+| `candidate_sha` | Exact 40-char commit SHA on `main` that is the release candidate |
+| `tree_hash` | Git tree hash for the candidate commit |
+| `generated_at` | ISO-8601 timestamp of manifest generation |
+| `generated_by` | Identifier for who/what generated the manifest |
+| `ci_jobs` | Per-job results: name, conclusion, run ID, URL |
+| `artifacts` | Content-addressed artifact references with SHA-256 hashes |
+| `fingerprints` | Dependency, service, model, tokenizer, hardware fingerprints |
+| `environment` | Runtime environment metadata |
+| `tag` | Optional release tag pointing to this SHA |
+
+### 13.2 Required CI jobs
+
+Every release candidate must have **all** of the following CI jobs conclude
+`success`:
+
+- `Test — Python 3.11`
+- `Test — Python 3.12`
+- `Ruff`
+- `Strict Campaign (issue #144) — Python 3.11`
+- `Strict Campaign (issue #144) — Python 3.12`
+
+A missing, skipped, failed, or cancelled job causes verification to fail.
+
+### 13.3 Generating a manifest
+
+```bash
+# Generate for current HEAD
+python -m research_store.release_evidence generate --repo . --output manifest.json
+
+# Generate for a specific SHA (detaches HEAD, generates, restores)
+python -m research_store.release_evidence generate --repo . --sha <40-char-sha> --output manifest.json
+```
+
+The CI workflow (`ci.yml` → `release-evidence` job) automates this on every
+`push` to `main` and on `workflow_dispatch` with an optional `candidate-sha`
+input.
+
+### 13.4 Verifying a manifest
+
+```bash
+python -m research_store.release_evidence verify \
+  --manifest manifest.json \
+  --repo .
+```
+
+The verifier checks:
+
+1. **SHA match** — current HEAD equals `candidate_sha`.
+2. **CI completeness** — all required jobs present and concluded `success`.
+3. **Artifact validity** — all artifact SHA-256 hashes match current files.
+4. **Fingerprints present** — environment and dependency categories recorded.
+5. **Post-candidate commits** — zero commits added after the candidate SHA.
+6. **Tag resolution** — if a tag is present, it resolves to the candidate SHA.
+
+Exit code `0` means all checks passed. Non-zero means one or more checks
+failed; the verifier prints error details to stderr.
+
+### 13.5 Post-candidate invalidation
+
+Any commit added to `main` after the candidate SHA **invalidates** the
+existing manifest. The verifier will report:
+
+```
+ERROR: N commit(s) added after candidate SHA
+```
+
+To re-establish evidence:
+
+1. Generate a new manifest from the updated `main` HEAD.
+2. Run the full CI suite against the new candidate.
+3. Re-verify the new manifest.
+
+**Never** commit a populated manifest to `main` and then treat the
+predecessor SHA as the candidate — this is the "manifest paradox" that
+issue #145 was created to prevent.
+
+### 13.6 Artifact store
+
+The CI workflow uploads `release-evidence-manifest.json` as a GitHub Actions
+artifact with a 90-day retention period. Download it from the workflow run
+artifacts panel or via:
+
+```bash
+gh run download <run-id> --name release-evidence-manifest
+```
+
+### 13.7 Relationship to gate #146
+
+Gate #146 (release revalidation gate) requires the exact-head CI and
+artifact provenance checks described in this section. The gate tooling
+reads the manifest from the latest `release-evidence` CI run on `main`
+and verifies:
+
+- `candidate_sha` matches current `main` HEAD.
+- All required CI jobs concluded `success`.
+- All artifact hashes are intact.
+- No post-candidate commits exist.
+- A release tag (if present) resolves to the candidate SHA.
+
+If any check fails, gate #146 returns **FAIL — release remains blocked**.
+
+---
+
+## 14. Destructive commands
 
 Every destructive command is documented with its scope, safeguards, and recovery procedure.
 
-### 13.1 `index-prune --force`
+### 14.1 `index-prune --force`
 
 | Aspect           | Detail                                                           |
 | ---------------- | ---------------------------------------------------------------- |
@@ -730,7 +847,7 @@ Every destructive command is documented with its scope, safeguards, and recovery
 | **Recovery**     | Rebuild the collection with `index-build --current-config --all` |
 | **Before use**   | Verify the index ID is not the active index via `index-list`     |
 
-### 13.2 `migrate --from N --to M --apply`
+### 14.2 `migrate --from N --to M --apply`
 
 | Aspect           | Detail                                                                                                                                                                                   |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -740,7 +857,7 @@ Every destructive command is documented with its scope, safeguards, and recovery
 | **Recovery**     | No automatic recovery. Restore from a prior catalog backup if available. Database state is unaffected.                                                                                   |
 | **Before use**   | Ensure the database is in a consistent state; stop all ingestion.                                                                                                                        |
 
-### 13.3 `purge --force` (no filter)
+### 14.3 `purge --force` (no filter)
 
 | Aspect           | Detail                                                                     |
 | ---------------- | -------------------------------------------------------------------------- |
@@ -750,7 +867,7 @@ Every destructive command is documented with its scope, safeguards, and recovery
 | **Recovery**     | Regenerate from PostgreSQL and blob storage via `catalog-export` commands  |
 | **Before use**   | Verify the catalog root path; consider `--keep-last` or `--before` instead |
 
-### 13.4 `verify-blobs` with `--force` deletion
+### 14.4 `verify-blobs` with `--force` deletion
 
 | Aspect           | Detail                                                                    |
 | ---------------- | ------------------------------------------------------------------------- |
@@ -760,7 +877,7 @@ Every destructive command is documented with its scope, safeguards, and recovery
 | **Recovery**     | Not recoverable. Re-import from source if needed.                         |
 | **Before use**   | Always run without `--force` first to review the orphan list              |
 
-### 13.5 Manual job/lease editing
+### 14.5 Manual job/lease editing
 
 | Aspect           | Detail                                                                             |
 | ---------------- | ---------------------------------------------------------------------------------- |
@@ -770,7 +887,7 @@ Every destructive command is documented with its scope, safeguards, and recovery
 | **Recovery**     | Restore from PostgreSQL backup.                                                    |
 | **Before use**   | **Do not do this.** Use `run-reopen`, `run-transition`, or `index-build` commands. |
 
-### 13.6 General safeguards for all destructive operations
+### 14.6 General safeguards for all destructive operations
 
 1. **Always capture a backup first** (see [Section 6.1](#61-backup-procedure)).
 2. **Stop ingestion** (`systemctl --user stop firecrawl-research-indexer.service`).
@@ -785,7 +902,7 @@ Every destructive command is documented with its scope, safeguards, and recovery
 
 Use this checklist periodically to verify that recovery procedures work end-to-end.
 
-### 14.1 Full disaster recovery
+### 15.1 Full disaster recovery
 
 - [ ] **Step 1:** Capture a consistent backup (PostgreSQL dump + blob inventory + Qdrant state).
 - [ ] **Step 2:** Stop all services (worker, any active ingestion).
@@ -801,7 +918,7 @@ Use this checklist periodically to verify that recovery procedures work end-to-e
 - [ ] **Step 12:** Restart the worker.
 - [ ] **Step 13:** Run a test acquisition and verify end-to-end provenance.
 
-### 14.2 Index cutover recovery
+### 15.2 Index cutover recovery
 
 - [ ] **Step 1:** Build a new index.
 - [ ] **Step 2:** Simulate cutover interruption (stop worker mid-activation).
@@ -809,7 +926,7 @@ Use this checklist periodically to verify that recovery procedures work end-to-e
 - [ ] **Step 4:** Complete the activation or rollback.
 - [ ] **Step 5:** Verify the active alias via `doctor`.
 
-### 14.3 Run recovery drill
+### 15.3 Run recovery drill
 
 - [ ] **Step 1:** Start a test run (`run-start`).
 - [ ] **Step 2:** Transition it to a non-terminal state.
@@ -818,7 +935,7 @@ Use this checklist periodically to verify that recovery procedures work end-to-e
 - [ ] **Step 5:** Reopen the run.
 - [ ] **Step 6:** Resume work and complete the run.
 
-### 14.4 Endpoint failure drill
+### 15.4 Endpoint failure drill
 
 - [ ] **Step 1:** Stop the local LLM endpoint.
 - [ ] **Step 2:** Start an `autonomous_local` run that requires the LLM.
