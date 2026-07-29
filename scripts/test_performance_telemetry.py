@@ -701,7 +701,259 @@ class TestStrictModeRejection:
         assert performance.cpu_percent == 0.0
         assert performance.gpu_memory_mb == 0.0
 
-    def test_strict_mode_passes_when_telemetry_tables_exist(self):
+    def test_strict_cache_metric_status_is_unavailable(self):
+        """Cache metric status must be UNAVAILABLE when no scoped lookups exist.
+
+        Issue #159: strict cache metrics must carry an explicit status
+        independent of the numeric value.  When cache_lookups == 0 in strict
+        mode the status must be UNAVAILABLE — not MEASURED with a value of 0.0.
+        """
+        import time
+        from unittest import mock
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        mock_conn = mock.Mock()
+
+        # Telemetry query returns all zeros → strict flags fire.
+        mock_telemetry_cursor = mock.Mock()
+        mock_telemetry_cursor.__enter__ = mock.Mock(return_value=mock_telemetry_cursor)
+        mock_telemetry_cursor.__exit__ = mock.Mock(return_value=False)
+        mock_telemetry_cursor.fetchone.return_value = (
+            None,  # total_tokens
+            None,  # token_source
+            0,  # cache_lookups
+            0,  # cache_hits
+            0,  # cache_misses
+            0.0,  # embedding_throughput
+            0,  # embedding_total_texts
+            0.0,  # embedding_elapsed_seconds
+            None,  # cpu_mean
+            0,  # cpu_count
+            None,  # gpu_mean
+            0,  # gpu_count
+        )
+        mock_conn.execute.return_value = mock_telemetry_cursor
+
+        mock_cursor = mock.Mock()
+        mock_cursor.__enter__ = mock.Mock(return_value=mock_cursor)
+        mock_cursor.__exit__ = mock.Mock(return_value=False)
+        mock_cursor.fetchone.return_value = (0,)  # COUNT(*) for semantic_calls
+        mock_conn.cursor.return_value = mock_cursor
+
+        engine = MetricEngine("postgresql://fake")
+        engine._connection = mock_conn
+        engine.config = ReleaseBenchmarkConfig(
+            database_url="postgresql://fake",
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        _, metrics = engine.extract_performance_metrics(uuid4(), time.monotonic())
+
+        # Find the cache_hit_rate metric record.
+        cache_metric = next((m for m in metrics if m.name == "cache_hit_rate"), None)
+        assert cache_metric is not None, "cache_hit_rate metric record missing"
+        assert cache_metric.status == MetricStatus.UNAVAILABLE, (
+            f"Expected UNAVAILABLE, got {cache_metric.status}"
+        )
+        # The numeric value is 0.0 but the status is UNAVAILABLE.
+        assert cache_metric.value == 0.0
+        # Source must always point to run_cache_events (issue #159).
+        assert cache_metric.source.table == "run_cache_events"
+        assert (
+            cache_metric.source.run_id is not None and cache_metric.source.run_id != ""
+        )
+
+    def test_strict_cache_metric_source_never_points_to_semantic_cache(self):
+        """Cache metric source.table must always be 'run_cache_events'.
+
+        Issue #159: the source provenance must never reference the global
+        semantic_cache table, even when the metric is unavailable.
+        """
+        import time
+        from unittest import mock
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            ReleaseBenchmarkConfig,
+        )
+
+        mock_conn = mock.Mock()
+
+        # Telemetry query returns all zeros.
+        mock_telemetry_cursor = mock.Mock()
+        mock_telemetry_cursor.__enter__ = mock.Mock(return_value=mock_telemetry_cursor)
+        mock_telemetry_cursor.__exit__ = mock.Mock(return_value=False)
+        mock_telemetry_cursor.fetchone.return_value = (
+            None,
+            None,
+            0,
+            0,
+            0,
+            0.0,
+            0,
+            0.0,
+            None,
+            0,
+            None,
+            0,
+        )
+        mock_conn.execute.return_value = mock_telemetry_cursor
+
+        mock_cursor = mock.Mock()
+        mock_cursor.__enter__ = mock.Mock(return_value=mock_cursor)
+        mock_cursor.__exit__ = mock.Mock(return_value=False)
+        mock_cursor.fetchone.return_value = (0,)
+        mock_conn.cursor.return_value = mock_cursor
+
+        engine = MetricEngine("postgresql://fake")
+        engine._connection = mock_conn
+        engine.config = ReleaseBenchmarkConfig(
+            database_url="postgresql://fake",
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        _, metrics = engine.extract_performance_metrics(uuid4(), time.monotonic())
+
+        cache_metric = next((m for m in metrics if m.name == "cache_hit_rate"), None)
+        assert cache_metric is not None
+        assert cache_metric.source.table == "run_cache_events"
+        assert "semantic_cache" not in cache_metric.source.table
+
+    def test_strict_mode_does_not_invoke_legacy_cache(self):
+        """Strict mode must never call _legacy_cache_hit_rate().
+
+        Issue #159: the global semantic_cache fallback must not be reachable
+        from any strict code path.  We verify by asserting that the mock
+        connection's cursor() is never called for the legacy query.
+        """
+        import time
+        from unittest import mock
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            ReleaseBenchmarkConfig,
+        )
+
+        mock_conn = mock.Mock()
+
+        # Telemetry query returns all zeros → strict flags fire.
+        mock_telemetry_cursor = mock.Mock()
+        mock_telemetry_cursor.__enter__ = mock.Mock(return_value=mock_telemetry_cursor)
+        mock_telemetry_cursor.__exit__ = mock.Mock(return_value=False)
+        mock_telemetry_cursor.fetchone.return_value = (
+            None,
+            None,
+            0,
+            0,
+            0,
+            0.0,
+            0,
+            0.0,
+            None,
+            0,
+            None,
+            0,
+        )
+        mock_conn.execute.return_value = mock_telemetry_cursor
+
+        # cursor() is used for semantic_calls count — this is expected.
+        mock_cursor = mock.Mock()
+        mock_cursor.__enter__ = mock.Mock(return_value=mock_cursor)
+        mock_cursor.__exit__ = mock.Mock(return_value=False)
+        mock_cursor.fetchone.return_value = (0,)
+        mock_conn.cursor.return_value = mock_cursor
+
+        engine = MetricEngine("postgresql://fake")
+        engine._connection = mock_conn
+        engine.config = ReleaseBenchmarkConfig(
+            database_url="postgresql://fake",
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        # Patch _legacy_cache_hit_rate to raise if called.
+        with mock.patch.object(
+            engine,
+            "_legacy_cache_hit_rate",
+            side_effect=RuntimeError(
+                "_legacy_cache_hit_rate must not be called in strict mode"
+            ),
+        ):
+            _, _ = engine.extract_performance_metrics(uuid4(), time.monotonic())
+        # If we reach here, _legacy_cache_hit_rate was NOT called.
+
+    def test_non_strict_cache_metric_status_is_measured_with_lookups(self):
+        """Cache metric status must be MEASURED when scoped lookups exist.
+
+        Issue #159: when cache_lookups > 0 the status is MEASURED regardless
+        of strict mode, because the authoritative source (run_cache_events)
+        has data.
+        """
+        import time
+        from unittest import mock
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        mock_conn = mock.Mock()
+
+        # Telemetry query returns non-zero cache data.
+        mock_telemetry_cursor = mock.Mock()
+        mock_telemetry_cursor.__enter__ = mock.Mock(return_value=mock_telemetry_cursor)
+        mock_telemetry_cursor.__exit__ = mock.Mock(return_value=False)
+        mock_telemetry_cursor.fetchone.return_value = (
+            1000,  # total_tokens
+            "endpoint",  # token_source
+            10,  # cache_lookups
+            3,  # cache_hits
+            7,  # cache_misses
+            50.0,  # embedding_throughput
+            48,  # embedding_total_texts
+            2.5,  # embedding_elapsed_seconds
+            45.0,  # cpu_mean
+            5,  # cpu_count
+            1024.0,  # gpu_mean
+            3,  # gpu_count
+        )
+        mock_conn.execute.return_value = mock_telemetry_cursor
+
+        mock_cursor = mock.Mock()
+        mock_cursor.__enter__ = mock.Mock(return_value=mock_cursor)
+        mock_cursor.__exit__ = mock.Mock(return_value=False)
+        mock_cursor.fetchone.return_value = (5,)  # COUNT(*) for semantic_calls
+        mock_conn.cursor.return_value = mock_cursor
+
+        engine = MetricEngine("postgresql://fake")
+        engine._connection = mock_conn
+        engine.config = ReleaseBenchmarkConfig(
+            database_url="postgresql://fake",
+            blob_root=Path("/tmp"),
+            strict=False,
+        )
+
+        _, metrics = engine.extract_performance_metrics(uuid4(), time.monotonic())
+
+        cache_metric = next((m for m in metrics if m.name == "cache_hit_rate"), None)
+        assert cache_metric is not None
+        assert cache_metric.status == MetricStatus.MEASURED
+        assert cache_metric.value == 0.3  # 3/10
+        assert cache_metric.source.table == "run_cache_events"
+
+    def test_strict_mode_passes_when_telemetry_tables_exist(self: object) -> None:
         """Strict mode proceeds when telemetry tables exist and data is present."""
         from uuid import uuid4
 

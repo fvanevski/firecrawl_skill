@@ -1015,11 +1015,9 @@ class MetricEngine:
                 name="cache_hit_rate",
                 value=performance.cache_hit_rate,
                 source=MetricSource(
-                    table="run_cache_events" if cache_lookups > 0 else "semantic_cache",
-                    column="event_type, hit"
-                    if cache_lookups > 0
-                    else "status = 'valid'",
-                    run_id=str(run_id) if cache_lookups > 0 else "",
+                    table="run_cache_events",
+                    column="event_type, hit",
+                    run_id=str(run_id),
                     method="ratio",
                 ),
                 formula=cache_formula,

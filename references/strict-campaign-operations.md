@@ -69,7 +69,8 @@ Alembic migrations):
 - `coverage_events` — coverage completeness
 - `evidence_packets` — report quality
 - `semantic_calls` — performance metrics (tokens, latency, model)
-- `semantic_cache` — cache hit/miss events
+- `run_cache_events` — run-scoped cache hit/miss events (authoritative)
+- `semantic_cache` — legacy global cache (non-strict mode only)
 - `endpoint_usage_records` — token counts from endpoint responses
 - `resource_samples` — CPU/GPU multi-sample telemetry
 - `resource_summary` — aggregated CPU/GPU summary per run

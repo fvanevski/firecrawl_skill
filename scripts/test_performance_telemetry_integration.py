@@ -278,3 +278,161 @@ class TestLegacyFallback:
         gpu_mem = engine._legacy_gpu_memory()
         # May be None if NVML is unavailable.
         assert gpu_mem is None or gpu_mem >= 0.0
+
+
+class TestRunScopedCacheIsolation:
+    """Two-run cache isolation test — issue #159.
+
+    Verifies that two benchmark runs with different cache events produce
+    isolated cache metrics.  Records for Run A must not alter Run B's result.
+    """
+
+    def test_two_runs_with_different_cache_events_are_isolated(
+        self, telemetry_connection
+    ):
+        """Run A and Run B with different cache events remain isolated.
+
+        Issue #159: Campaign A and Campaign B cache metrics must be
+        reproducible from their own event sets.  Unrelated prior cache
+        records cannot alter a benchmark run's metric.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+        from research_store.telemetry_service import PerformanceTelemetryService
+
+        run_a = uuid4()
+        run_b = uuid4()
+
+        svc_a = PerformanceTelemetryService(telemetry_connection)
+        svc_b = PerformanceTelemetryService(telemetry_connection)
+
+        # Run A: 5 lookups, 2 hits, 3 misses
+        for i in range(5):
+            hit = i < 2
+            svc_a.record_cache_event(
+                run_a, "draft", "lookup", f"key-a-{i}", "fp-a", hit
+            )
+
+        # Run B: 3 lookups, 0 hits, 3 misses (zero hit rate)
+        for i in range(3):
+            svc_b.record_cache_event(
+                run_b, "draft", "lookup", f"key-b-{i}", "fp-b", False
+            )
+
+        # Also insert global semantic_cache entries that should NOT affect
+        # either run in strict mode.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO semantic_cache (id, key_hash, status, created_at)
+                   VALUES (%s, %s, %s, now())""",
+                (str(uuid4()), "global-key", "valid"),
+            )
+
+        engine = MetricEngine(TEST_DSN)
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        _, metrics_a = engine.extract_performance_metrics(run_a, 0)
+        _, metrics_b = engine.extract_performance_metrics(run_b, 0)
+
+        # Run A: 2/5 = 0.4 hit rate
+        cache_a = next(m for m in metrics_a if m.name == "cache_hit_rate")
+        assert cache_a.value == pytest.approx(0.4, abs=0.001)
+        assert cache_a.status == MetricStatus.MEASURED
+        assert cache_a.source.table == "run_cache_events"
+
+        # Run B: 0/3 = 0.0 hit rate
+        cache_b = next(m for m in metrics_b if m.name == "cache_hit_rate")
+        assert cache_b.value == 0.0
+        assert cache_b.status == MetricStatus.MEASURED
+        assert cache_b.source.table == "run_cache_events"
+
+        # The two runs must have different cache hit rates.
+        assert cache_a.value != cache_b.value
+
+    def test_no_scoped_lookups_yields_unavailable(self, telemetry_connection):
+        """No scoped lookups yields unavailable/unevaluated.
+
+        Issue #159: when there are no scoped lookups for a run, the cache
+        metric must be UNAVAILABLE — not a borrowed global ratio.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Insert global cache entries but NO run-scoped events.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO semantic_cache (id, key_hash, status, created_at)
+                   VALUES (%s, %s, %s, now())""",
+                (str(uuid4()), "global-key", "valid"),
+            )
+
+        engine = MetricEngine(TEST_DSN)
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        assert cache_metric.status == MetricStatus.UNAVAILABLE
+        assert cache_metric.value == 0.0
+        assert cache_metric.source.table == "run_cache_events"
+        assert "semantic_cache" not in cache_metric.source.table
+
+    def test_global_cache_rows_do_not_affect_strict_metrics(self, telemetry_connection):
+        """Global cache rows with no run association cannot affect strict metrics.
+
+        Issue #159: unrelated prior cache records cannot alter a benchmark
+        run's metric.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Insert many global cache entries with various statuses.
+        with telemetry_connection.cursor() as cur:
+            for i in range(20):
+                status = "valid" if i % 3 == 0 else "expired"
+                cur.execute(
+                    """INSERT INTO semantic_cache (id, key_hash, status, created_at)
+                       VALUES (%s, %s, %s, now())""",
+                    (str(uuid4()), f"global-key-{i}", status),
+                )
+
+        engine = MetricEngine(TEST_DSN)
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        # The global cache entries must NOT affect the strict metric.
+        assert cache_metric.status == MetricStatus.UNAVAILABLE
+        assert cache_metric.value == 0.0
