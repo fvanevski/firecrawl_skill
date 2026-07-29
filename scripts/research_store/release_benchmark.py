@@ -1180,16 +1180,17 @@ class MetricEngine:
                     result["gpu_mean_memory_mb"] = round(float(gpu_mean), 2)
                 result["cpu_samples"] = cpu_cnt
                 result["gpu_samples"] = gpu_cnt
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             # Rollback the failed transaction so legacy queries can execute.
             try:
                 self._connection.rollback()
             except Exception:  # noqa: S110, BLE001
                 pass
             # Telemetry tables don't exist — fall through to legacy.
-            logger.debug(
-                "run_performance_telemetry table not found — "
-                "falling back to legacy metric extraction"
+            logger.warning(
+                "run_performance_telemetry query failed — "
+                "falling back to legacy metric extraction: %s",
+                exc,
             )
 
         return result
