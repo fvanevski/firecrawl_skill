@@ -181,6 +181,8 @@ def schema_for(model_type) -> dict:
     def build(annotation, *, root=False):
         if annotation is Any:
             return {}
+        if annotation is object:
+            return {}
         origin = get_origin(annotation)
         args = get_args(annotation)
         if origin in (types.UnionType,):

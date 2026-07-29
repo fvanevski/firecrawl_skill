@@ -134,8 +134,16 @@
     "performance": {
       "$ref": "#/$defs/PerformanceMeasurement"
     },
+    "performance_metrics": {
+      "items": {},
+      "type": "array"
+    },
     "quality": {
       "$ref": "#/$defs/QualityMeasurement"
+    },
+    "quality_metrics": {
+      "items": {},
+      "type": "array"
     },
     "run_id": {
       "anyOf": [
@@ -163,7 +171,9 @@
     "performance",
     "integrity_checks",
     "run_id",
-    "errors"
+    "errors",
+    "quality_metrics",
+    "performance_metrics"
   ],
   "title": "WorkflowRunResult",
   "type": "object"

@@ -723,7 +723,9 @@
       }
     ],
     "run_id": null,
-    "errors": []
+    "errors": [],
+    "quality_metrics": [],
+    "performance_metrics": []
   },
   "workflow-comparison-v1": {
     "schema_version": "workflow-comparison-v1",
@@ -754,7 +756,9 @@
         },
         "integrity_checks": [],
         "run_id": null,
-        "errors": []
+        "errors": [],
+        "quality_metrics": [],
+        "performance_metrics": []
       },
       {
         "schema_version": "workflow-run-result-v1",
@@ -781,7 +785,9 @@
         },
         "integrity_checks": [],
         "run_id": null,
-        "errors": []
+        "errors": [],
+        "quality_metrics": [],
+        "performance_metrics": []
       }
     ],
     "quality_vs_baseline": {
@@ -825,7 +831,9 @@
           },
           "integrity_checks": [],
           "run_id": null,
-          "errors": []
+          "errors": [],
+          "quality_metrics": [],
+          "performance_metrics": []
         },
         {
           "schema_version": "workflow-run-result-v1",
@@ -852,7 +860,9 @@
           },
           "integrity_checks": [],
           "run_id": null,
-          "errors": []
+          "errors": [],
+          "quality_metrics": [],
+          "performance_metrics": []
         }
       ],
       "quality_vs_baseline": {
