@@ -103,16 +103,31 @@ def _preflight_check(
 ) -> tuple[bool, list[str]]:
     """Validate that all required infrastructure is available before starting campaigns.
 
-    Returns (ok, errors) where ok is True when all checks pass,
-    and errors is a list of failure descriptions.
+    Returns (ok, errors) where ok is True when all MANDATORY checks pass.
+    Optional infrastructure (Firecrawl CLI, LLM endpoints) are checked but
+    do not cause failure — they are logged as warnings.
+
+    Mandatory infrastructure:
+    - PostgreSQL (required for creating research runs)
+    - Dataset file (required for benchmark data)
+    - Campaign directory (required for writing artifacts)
+
+    Optional infrastructure (logged as warnings, not errors):
+    - Qdrant (used for vector indexing)
+    - Firecrawl CLI (used for search/scrape)
+    - Embedding endpoint (used for chunk embedding)
+    - Generative endpoint (used for synthesis)
+    - Reranker endpoint (optional)
+    - Blob root (used for content-addressed storage)
     """
     errors: list[str] = []
+    warnings: list[str] = []
 
-    # 1. Dataset file
+    # 1. Dataset file (MANDATORY)
     if not dataset_path.is_file():
         errors.append(f"benchmark dataset not found: {dataset_path}")
 
-    # 2. PostgreSQL connectivity
+    # 2. PostgreSQL connectivity (MANDATORY)
     try:
         import psycopg
 
@@ -129,7 +144,7 @@ def _preflight_check(
     except Exception as exc:  # noqa: BLE001
         errors.append(f"PostgreSQL connection failed: {exc}")
 
-    # 3. Qdrant connectivity and collection state
+    # 3. Qdrant connectivity and collection state (OPTIONAL)
     if qdrant_url:
         try:
             import urllib.request
@@ -150,11 +165,11 @@ def _preflight_check(
                 f"  Qdrant: ok, {len(collections)} collection(s): {', '.join(collection_names) or 'none'}"
             )
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"Qdrant connection failed: {exc}")
+            warnings.append(f"Qdrant connection failed: {exc}")
     else:
         print("  Qdrant: NOT CONFIGURED")
 
-    # 4. Firecrawl CLI availability
+    # 4. Firecrawl CLI availability (OPTIONAL)
     try:
         import subprocess
 
@@ -169,13 +184,13 @@ def _preflight_check(
             version = result.stdout.strip()
             print(f"  Firecrawl CLI: {version}")
         else:
-            errors.append("Firecrawl CLI returned non-zero exit code")
+            warnings.append("Firecrawl CLI returned non-zero exit code")
     except FileNotFoundError:
-        errors.append("Firecrawl CLI not found in PATH")
+        warnings.append("Firecrawl CLI not found in PATH")
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"Firecrawl CLI check failed: {exc}")
+        warnings.append(f"Firecrawl CLI check failed: {exc}")
 
-    # 5. Embedding endpoint health
+    # 5. Embedding endpoint health (OPTIONAL)
     try:
         import urllib.request
 
@@ -202,11 +217,11 @@ def _preflight_check(
                 f"  Embedding endpoint ({embedding_url}): {len(embed_models)} model(s): {', '.join(embed_models) or 'none'}"
             )
         else:
-            errors.append("EMBEDDING_URL not set — embedding unavailable")
+            warnings.append("EMBEDDING_URL not set — embedding unavailable")
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"Embedding endpoint check failed: {exc}")
+        warnings.append(f"Embedding endpoint check failed: {exc}")
 
-    # 6. Generative endpoint health
+    # 6. Generative endpoint health (OPTIONAL)
     try:
         import urllib.request
 
@@ -235,11 +250,11 @@ def _preflight_check(
                 f"  Generative endpoint ({generative_url}): {len(chat_models)} model(s): {', '.join(chat_models) or 'none'}"
             )
         else:
-            errors.append("GENERATIVE_URL not set — generative LLM unavailable")
+            warnings.append("GENERATIVE_URL not set — generative LLM unavailable")
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"Generative endpoint check failed: {exc}")
+        warnings.append(f"Generative endpoint check failed: {exc}")
 
-    # 7. Reranker endpoint health
+    # 7. Reranker endpoint health (OPTIONAL)
     try:
         import urllib.request
 
@@ -268,9 +283,9 @@ def _preflight_check(
         else:
             print("  Reranker endpoint: NOT CONFIGURED (optional)")
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"Reranker endpoint check failed: {exc}")
+        warnings.append(f"Reranker endpoint check failed: {exc}")
 
-    # 8. Blob root writability
+    # 8. Blob root writability (OPTIONAL)
     if blob_root:
         try:
             blob_root.mkdir(parents=True, exist_ok=True)
@@ -279,14 +294,20 @@ def _preflight_check(
             test_file.unlink()
             print(f"  Blob root ({blob_root}): writable")
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"Blob root not writable: {exc}")
+            warnings.append(f"Blob root not writable: {exc}")
 
-    # 9. Campaign directory writability
+    # 9. Campaign directory writability (MANDATORY)
     try:
         campaign_dir.mkdir(parents=True, exist_ok=True)
         print(f"  Campaign directory ({campaign_dir}): writable")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"Campaign directory not writable: {exc}")
+
+    # Print any warnings
+    if warnings:
+        print("\n  [WARN] Optional infrastructure unavailable:")
+        for w in warnings:
+            print(f"    - {w}")
 
     return (len(errors) == 0, errors)
 
