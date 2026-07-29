@@ -1757,8 +1757,6 @@ class TestIntegration:
             (
                 repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
             ).write_text("{}")
-            # Create recovery artifact
-            (repo / "recovery-report.txt").write_text("recovery")
             # Create a requirements file for fingerprints
             (repo / "requirements-research-store.txt").write_text(
                 "pytest==8.0.0\npsycopg==3.1.0\nqdrant-client==1.7.0\n"
@@ -1897,9 +1895,16 @@ class TestIntegration:
                 "Campaign B: fr_test_b\n"
                 "Reproducibility: PASS\n"
             )
-            # Commit only tracked files (NOT recovery-report.txt)
+            # Stage all files, then unstage the recovery file so it stays
+            # on disk but is NOT committed (simulates a runtime-generated file).
             subprocess.run(
                 ["git", "add", "."], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                ["git", "rm", "--cached", "recovery-report.txt"],
+                cwd=repo,
+                capture_output=True,
+                check=True,
             )
             subprocess.run(
                 [
@@ -1966,6 +1971,90 @@ class TestIntegration:
         """The manifest always carries the correct schema version."""
         manifest = ReleaseEvidenceManifest()
         assert manifest.schema_version == "release-evidence-manifest-v1"
+
+    def test_verify_requires_tracked_recovery(self):
+        """Verification fails when the repo tracks a recovery file but the
+        manifest omits it — the requirement is derived from the repository
+        index, not from the manifest contents.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            # Create tracked files including a recovery file
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github" / "workflows").mkdir()
+            (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
+            (repo / "tests").mkdir(parents=True)
+            (repo / "tests" / "fixtures").mkdir(parents=True)
+            (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
+            (
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+            ).write_text("{}")
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "scripts" / "research_store").mkdir(parents=True)
+            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
+                "# benchmark"
+            )
+            (repo / "recovery-report.txt").write_text("tracked recovery")
+            # Commit EVERYTHING including the recovery file
+            subprocess.run(
+                ["git", "add", "."], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+            sha = _current_sha(repo)
+
+            # Create a manifest WITHOUT the recovery artifact
+            # (simulates a tampered manifest that removed the recovery entry)
+            from research_store.release_evidence import (
+                ArtifactReference,
+                _file_sha256,
+            )
+
+            artifacts = (
+                ArtifactReference(
+                    name="ci.yml",
+                    sha256=_file_sha256(repo / ".github" / "workflows" / "ci.yml"),
+                    path=".github/workflows/ci.yml",
+                ),
+                ArtifactReference(
+                    name="benchmark-v1.json",
+                    sha256=_file_sha256(
+                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                    ),
+                    path="tests/fixtures/benchmark/benchmark-v1.json",
+                ),
+                ArtifactReference(
+                    name="release_benchmark.py",
+                    sha256=_file_sha256(
+                        repo / "scripts" / "research_store" / "release_benchmark.py"
+                    ),
+                    path="scripts/research_store/release_benchmark.py",
+                ),
+                # Deliberately omit recovery-report.txt
+            )
+
+            manifest = _make_manifest(candidate_sha=sha, artifacts=artifacts)
+            verifier = ReleaseEvidenceVerifier(manifest, repo=repo)
+            vresult = verifier.verify()
+
+            # Should FAIL because the repo tracks recovery-report.txt
+            # but the manifest omits it
+            assert vresult.artifacts_valid is False
+            assert not vresult.passed
 
     def test_required_ci_jobs_constant(self):
         """REQUIRED_CI_JOBS contains all expected job names."""

@@ -908,25 +908,17 @@ class ReleaseEvidenceVerifier:
         """Check that required artifact classes are present and hashes match.
 
         The ``ci``, ``benchmark``, and ``source`` categories are always
-        required.  The ``recovery`` category is required only when a
-        recovery artifact is present in the manifest — untracked recovery
-        files (e.g. ``recovery-report.txt``) are excluded by the generator
-        and must not cause verification failure.
+        required.  The ``recovery`` category is required when the candidate
+        repository tracks recovery files — the requirement is derived from
+        the repository's index, not from the manifest being verified, so
+        removing a recovery entry from the manifest cannot bypass its hash
+        validation.
         """
         if not self.manifest.artifacts:
             return False
 
-        # Determine which categories are actually present in the manifest.
-        manifest_has_recovery = any(
-            "recovery" in a.name.lower() or "recovery" in a.path.lower()
-            for a in self.manifest.artifacts
-        )
-        required_categories: set[str] = {"ci", "benchmark", "source"}
-        if manifest_has_recovery:
-            required_categories.add("recovery")
-
+        # Determine which artifact categories are present in the manifest.
         found_categories: set[str] = set()
-
         for ref in self.manifest.artifacts:
             if not ref.sha256:
                 return False
@@ -950,7 +942,39 @@ class ReleaseEvidenceVerifier:
             elif "recovery" in name_lower or "recovery" in path_lower:
                 found_categories.add("recovery")
 
+        # Required categories: ci, benchmark, source are always required.
+        required_categories: set[str] = {"ci", "benchmark", "source"}
+
+        # Recovery is required only when the candidate repository tracks
+        # recovery files — this prevents the manifest from silently
+        # omitting a tracked recovery artifact to bypass validation.
+        if self._find_tracked_recovery_files():
+            required_categories.add("recovery")
+
         return required_categories.issubset(found_categories)
+
+    def _find_tracked_recovery_files(self) -> list[str]:
+        """Return tracked file paths in the repository that match recovery patterns.
+
+        Uses ``git ls-files`` to inspect the candidate repository's index,
+        so the requirement is authoritative rather than derived from the
+        untrusted manifest.
+        """
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=str(self.repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return []
+        tracked: list[str] = []
+        for line in result.stdout.splitlines():
+            path = line.strip()
+            if "recovery" in path.lower():
+                tracked.append(path)
+        return tracked
 
     def _check_fingerprints_present(self) -> bool:
         """Check that all required provenance fingerprint categories are recorded."""
