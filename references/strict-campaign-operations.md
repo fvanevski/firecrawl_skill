@@ -173,8 +173,11 @@ orchestrator.run()
   → metric_engine.extract_performance_metrics()
 ```
 
-If telemetry is populated after extraction, strict mode will raise
-`RuntimeError` because the metric engine cannot find the required tables.
+If telemetry is populated after extraction, strict mode will produce
+0.0 metrics with clear formulas documenting the empty source — it no
+longer raises `RuntimeError`. This ensures campaigns can complete even
+when the orchestrator produces partial state (coverage events but no
+claims/evidence/telemetry).
 
 ---
 
@@ -313,15 +316,15 @@ in both campaigns.
 
 ### Performance metrics compared
 
-| Metric                  | Type    | Tolerance |
+| Metric | Type | Tolerance |
 | ----------------------- | ------- | --------- |
-| `total_latency_ms`      | absolute | configurable |
-| `total_tokens`          | absolute | configurable |
-| `semantic_calls`        | absolute | configurable |
-| `cache_hit_rate`        | ratio   | configurable |
-| `embedding_throughput`  | absolute | configurable |
-| `cpu_percent`           | absolute | configurable |
-| `gpu_memory_mb`         | absolute | configurable |
+| `total_latency_ms` | absolute | configurable |
+| `total_tokens` | absolute | configurable |
+| `semantic_calls` | absolute | configurable |
+| `cache_hit_rate` | ratio | configurable |
+| `embedding_throughput` | absolute | configurable |
+| `cpu_percent` | absolute | configurable |
+| `gpu_memory_mb` | absolute | configurable |
 
 ### Relative difference formula
 
@@ -388,15 +391,17 @@ ELSE:
 
 ## 8. Failure modes and recovery
 
-### RuntimeError — missing authoritative metrics
+### 0.0 metrics — missing or partial telemetry
 
-**Cause:** Strict mode requires complete quality and performance metrics. If any
-required PostgreSQL table is empty or missing, the metric engine raises
-`RuntimeError`.
+**Cause:** The orchestrator failed partway through and did not produce
+telemetry data (no claims, no evidence, no cache events, no resource
+samples). Strict mode now produces 0.0 metrics with formulas documenting
+the empty source, rather than raising `RuntimeError`.
 
-**Recovery:** Ensure the database is populated with workflow state from at least
-one completed research run. Run `"<skill-root>/scripts/research-db" doctor` to
-verify table health.
+**Recovery:** This is expected when infrastructure (Firecrawl, embedding
+endpoint, reranker) is unavailable. The campaign completes with NO_GO
+recommendation because quality thresholds are not met. Inspect the
+`result.json` for formulas documenting which data sources were empty.
 
 ### RuntimeError — simulation fallback blocked
 

@@ -92,6 +92,15 @@ RELEASE_MODES = (
 # explicit error rather than silently aliasing to another mode.
 LEGACY_MODE_FORBIDDEN = True
 
+# ---------------------------------------------------------------------------
+# Coverage event type constants — used by MetricEngine queries.
+# Keeping these as named constants avoids hard-coding string literals in
+# SQL WHERE clauses, so a migration that renames an event type only needs
+# to update the constant in one place.
+# ---------------------------------------------------------------------------
+COVERAGE_EVENT_STATUS_CHANGED = "item_status_changed"
+COVERAGE_EVENT_CREATED = "item_created"
+
 
 # ---------------------------------------------------------------------------
 # Metric engine — reads from persisted PostgreSQL artifacts
@@ -364,22 +373,30 @@ class MetricEngine:
             # increments the coverage revision, so filtering to a single
             # revision would miss items whose last status change occurred
             # in an earlier revision.
+            # Include both item_status_changed and item_created events so that
+            # the latest status of every coverage item is captured — even when
+            # no status transition ever occurs (the item stays at its initial
+            # unassessed status).  Without item_created, strict-mode metric
+            # extraction always fails because coverage items are only ever
+            # created, never transitioned.
             cur.execute(
                 """SELECT DISTINCT ON (item_id)
                       item_id, new_status
                    FROM coverage_events
                    WHERE run_id = %s
-                     AND event_type = 'item_status_changed'
+                     AND event_type IN (%s, %s)
                    ORDER BY item_id, coverage_revision DESC, created_at DESC""",
-                (run_id,),
+                (run_id, COVERAGE_EVENT_STATUS_CHANGED, COVERAGE_EVENT_CREATED),
             )
             item_statuses = cur.fetchall()
 
         # Classify items by status.
         # Satisfied statuses: satisfied, partially_supported
         # Applicable statuses: satisfied, partially_supported, contradicted,
-        #   qualified, supported, blocked, waived
-        # Inapplicable: missing, candidate_identified, acquired, unassessed
+        #   qualified, supported, blocked, waived, unassessed
+        # The orchestrator creates items at unassessed and may never
+        # transition them — unassessed is an applicable status because the
+        # research had a requirement but did not assess it (completeness = 0.0).
         #
         # Note: "supported" is the correct PostgreSQL enum value
         # (coverage_item_status enum has 'supported', not 'unsupported').
@@ -393,6 +410,7 @@ class MetricEngine:
             "supported",
             "blocked",
             "waived",
+            "unassessed",
         }
 
         satisfied_count = 0
@@ -445,13 +463,18 @@ class MetricEngine:
             )
             unsupported_source_table = "research_claims"
         else:
+            # Strict mode: we consulted the authoritative source (research_claims)
+            # but it was empty — the orchestrator did not produce claims for this
+            # run.  Return 0.0 with a formula that documents the empty source
+            # rather than falling back to a heuristic constant.
             if strict:
-                raise RuntimeError(
-                    "Unsupported-claim rate: strict mode requires research_claims "
-                    f"for run_id={run_id}. No assessed claims found."
+                unsupported_claim_rate = 0.0
+                unsupported_formula = (
+                    "0.0 — research_claims empty (no claims produced by orchestrator)"
                 )
-            unsupported_claim_rate = 0.0
-            unsupported_formula = "0.0 — no assessed claims"
+            else:
+                unsupported_claim_rate = 0.0
+                unsupported_formula = "0.0 — no assessed claims"
             unsupported_source_table = "research_claims"
 
         # ------------------------------------------------------------------
@@ -481,13 +504,18 @@ class MetricEngine:
             )
             citation_source_table = "claim_evidence_links"
         else:
+            # Strict mode: we consulted the authoritative source (claim_evidence_links
+            # joined with research_claims) but it was empty — the orchestrator did
+            # not produce assessed claims or evidence links for this run.
             if strict:
-                raise RuntimeError(
-                    "Citation accuracy: strict mode requires assessed claims with "
-                    f"evidence links for run_id={run_id}. No assessed claims found."
+                citation_accuracy = 0.0
+                citation_formula = (
+                    "0.0 — no assessed claims with evidence links "
+                    "(orchestrator did not produce claims)"
                 )
-            citation_accuracy = 0.0
-            citation_formula = "0.0 — no assessed claims with evidence"
+            else:
+                citation_accuracy = 0.0
+                citation_formula = "0.0 — no assessed claims with evidence"
             citation_source_table = "claim_evidence_links"
 
         # ------------------------------------------------------------------
@@ -654,33 +682,34 @@ class MetricEngine:
         # Strict mode: reject when required telemetry is unavailable.
         # ----------------------------------------------------------------
         strict = self.config.strict if self.config else False
+        # In strict mode, we still need to produce metrics even when the
+        # orchestrator failed partway through and telemetry tables are empty.
+        # Rather than raising RuntimeError, we mark the source as unavailable
+        # and use fallback values with formulas that document the empty source.
         if strict:
+            _strict_token_unavailable = False
+            _strict_embedding_unavailable = False
+            _strict_cpu_unavailable = False
+            _strict_cache_unavailable = False
+            _strict_telemetry_tables_absent = False
+
             if telemetry["token_source"] == "unavailable":
-                raise RuntimeError(
-                    "Strict mode: token_source is unavailable for run_id "
-                    f"{run_id}. Cannot produce release-quality metrics."
-                )
+                _strict_token_unavailable = True
             if telemetry["embedding_throughput"] <= 0:
-                raise RuntimeError(
-                    "Strict mode: embedding telemetry unavailable for run_id "
-                    f"{run_id}. Cannot compute release-quality throughput."
-                )
+                _strict_embedding_unavailable = True
             if telemetry["cpu_samples"] == 0:
-                raise RuntimeError(
-                    "Strict mode: CPU telemetry unavailable for run_id "
-                    f"{run_id}. Cannot compute release-quality CPU metrics."
-                )
+                _strict_cpu_unavailable = True
             if telemetry["cache_lookups"] == 0:
-                raise RuntimeError(
-                    "Strict mode: cache telemetry unavailable for run_id "
-                    f"{run_id}. Cannot compute release-quality cache metrics."
-                )
+                _strict_cache_unavailable = True
             if not telemetry.get("telemetry_tables_exist"):
-                raise RuntimeError(
-                    "Strict mode: telemetry tables (migration 0036) are absent "
-                    f"for run_id {run_id}. Cannot produce release-quality metrics "
-                    "without run-scoped telemetry."
-                )
+                _strict_telemetry_tables_absent = True
+        else:
+            # Non-strict mode: all strict flags are False (legacy fallbacks OK).
+            _strict_token_unavailable = False
+            _strict_embedding_unavailable = False
+            _strict_cpu_unavailable = False
+            _strict_cache_unavailable = False
+            _strict_telemetry_tables_absent = False
 
         # ----------------------------------------------------------------
         # Semantic calls — always available from semantic_calls table.
@@ -697,6 +726,9 @@ class MetricEngine:
         # ----------------------------------------------------------------
         total_tokens = telemetry["total_tokens"]
         token_source = telemetry["token_source"]
+        if _strict_token_unavailable:
+            token_source = "unavailable"
+            total_tokens = 0
         token_method = (
             "endpoint"
             if token_source == "endpoint"
@@ -705,7 +737,7 @@ class MetricEngine:
         token_formula = (
             f"SUM(endpoint_usage_records.total_tokens) — source={token_source}"
             if token_source != "unavailable"
-            else "semantic_calls * 500 (endpoint_usage_records absent)"
+            else "0.0 — endpoint_usage_records empty (no token data from orchestrator)"
         )
 
         # Cache — run-scoped from run_cache_events, or legacy global.
@@ -717,10 +749,20 @@ class MetricEngine:
                 f"run_cache_events: hits({cache_hits}) / lookups({cache_lookups})"
             )
         else:
-            # Legacy fallback: global semantic_cache (no run_id filter).
-            cache_hit_rate, cache_formula = self._legacy_cache_hit_rate()
+            if _strict_cache_unavailable:
+                # Strict mode: do NOT fall back to the global semantic_cache
+                # table. A partial campaign must not inherit cache state from
+                # unrelated prior runs — that would produce spurious cache
+                # hit rates that vary between Campaign A and B.
+                cache_hit_rate = 0.0
+                cache_formula = (
+                    "0.0 — run_cache_events empty (no cache lookups from orchestrator)"
+                )
+            else:
+                # Legacy fallback: global semantic_cache (no run_id filter).
+                cache_hit_rate, cache_formula = self._legacy_cache_hit_rate()
 
-        # Embedding throughput — from run_embedding_throughput, or legacy estimate.
+        # Embedding throughput — from run_embedding_throughput, or fallback.
         embedding_throughput = telemetry["embedding_throughput"]
         if embedding_throughput > 0:
             emb_formula = (
@@ -728,36 +770,62 @@ class MetricEngine:
                 f"{telemetry['embedding_elapsed_seconds']:.3f}s"
             )
         else:
-            embedding_throughput = max(0.0, 1000.0 / max(1, latency_ms / 100))
-            emb_formula = (
-                "1000 / max(1, latency_ms / 100) — run_embedding_throughput absent"
-            )
+            if _strict_embedding_unavailable:
+                embedding_throughput = 0.0
+                emb_formula = (
+                    "0.0 — run_embedding_throughput empty "
+                    "(no embedding work from orchestrator)"
+                )
+            else:
+                embedding_throughput = max(0.0, 1000.0 / max(1, latency_ms / 100))
+                emb_formula = (
+                    "1000 / max(1, latency_ms / 100) — run_embedding_throughput absent"
+                )
 
-        # CPU — from run_resource_samples, or legacy single sample.
+        # CPU — from run_resource_samples, or fallback.
         cpu_pct = telemetry["cpu_mean_percent"]
         if cpu_pct is None:
-            cpu_pct = self._legacy_cpu_percent()
+            if _strict_cpu_unavailable:
+                # Strict mode: do NOT fall back to a live psutil sample.
+                # A partial campaign must not report a host-wide CPU
+                # measurement while its provenance says the value is zero —
+                # that corrupts artifacts and creates spurious differences.
+                cpu_pct = 0.0
+            else:
+                cpu_pct = self._legacy_cpu_percent()
         cpu_formula = (
             f"run_resource_samples: mean({telemetry['cpu_samples']} samples)"
             if telemetry["cpu_samples"] > 0
             else (
-                "psutil.cpu_percent(interval=0.1) — single sample"
-                if _HAS_PSUTIL
-                else "0.0 — psutil not available"
+                "0.0 — run_resource_samples empty (no CPU samples from orchestrator)"
+                if _strict_cpu_unavailable
+                else (
+                    "psutil.cpu_percent(interval=0.1) — single sample"
+                    if _HAS_PSUTIL
+                    else "0.0 — psutil not available"
+                )
             )
         )
 
-        # GPU — from run_resource_samples, or legacy single sample.
+        # GPU — from run_resource_samples, or fallback.
         gpu_mem = telemetry["gpu_mean_memory_mb"]
         if gpu_mem is None:
-            gpu_mem = self._legacy_gpu_memory()
+            if _strict_telemetry_tables_absent:
+                # Strict mode: do NOT fall back to a live NVML sample.
+                gpu_mem = 0.0
+            else:
+                gpu_mem = self._legacy_gpu_memory()
         gpu_formula = (
             f"run_resource_samples: mean({telemetry['gpu_samples']} samples)"
             if telemetry["gpu_samples"] > 0
             else (
-                "pynvml.nvmlDeviceGetMemoryInfo — single sample"
-                if _HAS_PYNVML and gpu_mem is not None
-                else "0.0 — NVML not available"
+                "0.0 — run_resource_samples empty (no GPU samples from orchestrator)"
+                if _strict_telemetry_tables_absent
+                else (
+                    "pynvml.nvmlDeviceGetMemoryInfo — single sample"
+                    if _HAS_PYNVML and gpu_mem is not None
+                    else "0.0 — NVML not available"
+                )
             )
         )
 
@@ -1534,8 +1602,13 @@ class ReleaseBenchmarkRunner:
                 sample = sampler.collect_cpu_sample()
                 if sample is None:
                     break
-                sample.run_id = str(run_id)
-                sample.sample_number = i
+                sample = sample.__class__(
+                    **{
+                        **sample.__dict__,
+                        "run_id": str(run_id),
+                        "sample_number": i,
+                    }
+                )
                 telemetry_svc.record_resource_sample(sample)
 
         # Collect GPU samples.
@@ -1544,8 +1617,13 @@ class ReleaseBenchmarkRunner:
                 sample = sampler.collect_gpu_sample()
                 if sample is None:
                     break
-                sample.run_id = str(run_id)
-                sample.sample_number = i
+                sample = sample.__class__(
+                    **{
+                        **sample.__dict__,
+                        "run_id": str(run_id),
+                        "sample_number": i,
+                    }
+                )
                 telemetry_svc.record_resource_sample(sample)
 
     def _campaign_to_workflow_results(

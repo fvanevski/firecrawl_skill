@@ -999,7 +999,8 @@ class TestAuthoritativeCoverageCompleteness:
 
         Matches the PostgreSQL coverage_item_status enum: 'supported' (not
         'unsupported') is the correct value.  'supported' is applicable but
-        not satisfied.
+        not satisfied.  'unassessed' is applicable because the research had
+        a requirement but did not assess it (completeness = 0.0).
         """
         # Verify the status vocabulary used by the metric engine
         satisfied_statuses = {"satisfied", "partially_supported"}
@@ -1011,11 +1012,12 @@ class TestAuthoritativeCoverageCompleteness:
             "supported",
             "blocked",
             "waived",
+            "unassessed",
         }
         # Satisfied statuses are a subset of applicable
         assert satisfied_statuses.issubset(applicable_statuses)
         # Inapplicable statuses are excluded
-        inapplicable = {"missing", "candidate_identified", "acquired", "unassessed"}
+        inapplicable = {"missing", "candidate_identified", "acquired"}
         assert inapplicable.isdisjoint(applicable_statuses)
 
 
