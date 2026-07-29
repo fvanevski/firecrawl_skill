@@ -942,14 +942,23 @@ class TestStrictModeRejection:
         """CPU strict flag must fire when telemetry tables are absent.
 
         Issue #160: the strict CPU flag was only set when ``cpu_samples == 0``,
-        not when the telemetry query itself failed.  When tables are absent the
-        query raises, ``telemetry_tables_exist`` stays ``False``, and the legacy
-        ``_legacy_cpu_percent()`` fallback was called — producing a live
-        host-wide psutil sample whose provenance claimed ``0.0``.
+        not when the telemetry query itself failed.  The original regression
+        test mocked the execute call to raise, which caused ``_read_telemetry``
+        to return its default dict with ``cpu_samples == 0`` — so the old
+        condition ``if telemetry["cpu_samples"] == 0`` already fired and the
+        test passed against the parent commit.  That test did not distinguish
+        old from new.
 
-        This regression test verifies that the strict flag now also fires when
-        ``telemetry_tables_exist`` is ``False``, preventing the legacy fallback
-        and ensuring the CPU value is ``0.0`` with the correct formula.
+        This regression test mocks ``_read_telemetry`` directly to produce a
+        state that **fails** under the old implementation:
+        ``cpu_samples > 0`` but ``telemetry_tables_exist = False``.  Under the
+        old code the strict flag would stay ``False`` (because
+        ``cpu_samples != 0``) and the legacy ``_legacy_cpu_percent()`` would
+        execute — producing a live host-wide psutil sample whose provenance
+        formula claimed ``0.0``.
+
+        The new condition ``or not telemetry.get("telemetry_tables_exist")``
+        fires in this state, blocking the legacy fallback.
         """
         import time
         from unittest import mock
@@ -961,15 +970,34 @@ class TestStrictModeRejection:
             ReleaseBenchmarkConfig,
         )
 
-        mock_conn = mock.Mock()
-        # Telemetry query fails → telemetry_tables_exist=False.
-        mock_conn.execute.side_effect = Exception("table does not exist")
         engine = MetricEngine("postgresql://fake")
-        engine._connection = mock_conn
+        engine._connection = mock.Mock()
         engine.config = ReleaseBenchmarkConfig(
             database_url="postgresql://fake",
             blob_root=Path("/tmp"),
             strict=True,
+        )
+
+        # Mock _read_telemetry to return a state that the old code would
+        # miss: cpu_samples > 0 but telemetry_tables_exist = False.
+        # Under the old code, _strict_cpu_unavailable would stay False
+        # (cpu_samples != 0), and _legacy_cpu_percent() would be called.
+        engine._read_telemetry = mock.Mock(
+            return_value={
+                "total_tokens": 0,
+                "token_source": "unavailable",
+                "cache_lookups": 0,
+                "cache_hits": 0,
+                "cache_misses": 0,
+                "embedding_throughput": 0.0,
+                "embedding_total_texts": 0,
+                "embedding_elapsed_seconds": 0.0,
+                "cpu_samples": 5,  # > 0 — old code would NOT set strict flag
+                "cpu_mean_percent": None,
+                "gpu_samples": 0,
+                "gpu_mean_memory_mb": None,
+                "telemetry_tables_exist": False,  # tables absent
+            }
         )
 
         # Mock cursor for semantic_calls and other queries.
@@ -977,7 +1005,7 @@ class TestStrictModeRejection:
         mock_cursor.__enter__ = mock.Mock(return_value=mock_cursor)
         mock_cursor.__exit__ = mock.Mock(return_value=False)
         mock_cursor.fetchone.return_value = (0,)
-        mock_conn.cursor.return_value = mock_cursor
+        engine._connection.cursor.return_value = mock_cursor
 
         performance, metrics = engine.extract_performance_metrics(
             uuid4(), time.monotonic()
@@ -1004,6 +1032,10 @@ class TestStrictModeRejection:
         Issue #160: verifies that the GPU path also produces 0.0 with
         UNAVAILABLE status when the telemetry tables don't exist,
         preventing a legacy NVML sample from leaking into the artifact.
+
+        Uses the same mock-``_read_telemetry`` approach as the CPU test to
+        produce a distinguishing state (``gpu_samples > 0`` but
+        ``telemetry_tables_exist = False``).
         """
         import time
         from unittest import mock
@@ -1015,21 +1047,37 @@ class TestStrictModeRejection:
             ReleaseBenchmarkConfig,
         )
 
-        mock_conn = mock.Mock()
-        mock_conn.execute.side_effect = Exception("table does not exist")
         engine = MetricEngine("postgresql://fake")
-        engine._connection = mock_conn
+        engine._connection = mock.Mock()
         engine.config = ReleaseBenchmarkConfig(
             database_url="postgresql://fake",
             blob_root=Path("/tmp"),
             strict=True,
         )
 
+        engine._read_telemetry = mock.Mock(
+            return_value={
+                "total_tokens": 0,
+                "token_source": "unavailable",
+                "cache_lookups": 0,
+                "cache_hits": 0,
+                "cache_misses": 0,
+                "embedding_throughput": 0.0,
+                "embedding_total_texts": 0,
+                "embedding_elapsed_seconds": 0.0,
+                "cpu_samples": 0,
+                "cpu_mean_percent": None,
+                "gpu_samples": 3,  # > 0 — old code would NOT set strict flag
+                "gpu_mean_memory_mb": 1024.0,
+                "telemetry_tables_exist": False,  # tables absent
+            }
+        )
+
         mock_cursor = mock.Mock()
         mock_cursor.__enter__ = mock.Mock(return_value=mock_cursor)
         mock_cursor.__exit__ = mock.Mock(return_value=False)
         mock_cursor.fetchone.return_value = (0,)
-        mock_conn.cursor.return_value = mock_cursor
+        engine._connection.cursor.return_value = mock_cursor
 
         _, metrics = engine.extract_performance_metrics(uuid4(), time.monotonic())
 
