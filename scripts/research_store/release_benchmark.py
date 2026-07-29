@@ -1997,23 +1997,42 @@ class ReleaseBenchmarkRunner:
                     )
 
         # P7-R09 / #158: strict fail-closed — reject when mandatory metrics
-        # are unavailable.  A metric with value 0.0 from an empty source must
-        # not be treated as a valid measurement.
-        for mode, mode_results_list in mode_results.items():
-            for result in mode_results_list:
-                # Check quality metric statuses
-                for qm in result.quality_metrics:
-                    if (
-                        qm.name in MANDATORY_QUALITY_METRICS
-                        and qm.status != MetricStatus.MEASURED
-                    ):
+        # are unavailable or missing.  Non-strict mode permits legacy fallbacks.
+        if self.config.strict:
+            for mode, mode_results_list in mode_results.items():
+                for result in mode_results_list:
+                    # Collect observed metric names
+                    observed_quality = {qm.name for qm in result.quality_metrics}
+                    observed_perf = {pm.name for pm in result.performance_metrics}
+
+                    # Reject missing mandatory quality metrics
+                    missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
+                    if missing_quality:
                         withdrawn.append(
-                            f"quality metric {qm.name} is {qm.status.value} "
-                            f"(not measured) — {mode} cannot satisfy release policy"
+                            f"quality metrics {sorted(missing_quality)} missing — "
+                            f"{mode} cannot satisfy release policy"
                         )
-                        break
-                else:
-                    # Check performance metric statuses
+
+                    # Reject unavailable quality metrics
+                    for qm in result.quality_metrics:
+                        if (
+                            qm.name in MANDATORY_QUALITY_METRICS
+                            and qm.status != MetricStatus.MEASURED
+                        ):
+                            withdrawn.append(
+                                f"quality metric {qm.name} is {qm.status.value} "
+                                f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+
+                    # Reject missing mandatory performance metrics
+                    missing_perf = MANDATORY_PERFORMANCE_METRICS - observed_perf
+                    if missing_perf:
+                        withdrawn.append(
+                            f"performance metrics {sorted(missing_perf)} missing — "
+                            f"{mode} cannot satisfy release policy"
+                        )
+
+                    # Reject unavailable performance metrics
                     for pm in result.performance_metrics:
                         if (
                             pm.name in MANDATORY_PERFORMANCE_METRICS
@@ -2023,10 +2042,6 @@ class ReleaseBenchmarkRunner:
                                 f"performance metric {pm.name} is {pm.status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"
                             )
-                            break
-                    else:
-                        continue
-                    break
 
         # P6: Enforce performance thresholds
         max_latency_ratio = thresholds.get("max_latency_ratio_vs_baseline")

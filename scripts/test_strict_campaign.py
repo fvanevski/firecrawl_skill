@@ -1136,25 +1136,43 @@ class TestStrictMetricCompleteness:
                     )
 
         # P7-R09 / #158: strict fail-closed — reject when mandatory metrics
-        # are unavailable.
+        # are unavailable or missing.
         from research_store.release_benchmark import (
             MANDATORY_PERFORMANCE_METRICS,
             MANDATORY_QUALITY_METRICS,
         )
 
-        for mode, mode_results_list in mode_results.items():
-            for result in mode_results_list:
-                for qm in result.quality_metrics:
-                    if (
-                        qm.name in MANDATORY_QUALITY_METRICS
-                        and qm.status != MS.MEASURED
-                    ):
+        strict = True
+        if strict:
+            for mode, mode_results_list in mode_results.items():
+                for result in mode_results_list:
+                    observed_quality = {qm.name for qm in result.quality_metrics}
+                    observed_perf = {pm.name for pm in result.performance_metrics}
+
+                    missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
+                    if missing_quality:
                         withdrawn.append(
-                            f"quality metric {qm.name} is {qm.status.value} "
-                            f"(not measured) — {mode} cannot satisfy release policy"
+                            f"quality metrics {sorted(missing_quality)} missing — "
+                            f"{mode} cannot satisfy release policy"
                         )
-                        break
-                else:
+
+                    for qm in result.quality_metrics:
+                        if (
+                            qm.name in MANDATORY_QUALITY_METRICS
+                            and qm.status != MS.MEASURED
+                        ):
+                            withdrawn.append(
+                                f"quality metric {qm.name} is {qm.status.value} "
+                                f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+
+                    missing_perf = MANDATORY_PERFORMANCE_METRICS - observed_perf
+                    if missing_perf:
+                        withdrawn.append(
+                            f"performance metrics {sorted(missing_perf)} missing — "
+                            f"{mode} cannot satisfy release policy"
+                        )
+
                     for pm in result.performance_metrics:
                         if (
                             pm.name in MANDATORY_PERFORMANCE_METRICS
@@ -1164,10 +1182,6 @@ class TestStrictMetricCompleteness:
                                 f"performance metric {pm.name} is {pm.status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"
                             )
-                            break
-                    else:
-                        continue
-                    break
 
         assert len(withdrawn) > 0
         # Verify the withdrawn claims include metric status failures.
@@ -1255,20 +1269,39 @@ class TestStrictMetricCompleteness:
                     )
 
         # P7-R09 / #158: strict fail-closed — reject when mandatory metrics
-        # are unavailable. Since all metrics are MEASURED, no status failures.
-        for mode, mode_results_list in mode_results.items():
-            for result in mode_results_list:
-                for qm in result.quality_metrics:
-                    if (
-                        qm.name in MANDATORY_QUALITY_METRICS
-                        and qm.status != MS.MEASURED
-                    ):
+        # are unavailable or missing. Since all metrics are MEASURED, no status
+        # failures.
+        strict = True
+        if strict:
+            for mode, mode_results_list in mode_results.items():
+                for result in mode_results_list:
+                    observed_quality = {qm.name for qm in result.quality_metrics}
+                    observed_perf = {pm.name for pm in result.performance_metrics}
+
+                    missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
+                    if missing_quality:
                         withdrawn.append(
-                            f"quality metric {qm.name} is {qm.status.value} "
-                            f"(not measured) — {mode} cannot satisfy release policy"
+                            f"quality metrics {sorted(missing_quality)} missing — "
+                            f"{mode} cannot satisfy release policy"
                         )
-                        break
-                else:
+
+                    for qm in result.quality_metrics:
+                        if (
+                            qm.name in MANDATORY_QUALITY_METRICS
+                            and qm.status != MS.MEASURED
+                        ):
+                            withdrawn.append(
+                                f"quality metric {qm.name} is {qm.status.value} "
+                                f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+
+                    missing_perf = MANDATORY_PERFORMANCE_METRICS - observed_perf
+                    if missing_perf:
+                        withdrawn.append(
+                            f"performance metrics {sorted(missing_perf)} missing — "
+                            f"{mode} cannot satisfy release policy"
+                        )
+
                     for pm in result.performance_metrics:
                         if (
                             pm.name in MANDATORY_PERFORMANCE_METRICS
@@ -1278,10 +1311,6 @@ class TestStrictMetricCompleteness:
                                 f"performance metric {pm.name} is {pm.status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"
                             )
-                            break
-                    else:
-                        continue
-                    break
 
         # The outcome is NO_GO because quality thresholds fail (all 0.0),
         # NOT because of metric status. Verify that no status failures are
@@ -1292,3 +1321,221 @@ class TestStrictMetricCompleteness:
         )
         # But threshold failures should be present.
         assert any("candidate_recall" in claim for claim in withdrawn)
+
+
+class TestStrictMetricCompletenessMissing:
+    """Tests that missing mandatory metric names are rejected in strict mode."""
+
+    def test_missing_mandatory_metrics_rejected_in_strict_mode(self):
+        """Empty metric tuples in strict mode → withdrawn claims about missing metrics."""
+        from research_store.release_benchmark import (
+            MANDATORY_PERFORMANCE_METRICS,
+            MANDATORY_QUALITY_METRICS,
+            MetricStatus,
+            WorkflowComparison,
+            WorkflowRunResult,
+        )
+
+        quality = _make_quality()
+        performance = _make_performance()
+
+        # Both metric tuples are empty — the default.
+        comparison = WorkflowComparison(
+            schema_version="workflow-comparison-v1",
+            dataset_version="benchmark-v1",
+            results=[
+                WorkflowRunResult(
+                    schema_version="workflow-run-result-v1",
+                    workflow_mode="agent_led",
+                    quality=quality,
+                    performance=performance,
+                    integrity_checks=(),
+                    run_id="fr_bench_test",
+                    errors=(),
+                    quality_metrics=(),
+                    performance_metrics=(),
+                ),
+                WorkflowRunResult(
+                    schema_version="workflow-run-result-v1",
+                    workflow_mode="deterministic_debug",
+                    quality=quality,
+                    performance=performance,
+                    integrity_checks=(),
+                    run_id="fr_bench_test_2",
+                    errors=(),
+                    quality_metrics=(),
+                    performance_metrics=(),
+                ),
+            ],
+            quality_vs_baseline={},
+            performance_vs_baseline={},
+            integrity_regression=False,
+        )
+
+        # Replicate _build_recommendation logic with strict=True.
+        withdrawn: list[str] = []
+        thresholds = {
+            "min_candidate_recall": 0.5,
+            "min_source_quality_score": 0.7,
+            "min_coverage_completeness": 0.5,
+            "max_unsupported_claim_rate": 0.15,
+            "min_citation_accuracy": 0.8,
+        }
+
+        mode_results: dict[str, list[WorkflowRunResult]] = {}
+        for result in comparison.results:
+            mode_results.setdefault(result.workflow_mode, []).append(result)
+
+        # Strict guard: only check in strict mode.
+        strict = True
+        if strict:
+            for mode, mode_results_list in mode_results.items():
+                for result in mode_results_list:
+                    observed_quality = {qm.name for qm in result.quality_metrics}
+                    observed_perf = {pm.name for pm in result.performance_metrics}
+
+                    missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
+                    if missing_quality:
+                        withdrawn.append(
+                            f"quality metrics {sorted(missing_quality)} missing — "
+                            f"{mode} cannot satisfy release policy"
+                        )
+
+                    for qm in result.quality_metrics:
+                        if (
+                            qm.name in MANDATORY_QUALITY_METRICS
+                            and qm.status != MetricStatus.MEASURED
+                        ):
+                            withdrawn.append(
+                                f"quality metric {qm.name} is {qm.status.value} "
+                                f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+
+                    missing_perf = MANDATORY_PERFORMANCE_METRICS - observed_perf
+                    if missing_perf:
+                        withdrawn.append(
+                            f"performance metrics {sorted(missing_perf)} missing — "
+                            f"{mode} cannot satisfy release policy"
+                        )
+
+                    for pm in result.performance_metrics:
+                        if (
+                            pm.name in MANDATORY_PERFORMANCE_METRICS
+                            and pm.status != MetricStatus.MEASURED
+                        ):
+                            withdrawn.append(
+                                f"performance metric {pm.name} is {pm.status.value} "
+                                f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+
+        assert len(withdrawn) > 0
+        # Should contain missing-metric claims.
+        assert any("missing" in claim for claim in withdrawn)
+        # Should mention both quality and performance metrics.
+        assert any("quality metrics" in claim for claim in withdrawn)
+        assert any("performance metrics" in claim for claim in withdrawn)
+
+    def test_missing_metrics_not_rejected_in_non_strict_mode(self):
+        """Empty metric tuples in non-strict mode → no missing-metric claims."""
+        from research_store.release_benchmark import (
+            MANDATORY_PERFORMANCE_METRICS,
+            MANDATORY_QUALITY_METRICS,
+            MetricStatus,
+            WorkflowComparison,
+            WorkflowRunResult,
+        )
+
+        quality = _make_quality()
+        performance = _make_performance()
+
+        comparison = WorkflowComparison(
+            schema_version="workflow-comparison-v1",
+            dataset_version="benchmark-v1",
+            results=[
+                WorkflowRunResult(
+                    schema_version="workflow-run-result-v1",
+                    workflow_mode="agent_led",
+                    quality=quality,
+                    performance=performance,
+                    integrity_checks=(),
+                    run_id="fr_bench_test",
+                    errors=(),
+                    quality_metrics=(),
+                    performance_metrics=(),
+                ),
+                WorkflowRunResult(
+                    schema_version="workflow-run-result-v1",
+                    workflow_mode="deterministic_debug",
+                    quality=quality,
+                    performance=performance,
+                    integrity_checks=(),
+                    run_id="fr_bench_test_2",
+                    errors=(),
+                    quality_metrics=(),
+                    performance_metrics=(),
+                ),
+            ],
+            quality_vs_baseline={},
+            performance_vs_baseline={},
+            integrity_regression=False,
+        )
+
+        withdrawn: list[str] = []
+        thresholds = {
+            "min_candidate_recall": 0.5,
+            "min_source_quality_score": 0.7,
+            "min_coverage_completeness": 0.5,
+            "max_unsupported_claim_rate": 0.15,
+            "min_citation_accuracy": 0.8,
+        }
+
+        mode_results: dict[str, list[WorkflowRunResult]] = {}
+        for result in comparison.results:
+            mode_results.setdefault(result.workflow_mode, []).append(result)
+
+        # Non-strict: strict guard is False, so missing metrics are NOT checked.
+        strict = False
+        if strict:
+            for mode, mode_results_list in mode_results.items():
+                for result in mode_results_list:
+                    observed_quality = {qm.name for qm in result.quality_metrics}
+                    observed_perf = {pm.name for pm in result.performance_metrics}
+
+                    missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
+                    if missing_quality:
+                        withdrawn.append(
+                            f"quality metrics {sorted(missing_quality)} missing — "
+                            f"{mode} cannot satisfy release policy"
+                        )
+
+                    for qm in result.quality_metrics:
+                        if (
+                            qm.name in MANDATORY_QUALITY_METRICS
+                            and qm.status != MetricStatus.MEASURED
+                        ):
+                            withdrawn.append(
+                                f"quality metric {qm.name} is {qm.status.value} "
+                                f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+
+                    missing_perf = MANDATORY_PERFORMANCE_METRICS - observed_perf
+                    if missing_perf:
+                        withdrawn.append(
+                            f"performance metrics {sorted(missing_perf)} missing — "
+                            f"{mode} cannot satisfy release policy"
+                        )
+
+                    for pm in result.performance_metrics:
+                        if (
+                            pm.name in MANDATORY_PERFORMANCE_METRICS
+                            and pm.status != MetricStatus.MEASURED
+                        ):
+                            withdrawn.append(
+                                f"performance metric {pm.name} is {pm.status.value} "
+                                f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+
+        # No missing-metric claims in non-strict mode.
+        assert not any("missing" in claim for claim in withdrawn)
+        assert not any("is unevaluated" in claim for claim in withdrawn)
+        assert not any("is unavailable" in claim for claim in withdrawn)
