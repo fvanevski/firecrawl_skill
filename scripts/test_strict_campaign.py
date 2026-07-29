@@ -469,33 +469,35 @@ class TestStrictCampaignIntegration:
     """Integration tests that require a real PostgreSQL database."""
 
     def test_strict_campaign_with_real_db(self):
-        """Strict campaign fails on empty DB — no coverage metrics available.
+        """Strict campaign completes on empty DB — metrics are 0.0, not RuntimeError.
 
-        Strict mode requires complete quality metrics (coverage events, etc.).
-        With an empty database, strict mode raises RuntimeError — this is the
-        correct fail-closed behavior.
+        Strict mode now handles partial data gracefully: when the database is
+        empty, the MetricEngine produces 0.0 metrics with clear formulas
+        documenting the empty source, rather than raising RuntimeError.
+        The campaign completes with NO_GO recommendation because quality
+        thresholds are not met — this is the correct fail-closed behavior.
         """
         database_url = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
 
-        # Run with only deterministic_debug (fastest mode)
-        with pytest.raises(
-            RuntimeError,
-            match="strict|coverage|metrics",
-        ):
-            main(
-                [
-                    "--campaign-dir",
-                    "/tmp/test_strict_campaign",
-                    "--database-url",
-                    database_url,
-                    "--dataset",
-                    str(BENCHMARK_FIXTURE),
-                    "--objectives",
-                    "obj-001",
-                    "--tolerance",
-                    "0.15",
-                ]
-            )
+        # Run with only deterministic_debug (fastest mode).
+        # The campaign should complete (not raise RuntimeError) and produce
+        # NO_GO because quality metrics are all 0.0.
+        rc = main(
+            [
+                "--campaign-dir",
+                "/tmp/test_strict_campaign",
+                "--database-url",
+                database_url,
+                "--dataset",
+                str(BENCHMARK_FIXTURE),
+                "--objectives",
+                "obj-001",
+                "--tolerance",
+                "0.15",
+            ]
+        )
+        # NO_GO because quality metrics are 0.0 (empty DB)
+        assert rc == 1
 
     @pytest.mark.skip(reason="requires full infrastructure; skip by default")
     def test_strict_campaign_artifacts_written(self):
