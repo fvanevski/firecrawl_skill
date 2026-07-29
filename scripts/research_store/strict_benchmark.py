@@ -305,6 +305,7 @@ def _compare_campaigns(
     result_a: ReleaseBenchmarkResult,
     result_b: ReleaseBenchmarkResult,
     campaign_dir: Path,
+    reproducibility_tolerance: float,
 ) -> ReproducibilityComparison:
     """Compare two campaign runs for reproducibility.
 
@@ -312,6 +313,7 @@ def _compare_campaigns(
         result_a: Campaign A result.
         result_b: Campaign B result.
         campaign_dir: Directory to write comparison artifacts to.
+        reproducibility_tolerance: Tolerance to use for the comparison.
 
     Returns:
         ReproducibilityComparison.
@@ -321,7 +323,9 @@ def _compare_campaigns(
     loader = load_benchmark_dataset(
         SCRIPTS.parent.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
     )
-    config = ReleaseBenchmarkConfig()
+    config = ReleaseBenchmarkConfig(
+        reproducibility_tolerance=reproducibility_tolerance,
+    )
     runner = ReleaseBenchmarkRunner(loader, config)
 
     comparison = runner.compare_campaigns(result_a, result_b)
@@ -580,7 +584,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # ── Reproducibility comparison ───────────────────────────────────────
-    comparison = _compare_campaigns(result_a, result_b, campaign_dir)
+    comparison = _compare_campaigns(result_a, result_b, campaign_dir, args.tolerance)
 
     # ── Build and write manifest ─────────────────────────────────────────
     manifest = _build_manifest(
@@ -606,7 +610,24 @@ def main(argv: list[str] | None = None) -> int:
 
     print("=" * 60)
 
-    # Exit with failure if any campaign failed or reproducibility failed
+    # Exit with failure if any campaign failed, reproducibility failed,
+    # or either campaign recommends NO_GO.
+    no_go_a = (
+        result_a.recommendation.outcome == "no_go" if result_a.recommendation else False
+    )
+    no_go_b = (
+        result_b.recommendation.outcome == "no_go" if result_b.recommendation else False
+    )
+
+    if no_go_a or no_go_b:
+        if no_go_a and no_go_b:
+            print("\nFATAL: Both campaigns recommend NO_GO. Release is rejected.")
+        elif no_go_a:
+            print("\nFATAL: Campaign A recommends NO_GO. Release is rejected.")
+        else:
+            print("\nFATAL: Campaign B recommends NO_GO. Release is rejected.")
+        return 1
+
     if not comparison.all_within_tolerance:
         print(
             "\nWARNING: Reproducibility comparison FAILED. "
