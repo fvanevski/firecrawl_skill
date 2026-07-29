@@ -199,6 +199,8 @@ jobs:
 
       - name: Generate release-evidence manifest
         id: generate
+        env:
+          PYTHONPATH: scripts
         run: |
           python -m research_store.release_evidence generate \
             --repo . \
@@ -214,6 +216,8 @@ jobs:
           retention-days: 90
 
       - name: Verify manifest against candidate SHA
+        env:
+          PYTHONPATH: scripts
         run: |
           python -m research_store.release_evidence verify \
             --manifest release-evidence-manifest.json \

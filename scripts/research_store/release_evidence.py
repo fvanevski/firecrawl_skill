@@ -69,6 +69,7 @@ class CiJobResult:
     conclusion: str  # "success", "failure", "skipped", "cancelled"
     run_id: str  # GitHub Actions workflow run ID
     url: str = ""  # permalink to the job
+    candidate_sha: str = ""  # SHA the job was executed against
 
 
 @dataclass(frozen=True)
@@ -219,7 +220,10 @@ def _current_tree_hash(repo: Path) -> str:
 
 def _sha_at_ref(repo: Path, ref: str) -> str:
     """Return the SHA at a given ref (branch, tag, etc.)."""
-    return _git(["rev-parse", ref], repo)
+    try:
+        return _git(["rev-parse", ref], repo)
+    except subprocess.CalledProcessError:
+        return ""
 
 
 def _commits_between(repo: Path, older: str, newer: str) -> int:
@@ -356,7 +360,7 @@ class ReleaseEvidenceGenerator:
         """Attempt to fetch CI job results via ``gh`` CLI."""
         jobs: list[dict[str, Any]] = []
         try:
-            out = _git_safe(
+            result = subprocess.run(
                 [
                     "gh",
                     "run",
@@ -368,23 +372,31 @@ class ReleaseEvidenceGenerator:
                     "--limit",
                     "1",
                 ],
-                self.repo,
+                cwd=str(self.repo),
+                capture_output=True,
+                text=True,
+                check=False,
             )
-            if out:
-                runs = json.loads(out)
-                if runs:
-                    run_id = runs[0]["id"]
-                    conclusion = runs[0]["conclusion"]
-                    # Map to required job names
-                    for job_name in REQUIRED_CI_JOBS:
-                        jobs.append(
-                            {
-                                "name": job_name,
-                                "conclusion": conclusion or "pending",
-                                "run_id": run_id,
-                            }
-                        )
-        except Exception:  # noqa: BLE001, S110
+            if result.returncode != 0:
+                return jobs
+            out = result.stdout.strip()
+            if not out:
+                return jobs
+            runs = json.loads(out)
+            if runs:
+                run_id = runs[0]["id"]
+                conclusion = runs[0]["conclusion"]
+                # Map to required job names
+                for job_name in REQUIRED_CI_JOBS:
+                    jobs.append(
+                        {
+                            "name": job_name,
+                            "conclusion": conclusion or "pending",
+                            "run_id": run_id,
+                        }
+                    )
+        except FileNotFoundError:
+            # gh CLI not available
             pass
         return jobs
 
@@ -396,6 +408,7 @@ class ReleaseEvidenceGenerator:
             ("ci.yml", ".github/workflows/ci.yml"),
             ("release_benchmark.py", "scripts/research_store/release_benchmark.py"),
             ("workflow_benchmark.py", "scripts/research_store/workflow_benchmark.py"),
+            ("recovery-report.txt", "recovery-report.txt"),
         ]
         for name, rel_path in artifact_paths:
             p = self.repo / rel_path
@@ -494,7 +507,7 @@ class ReleaseEvidenceGenerator:
         parsed = parser.parse_args(args)
 
         if parsed.command == "generate":
-            gen = cls(repo=parsed.repo, generated_by="cli")
+            gen = cls(repo_path=parsed.repo, generated_by="cli")
             if parsed.sha:
                 manifest = gen.generate_from_sha(parsed.sha)
             else:
@@ -620,14 +633,18 @@ class ReleaseEvidenceVerifier:
         )
 
     def _check_sha_match(self) -> bool:
-        """Check that current HEAD equals the candidate SHA."""
+        """Check that current main HEAD equals the candidate SHA."""
         if not self.manifest.candidate_sha:
             return False
-        current = _current_sha(self.repo)
-        return current == self.manifest.candidate_sha
+        # Compare against main branch ref, fall back to HEAD if main doesn't exist
+        main_sha = _sha_at_ref(self.repo, "main")
+        if not main_sha:
+            # Fall back to HEAD for repos without a main branch
+            main_sha = _current_sha(self.repo)
+        return main_sha == self.manifest.candidate_sha
 
     def _check_ci_complete(self) -> bool:
-        """Check that all required CI jobs passed."""
+        """Check that all required CI jobs passed and are bound to candidate SHA."""
         if not self.manifest.ci_jobs:
             return False
         job_names = {j.name for j in self.manifest.ci_jobs}
@@ -635,8 +652,15 @@ class ReleaseEvidenceVerifier:
             if required not in job_names:
                 return False
             for j in self.manifest.ci_jobs:
-                if j.name == required and j.conclusion != "success":
-                    return False
+                if j.name == required:
+                    if j.conclusion != "success":
+                        return False
+                    # Verify CI job is bound to the candidate SHA
+                    if (
+                        j.candidate_sha
+                        and j.candidate_sha != self.manifest.candidate_sha
+                    ):
+                        return False
         return True
 
     def _missing_ci_jobs(self) -> list[str]:
@@ -654,9 +678,14 @@ class ReleaseEvidenceVerifier:
         return missing
 
     def _check_artifacts_valid(self) -> bool:
-        """Check that all artifact hashes are present and files match."""
+        """Check that required artifact classes are present and hashes match."""
         if not self.manifest.artifacts:
             return False
+
+        # Required artifact categories: ci, benchmark, source, recovery
+        required_categories = {"ci", "benchmark", "source", "recovery"}
+        found_categories: set[str] = set()
+
         for ref in self.manifest.artifacts:
             if not ref.sha256:
                 return False
@@ -666,37 +695,68 @@ class ReleaseEvidenceVerifier:
             actual = _file_sha256(p)
             if actual != ref.sha256:
                 return False
-        return True
+            # Categorize the artifact
+            name_lower = ref.name.lower()
+            path_lower = ref.path.lower()
+            if "ci" in name_lower or ".github" in path_lower or "ci.yml" in path_lower:
+                found_categories.add("ci")
+            elif (
+                "release_benchmark" in path_lower or "workflow_benchmark" in path_lower
+            ):
+                found_categories.add("source")
+            elif "benchmark" in name_lower or "benchmark" in path_lower:
+                found_categories.add("benchmark")
+            elif "recovery" in name_lower or "recovery" in path_lower:
+                found_categories.add("recovery")
+
+        return required_categories.issubset(found_categories)
 
     def _check_fingerprints_present(self) -> bool:
-        """Check that required fingerprint categories are recorded."""
+        """Check that all required provenance fingerprint categories are recorded."""
+        # All categories required for release evidence
         required_categories = {
             "environment",
             "dependency",
+            "service",
+            "model",
+            "tokenizer",
+            "dataset",
+            "ground_truth",
+            "hardware",
         }
         categories = {f.category for f in self.manifest.fingerprints}
         return required_categories.issubset(categories)
 
     def _check_no_post_candidate_commits(self) -> bool:
-        """Check that no commits were added after the candidate SHA."""
+        """Check that no commits were added after the candidate SHA on main."""
         if not self.manifest.candidate_sha:
             return False
-        count = _commit_count_since(self.repo, self.manifest.candidate_sha)
+        # Compare against main branch ref, fall back to HEAD if main doesn't exist
+        main_sha = _sha_at_ref(self.repo, "main")
+        if not main_sha:
+            # Fall back to HEAD for repos without a main branch
+            main_sha = _current_sha(self.repo)
+        count = _commits_between(self.repo, self.manifest.candidate_sha, main_sha)
         if count < 0:
-            # Cannot determine — assume OK (e.g. SHA not on current branch)
+            # Cannot determine — assume OK (e.g. SHA not on main)
             return True
         return count == 0
 
     def _check_tag_resolves(self) -> bool:
-        """Check that a tag (if present) resolves to the candidate SHA."""
+        """Check that a tag (if present) resolves to the candidate SHA.
+
+        Peels annotated tags to their commit SHA using ``^{commit}`` before
+        comparing.
+        """
         if not self.manifest.tag:
             return True
         try:
+            # First try peeling the tag to its commit object
             resolved = _git_safe(
-                ["rev-parse", f"{self.manifest.tag}^{self.manifest.tree_hash}"],
-                self.repo,
+                ["rev-parse", f"{self.manifest.tag}^{{commit}}"], self.repo
             )
             if resolved is None:
+                # Fall back to direct tag resolution
                 resolved = _git_safe(["rev-parse", self.manifest.tag], self.repo)
             return resolved == self.manifest.candidate_sha
         except Exception:  # noqa: BLE001
