@@ -1865,7 +1865,9 @@ class TestCacheRegressionPR157:
         3. Global cache entries do not affect strict metrics.
         """
         import os
+        import time
         from pathlib import Path
+        from uuid import uuid4 as gen_uuid
 
         from research_store.postgres import connect, migrate
 
@@ -1877,20 +1879,32 @@ class TestCacheRegressionPR157:
         migrate(database_url)
 
         # Insert global cache entries that should NOT affect strict metrics.
+        # Must include all required non-nullable columns from migration 0032.
+        unique_key = f"global-key-{gen_uuid().hex[:8]}"
         with connect(database_url) as conn, conn.cursor() as cur:
             cur.execute(
-                """INSERT INTO semantic_cache (id, key_hash, status, created_at)
-                   VALUES (%s, %s, %s, now())""",
+                """INSERT INTO semantic_cache
+                   (id, key_hash, stage, model_fingerprint, input_hash,
+                    prompt_hash, prompt_version, schema_version, status, ttl_seconds, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
-                    str(Path(__file__).resolve().parent / "test"),
-                    "global-key",
+                    str(gen_uuid()),
+                    unique_key,
+                    "draft",
+                    "model-v1",
+                    "input-hash-123",
+                    "prompt-hash-456",
+                    "1",
+                    1,
                     "valid",
+                    3600,
+                    time.time(),
                 ),
             )
             conn.commit()
 
         # Run the strict campaign with deterministic_debug mode (fastest).
-        from scripts.strict_benchmark import main
+        from research_store.strict_benchmark import main
 
         campaign_dir = "/tmp/test_cache_regression_159"
         rc = main(
@@ -1929,15 +1943,26 @@ class TestCacheRegressionPR157:
             manifest_data = json.load(f)
 
         # Find the first campaign result.
-        for mode_results in manifest_data.get("results", {}).values():
-            for mode_result in mode_results:
-                for run_result in mode_result.get("runs", []):
-                    perf_metrics = run_result.get("performance_metrics", [])
-                    for m in perf_metrics:
-                        if m["name"] == "cache_hit_rate":
-                            # Cache metric must have a status.
-                            assert "status" in m, "cache_hit_rate must have status"
-                            # In strict mode with no cache events, status should be unavailable.
-                            assert m["status"] in ("unavailable", "measured"), (
-                                f"cache_hit_rate status is {m['status']}"
-                            )
+        # Manifest uses campaign_a/campaign_b keys, not "results".
+        for campaign_key in ("campaign_a", "campaign_b"):
+            campaign = manifest_data.get(campaign_key)
+            if not campaign:
+                continue
+            result_path = campaign.get("result_path")
+            if not result_path:
+                continue
+            result_file = Path(result_path) / "result.json"
+            if not result_file.exists():
+                continue
+            with open(result_file) as f:
+                result_data = json.load(f)
+            for run_result in result_data.get("runs", []):
+                perf_metrics = run_result.get("performance_metrics", [])
+                for m in perf_metrics:
+                    if m["name"] == "cache_hit_rate":
+                        # Cache metric must have a status.
+                        assert "status" in m, "cache_hit_rate must have status"
+                        # In strict mode with no cache events, status should be unavailable.
+                        assert m["status"] in ("unavailable", "measured"), (
+                            f"cache_hit_rate status is {m['status']}"
+                        )

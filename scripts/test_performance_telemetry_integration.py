@@ -284,6 +284,34 @@ class TestRunScopedCacheIsolation:
         run_a = uuid4()
         run_b = uuid4()
 
+        # Create parent run rows (required for FK constraint).
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, external_id, objective,
+                   execution_mode, state, created_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, now(), now())""",
+                (
+                    str(run_a),
+                    f"test_a_{uuid4().hex[:8]}",
+                    "Test objective",
+                    "agent_led",
+                    "created",
+                ),
+            )
+            cur.execute(
+                """INSERT INTO research_runs (id, external_id, objective,
+                   execution_mode, state, created_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, now(), now())""",
+                (
+                    str(run_b),
+                    f"test_b_{uuid4().hex[:8]}",
+                    "Test objective",
+                    "agent_led",
+                    "created",
+                ),
+            )
+        telemetry_connection.commit()
+
         svc_a = PerformanceTelemetryService(telemetry_connection)
         svc_b = PerformanceTelemetryService(telemetry_connection)
 
@@ -302,11 +330,27 @@ class TestRunScopedCacheIsolation:
 
         # Also insert global semantic_cache entries that should NOT affect
         # either run in strict mode.
+        import time
+
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO semantic_cache (id, key_hash, status, created_at)
-                   VALUES (%s, %s, %s, now())""",
-                (str(uuid4()), "global-key", "valid"),
+                """INSERT INTO semantic_cache
+                   (id, key_hash, stage, model_fingerprint, input_hash,
+                    prompt_hash, prompt_version, schema_version, status, ttl_seconds, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(uuid4()),
+                    "global-key",
+                    "draft",
+                    "model-v1",
+                    "input-hash-123",
+                    "prompt-hash-456",
+                    "1",
+                    1,
+                    "valid",
+                    3600,
+                    time.time(),
+                ),
             )
 
         engine = MetricEngine(TEST_DSN)
@@ -351,11 +395,27 @@ class TestRunScopedCacheIsolation:
         run_id = uuid4()
 
         # Insert global cache entries but NO run-scoped events.
+        import time
+
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO semantic_cache (id, key_hash, status, created_at)
-                   VALUES (%s, %s, %s, now())""",
-                (str(uuid4()), "global-key", "valid"),
+                """INSERT INTO semantic_cache
+                   (id, key_hash, stage, model_fingerprint, input_hash,
+                    prompt_hash, prompt_version, schema_version, status, ttl_seconds, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(uuid4()),
+                    "global-key",
+                    "draft",
+                    "model-v1",
+                    "input-hash-123",
+                    "prompt-hash-456",
+                    "1",
+                    1,
+                    "valid",
+                    3600,
+                    time.time(),
+                ),
             )
 
         engine = MetricEngine(TEST_DSN)
@@ -390,13 +450,29 @@ class TestRunScopedCacheIsolation:
         run_id = uuid4()
 
         # Insert many global cache entries with various statuses.
+        import time
+
         with telemetry_connection.cursor() as cur:
             for i in range(20):
                 status = "valid" if i % 3 == 0 else "expired"
                 cur.execute(
-                    """INSERT INTO semantic_cache (id, key_hash, status, created_at)
-                       VALUES (%s, %s, %s, now())""",
-                    (str(uuid4()), f"global-key-{i}", status),
+                    """INSERT INTO semantic_cache
+                       (id, key_hash, stage, model_fingerprint, input_hash,
+                        prompt_hash, prompt_version, schema_version, status, ttl_seconds, created_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        str(uuid4()),
+                        f"global-key-{i}",
+                        "draft",
+                        "model-v1",
+                        "input-hash-123",
+                        "prompt-hash-456",
+                        "1",
+                        1,
+                        status,
+                        3600,
+                        time.time(),
+                    ),
                 )
 
         engine = MetricEngine(TEST_DSN)
