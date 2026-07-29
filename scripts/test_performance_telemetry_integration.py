@@ -198,7 +198,9 @@ class TestTelemetryLifecycle:
         )
 
         # Strict mode produces 0.0 metrics with UNAVAILABLE status.
-        performance, metrics = engine.extract_performance_metrics(run_id, 0.0)
+        from research_store.release_benchmark import MetricStatus
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0.0)
         cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
         assert cache_metric.status == MetricStatus.UNAVAILABLE
         assert cache_metric.value == 0.0
