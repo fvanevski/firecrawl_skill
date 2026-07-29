@@ -784,22 +784,24 @@ class MetricEngine:
             _strict_token_unavailable = False
             _strict_embedding_unavailable = False
             _strict_cpu_unavailable = False
-            _strict_telemetry_tables_absent = False
+            _strict_gpu_unavailable = False
 
             if telemetry["token_source"] == "unavailable":
                 _strict_token_unavailable = True
             if telemetry["embedding_throughput"] <= 0:
                 _strict_embedding_unavailable = True
-            if telemetry["cpu_samples"] == 0:
+            if telemetry["cpu_samples"] == 0 or not telemetry.get(
+                "telemetry_tables_exist"
+            ):
                 _strict_cpu_unavailable = True
             if not telemetry.get("telemetry_tables_exist"):
-                _strict_telemetry_tables_absent = True
+                _strict_gpu_unavailable = True
         else:
             # Non-strict mode: all strict flags are False.
             _strict_token_unavailable = False
             _strict_embedding_unavailable = False
             _strict_cpu_unavailable = False
-            _strict_telemetry_tables_absent = False
+            _strict_gpu_unavailable = False
 
         # ----------------------------------------------------------------
         # Semantic calls — always available from semantic_calls table.
@@ -904,9 +906,16 @@ class MetricEngine:
                 cpu_pct = 0.0
             else:
                 cpu_pct = self._legacy_cpu_percent()
+        # Formula: only claim run_resource_samples when both samples exist
+        # AND the telemetry tables actually exist.  When tables are absent
+        # the samples dict may contain stale values — use the unavailable
+        # formula instead.
+        _cpu_valid_samples = telemetry["cpu_samples"] > 0 and telemetry.get(
+            "telemetry_tables_exist"
+        )
         cpu_formula = (
             f"run_resource_samples: mean({telemetry['cpu_samples']} samples)"
-            if telemetry["cpu_samples"] > 0
+            if _cpu_valid_samples
             else (
                 "0.0 — run_resource_samples empty (no CPU samples from orchestrator)"
                 if _strict_cpu_unavailable
@@ -921,17 +930,22 @@ class MetricEngine:
         # GPU — from run_resource_samples, or fallback.
         gpu_mem = telemetry["gpu_mean_memory_mb"]
         if gpu_mem is None:
-            if _strict_telemetry_tables_absent:
+            if _strict_gpu_unavailable:
                 # Strict mode: do NOT fall back to a live NVML sample.
                 gpu_mem = 0.0
             else:
                 gpu_mem = self._legacy_gpu_memory()
+        # Formula: only claim run_resource_samples when both samples exist
+        # AND the telemetry tables actually exist.
+        _gpu_valid_samples = telemetry["gpu_samples"] > 0 and telemetry.get(
+            "telemetry_tables_exist"
+        )
         gpu_formula = (
             f"run_resource_samples: mean({telemetry['gpu_samples']} samples)"
-            if telemetry["gpu_samples"] > 0
+            if _gpu_valid_samples
             else (
                 "0.0 — run_resource_samples empty (no GPU samples from orchestrator)"
-                if _strict_telemetry_tables_absent
+                if _strict_gpu_unavailable
                 else (
                     "pynvml.nvmlDeviceGetMemoryInfo — single sample"
                     if _HAS_PYNVML and gpu_mem is not None
@@ -980,7 +994,7 @@ class MetricEngine:
         )
         _gpu_status = (
             MetricStatus.UNAVAILABLE
-            if _strict_telemetry_tables_absent
+            if _strict_gpu_unavailable
             else (
                 MetricStatus.MEASURED
                 if telemetry["gpu_samples"] > 0
@@ -1064,13 +1078,13 @@ class MetricEngine:
                 value=performance.cpu_percent,
                 source=MetricSource(
                     table="run_resource_samples"
-                    if telemetry["cpu_samples"] > 0
+                    if _cpu_valid_samples
                     else ("psutil" if _HAS_PSUTIL else "none"),
                     column="AVG(value)"
-                    if telemetry["cpu_samples"] > 0
+                    if _cpu_valid_samples
                     else "cpu_percent(interval=0.1)",
                     run_id=str(run_id),
-                    method="mean" if telemetry["cpu_samples"] > 0 else "sample",
+                    method="mean" if _cpu_valid_samples else "sample",
                 ),
                 formula=cpu_formula,
                 status=_cpu_status,
@@ -1080,13 +1094,13 @@ class MetricEngine:
                 value=performance.gpu_memory_mb,
                 source=MetricSource(
                     table="run_resource_samples"
-                    if telemetry["gpu_samples"] > 0
+                    if _gpu_valid_samples
                     else ("pynvml" if _HAS_PYNVML else "none"),
                     column="AVG(value)"
-                    if telemetry["gpu_samples"] > 0
+                    if _gpu_valid_samples
                     else "nvmlDeviceGetMemoryInfo",
-                    run_id=str(run_id) if telemetry["gpu_samples"] > 0 else "",
-                    method="mean" if telemetry["gpu_samples"] > 0 else "nvml",
+                    run_id=str(run_id) if _gpu_valid_samples else "",
+                    method="mean" if _gpu_valid_samples else "nvml",
                 ),
                 formula=gpu_formula,
                 status=_gpu_status,
@@ -1166,16 +1180,17 @@ class MetricEngine:
                     result["gpu_mean_memory_mb"] = round(float(gpu_mean), 2)
                 result["cpu_samples"] = cpu_cnt
                 result["gpu_samples"] = gpu_cnt
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             # Rollback the failed transaction so legacy queries can execute.
             try:
                 self._connection.rollback()
             except Exception:  # noqa: S110, BLE001
                 pass
             # Telemetry tables don't exist — fall through to legacy.
-            logger.debug(
-                "run_performance_telemetry table not found — "
-                "falling back to legacy metric extraction"
+            logger.warning(
+                "run_performance_telemetry query failed — "
+                "falling back to legacy metric extraction: %s",
+                exc,
             )
 
         return result

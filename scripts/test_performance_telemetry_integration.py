@@ -781,3 +781,224 @@ class TestCacheEventClassification:
         # (the stages query in MetricEngine does not use the build_summary
         # stage filter — it queries all lookup events for the run_id).
         assert "draft" in cache_metric.source.stages
+
+
+class TestAbsentTelemetryTables:
+    """Integration test for absent telemetry tables — issue #160.
+
+    Verifies that ``extract_performance_metrics()`` produces correct
+    ``0.0`` / ``UNAVAILABLE`` metrics when the telemetry tables do not
+    exist (pre-migration database scenario).  The old code would call
+    the legacy psutil/NVML fallback in this state, producing a host-wide
+    sample whose provenance formula claimed ``0.0`` — a value-provenance
+    contradiction.
+
+    These tests **drop the telemetry tables after migration** to simulate
+    the pre-migration scenario where the tables never existed.
+    """
+
+    def test_strict_metrics_when_tables_dropped(self, telemetry_connection):
+        """Strict mode with dropped telemetry tables yields 0.0 / UNAVAILABLE.
+
+        Issue #160: when the telemetry tables do not exist,
+        ``_read_telemetry`` returns ``telemetry_tables_exist = False``.
+        In strict mode, both CPU and GPU must be ``0.0`` with
+        ``UNAVAILABLE`` status and a formula documenting the empty source.
+        No legacy psutil or NVML samples may appear.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Drop the telemetry tables to simulate pre-migration scenario.
+        with telemetry_connection.cursor() as cur:
+            for table in (
+                "run_performance_telemetry",
+                "run_cache_events",
+                "run_embedding_throughput",
+                "run_resource_samples",
+                "endpoint_usage_records",
+            ):
+                cur.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+        telemetry_connection.commit()
+
+        # Create a research run row (required for FK).
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        performance, metrics = engine.extract_performance_metrics(run_id, 0)
+
+        # CPU: value 0.0, UNAVAILABLE status, empty-source formula.
+        cpu_metric = next(m for m in metrics if m.name == "cpu_percent")
+        assert performance.cpu_percent == 0.0
+        assert cpu_metric.status == MetricStatus.UNAVAILABLE
+        assert "run_resource_samples empty" in cpu_metric.formula
+        # Provenance must NOT claim run_resource_samples.
+        assert cpu_metric.source.table != "run_resource_samples"
+
+        # GPU: value 0.0, UNAVAILABLE status, empty-source formula.
+        gpu_metric = next(m for m in metrics if m.name == "gpu_memory_mb")
+        assert performance.gpu_memory_mb == 0.0
+        assert gpu_metric.status == MetricStatus.UNAVAILABLE
+        assert "run_resource_samples empty" in gpu_metric.formula
+        # Provenance must NOT claim run_resource_samples.
+        assert gpu_metric.source.table != "run_resource_samples"
+
+        # Re-run migrations to recreate the dropped tables so that
+        # subsequent tests in this session still have the tables.
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute("DROP SCHEMA public CASCADE")
+            cur.execute("CREATE SCHEMA public")
+        migrate(TEST_DSN)
+
+
+class TestNoSamplesInExistingTables:
+    """Integration tests for empty telemetry tables — issue #160.
+
+    These tests verify behavior when the telemetry tables exist but contain
+    no samples (e.g. an orchestrator that failed before producing telemetry).
+    The ``telemetry_database`` fixture migrates the tables, so they always
+    exist in this test class.
+    """
+
+    def test_strict_metrics_no_samples_existing_tables(self, telemetry_connection):
+        """Strict mode with existing but empty telemetry tables.
+
+        When the telemetry tables exist but have no samples, strict mode
+        blocks legacy fallbacks and produces 0.0 / UNAVAILABLE.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Create a research run row (required for FK).
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        performance, metrics = engine.extract_performance_metrics(run_id, 0)
+
+        # CPU: value 0.0, UNAVAILABLE status, empty-source formula.
+        cpu_metric = next(m for m in metrics if m.name == "cpu_percent")
+        assert performance.cpu_percent == 0.0
+        assert cpu_metric.status == MetricStatus.UNAVAILABLE
+        assert "run_resource_samples empty" in cpu_metric.formula
+
+        # GPU: value 0.0, UNAVAILABLE status (no samples).
+        gpu_metric = next(m for m in metrics if m.name == "gpu_memory_mb")
+        assert performance.gpu_memory_mb == 0.0
+        assert gpu_metric.status == MetricStatus.UNAVAILABLE
+
+    def test_non_strict_uses_legacy_fallback_no_samples(self, telemetry_connection):
+        """Non-strict mode with existing but empty telemetry tables.
+
+        When telemetry tables exist but are empty and strict mode is off,
+        the engine falls back to psutil/NVML.  The metric status should be
+        MEASURED (not UNAVAILABLE) and the formula should reference the
+        legacy source.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Create a research run row (required for FK).
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=False,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+
+        # CPU: non-strict mode uses psutil fallback for the value.
+        # Status is UNAVAILABLE because cpu_samples == 0 (no authoritative data).
+        cpu_metric = next(m for m in metrics if m.name == "cpu_percent")
+        assert cpu_metric.status == MetricStatus.UNAVAILABLE
+        assert "psutil" in cpu_metric.formula.lower()
+
+        # GPU: non-strict mode uses NVML fallback for the value.
+        # Status is UNAVAILABLE because gpu_samples == 0 (no authoritative data).
+        gpu_metric = next(m for m in metrics if m.name == "gpu_memory_mb")
+        assert gpu_metric.status == MetricStatus.UNAVAILABLE
+        # Formula references NVML or "NVML not available" depending on hardware.
+        assert "nvml" in gpu_metric.formula.lower()
