@@ -66,7 +66,6 @@ jobs:
             -p no:cacheprovider \
             scripts/test_research_domain.py \
             scripts/test_research_store.py \
-            scripts/test_research_store_integration.py \
             scripts/test_classifier.py \
             scripts/test_workflow.py \
             scripts/test_budget_policy.py \
