@@ -346,6 +346,10 @@ class TestRunScopedCacheIsolation:
                 run_b, "draft", "lookup", f"key-b-{i}", "fp-b", False
             )
 
+        # Build summaries so run_performance_telemetry is populated.
+        svc_a.build_summary(run_a)
+        svc_b.build_summary(run_b)
+
         # Also insert global semantic_cache entries that should NOT affect
         # either run in strict mode.
         import time
