@@ -725,9 +725,11 @@ class TestStrictMetricCompleteness:
         assert status_map["coverage_completeness"] == MetricStatus.UNEVALUATED
         assert status_map["unsupported_claim_rate"] == MetricStatus.UNEVALUATED
         assert status_map["citation_accuracy"] == MetricStatus.UNEVALUATED
-        # source_quality_score and report_quality_score are MEASURED
-        # (computed from available data, even if zero)
-        assert status_map["source_quality_score"] == MetricStatus.MEASURED
+        # source_quality_score is UNEVALUATED when no source-class data
+        # is available (mock returns no search_candidates → total_classified=0).
+        assert status_map["source_quality_score"] == MetricStatus.UNEVALUATED
+        # report_quality_score is MEASURED — it is a composite computed
+        # from other metric values; the computation genuinely happens.
         assert status_map["report_quality_score"] == MetricStatus.MEASURED
 
     def test_strict_campaign_rejects_unavailable_metrics(self):
@@ -1525,3 +1527,119 @@ class TestStrictMetricCompletenessMissing:
         assert not any("missing" in claim for claim in withdrawn)
         assert not any("is unevaluated" in claim for claim in withdrawn)
         assert not any("is unavailable" in claim for claim in withdrawn)
+
+
+# ---------------------------------------------------------------------------
+# Status serialization integration test — issue #158
+# ---------------------------------------------------------------------------
+
+
+class TestStatusSerialization:
+    """Integration test verifying status fields are serialized in result.json."""
+
+    def test_status_fields_serialized_in_result_json(self):
+        """Strict campaign produces result.json with quality/perf metrics arrays.
+
+        Runs the strict campaign against a disposable PostgreSQL database and
+        verifies that the resulting result.json contains quality_metrics and
+        performance_metrics arrays with correct status fields. The DB is empty,
+        so all metrics will be 0.0 with unevaluated/unavailable status.
+        """
+        database_url = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+
+        campaign_dir = Path("/tmp/test_status_serialization")
+        # Clean up previous run artifacts.
+        import shutil
+
+        if campaign_dir.exists():
+            shutil.rmtree(campaign_dir)
+        campaign_dir.mkdir(parents=True, exist_ok=True)
+
+        # Run the strict campaign.
+        rc = main(
+            [
+                "--campaign-dir",
+                str(campaign_dir),
+                "--database-url",
+                database_url,
+                "--dataset",
+                str(BENCHMARK_FIXTURE),
+                "--objectives",
+                "obj-001",
+                "--tolerance",
+                "0.15",
+            ]
+        )
+
+        # Campaign should complete (not raise) and produce NO_GO.
+        assert rc == 1
+
+        # Find the result.json file (nested in A/<timestamp>/ or B/<timestamp>/).
+        result_files = list(campaign_dir.rglob("result.json"))
+        assert len(result_files) > 0, "result.json not found in campaign artifacts"
+
+        result_path = result_files[0]
+        with open(result_path) as f:
+            result_data = json.load(f)
+
+        # The metrics are at the run level (inside the 'runs' array).
+        runs = result_data.get("runs", [])
+        assert len(runs) > 0, "No runs in result.json"
+        run = runs[0]
+
+        # Verify quality_metrics array is present and non-empty.
+        quality_metrics = run.get("quality_metrics", [])
+        assert len(quality_metrics) > 0, "quality_metrics array is empty"
+
+        # Build a status map for easy assertions.
+        status_map = {m["name"]: m["status"] for m in quality_metrics}
+
+        # With an empty DB, coverage_completeness should be MEASURED
+        # (coverage items exist at unassessed status — applicable but not satisfied).
+        assert status_map.get("coverage_completeness") == "measured", (
+            f"coverage_completeness status is {status_map.get('coverage_completeness')}, "
+            "expected 'measured' (coverage items exist)"
+        )
+
+        # With no claims, unsupported_claim_rate should be UNEVALUATED.
+        assert status_map.get("unsupported_claim_rate") == "unevaluated", (
+            f"unsupported_claim_rate status is {status_map.get('unsupported_claim_rate')}, "
+            "expected 'unevaluated' (no claims)"
+        )
+
+        # With no assessed claims, citation_accuracy should be UNEVALUATED.
+        assert status_map.get("citation_accuracy") == "unevaluated", (
+            f"citation_accuracy status is {status_map.get('citation_accuracy')}, "
+            "expected 'unevaluated' (no assessed claims)"
+        )
+
+        # Verify performance_metrics array is present and non-empty.
+        perf_metrics = run.get("performance_metrics", [])
+        assert len(perf_metrics) > 0, "performance_metrics array is empty"
+
+        perf_status_map = {m["name"]: m["status"] for m in perf_metrics}
+
+        # With no endpoint usage, total_tokens should be UNAVAILABLE.
+        assert perf_status_map.get("total_tokens") == "unavailable", (
+            f"total_tokens status is {perf_status_map.get('total_tokens')}, "
+            "expected 'unavailable' (no endpoint_usage)"
+        )
+
+        # With no cache events, cache_hit_rate should be UNAVAILABLE.
+        assert perf_status_map.get("cache_hit_rate") == "unavailable", (
+            f"cache_hit_rate status is {perf_status_map.get('cache_hit_rate')}, "
+            "expected 'unavailable' (no cache events)"
+        )
+
+        # Verify each metric has name, value, status, formula fields.
+        for m in quality_metrics:
+            assert "name" in m
+            assert "value" in m
+            assert "status" in m
+            assert "formula" in m
+
+        for m in perf_metrics:
+            assert "name" in m
+            assert "value" in m
+            assert "status" in m
+            assert "formula" in m

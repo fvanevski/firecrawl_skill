@@ -421,6 +421,13 @@ class MetricEngine:
             else "domain_diversity fallback"
         )
 
+        # NF1: source_quality status reflects whether source-class data was
+        # available (MEASURED) or only a heuristic fallback was used
+        # (UNEVALUATED).
+        _source_quality_status = (
+            MetricStatus.MEASURED if total_classified > 0 else MetricStatus.UNEVALUATED
+        )
+
         # ------------------------------------------------------------------
         # 3. Coverage completeness — reconstruct projection from ALL revisions
         # ------------------------------------------------------------------
@@ -673,7 +680,7 @@ class MetricEngine:
                     method="source_class_compliance",
                 ),
                 formula=source_quality_formula,
-                status=MetricStatus.MEASURED,
+                status=_source_quality_status,
             ),
             QualityMetric(
                 name="coverage_completeness",

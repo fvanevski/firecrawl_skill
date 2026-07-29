@@ -30,6 +30,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from research_store.release_benchmark import (
     RELEASE_MODES,
+    MetricStatus,
     ReleaseBenchmarkConfig,
     ReleaseBenchmarkResult,
     ReleaseBenchmarkRunner,
@@ -238,9 +239,9 @@ def _run_campaign(
                         {
                             "name": qm.name,
                             "value": qm.value,
-                            "status": qm.status.value
-                            if hasattr(qm, "status")
-                            else "measured",
+                            "status": getattr(
+                                qm, "status", MetricStatus.UNEVALUATED
+                            ).value,
                             "formula": qm.formula,
                         }
                         for qm in run.quality_metrics
@@ -276,9 +277,9 @@ def _run_campaign(
                         {
                             "name": pm.name,
                             "value": pm.value,
-                            "status": pm.status.value
-                            if hasattr(pm, "status")
-                            else "measured",
+                            "status": getattr(
+                                pm, "status", MetricStatus.UNEVALUATED
+                            ).value,
                             "formula": pm.formula,
                         }
                         for pm in run.performance_metrics
