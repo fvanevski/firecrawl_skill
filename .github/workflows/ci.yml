@@ -8,6 +8,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      candidate-sha:
+        description: "Exact commit SHA to validate (workflow_dispatch only)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -176,7 +181,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.candidate-sha || github.sha }}
           fetch-depth: 0
 
       - name: Set up Python
