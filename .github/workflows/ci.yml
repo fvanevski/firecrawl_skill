@@ -56,6 +56,13 @@ jobs:
             PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE firecrawl_telemetry_test;" 2>/dev/null && break || sleep 1
           done
 
+      - name: Start disposable Qdrant
+        run: |
+          docker run --name qdrant -d -p 6333:6333 \
+            -e QDRANT__SERVICE__READ_ONLY_ACCESS=false \
+            qdrant/qdrant:v1.18.3-unprivileged
+          sleep 3
+
       - name: Run tests
         env:
           RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_telemetry_test"
@@ -93,7 +100,8 @@ jobs:
             scripts/test_performance_telemetry.py \
             scripts/test_performance_telemetry_integration.py \
             scripts/test_strict_campaign.py \
-            scripts/test_release_evidence.py
+            scripts/test_release_evidence.py \
+            scripts/test_research_store_integration.py
 
   strict-campaign:
     name: "Strict Campaign (issue #144) — Python ${{ matrix.python-version }}"
