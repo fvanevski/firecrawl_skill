@@ -537,10 +537,9 @@ class ReleaseEvidenceGenerator:
         """Collect known durable artifacts and their hashes.
 
         Only includes files that are tracked in git.  Untracked files
-        (such as ``recovery-report.txt`` generated at runtime by strict
-        benchmark campaigns) are excluded because their contents can
-        change between manifest generation and verification, causing
-        spurious hash mismatches.
+        generated at runtime (such as benchmark recovery reports) are
+        excluded because their contents can change between manifest
+        generation and verification, causing spurious hash mismatches.
         """
         artifacts: list[ArtifactReference] = []
         artifact_paths = [
@@ -548,7 +547,6 @@ class ReleaseEvidenceGenerator:
             ("ci.yml", ".github/workflows/ci.yml"),
             ("release_benchmark.py", "scripts/research_store/release_benchmark.py"),
             ("workflow_benchmark.py", "scripts/research_store/workflow_benchmark.py"),
-            ("recovery-report.txt", "recovery-report.txt"),
         ]
         for name, rel_path in artifact_paths:
             p = self.repo / rel_path
@@ -556,7 +554,7 @@ class ReleaseEvidenceGenerator:
                 continue
             # Skip untracked files — their hashes are not stable across
             # manifest generation and verification runs.
-            if not self._is_tracked(rel_path):
+            if not self._is_tracked(rel_path, self.repo):
                 continue
             artifacts.append(
                 ArtifactReference(
@@ -569,14 +567,16 @@ class ReleaseEvidenceGenerator:
         return tuple(artifacts)
 
     @staticmethod
-    def _is_tracked(rel_path: str, repo: Path | None = None) -> bool:
+    def _is_tracked(rel_path: str, repo: Path) -> bool:
         """Return ``True`` when *rel_path* is tracked in the git index.
 
         Uses ``git ls-files --error-unmatch`` which returns zero only for
         paths that are known to git (tracked, staged, or in the index).
+
+        Args:
+            rel_path: Relative file path to check.
+            repo: Path to the git repository root.
         """
-        if repo is None:
-            repo = Path.cwd()
         result = subprocess.run(
             ["git", "ls-files", "--error-unmatch", rel_path],
             cwd=str(repo),
