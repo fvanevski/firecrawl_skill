@@ -95,20 +95,35 @@ class PerformanceTelemetryService:
             ),
         )
 
-    def get_cache_stats(self, run_id: UUID) -> dict[str, int]:
+    def get_cache_stats(
+        self, run_id: UUID, stages: tuple[str, ...] | None = None
+    ) -> dict[str, int]:
         """Get cache event counts for a run.
+
+        Args:
+            run_id: Research run UUID.
+            stages: Optional tuple of semantic stages to filter by.
+                If None, all stages are included.
 
         Returns:
             Dict with keys: lookups, hits, misses.
         """
+        where_clause = "WHERE run_id = %s"
+        params: list[str] = [str(run_id)]
+        if stages:
+            # Convert Python tuple to PostgreSQL array literal.
+            # Example: ('draft', 'outline') → '{draft,outline}'
+            array_literal = "{" + ",".join(stages) + "}"
+            where_clause += " AND stage = ANY(%s)"
+            params.append(array_literal)
         cur = self._connection.execute(
-            """SELECT
+            f"""SELECT
                    COUNT(*) FILTER (WHERE event_type = 'lookup') AS lookups,
                    COUNT(*) FILTER (WHERE event_type = 'lookup' AND hit IS TRUE) AS hits,
                    COUNT(*) FILTER (WHERE event_type = 'lookup' AND hit IS FALSE) AS misses
                  FROM run_cache_events
-                 WHERE run_id = %s""",
-            (str(run_id),),
+                 {where_clause}""",
+            tuple(params),
         )
         row = cur.fetchone()
         return {
@@ -469,7 +484,11 @@ class PerformanceTelemetryService:
             strict_pass=row[20] if row[20] is not None else True,
         )
 
-    def build_summary(self, run_id: UUID) -> PerformanceTelemetrySummary:
+    def build_summary(
+        self,
+        run_id: UUID,
+        stages: tuple[str, ...] | None = None,
+    ) -> PerformanceTelemetrySummary:
         """Build and persist a summary from all telemetry sources.
 
         This method aggregates cache stats, embedding stats, resource
@@ -477,12 +496,14 @@ class PerformanceTelemetryService:
 
         Args:
             run_id: Research run UUID.
+            stages: Optional tuple of semantic stages to filter cache events by.
+                If None, all stages are included.
 
         Returns:
             The built PerformanceTelemetrySummary.
         """
         # Aggregate cache stats.
-        cache_stats = self.get_cache_stats(run_id)
+        cache_stats = self.get_cache_stats(run_id, stages=stages)
         cache_lookups = cache_stats["lookups"]
         cache_hits = cache_stats["hits"]
         cache_misses = cache_stats["misses"]

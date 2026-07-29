@@ -170,6 +170,9 @@ class MetricSource:
     column: str
     run_id: str
     method: str  # "count", "sum", "avg", "max", "ratio", "boolean"
+    # Optional provenance fields — populated when available.
+    event_ids: tuple[str, ...] = ()  # UUIDs of source events (e.g. run_cache_events)
+    stages: tuple[str, ...] = ()  # Semantic stages included in the query
 
 
 @dataclass(frozen=True)
@@ -781,7 +784,6 @@ class MetricEngine:
             _strict_token_unavailable = False
             _strict_embedding_unavailable = False
             _strict_cpu_unavailable = False
-            _strict_cache_unavailable = False
             _strict_telemetry_tables_absent = False
 
             if telemetry["token_source"] == "unavailable":
@@ -790,16 +792,13 @@ class MetricEngine:
                 _strict_embedding_unavailable = True
             if telemetry["cpu_samples"] == 0:
                 _strict_cpu_unavailable = True
-            if telemetry["cache_lookups"] == 0:
-                _strict_cache_unavailable = True
             if not telemetry.get("telemetry_tables_exist"):
                 _strict_telemetry_tables_absent = True
         else:
-            # Non-strict mode: all strict flags are False (legacy fallbacks OK).
+            # Non-strict mode: all strict flags are False.
             _strict_token_unavailable = False
             _strict_embedding_unavailable = False
             _strict_cpu_unavailable = False
-            _strict_cache_unavailable = False
             _strict_telemetry_tables_absent = False
 
         # ----------------------------------------------------------------
@@ -831,7 +830,8 @@ class MetricEngine:
             else "0.0 — endpoint_usage_records empty (no token data from orchestrator)"
         )
 
-        # Cache — run-scoped from run_cache_events, or legacy global.
+        # Cache — run-scoped from run_cache_events.
+        # No legacy fallback: all modes use the authoritative run-scoped table.
         cache_lookups = telemetry["cache_lookups"]
         cache_hits = telemetry["cache_hits"]
         if cache_lookups > 0:
@@ -840,19 +840,39 @@ class MetricEngine:
                 f"run_cache_events: hits({cache_hits}) / lookups({cache_lookups})"
             )
         else:
-            if _strict_cache_unavailable:
-                # Strict mode: do NOT fall back to the global semantic_cache
-                # table. A partial campaign must not inherit cache state from
-                # unrelated prior runs — that would produce spurious cache
-                # hit rates that vary between Campaign A and B.
-                cache_hit_rate = 0.0
-                cache_formula = (
-                    "0.0 — run_cache_events empty (no cache lookups from orchestrator)"
-                )
-            else:
-                # Legacy fallback: global semantic_cache (no run_id filter).
-                cache_hit_rate, cache_formula = self._legacy_cache_hit_rate()
+            # No scoped cache events: produce 0.0 with UNAVAILABLE status.
+            cache_hit_rate = 0.0
+            cache_formula = (
+                "0.0 — run_cache_events empty (no cache lookups from orchestrator)"
+            )
 
+        # ------------------------------------------------------------------
+        # Cache event provenance: event IDs and stages from raw events.
+        # ------------------------------------------------------------------
+        _cache_event_ids: tuple[str, ...] = ()
+        _cache_stages: tuple[str, ...] = ()
+        try:
+            cur = self._connection.execute(
+                """SELECT ARRAY_AGG(id::text) AS event_ids,
+                          ARRAY_AGG(DISTINCT stage) AS stages
+                   FROM run_cache_events
+                   WHERE run_id = %s
+                     AND event_type = 'lookup'""",
+                (str(run_id),),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                _cache_event_ids = tuple(row[0])
+            if row and row[1]:
+                _cache_stages = tuple(row[1])
+        except Exception:  # noqa: BLE001
+            # Rollback so legacy queries can still execute.
+            try:
+                self._connection.rollback()
+            except Exception:  # noqa: S110, BLE001
+                pass
+
+        # ------------------------------------------------------------------
         # Embedding throughput — from run_embedding_throughput, or fallback.
         embedding_throughput = telemetry["embedding_throughput"]
         if embedding_throughput > 0:
@@ -942,9 +962,7 @@ class MetricEngine:
             else MetricStatus.MEASURED
         )
         _cache_status = (
-            MetricStatus.UNAVAILABLE
-            if _strict_cache_unavailable
-            else MetricStatus.MEASURED
+            MetricStatus.UNAVAILABLE if cache_lookups == 0 else MetricStatus.MEASURED
         )
         _emb_status = (
             MetricStatus.UNAVAILABLE
@@ -1015,12 +1033,12 @@ class MetricEngine:
                 name="cache_hit_rate",
                 value=performance.cache_hit_rate,
                 source=MetricSource(
-                    table="run_cache_events" if cache_lookups > 0 else "semantic_cache",
-                    column="event_type, hit"
-                    if cache_lookups > 0
-                    else "status = 'valid'",
-                    run_id=str(run_id) if cache_lookups > 0 else "",
+                    table="run_cache_events",
+                    column="event_type, hit",
+                    run_id=str(run_id),
                     method="ratio",
+                    event_ids=_cache_event_ids,
+                    stages=_cache_stages,
                 ),
                 formula=cache_formula,
                 status=_cache_status,
@@ -1165,24 +1183,6 @@ class MetricEngine:
     # ------------------------------------------------------------------
     # Legacy fallbacks (pre-migration 0036)
     # ------------------------------------------------------------------
-
-    def _legacy_cache_hit_rate(self) -> tuple[float, str]:
-        """Legacy cache hit rate from global semantic_cache (no run_id)."""
-        with self._connection.cursor() as cur:
-            cur.execute(
-                """SELECT
-                       COUNT(*) AS total,
-                       SUM(CASE WHEN status = 'valid' THEN 1 ELSE 0 END) AS valid
-                   FROM semantic_cache""",
-            )
-            row = cur.fetchone()
-        total = row[0] or 0
-        valid = row[1] or 0
-        rate = valid / total if total > 0 else 0.0
-        return (
-            round(rate, 6),
-            f"semantic_cache: valid({valid}) / total({total}) (no run_id filter)",
-        )
 
     def _legacy_cpu_percent(self) -> float:
         """Legacy CPU percent: single psutil sample."""

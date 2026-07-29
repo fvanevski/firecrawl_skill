@@ -24,6 +24,7 @@ import pytest
 from research_store.postgres import connect, migrate
 from research_store.release_benchmark import (
     MetricEngine,
+    MetricStatus,
     ReleaseBenchmarkConfig,
 )
 from research_store.telemetry_service import PerformanceTelemetryService
@@ -92,15 +93,17 @@ class TestTelemetryLifecycle:
         # Create a research run row (required for FK).
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, external_id, objective,
-                   execution_mode, state, created_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, now(), now())""",
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
-                    f"test_{gen_uuid().hex[:8]}",
                     "Test objective",
-                    "agent_led",
+                    "running",
                     "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{gen_uuid().hex[:8]}",
                 ),
             )
         telemetry_connection.commit()
@@ -162,21 +165,27 @@ class TestTelemetryLifecycle:
         assert summary.strict_pass is False  # No embedding telemetry
 
     def test_strict_mode_rejects_empty_telemetry(self, telemetry_connection):
-        """Strict mode must fail when telemetry tables exist but are empty."""
+        """Strict mode must produce 0.0 metrics with UNAVAILABLE status.
+
+        Strict mode no longer raises RuntimeError for empty telemetry.
+        Instead it produces 0.0 metrics with clear UNAVAILABLE status.
+        """
         run_id = uuid4()
 
         # Create a research run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, external_id, objective,
-                   execution_mode, state, created_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, now(), now())""",
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
-                    f"test_{uuid4().hex[:8]}",
                     "Test objective",
-                    "agent_led",
+                    "running",
                     "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
                 ),
             )
         telemetry_connection.commit()
@@ -189,9 +198,13 @@ class TestTelemetryLifecycle:
             strict=True,
         )
 
-        # Strict mode should raise because token_source is unavailable.
-        with pytest.raises(RuntimeError, match="Strict mode:"):
-            engine.extract_performance_metrics(run_id, 0.0)
+        # Strict mode produces 0.0 metrics with UNAVAILABLE status.
+        from research_store.release_benchmark import MetricStatus
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0.0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+        assert cache_metric.status == MetricStatus.UNAVAILABLE
+        assert cache_metric.value == 0.0
 
     def test_cache_stats_query(self, telemetry_connection):
         """Cache stats correctly count lookups, hits, and misses."""
@@ -200,15 +213,17 @@ class TestTelemetryLifecycle:
         # Create a research run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, external_id, objective,
-                   execution_mode, state, created_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, now(), now())""",
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
-                    f"test_{uuid4().hex[:8]}",
                     "Test objective",
-                    "agent_led",
+                    "running",
                     "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
                 ),
             )
         telemetry_connection.commit()
@@ -234,30 +249,6 @@ class TestTelemetryLifecycle:
 class TestLegacyFallback:
     """Tests for legacy fallback paths when telemetry tables are absent."""
 
-    def test_legacy_cache_hit_rate(self, telemetry_connection):
-        """Legacy cache hit rate from global semantic_cache."""
-        from research_store.release_benchmark import MetricEngine
-
-        engine = MetricEngine(TEST_DSN)
-        engine._connection = telemetry_connection
-
-        # Insert some cache entries.
-        with telemetry_connection.cursor() as cur:
-            cur.execute(
-                """INSERT INTO semantic_cache (id, key_hash, status, created_at)
-                   VALUES (%s, %s, %s, now())""",
-                (str(uuid4()), "abc123", "valid"),
-            )
-            cur.execute(
-                """INSERT INTO semantic_cache (id, key_hash, status, created_at)
-                   VALUES (%s, %s, %s, now())""",
-                (str(uuid4()), "def456", "expired"),
-            )
-
-        rate, formula = engine._legacy_cache_hit_rate()
-        assert rate == 0.5
-        assert "semantic_cache" in formula
-
     def test_legacy_cpu_percent(self, telemetry_connection):
         """Legacy CPU percent from psutil."""
         from research_store.release_benchmark import MetricEngine
@@ -278,3 +269,515 @@ class TestLegacyFallback:
         gpu_mem = engine._legacy_gpu_memory()
         # May be None if NVML is unavailable.
         assert gpu_mem is None or gpu_mem >= 0.0
+
+
+class TestRunScopedCacheIsolation:
+    """Two-run cache isolation test — issue #159.
+
+    Verifies that two benchmark runs with different cache events produce
+    isolated cache metrics.  Records for Run A must not alter Run B's result.
+    """
+
+    def test_two_runs_with_different_cache_events_are_isolated(
+        self, telemetry_connection
+    ):
+        """Run A and Run B with different cache events remain isolated.
+
+        Issue #159: Campaign A and Campaign B cache metrics must be
+        reproducible from their own event sets.  Unrelated prior cache
+        records cannot alter a benchmark run's metric.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+        from research_store.telemetry_service import PerformanceTelemetryService
+
+        run_a = uuid4()
+        run_b = uuid4()
+
+        # Create parent run rows (required for FK constraint).
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_a),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_a_{uuid4().hex[:8]}",
+                ),
+            )
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_b),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_b_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        svc_a = PerformanceTelemetryService(telemetry_connection)
+        svc_b = PerformanceTelemetryService(telemetry_connection)
+
+        # Run A: 5 lookups, 2 hits, 3 misses
+        for i in range(5):
+            hit = i < 2
+            svc_a.record_cache_event(
+                run_a, "draft", "lookup", f"key-a-{i}", "fp-a", hit
+            )
+
+        # Run B: 3 lookups, 0 hits, 3 misses (zero hit rate)
+        for i in range(3):
+            svc_b.record_cache_event(
+                run_b, "draft", "lookup", f"key-b-{i}", "fp-b", False
+            )
+
+        # Build summaries so run_performance_telemetry is populated.
+        svc_a.build_summary(run_a)
+        svc_b.build_summary(run_b)
+
+        # Also insert global semantic_cache entries that should NOT affect
+        # either run in strict mode.
+        import time
+
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO semantic_cache
+                   (id, key_hash, stage, model_fingerprint, input_hash,
+                    prompt_hash, prompt_version, schema_version, status, ttl_seconds, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(uuid4()),
+                    "global-key",
+                    "draft",
+                    "model-v1",
+                    "input-hash-123",
+                    "prompt-hash-456",
+                    "1",
+                    1,
+                    "valid",
+                    3600,
+                    time.time(),
+                ),
+            )
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        _, metrics_a = engine.extract_performance_metrics(run_a, 0)
+        _, metrics_b = engine.extract_performance_metrics(run_b, 0)
+
+        # Run A: 2/5 = 0.4 hit rate
+        cache_a = next(m for m in metrics_a if m.name == "cache_hit_rate")
+        assert cache_a.value == pytest.approx(0.4, abs=0.001)
+        assert cache_a.status == MetricStatus.MEASURED
+        assert cache_a.source.table == "run_cache_events"
+
+        # Run B: 0/3 = 0.0 hit rate
+        cache_b = next(m for m in metrics_b if m.name == "cache_hit_rate")
+        assert cache_b.value == 0.0
+        assert cache_b.status == MetricStatus.MEASURED
+        assert cache_b.source.table == "run_cache_events"
+
+        # The two runs must have different cache hit rates.
+        assert cache_a.value != cache_b.value
+
+    def test_no_scoped_lookups_yields_unavailable(self, telemetry_connection):
+        """No scoped lookups yields unavailable/unevaluated.
+
+        Issue #159: when there are no scoped lookups for a run, the cache
+        metric must be UNAVAILABLE — not a borrowed global ratio.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Insert global cache entries but NO run-scoped events.
+        import time
+
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO semantic_cache
+                   (id, key_hash, stage, model_fingerprint, input_hash,
+                    prompt_hash, prompt_version, schema_version, status, ttl_seconds, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(uuid4()),
+                    "global-key",
+                    "draft",
+                    "model-v1",
+                    "input-hash-123",
+                    "prompt-hash-456",
+                    "1",
+                    1,
+                    "valid",
+                    3600,
+                    time.time(),
+                ),
+            )
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        assert cache_metric.status == MetricStatus.UNAVAILABLE
+        assert cache_metric.value == 0.0
+        assert cache_metric.source.table == "run_cache_events"
+        assert "semantic_cache" not in cache_metric.source.table
+
+    def test_global_cache_rows_do_not_affect_strict_metrics(self, telemetry_connection):
+        """Global cache rows with no run association cannot affect strict metrics.
+
+        Issue #159: unrelated prior cache records cannot alter a benchmark
+        run's metric.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Insert many global cache entries with various statuses.
+        import time
+
+        with telemetry_connection.cursor() as cur:
+            for i in range(20):
+                status = "valid" if i % 3 == 0 else "expired"
+                cur.execute(
+                    """INSERT INTO semantic_cache
+                       (id, key_hash, stage, model_fingerprint, input_hash,
+                        prompt_hash, prompt_version, schema_version, status, ttl_seconds, created_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        str(uuid4()),
+                        f"global-key-{i}",
+                        "draft",
+                        "model-v1",
+                        "input-hash-123",
+                        "prompt-hash-456",
+                        "1",
+                        1,
+                        status,
+                        3600,
+                        time.time(),
+                    ),
+                )
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        # The global cache entries must NOT affect the strict metric.
+        assert cache_metric.status == MetricStatus.UNAVAILABLE
+        assert cache_metric.value == 0.0
+
+
+class TestCacheEventProvenance:
+    """Cache event provenance tests — issue #159.
+
+    Verifies that cache metric source includes event IDs and semantic stages.
+    """
+
+    def test_cache_metric_source_includes_event_ids_and_stages(
+        self, telemetry_connection
+    ):
+        """Cache metric source includes event IDs and semantic stages.
+
+        Issue #159: metric provenance must include source event IDs or an
+        equivalent deterministic query identity.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            ReleaseBenchmarkConfig,
+        )
+        from research_store.telemetry_service import PerformanceTelemetryService
+
+        run_id = uuid4()
+
+        # Create parent run row.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        # Record cache events across multiple stages.
+        svc = PerformanceTelemetryService(telemetry_connection)
+        for i in range(5):
+            stage = "draft" if i < 3 else "outline"
+            svc.record_cache_event(run_id, stage, "lookup", f"key-{i}", "fp", i < 2)
+
+        # Build summary.
+        svc.build_summary(run_id)
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=False,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        # Event IDs must be populated (5 lookup events).
+        assert len(cache_metric.source.event_ids) == 5, (
+            f"Expected 5 event IDs, got {len(cache_metric.source.event_ids)}"
+        )
+        # Stages must be populated (draft and outline).
+        assert set(cache_metric.source.stages) == {"draft", "outline"}, (
+            f"Expected stages {{'draft', 'outline'}}, got {set(cache_metric.source.stages)}"
+        )
+        # Source table must still be run_cache_events.
+        assert cache_metric.source.table == "run_cache_events"
+
+    def test_cache_metric_source_empty_when_no_events(self, telemetry_connection):
+        """Cache metric source has empty event IDs and stages when no events exist."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Create parent run row but no cache events.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=True,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        # Event IDs and stages must be empty tuples.
+        assert cache_metric.source.event_ids == ()
+        assert cache_metric.source.stages == ()
+        # Status must be UNAVAILABLE.
+        assert cache_metric.status == MetricStatus.UNAVAILABLE
+
+
+class TestCacheEventClassification:
+    """Stale/invalidated/reused cache event classification — issue #159.
+
+    Verifies that non-lookup event types (invalidation, reuse) are recorded
+    but do not affect the lookup/hit/miss cache hit rate computation.
+    """
+
+    def test_invalidation_and_reuse_events_dont_affect_hit_rate(
+        self, telemetry_connection
+    ):
+        """Stale, invalidated, and reused events are classified correctly.
+
+        Issue #159: only 'lookup' events with hit=True/False contribute to
+        the cache hit rate. 'invalidation' and 'reuse' events are recorded
+        but do not affect the hit/miss ratio.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+        from research_store.telemetry_service import PerformanceTelemetryService
+
+        run_id = uuid4()
+
+        # Create parent run row.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        svc = PerformanceTelemetryService(telemetry_connection)
+
+        # Record 3 lookup events: 2 hits, 1 miss → 2/3 = 0.666... hit rate.
+        for i in range(3):
+            svc.record_cache_event(run_id, "draft", "lookup", f"key-{i}", "fp", i < 2)
+
+        # Record invalidation and reuse events — these should NOT affect hit rate.
+        svc.record_cache_event(run_id, "draft", "invalidation", "key-0", "fp", None)
+        svc.record_cache_event(run_id, "draft", "reuse", "key-1", "fp", None)
+
+        # Build summary.
+        svc.build_summary(run_id)
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=False,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        # Hit rate must be 2/3 (only lookup events count).
+        assert cache_metric.value == pytest.approx(2.0 / 3.0, abs=0.001)
+        assert cache_metric.status == MetricStatus.MEASURED
+        # Source must still point to run_cache_events.
+        assert cache_metric.source.table == "run_cache_events"
+
+    def test_stage_filtering_excludes_unrelated_stages(self, telemetry_connection):
+        """Stage filtering excludes unrelated semantic stages.
+
+        Issue #159: when stages are specified, only events from those stages
+        contribute to the cache hit rate.
+        """
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+        from research_store.telemetry_service import PerformanceTelemetryService
+
+        run_id = uuid4()
+
+        # Create parent run row.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        svc = PerformanceTelemetryService(telemetry_connection)
+
+        # Record events across multiple stages.
+        # draft: 2 lookups, 1 hit → 0.5 hit rate
+        for i in range(2):
+            svc.record_cache_event(
+                run_id, "draft", "lookup", f"draft-{i}", "fp", i == 0
+            )
+        # outline: 2 lookups, 0 hits → 0.0 hit rate
+        for i in range(2):
+            svc.record_cache_event(
+                run_id, "outline", "lookup", f"outline-{i}", "fp", False
+            )
+
+        # Build summary with stage filter (only draft).
+        svc.build_summary(run_id, stages=("draft",))
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp"),
+            strict=False,
+        )
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
+
+        # With stage filter, only draft events count: 1/2 = 0.5.
+        assert cache_metric.value == pytest.approx(0.5, abs=0.001)
+        assert cache_metric.status == MetricStatus.MEASURED
+        # Source stages reflect all stages that have events for this run
+        # (the stages query in MetricEngine does not use the build_summary
+        # stage filter — it queries all lookup events for the run_id).
+        assert "draft" in cache_metric.source.stages

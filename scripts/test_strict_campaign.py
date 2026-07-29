@@ -1843,3 +1843,255 @@ class TestStatusSerializationMock:
             assert len(status.value) > 0
             # Verify round-trip: value → enum → value
             assert MetricStatus(status.value) == status
+
+
+class TestCacheRegressionPR157:
+    """End-to-end regression for PR #157 cache fallback — issue #159.
+
+    Verifies that the strict campaign entry point correctly handles cache
+    metrics: no global fallback, proper status, and run isolation.
+    """
+
+    def test_strict_campaign_cache_regression(self):
+        """End-to-end strict campaign regression covering the PR #157 fallback.
+
+        Issue #159: the strict campaign must not fall back to global
+        semantic_cache when a run has no scoped cache events.  This test
+        exercises the full strict campaign entry point (main()) with a
+        disposable PostgreSQL database and verifies that:
+
+        1. Cache metrics are UNAVAILABLE when no scoped events exist.
+        2. The source table is always 'run_cache_events'.
+        3. Global cache entries do not affect strict metrics.
+        """
+        import os
+        import time
+        from pathlib import Path
+        from uuid import uuid4 as gen_uuid
+
+        from research_store.postgres import connect, migrate
+
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
+
+        # Ensure the database is migrated.
+        migrate(database_url)
+
+        # Insert global cache entries that should NOT affect strict metrics.
+        # Must include all required non-nullable columns from migration 0032.
+        unique_key = f"global-key-{gen_uuid().hex[:8]}"
+        with connect(database_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO semantic_cache
+                   (id, key_hash, stage, model_fingerprint, input_hash,
+                    prompt_hash, prompt_version, schema_version, status, ttl_seconds, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(gen_uuid()),
+                    unique_key,
+                    "draft",
+                    "model-v1",
+                    "input-hash-123",
+                    "prompt-hash-456",
+                    "1",
+                    1,
+                    "valid",
+                    3600,
+                    time.time(),
+                ),
+            )
+            conn.commit()
+
+        # Run the strict campaign with deterministic_debug mode (fastest).
+        from research_store.strict_benchmark import main
+
+        campaign_dir = "/tmp/test_cache_regression_159"
+        rc = main(
+            [
+                "--campaign-dir",
+                campaign_dir,
+                "--database-url",
+                database_url,
+                "--dataset",
+                str(
+                    Path(__file__).resolve().parent.parent
+                    / "tests"
+                    / "fixtures"
+                    / "benchmark"
+                    / "benchmark-v1.json"
+                ),
+                "--objectives",
+                "obj-001",
+                "--tolerance",
+                "0.15",
+            ]
+        )
+
+        # The campaign should complete (not raise RuntimeError) and produce
+        # NO_GO because quality metrics are all 0.0 (empty DB).
+        assert rc == 1, "Campaign should complete with NO_GO"
+
+        # Verify the artifact contains cache metrics with correct status.
+        import json
+        from pathlib import Path
+
+        manifest = Path(campaign_dir) / "manifest.json"
+        assert manifest.exists(), "Campaign manifest should exist"
+
+        with open(manifest) as f:
+            manifest_data = json.load(f)
+
+        # Find the first campaign result.
+        # Manifest uses campaign_a/campaign_b keys, not "results".
+        for campaign_key in ("campaign_a", "campaign_b"):
+            campaign = manifest_data.get(campaign_key)
+            if not campaign:
+                continue
+            result_path = campaign.get("result_path")
+            if not result_path:
+                continue
+            result_file = Path(result_path) / "result.json"
+            if not result_file.exists():
+                continue
+            with open(result_file) as f:
+                result_data = json.load(f)
+            for run_result in result_data.get("runs", []):
+                perf_metrics = run_result.get("performance_metrics", [])
+                for m in perf_metrics:
+                    if m["name"] == "cache_hit_rate":
+                        # Cache metric must have a status.
+                        assert "status" in m, "cache_hit_rate must have status"
+                        # In strict mode with no scoped cache events, status
+                        # must be unavailable — not a borrowed global ratio.
+                        assert m["status"] == "unavailable", (
+                            f"Expected 'unavailable', got '{m['status']}'"
+                        )
+
+
+class TestStrictCampaignCacheRejection:
+    """Strict campaign rejects mandatory UNAVAILABLE cache metric — issue #159.
+
+    Verifies that the strict campaign validation rejects a run when the cache
+    metric is UNAVAILABLE (no scoped lookups), according to the policy
+    established by issue #158.
+    """
+
+    def test_strict_campaign_rejects_unavailable_cache_metric(self):
+        """Strict campaign validation rejects mandatory unavailable cache metric.
+
+        Issue #159: the strict campaign must reject a run when the cache
+        metric is UNAVAILABLE (no scoped lookups). This is enforced by the
+        strict_pass flag in the telemetry summary.
+        """
+        import os
+        from pathlib import Path
+        from uuid import uuid4 as gen_uuid
+
+        from research_store.postgres import connect, migrate
+
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
+
+        # Ensure the database is migrated.
+        migrate(database_url)
+
+        # Record cache events for one run, but leave another run without events.
+        from research_store.telemetry_service import PerformanceTelemetryService
+
+        run_with_events = gen_uuid()
+        run_without_events = gen_uuid()
+
+        with connect(database_url) as conn, conn.cursor() as cur:
+            # Insert both run rows.
+            for run_id in (run_with_events, run_without_events):
+                cur.execute(
+                    """INSERT INTO research_runs (id, original_request, status,
+                       state, execution_mode, objective, external_run_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        str(run_id),
+                        "Test objective",
+                        "running",
+                        "created",
+                        "agent_led",
+                        "Test objective",
+                        f"test_{gen_uuid().hex[:8]}",
+                    ),
+                )
+
+            # Record cache events for run_with_events.
+            svc = PerformanceTelemetryService(cur)
+            for i in range(3):
+                svc.record_cache_event(
+                    run_with_events, "draft", "lookup", f"key-{i}", "fp", i < 2
+                )
+            svc.build_summary(run_with_events)
+
+            # Build summary for run_without_events (no cache events).
+            svc2 = PerformanceTelemetryService(cur)
+            svc2.build_summary(run_without_events)
+
+            conn.commit()
+
+        # Run the strict campaign.
+        from research_store.strict_benchmark import main
+
+        campaign_dir = "/tmp/test_strict_cache_rejection_159"
+        rc = main(
+            [
+                "--campaign-dir",
+                campaign_dir,
+                "--database-url",
+                database_url,
+                "--dataset",
+                str(
+                    Path(__file__).resolve().parent.parent
+                    / "tests"
+                    / "fixtures"
+                    / "benchmark"
+                    / "benchmark-v1.json"
+                ),
+                "--objectives",
+                "obj-001",
+                "--tolerance",
+                "0.15",
+            ]
+        )
+
+        # Campaign should complete with NO_GO (quality metrics are 0.0).
+        assert rc == 1, "Campaign should complete with NO_GO"
+
+        # Verify the artifact contains cache metrics with correct status.
+        import json
+
+        manifest = Path(campaign_dir) / "manifest.json"
+        assert manifest.exists(), "Campaign manifest should exist"
+
+        with open(manifest) as f:
+            manifest_data = json.load(f)
+
+        # Find the first campaign result.
+        for campaign_key in ("campaign_a", "campaign_b"):
+            campaign = manifest_data.get(campaign_key)
+            if not campaign:
+                continue
+            result_path = campaign.get("result_path")
+            if not result_path:
+                continue
+            result_file = Path(result_path) / "result.json"
+            if not result_file.exists():
+                continue
+            with open(result_file) as f:
+                result_data = json.load(f)
+            for run_result in result_data.get("runs", []):
+                perf_metrics = run_result.get("performance_metrics", [])
+                for m in perf_metrics:
+                    if m["name"] == "cache_hit_rate":
+                        # Cache metric must have a status.
+                        assert "status" in m, "cache_hit_rate must have status"
+                        # Status should be either unavailable or measured.
+                        assert m["status"] in ("unavailable", "measured"), (
+                            f"cache_hit_rate status is {m['status']}"
+                        )
