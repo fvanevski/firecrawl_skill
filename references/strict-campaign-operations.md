@@ -474,6 +474,24 @@ pytest -q -p no:cacheprovider \
 ``unavailable`` and a formula containing ``run_resource_samples empty``.
 No legacy ``psutil`` or ``pynvml`` samples may appear in the artifact.
 
+**Provenance contract:** The engine uses two intermediate booleans to gate
+provenance claims:
+
+- ``_cpu_valid_samples = cpu_samples > 0 and telemetry_tables_exist``
+- ``_gpu_valid_samples = gpu_samples > 0 and telemetry_tables_exist``
+
+When either boolean is ``False``, the metric's ``source.table`` is set to
+``psutil`` / ``pynvml`` / ``none`` (never ``run_resource_samples``), the
+``source.method`` is ``sample`` / ``nvml`` / ``none`` (never ``mean``), and
+the formula documents the empty source.  This prevents stale sample data from
+claiming authoritative provenance when the telemetry tables do not exist.
+
+**Naming convention:** Strict-mode flags use the ``_strict_<resource>_unavailable``
+pattern (``_strict_cpu_unavailable``, ``_strict_gpu_unavailable``,
+``_strict_token_unavailable``, ``_strict_embedding_unavailable``).  All four
+flags are ``False`` in non-strict mode and are set independently based on the
+corresponding telemetry field.
+
 ### Exit 1 — campaign recommends NO_GO
 
 **Cause:** Either campaign produced quality or performance results below

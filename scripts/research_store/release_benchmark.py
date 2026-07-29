@@ -784,7 +784,7 @@ class MetricEngine:
             _strict_token_unavailable = False
             _strict_embedding_unavailable = False
             _strict_cpu_unavailable = False
-            _strict_telemetry_tables_absent = False
+            _strict_gpu_unavailable = False
 
             if telemetry["token_source"] == "unavailable":
                 _strict_token_unavailable = True
@@ -795,13 +795,13 @@ class MetricEngine:
             ):
                 _strict_cpu_unavailable = True
             if not telemetry.get("telemetry_tables_exist"):
-                _strict_telemetry_tables_absent = True
+                _strict_gpu_unavailable = True
         else:
             # Non-strict mode: all strict flags are False.
             _strict_token_unavailable = False
             _strict_embedding_unavailable = False
             _strict_cpu_unavailable = False
-            _strict_telemetry_tables_absent = False
+            _strict_gpu_unavailable = False
 
         # ----------------------------------------------------------------
         # Semantic calls — always available from semantic_calls table.
@@ -930,7 +930,7 @@ class MetricEngine:
         # GPU — from run_resource_samples, or fallback.
         gpu_mem = telemetry["gpu_mean_memory_mb"]
         if gpu_mem is None:
-            if _strict_telemetry_tables_absent:
+            if _strict_gpu_unavailable:
                 # Strict mode: do NOT fall back to a live NVML sample.
                 gpu_mem = 0.0
             else:
@@ -945,7 +945,7 @@ class MetricEngine:
             if _gpu_valid_samples
             else (
                 "0.0 — run_resource_samples empty (no GPU samples from orchestrator)"
-                if _strict_telemetry_tables_absent
+                if _strict_gpu_unavailable
                 else (
                     "pynvml.nvmlDeviceGetMemoryInfo — single sample"
                     if _HAS_PYNVML and gpu_mem is not None
@@ -994,7 +994,7 @@ class MetricEngine:
         )
         _gpu_status = (
             MetricStatus.UNAVAILABLE
-            if _strict_telemetry_tables_absent
+            if _strict_gpu_unavailable
             else (
                 MetricStatus.MEASURED
                 if telemetry["gpu_samples"] > 0
