@@ -109,10 +109,13 @@ class PerformanceTelemetryService:
             Dict with keys: lookups, hits, misses.
         """
         where_clause = "WHERE run_id = %s"
-        params: list[str | tuple[str, ...]] = [str(run_id)]
+        params: list[str] = [str(run_id)]
         if stages:
+            # Convert Python tuple to PostgreSQL array literal.
+            # Example: ('draft', 'outline') → '{draft,outline}'
+            array_literal = "{" + ",".join(stages) + "}"
             where_clause += " AND stage = ANY(%s)"
-            params.append(stages)
+            params.append(array_literal)
         cur = self._connection.execute(
             f"""SELECT
                    COUNT(*) FILTER (WHERE event_type = 'lookup') AS lookups,
