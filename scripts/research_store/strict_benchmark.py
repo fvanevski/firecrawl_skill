@@ -609,6 +609,31 @@ def main(argv: list[str] | None = None) -> int:
     if result_b.recommendation:
         print(f"  Campaign B recommendation: {result_b.recommendation.outcome}")
 
+    # ── Recovery report ──────────────────────────────────────────────────
+    # Generate a recovery report at the repository root for release
+    # evidence artifact collection (issue #145).
+    repo_root = SCRIPTS.parent.parent
+    recovery_report_path = repo_root / "recovery-report.txt"
+    recovery_lines = [
+        "Recovery Report — Strict Benchmark Campaign",
+        f"Commit: {_get_commit_sha()}",
+        f"Timestamp: {time.strftime('%Y-%m-%dT%H:%M:%S+00:00', time.gmtime())}",
+        f"Campaign A: {result_a.campaign_id}",
+        f"Campaign B: {result_b.campaign_id}",
+        f"Reproducibility: {'PASS' if comparison.all_within_tolerance else 'FAIL'}",
+    ]
+    if result_a.recommendation:
+        recovery_lines.append(
+            f"Campaign A recommendation: {result_a.recommendation.outcome}"
+        )
+    if result_b.recommendation:
+        recovery_lines.append(
+            f"Campaign B recommendation: {result_b.recommendation.outcome}"
+        )
+    recovery_lines.append("")
+    recovery_report_path.write_text("\n".join(recovery_lines) + "\n", encoding="utf-8")
+    print(f"  Recovery report: {recovery_report_path}")
+
     print("=" * 60)
 
     # Exit with failure if any campaign failed, reproducibility failed,
