@@ -1,8 +1,8 @@
 Recovery Report — Strict Benchmark Campaign
-Commit: f496be9f3f5c
-Timestamp: 2026-07-29T21:15:51+00:00
-Campaign A: fr_bench_269f6e70
-Campaign B: fr_bench_1a2320e2
+Commit: 2e484b393599
+Timestamp: 2026-07-29T23:53:03+00:00
+Campaign A: fr_bench_d541ab8f
+Campaign B: fr_bench_97e63907
 Reproducibility: FAIL
 Campaign A recommendation: no_go
 Campaign B recommendation: no_go

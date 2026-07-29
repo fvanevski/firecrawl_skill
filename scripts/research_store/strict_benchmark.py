@@ -93,6 +93,204 @@ def _write_json_atomic(path: Path, data: object) -> str:
     return _compute_file_hash(path)
 
 
+def _preflight_check(
+    database_url: str,
+    blob_root: Path | None,
+    qdrant_url: str,
+    qdrant_api_key: str,
+    dataset_path: Path,
+    campaign_dir: Path,
+) -> tuple[bool, list[str]]:
+    """Validate that all required infrastructure is available before starting campaigns.
+
+    Returns (ok, errors) where ok is True when all checks pass,
+    and errors is a list of failure descriptions.
+    """
+    errors: list[str] = []
+
+    # 1. Dataset file
+    if not dataset_path.is_file():
+        errors.append(f"benchmark dataset not found: {dataset_path}")
+
+    # 2. PostgreSQL connectivity
+    try:
+        import psycopg
+
+        conn = psycopg.connect(database_url)
+        cur = conn.cursor()
+        cur.execute("SELECT current_database(), version()")
+        db_name, db_version = cur.fetchone()
+        cur.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'"
+        )
+        table_count = cur.fetchone()[0]
+        conn.close()
+        print(f"  PostgreSQL: {db_name} ({table_count} tables) — {db_version[:60]}")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"PostgreSQL connection failed: {exc}")
+
+    # 3. Qdrant connectivity and collection state
+    if qdrant_url:
+        try:
+            import urllib.request
+
+            req = urllib.request.Request(
+                f"{qdrant_url.rstrip('/')}/collections",
+                headers={
+                    "Api-Key": qdrant_api_key,
+                }
+                if qdrant_api_key
+                else {},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            collections = data.get("result", {}).get("collections", [])
+            collection_names = [c["name"] for c in collections]
+            print(
+                f"  Qdrant: ok, {len(collections)} collection(s): {', '.join(collection_names) or 'none'}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Qdrant connection failed: {exc}")
+    else:
+        print("  Qdrant: NOT CONFIGURED")
+
+    # 4. Firecrawl CLI availability
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["firecrawl", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip()
+            print(f"  Firecrawl CLI: {version}")
+        else:
+            errors.append("Firecrawl CLI returned non-zero exit code")
+    except FileNotFoundError:
+        errors.append("Firecrawl CLI not found in PATH")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Firecrawl CLI check failed: {exc}")
+
+    # 5. Embedding endpoint health
+    try:
+        import urllib.request
+
+        embedding_url = os.environ.get(
+            "EMBEDDING_URL", os.environ.get("FIRECRAWL_EMBEDDING_URL", "")
+        )
+        if embedding_url:
+            base = embedding_url.rstrip("/")
+            if not base.endswith("/v1"):
+                base = f"{base}/v1"
+            req = urllib.request.Request(
+                f"{base}/models",
+                headers={
+                    "Authorization": f"Bearer {os.environ.get('EMBEDDING_API_KEY', '')}"
+                }
+                if os.environ.get("EMBEDDING_API_KEY")
+                else {},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            models = [m["id"] for m in data.get("data", [])]
+            embed_models = [m for m in models if "embed" in m.lower()]
+            print(
+                f"  Embedding endpoint ({embedding_url}): {len(embed_models)} model(s): {', '.join(embed_models) or 'none'}"
+            )
+        else:
+            errors.append("EMBEDDING_URL not set — embedding unavailable")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Embedding endpoint check failed: {exc}")
+
+    # 6. Generative endpoint health
+    try:
+        import urllib.request
+
+        generative_url = os.environ.get(
+            "GENERATIVE_URL", os.environ.get("FIRECRAWL_GENERATIVE_URL", "")
+        )
+        if generative_url:
+            base = generative_url.rstrip("/")
+            if not base.endswith("/v1"):
+                base = f"{base}/v1"
+            req = urllib.request.Request(
+                f"{base}/models",
+                headers={
+                    "Authorization": f"Bearer {os.environ.get('GENERATIVE_API_KEY', '')}"
+                }
+                if os.environ.get("GENERATIVE_API_KEY")
+                else {},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            models = [m["id"] for m in data.get("data", [])]
+            chat_models = [
+                m for m in models if "chat" in m.lower() or "llm" in m.lower()
+            ]
+            print(
+                f"  Generative endpoint ({generative_url}): {len(chat_models)} model(s): {', '.join(chat_models) or 'none'}"
+            )
+        else:
+            errors.append("GENERATIVE_URL not set — generative LLM unavailable")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Generative endpoint check failed: {exc}")
+
+    # 7. Reranker endpoint health
+    try:
+        import urllib.request
+
+        reranker_url = os.environ.get(
+            "RERANKER_URL", os.environ.get("FIRECRAWL_RERANKER_URL", "")
+        )
+        if reranker_url:
+            base = reranker_url.rstrip("/")
+            if not base.endswith("/v1"):
+                base = f"{base}/v1"
+            req = urllib.request.Request(
+                f"{base}/models",
+                headers={
+                    "Authorization": f"Bearer {os.environ.get('RERANKER_API_KEY', '')}"
+                }
+                if os.environ.get("RERANKER_API_KEY")
+                else {},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            models = [m["id"] for m in data.get("data", [])]
+            rerank_models = [m for m in models if "rerank" in m.lower()]
+            print(
+                f"  Reranker endpoint ({reranker_url}): {len(rerank_models)} model(s): {', '.join(rerank_models) or 'none'}"
+            )
+        else:
+            print("  Reranker endpoint: NOT CONFIGURED (optional)")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Reranker endpoint check failed: {exc}")
+
+    # 8. Blob root writability
+    if blob_root:
+        try:
+            blob_root.mkdir(parents=True, exist_ok=True)
+            test_file = blob_root / ".preflight_test"
+            test_file.write_text("ok", encoding="utf-8")
+            test_file.unlink()
+            print(f"  Blob root ({blob_root}): writable")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Blob root not writable: {exc}")
+
+    # 9. Campaign directory writability
+    try:
+        campaign_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  Campaign directory ({campaign_dir}): writable")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Campaign directory not writable: {exc}")
+
+    return (len(errors) == 0, errors)
+
+
 def _run_campaign(
     campaign_label: str,
     dataset_path: Path,
@@ -579,7 +777,39 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         print("\n[Dry run] Configuration validated. No campaigns executed.")
+        # Still run preflight in dry-run mode to surface infrastructure issues.
+        ok, errors = _preflight_check(
+            database_url=args.database_url,
+            blob_root=args.blob_root,
+            qdrant_url=args.qdrant_url,
+            qdrant_api_key=args.qdrant_api_key,
+            dataset_path=args.dataset,
+            campaign_dir=campaign_dir,
+        )
+        if not ok:
+            print("\n[Preflight] FAILED — required infrastructure unavailable:")
+            for err in errors:
+                print(f"  - {err}")
+            return 1
         return 0
+
+    # ── Preflight: validate infrastructure before starting campaigns ─────
+    print("\n[Preflight] Checking required infrastructure...")
+    ok, errors = _preflight_check(
+        database_url=args.database_url,
+        blob_root=args.blob_root,
+        qdrant_url=args.qdrant_url,
+        qdrant_api_key=args.qdrant_api_key,
+        dataset_path=args.dataset,
+        campaign_dir=campaign_dir,
+    )
+    if not ok:
+        print("\n[Preflight] FAILED — required infrastructure unavailable:")
+        for err in errors:
+            print(f"  - {err}")
+        print("\nCampaign execution aborted. Fix the above issues and retry.")
+        return 1
+    print("[Preflight] OK — all required infrastructure available.\n")
 
     # ── Execute Campaign A ───────────────────────────────────────────────
     result_a, hash_a = _run_campaign(

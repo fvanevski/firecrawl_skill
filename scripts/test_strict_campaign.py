@@ -46,6 +46,17 @@ from research_store.strict_benchmark import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
+# Ensure EMBEDDING_URL and GENERATIVE_URL are set for all tests that exercise
+# the preflight check (which validates these endpoints).
+@pytest.fixture(autouse=True)
+def _set_llm_env_vars(monkeypatch):
+    """Set LLM endpoint URLs for preflight infrastructure checks."""
+    monkeypatch.setenv("EMBEDDING_URL", "http://localhost:8004/v1")
+    monkeypatch.setenv("GENERATIVE_URL", "http://localhost:8004/v1")
+    monkeypatch.setenv("RERANKER_URL", "http://localhost:8004/v1")
+
+
 # The benchmark fixture is at ../tests/fixtures/benchmark/benchmark-v1.json
 # when accessed from scripts/test_strict_campaign.py (SCRIPTS = scripts/)
 BENCHMARK_FIXTURE = (
@@ -275,7 +286,7 @@ class TestCLIParsing:
             [
                 "--dry-run",
                 "--database-url",
-                "postgresql://test@test:5432/test",
+                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
                 "--dataset",
                 str(BENCHMARK_FIXTURE),
             ]
@@ -299,7 +310,7 @@ class TestCLIParsing:
             [
                 "--dry-run",
                 "--database-url",
-                "postgresql://test@test:5432/test",
+                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
                 "--dataset",
                 "/nonexistent/benchmark.json",
             ]
@@ -312,7 +323,7 @@ class TestCLIParsing:
             [
                 "--dry-run",
                 "--database-url",
-                "postgresql://test@test:5432/test",
+                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
                 "--dataset",
                 str(BENCHMARK_FIXTURE),
                 "--tolerance",
@@ -323,56 +334,62 @@ class TestCLIParsing:
 
     def test_objectives_parsed_correctly(self):
         """--objectives parses comma-separated IDs."""
-        with mock.patch("research_store.strict_benchmark._run_campaign") as mock_run:
-            mock_run.return_value = (_make_campaign_result(), "hash123")
+        with mock.patch(
+            "research_store.strict_benchmark._preflight_check"
+        ) as mock_preflight:
+            mock_preflight.return_value = (True, [])
             with mock.patch(
-                "research_store.strict_benchmark._compare_campaigns"
-            ) as mock_comp:
-                mock_comp.return_value = ReproducibilityComparison(
-                    run_a_id="fr_a",
-                    run_b_id="fr_b",
-                    all_within_tolerance=True,
-                    quality_tolerances=(),
-                    performance_tolerances=(),
-                    details=(),
-                )
+                "research_store.strict_benchmark._run_campaign"
+            ) as mock_run:
+                mock_run.return_value = (_make_campaign_result(), "hash123")
                 with mock.patch(
-                    "research_store.strict_benchmark._build_manifest"
-                ) as mock_manifest:
-                    mock_manifest.return_value = {"schema_version": "v1"}
+                    "research_store.strict_benchmark._compare_campaigns"
+                ) as mock_comp:
+                    mock_comp.return_value = ReproducibilityComparison(
+                        run_a_id="fr_a",
+                        run_b_id="fr_b",
+                        all_within_tolerance=True,
+                        quality_tolerances=(),
+                        performance_tolerances=(),
+                        details=(),
+                    )
                     with mock.patch(
-                        "research_store.strict_benchmark._write_json_atomic"
-                    ) as mock_write:
-                        mock_write.return_value = "hash"
+                        "research_store.strict_benchmark._build_manifest"
+                    ) as mock_manifest:
+                        mock_manifest.return_value = {"schema_version": "v1"}
                         with mock.patch(
-                            "research_store.strict_benchmark._compute_file_hash"
-                        ) as mock_hash:
-                            mock_hash.return_value = "hash123"
-                            rc = main(
-                                [
-                                    "--database-url",
-                                    "postgresql://test@test:5432/test",
-                                    "--dataset",
-                                    str(BENCHMARK_FIXTURE),
-                                    "--objectives",
-                                    "obj-001,obj-002",
-                                ]
-                            )
-                            assert rc == 0
-                            # Verify campaigns were called with correct objectives
-                            assert mock_run.call_count == 2
-                            # First call (Campaign A)
-                            call_a_kwargs = mock_run.call_args_list[0][1]
-                            assert call_a_kwargs["objective_ids"] == (
-                                "obj-001",
-                                "obj-002",
-                            )
-                            # Second call (Campaign B)
-                            call_b_kwargs = mock_run.call_args_list[1][1]
-                            assert call_b_kwargs["objective_ids"] == (
-                                "obj-001",
-                                "obj-002",
-                            )
+                            "research_store.strict_benchmark._write_json_atomic"
+                        ) as mock_write:
+                            mock_write.return_value = "hash"
+                            with mock.patch(
+                                "research_store.strict_benchmark._compute_file_hash"
+                            ) as mock_hash:
+                                mock_hash.return_value = "hash123"
+                                rc = main(
+                                    [
+                                        "--database-url",
+                                        "postgresql://test@test:5432/test",
+                                        "--dataset",
+                                        str(BENCHMARK_FIXTURE),
+                                        "--objectives",
+                                        "obj-001,obj-002",
+                                    ]
+                                )
+                                assert rc == 0
+                                # Verify campaigns were called with correct objectives
+                                assert mock_run.call_count == 2
+                                # First call (Campaign A)
+                                call_a_kwargs = mock_run.call_args_list[0][1]
+                                assert call_a_kwargs["objective_ids"] == (
+                                    "obj-001",
+                                    "obj-002",
+                                )
+                                # Second call (Campaign B)
+                                call_b_kwargs = mock_run.call_args_list[1][1]
+                                assert call_b_kwargs["objective_ids"] == (
+                                    "obj-001",
+                                    "obj-002",
+                                )
 
 
 # ---------------------------------------------------------------------------
@@ -2095,3 +2112,103 @@ class TestStrictCampaignCacheRejection:
                         assert m["status"] in ("unavailable", "measured"), (
                             f"cache_hit_rate status is {m['status']}"
                         )
+
+
+# ---------------------------------------------------------------------------
+# Preflight tests — issue #153
+# ---------------------------------------------------------------------------
+
+
+class TestPreflightCheck:
+    """Tests for the campaign preflight infrastructure validation."""
+
+    def test_preflight_passes_with_all_services(self):
+        """Preflight passes when all required services are available."""
+        from research_store.strict_benchmark import _preflight_check
+
+        ok, errors = _preflight_check(
+            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+            blob_root=Path("/tmp"),
+            qdrant_url="http://localhost:6333",
+            qdrant_api_key="",
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            campaign_dir=Path("/tmp/preflight_test"),
+        )
+        # Should pass — PostgreSQL, Qdrant, Firecrawl, blob root, campaign dir
+        # are all available in the test environment.
+        assert ok is True, f"Preflight should pass with all services: {errors}"
+        assert len(errors) == 0
+
+    def test_preflight_fails_without_database(self):
+        """Preflight fails when PostgreSQL is unreachable."""
+        from research_store.strict_benchmark import _preflight_check
+
+        ok, errors = _preflight_check(
+            database_url="postgresql://localhost:99999/nonexistent",
+            blob_root=Path("/tmp"),
+            qdrant_url="http://localhost:6333",
+            qdrant_api_key="",
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            campaign_dir=Path("/tmp/preflight_test"),
+        )
+        assert ok is False
+        assert any("PostgreSQL" in e for e in errors)
+
+    def test_preflight_fails_without_dataset(self):
+        """Preflight fails when benchmark dataset is missing."""
+        from research_store.strict_benchmark import _preflight_check
+
+        ok, errors = _preflight_check(
+            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+            blob_root=Path("/tmp"),
+            qdrant_url="http://localhost:6333",
+            qdrant_api_key="",
+            dataset_path=Path("/tmp/nonexistent_dataset.json"),
+            campaign_dir=Path("/tmp/preflight_test"),
+        )
+        assert ok is False
+        assert any("dataset" in e.lower() for e in errors)
+
+    def test_preflight_fails_without_qdrant(self):
+        """Preflight fails when Qdrant is unreachable."""
+        from research_store.strict_benchmark import _preflight_check
+
+        ok, errors = _preflight_check(
+            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+            blob_root=Path("/tmp"),
+            qdrant_url="http://localhost:99999",
+            qdrant_api_key="",
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            campaign_dir=Path("/tmp/preflight_test"),
+        )
+        assert ok is False
+        assert any("Qdrant" in e for e in errors)
+
+    def test_preflight_dry_run_aborts_before_campaign(self):
+        """Dry-run mode validates config and preflight but does not execute campaigns."""
+        rc = main(
+            [
+                "--campaign-dir",
+                "/tmp/test_preflight_dry_run",
+                "--database-url",
+                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+                "--blob-root",
+                "/tmp",
+                "--qdrant-url",
+                "http://localhost:6333",
+                "--dataset",
+                str(BENCHMARK_FIXTURE),
+                "--objectives",
+                "obj-001",
+                "--tolerance",
+                "0.15",
+                "--dry-run",
+            ]
+        )
+        # Dry-run exits 0 on success, 1 if preflight fails.
+        # With all services available, it should exit 0.
+        assert rc == 0, "Dry-run should exit 0 when preflight passes"
+
+        # No campaign artifacts should be created.
+        campaign_dirs = list(Path("/tmp/test_preflight_dry_run").glob("*/20*/"))
+        assert len(campaign_dirs) == 0, "Dry-run should not create campaign artifacts"
