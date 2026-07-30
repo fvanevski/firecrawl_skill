@@ -35,7 +35,8 @@ jobs:
         run: |
           command -v python3.12
           python3.12 --version
-          python3.12 -m venv "$RUNNER_TEMP/release-campaign-venv"
+          command -v uv
+          uv venv --python python3.12 --seed "$RUNNER_TEMP/release-campaign-venv"
           echo "$RUNNER_TEMP/release-campaign-venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
