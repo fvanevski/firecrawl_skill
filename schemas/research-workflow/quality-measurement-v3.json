@@ -1,0 +1,83 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/quality-measurement-v3.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_recall": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "citation_accuracy": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "coverage_completeness": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "report_quality_score": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema_version": {
+      "const": "quality-measurement-v3",
+      "type": "string"
+    },
+    "source_quality_score": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "unsupported_claim_rate": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "candidate_recall",
+    "source_quality_score",
+    "coverage_completeness",
+    "unsupported_claim_rate",
+    "citation_accuracy",
+    "report_quality_score"
+  ],
+  "title": "QualityMeasurement",
+  "type": "object"
+}

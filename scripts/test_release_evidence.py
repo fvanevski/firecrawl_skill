@@ -1714,8 +1714,8 @@ class TestEdgeCases:
         assert "Test — Python 3.11" in result
         assert "Test — Python 3.12" in result
         assert "Ruff" in result
-        assert "Strict Campaign (issue #144) — Python 3.11" in result
-        assert "Strict Campaign (issue #144) — Python 3.12" in result
+        assert "Strict campaign contract tests — Python 3.11" in result
+        assert "Strict campaign contract tests — Python 3.12" in result
         assert "Release evidence (issue #145)" in result
 
     def test_compute_required_ci_jobs_fallback(self):
@@ -1973,10 +1973,7 @@ class TestIntegration:
         assert manifest.schema_version == "release-evidence-manifest-v1"
 
     def test_verify_requires_tracked_recovery(self):
-        """Verification fails when the repo tracks a recovery file but the
-        manifest omits it — the requirement is derived from the repository
-        index, not from the manifest contents.
-        """
+        """A tracked recovery file cannot be omitted from the manifest."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
@@ -2044,17 +2041,119 @@ class TestIntegration:
                     ),
                     path="scripts/research_store/release_benchmark.py",
                 ),
-                # Deliberately omit recovery-report.txt
+                # Deliberately omit recovery-report.txt.
             )
 
             manifest = _make_manifest(candidate_sha=sha, artifacts=artifacts)
             verifier = ReleaseEvidenceVerifier(manifest, repo=repo)
             vresult = verifier.verify()
 
-            # Should FAIL because the repo tracks recovery-report.txt
-            # but the manifest omits it
             assert vresult.artifacts_valid is False
             assert not vresult.passed
+
+    def test_verify_validates_recovered_artifact_when_present(self):
+        """Verification validates recovery artifact hash when it is in the manifest."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            # Create tracked files including a recovery file
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github" / "workflows").mkdir()
+            (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
+            (repo / "tests").mkdir(parents=True)
+            (repo / "tests" / "fixtures").mkdir(parents=True)
+            (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
+            (
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+            ).write_text("{}")
+            (repo / "scripts").mkdir(parents=True)
+            (repo / "scripts" / "research_store").mkdir(parents=True)
+            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
+                "# benchmark"
+            )
+            (repo / "recovery-report.txt").write_text("tracked recovery")
+            # Commit EVERYTHING
+            subprocess.run(
+                ["git", "add", "."], cwd=repo, capture_output=True, check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                    "user.name=Test",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+            sha = _current_sha(repo)
+
+            from research_store.release_evidence import (
+                ArtifactReference,
+                _file_sha256,
+            )
+
+            # Include recovery artifact with CORRECT hash
+            artifacts_correct = (
+                ArtifactReference(
+                    name="ci.yml",
+                    sha256=_file_sha256(repo / ".github" / "workflows" / "ci.yml"),
+                    path=".github/workflows/ci.yml",
+                ),
+                ArtifactReference(
+                    name="benchmark-v1.json",
+                    sha256=_file_sha256(
+                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                    ),
+                    path="tests/fixtures/benchmark/benchmark-v1.json",
+                ),
+                ArtifactReference(
+                    name="release_benchmark.py",
+                    sha256=_file_sha256(
+                        repo / "scripts" / "research_store" / "release_benchmark.py"
+                    ),
+                    path="scripts/research_store/release_benchmark.py",
+                ),
+                ArtifactReference(
+                    name="recovery-report.txt",
+                    sha256=_file_sha256(repo / "recovery-report.txt"),
+                    path="recovery-report.txt",
+                ),
+            )
+
+            manifest_correct = _make_manifest(
+                candidate_sha=sha, artifacts=artifacts_correct
+            )
+            verifier_correct = ReleaseEvidenceVerifier(manifest_correct, repo=repo)
+            vresult_correct = verifier_correct.verify()
+
+            # Should PASS — all artifacts including recovery are valid
+            assert vresult_correct.artifacts_valid is True
+            assert not vresult_correct.passed  # fingerprints_present is False
+
+            # Now tamper with the recovery hash
+            artifacts_tampered = (
+                *artifacts_correct[:3],
+                ArtifactReference(
+                    name="recovery-report.txt",
+                    sha256="0" * 64,  # Wrong hash
+                    path="recovery-report.txt",
+                ),
+            )
+            manifest_tampered = _make_manifest(
+                candidate_sha=sha, artifacts=artifacts_tampered
+            )
+            verifier_tampered = ReleaseEvidenceVerifier(manifest_tampered, repo=repo)
+            vresult_tampered = verifier_tampered.verify()
+
+            # Should FAIL — recovery artifact hash does not match
+            assert vresult_tampered.artifacts_valid is False
+            assert not vresult_tampered.passed
 
     def test_verify_does_not_require_unrelated_recovery_files(self):
         """A tracked file with 'recovery' in the path but not

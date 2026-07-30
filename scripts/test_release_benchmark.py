@@ -376,8 +376,8 @@ class TestSimulationMode:
 class TestReproducibilityComparison:
     """Tests for reproducibility comparison between two campaign runs."""
 
-    def test_identical_runs_pass_tolerance(self):
-        """Two identical runs pass reproducibility tolerance."""
+    def test_identical_values_without_status_fail_tolerance(self):
+        """Equal numeric values cannot substitute for measured status."""
         quality_a = _make_quality(candidate_recall=0.75)
         quality_b = _make_quality(candidate_recall=0.75)
         perf_a = _make_performance(total_latency_ms=15000.0)
@@ -414,12 +414,13 @@ class TestReproducibilityComparison:
         runner = ReleaseBenchmarkRunner(loader, config)
         comparison = runner.compare_campaigns(result_a, result_b)
 
-        assert comparison.all_within_tolerance is True
+        assert comparison.all_within_tolerance is False
+        assert any("not reproducible" in detail for detail in comparison.details)
         assert comparison.run_a_id == "run-a"
         assert comparison.run_b_id == "run-b"
 
-    def test_runs_within_tolerance_pass(self):
-        """Runs with small differences pass reproducibility tolerance."""
+    def test_values_within_tolerance_without_status_fail(self):
+        """Tolerance applies only after both observations are measured."""
         quality_a = _make_quality(candidate_recall=0.75)
         quality_b = _make_quality(candidate_recall=0.77)  # ~2.7% diff, within 15%
         perf_a = _make_performance(total_latency_ms=15000.0)
@@ -450,7 +451,7 @@ class TestReproducibilityComparison:
         runner = ReleaseBenchmarkRunner(loader, config)
         comparison = runner.compare_campaigns(result_a, result_b)
 
-        assert comparison.all_within_tolerance is True
+        assert comparison.all_within_tolerance is False
 
     def test_runs_exceeding_tolerance_fail(self):
         """Runs with large differences fail reproducibility tolerance."""
@@ -1123,7 +1124,7 @@ class TestSchemaVersionV2:
         from research_domain.models import QualityMeasurement
 
         assert hasattr(QualityMeasurement, "SCHEMA_VERSION")
-        assert QualityMeasurement.SCHEMA_VERSION == "quality-measurement-v2"
+        assert QualityMeasurement.SCHEMA_VERSION == "quality-measurement-v3"
 
     def test_schema_versions_attribute_exists(self):
         """SCHEMA_VERSIONS tuple exists for validation."""

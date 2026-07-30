@@ -141,6 +141,18 @@ RELEASE_MODES = (
     "deterministic_debug",
 )
 
+# Versioned semantic stages included in release cache telemetry.  Release
+# measurements must never silently expand when a new cache-producing stage is
+# added elsewhere in the workflow.
+RELEASE_CACHE_STAGE_SET_VERSION = "release-cache-stages-v1"
+RELEASE_CACHE_STAGES = (
+    "outline",
+    "binding",
+    "draft",
+    "citation_pass",
+    "indexing",
+)
+
 # Mapping from benchmark mode names to execution modes.
 # "legacy" is no longer a valid benchmark mode because no distinct retained
 # baseline exists.  If a caller requests "legacy", the runner raises an
@@ -173,6 +185,14 @@ class MetricSource:
     # Optional provenance fields — populated when available.
     event_ids: tuple[str, ...] = ()  # UUIDs of source events (e.g. run_cache_events)
     stages: tuple[str, ...] = ()  # Semantic stages included in the query
+    stage_set_version: str = ""
+    sample_count: int = 0
+    device_type: str = ""
+    device_index: int | None = None
+    device_uuid: str = ""
+    collector: str = ""
+    collector_version: str = ""
+    status_counts: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -180,7 +200,7 @@ class QualityMetric:
     """A single quality metric extracted from persisted state."""
 
     name: str
-    value: float
+    value: float | None
     source: MetricSource
     formula: str  # human-readable description of how the value was computed
     status: MetricStatus = MetricStatus.MEASURED  # issue #158
@@ -191,7 +211,7 @@ class PerformanceMetric:
     """A single performance metric extracted from persisted state."""
 
     name: str
-    value: float
+    value: float | None
     source: MetricSource
     formula: str
     status: MetricStatus = MetricStatus.MEASURED  # issue #158
@@ -213,9 +233,9 @@ class MetricEngine:
     - ``semantic_cache`` — cache hit rate
     - ``model_endpoints`` — endpoint health
 
-    Strict mode (``config.strict = True``): any missing authoritative source
-    causes an explicit ``RuntimeError`` rather than falling back to a
-    heuristic or constant.
+    Strict mode (``config.strict = True``): missing authoritative sources are
+    emitted as ``status=unavailable`` with ``value=None``. Release policy then
+    rejects the incomplete run without erasing it from campaign artifacts.
     """
 
     def __init__(
@@ -278,8 +298,8 @@ class MetricEngine:
         * **report_quality_score** — documented versioned rubric combining
           coverage completeness, citation accuracy, and claim support rate.
 
-        In **strict** mode, any missing authoritative source causes an explicit
-        ``RuntimeError`` rather than falling back to a heuristic or constant.
+        In **strict** mode, missing sources produce explicit unavailable or
+        incomplete observations with null values and fail release policy.
 
         Args:
             run_id: The research run UUID.
@@ -291,16 +311,11 @@ class MetricEngine:
         Returns:
             A QualityMeasurement and a tuple of individual QualityMetric records.
 
-        Raises:
-            RuntimeError: When strict mode is enabled and a required
-                authoritative table is empty or missing.
         """
         if self._connection is None:
             raise RuntimeError(
                 "MetricEngine not connected. Call connect() first or use as context manager."
             )
-
-        strict = self.config.strict if self.config else False
 
         # ------------------------------------------------------------------
         # 1. Candidate recall — versioned benchmark ground truth
@@ -350,7 +365,7 @@ class MetricEngine:
         total_relevant = len(relevant_paths)
         tp = len(matched_relevant)
 
-        if total_relevant > 0:
+        if total_relevant > 0 and candidate_count > 0:
             candidate_recall = tp / total_relevant
             recall_formula = (
                 f"TP={tp} / (TP+FN={total_relevant}) — "
@@ -358,25 +373,21 @@ class MetricEngine:
             )
             recall_source_table = "benchmark_ground_truth"
         else:
-            if strict:
-                raise RuntimeError(
-                    "Candidate recall: strict mode requires versioned benchmark "
-                    "ground truth (known_relevant_sources). No labeled relevant "
-                    "sources are available for run_id="
-                    f"{run_id}. Cannot compute release-quality recall."
-                )
-            # Without ground truth, we cannot produce a release-quality metric.
-            candidate_recall = 0.0
+            candidate_recall = None
             recall_formula = (
-                "0.0 — no ground truth available, strict-mode failure in release"
+                "unavailable — no acquired candidates"
+                if candidate_count == 0
+                else "unavailable — no versioned labeled relevant set"
             )
-            recall_source_table = "none"
+            recall_source_table = (
+                "search_candidates"
+                if candidate_count == 0
+                else "benchmark_ground_truth"
+            )
 
         # ------------------------------------------------------------------
         # 2. Source quality — URL matching against benchmark annotations
         # ------------------------------------------------------------------
-        domain_count = len({d for _, d in candidates}) if candidates else 0
-
         # Match candidate URLs against known_relevant_sources and
         # known_distractor_sources file_paths.  A candidate "matches" a
         # relevant source when the source file_path appears as a substring
@@ -412,23 +423,20 @@ class MetricEngine:
             distractor_penalty = distractor_hits * 2
             numerator = max(0, relevant_hits - distractor_penalty)
             source_quality = min(1.0, numerator / total_classified)
-        elif candidate_count > 0:
-            # No source-class information — use domain diversity as weak signal
-            source_quality = min(1.0, domain_count / max(1, candidate_count))
         else:
-            source_quality = 0.0
+            source_quality = None
 
         source_quality_formula = (
             f"max(0, relevant_hits-{distractor_hits}*2) / total_classified"
             if total_classified > 0
-            else "domain_diversity fallback"
+            else "unavailable — no classified acquired candidates"
         )
 
         # NF1: source_quality status reflects whether source-class data was
         # available (MEASURED) or only a heuristic fallback was used
         # (UNEVALUATED).
         _source_quality_status = (
-            MetricStatus.MEASURED if total_classified > 0 else MetricStatus.UNEVALUATED
+            MetricStatus.MEASURED if total_classified > 0 else MetricStatus.UNAVAILABLE
         )
 
         # ------------------------------------------------------------------
@@ -495,13 +503,8 @@ class MetricEngine:
             )
             coverage_source_table = "coverage_events"
         else:
-            if strict:
-                raise RuntimeError(
-                    "Coverage completeness: strict mode requires coverage events "
-                    f"for run_id={run_id}. No applicable coverage items found."
-                )
-            coverage_completeness = 0.0
-            coverage_formula = "0.0 — no applicable coverage items"
+            coverage_completeness = None
+            coverage_formula = "unavailable — no applicable coverage items"
             coverage_source_table = "coverage_events"
 
         # ------------------------------------------------------------------
@@ -534,17 +537,9 @@ class MetricEngine:
             # but it was empty — the orchestrator did not produce claims for this
             # run.  Return 0.0 with a formula that documents the empty source
             # rather than falling back to a heuristic constant.
-            if strict:
-                _unsupported_claim_status = MetricStatus.UNEVALUATED
-            else:
-                _unsupported_claim_status = MetricStatus.UNEVALUATED
-            unsupported_claim_rate = 0.0
-            if strict:
-                unsupported_formula = (
-                    "0.0 — research_claims empty (no claims produced by orchestrator)"
-                )
-            else:
-                unsupported_formula = "0.0 — no assessed claims"
+            _unsupported_claim_status = MetricStatus.UNAVAILABLE
+            unsupported_claim_rate = None
+            unsupported_formula = "unavailable — no assessed claims"
             unsupported_source_table = "research_claims"
 
         # ------------------------------------------------------------------
@@ -577,18 +572,9 @@ class MetricEngine:
             # Strict mode: we consulted the authoritative source (claim_evidence_links
             # joined with research_claims) but it was empty — the orchestrator did
             # not produce assessed claims or evidence links for this run.
-            if strict:
-                _citation_accuracy_status = MetricStatus.UNEVALUATED
-            else:
-                _citation_accuracy_status = MetricStatus.UNEVALUATED
-            citation_accuracy = 0.0
-            if strict:
-                citation_formula = (
-                    "0.0 — no assessed claims with evidence links "
-                    "(orchestrator did not produce claims)"
-                )
-            else:
-                citation_formula = "0.0 — no assessed claims with evidence"
+            _citation_accuracy_status = MetricStatus.UNAVAILABLE
+            citation_accuracy = None
+            citation_formula = "unavailable — no assessed claims with evidence"
             citation_source_table = "claim_evidence_links"
 
         # ------------------------------------------------------------------
@@ -602,7 +588,7 @@ class MetricEngine:
         claim_support_rate = (
             (supported_count + contradicted_count + qualified_count) / assessed_claims
             if assessed_claims > 0
-            else 0.0
+            else None
         )
 
         # Versioned rubric v1 — documented weights
@@ -621,13 +607,21 @@ class MetricEngine:
             packet_count = cur.fetchone()[0] or 0
         packet_present = 1.0 if packet_count > 0 else 0.0
 
-        report_quality = (
-            _COVERAGE_WEIGHT * coverage_completeness
-            + _CITATION_WEIGHT * citation_accuracy
-            + _SUPPORT_WEIGHT * claim_support_rate
-            + _PACKET_WEIGHT * packet_present
+        report_inputs_complete = (
+            coverage_completeness is not None
+            and citation_accuracy is not None
+            and claim_support_rate is not None
+            and packet_count > 0
         )
-        report_quality = min(1.0, max(0.0, report_quality))
+        report_quality = None
+        if report_inputs_complete:
+            report_quality = (
+                _COVERAGE_WEIGHT * coverage_completeness
+                + _CITATION_WEIGHT * citation_accuracy
+                + _SUPPORT_WEIGHT * claim_support_rate
+                + _PACKET_WEIGHT * packet_present
+            )
+            report_quality = min(1.0, max(0.0, report_quality))
         report_quality_formula = (
             f"coverage({_COVERAGE_WEIGHT}) + citation({_CITATION_WEIGHT}) + "
             f"support({_SUPPORT_WEIGHT}) + packet({_PACKET_WEIGHT})"
@@ -637,13 +631,25 @@ class MetricEngine:
         # Build QualityMeasurement
         # ------------------------------------------------------------------
         quality = QualityMeasurement(
-            schema_version="quality-measurement-v2",
-            candidate_recall=round(min(1.0, max(0.0, candidate_recall)), 6),
-            source_quality_score=round(min(1.0, max(0.0, source_quality)), 6),
-            coverage_completeness=round(min(1.0, max(0.0, coverage_completeness)), 6),
-            unsupported_claim_rate=round(min(1.0, max(0.0, unsupported_claim_rate)), 6),
-            citation_accuracy=round(min(1.0, max(0.0, citation_accuracy)), 6),
-            report_quality_score=round(min(1.0, max(0.0, report_quality)), 6),
+            schema_version="quality-measurement-v3",
+            candidate_recall=round(candidate_recall, 6)
+            if candidate_recall is not None
+            else None,
+            source_quality_score=round(source_quality, 6)
+            if source_quality is not None
+            else None,
+            coverage_completeness=round(coverage_completeness, 6)
+            if coverage_completeness is not None
+            else None,
+            unsupported_claim_rate=round(unsupported_claim_rate, 6)
+            if unsupported_claim_rate is not None
+            else None,
+            citation_accuracy=round(citation_accuracy, 6)
+            if citation_accuracy is not None
+            else None,
+            report_quality_score=round(report_quality, 6)
+            if report_quality is not None
+            else None,
         )
 
         # ------------------------------------------------------------------
@@ -652,12 +658,12 @@ class MetricEngine:
         # Determine status per metric: 0.0 from empty source → UNEVALUATED,
         # genuine measurement → MEASURED.
         _recall_status = (
-            MetricStatus.UNEVALUATED
-            if recall_source_table == "none"
+            MetricStatus.UNAVAILABLE
+            if candidate_recall is None
             else MetricStatus.MEASURED
         )
         _coverage_status = (
-            MetricStatus.UNEVALUATED if applicable_count == 0 else MetricStatus.MEASURED
+            MetricStatus.UNAVAILABLE if applicable_count == 0 else MetricStatus.MEASURED
         )
         # _unsupported_claim_status and _citation_accuracy_status set above.
         metrics = (
@@ -735,7 +741,11 @@ class MetricEngine:
                     method="versioned_rubric_v1",
                 ),
                 formula=report_quality_formula,
-                status=MetricStatus.MEASURED,
+                status=(
+                    MetricStatus.MEASURED
+                    if report_inputs_complete
+                    else MetricStatus.INCOMPLETE
+                ),
             ),
         )
 
@@ -779,7 +789,7 @@ class MetricEngine:
         # In strict mode, we still need to produce metrics even when the
         # orchestrator failed partway through and telemetry tables are empty.
         # Rather than raising RuntimeError, we mark the source as unavailable
-        # and use fallback values with formulas that document the empty source.
+        # and preserve null values with formulas that document the empty source.
         if strict:
             _strict_token_unavailable = False
             _strict_embedding_unavailable = False
@@ -788,13 +798,18 @@ class MetricEngine:
 
             if telemetry["token_source"] == "unavailable":
                 _strict_token_unavailable = True
-            if telemetry["embedding_throughput"] <= 0:
+            if (
+                telemetry.get("embedding_batch_count", 0) == 0
+                or telemetry["embedding_elapsed_seconds"] <= 0
+            ):
                 _strict_embedding_unavailable = True
             if telemetry["cpu_samples"] == 0 or not telemetry.get(
                 "telemetry_tables_exist"
             ):
                 _strict_cpu_unavailable = True
-            if not telemetry.get("telemetry_tables_exist"):
+            if telemetry["gpu_samples"] == 0 or not telemetry.get(
+                "telemetry_tables_exist"
+            ):
                 _strict_gpu_unavailable = True
         else:
             # Non-strict mode: all strict flags are False.
@@ -820,7 +835,7 @@ class MetricEngine:
         token_source = telemetry["token_source"]
         if _strict_token_unavailable:
             token_source = "unavailable"
-            total_tokens = 0
+            total_tokens = None
         token_method = (
             "endpoint"
             if token_source == "endpoint"
@@ -829,7 +844,7 @@ class MetricEngine:
         token_formula = (
             f"SUM(endpoint_usage_records.total_tokens) — source={token_source}"
             if token_source != "unavailable"
-            else "0.0 — endpoint_usage_records empty (no token data from orchestrator)"
+            else "unavailable — endpoint_usage_records has no measured token data"
         )
 
         # Cache — run-scoped from run_cache_events.
@@ -842,10 +857,9 @@ class MetricEngine:
                 f"run_cache_events: hits({cache_hits}) / lookups({cache_lookups})"
             )
         else:
-            # No scoped cache events: produce 0.0 with UNAVAILABLE status.
-            cache_hit_rate = 0.0
+            cache_hit_rate = None
             cache_formula = (
-                "0.0 — run_cache_events empty (no cache lookups from orchestrator)"
+                "unavailable — no lookups in the versioned release cache-stage set"
             )
 
         # ------------------------------------------------------------------
@@ -859,13 +873,14 @@ class MetricEngine:
                           ARRAY_AGG(DISTINCT stage) AS stages
                    FROM run_cache_events
                    WHERE run_id = %s
-                     AND event_type = 'lookup'""",
-                (str(run_id),),
+                     AND event_type = 'lookup'
+                     AND stage = ANY(%s)""",
+                (str(run_id), list(RELEASE_CACHE_STAGES)),
             )
             row = cur.fetchone()
-            if row and row[0]:
+            if row and isinstance(row[0], (list, tuple)):
                 _cache_event_ids = tuple(row[0])
-            if row and row[1]:
+            if row and isinstance(row[1], (list, tuple)):
                 _cache_stages = tuple(row[1])
         except Exception:  # noqa: BLE001
             # Rollback so legacy queries can still execute.
@@ -877,17 +892,19 @@ class MetricEngine:
         # ------------------------------------------------------------------
         # Embedding throughput — from run_embedding_throughput, or fallback.
         embedding_throughput = telemetry["embedding_throughput"]
-        if embedding_throughput > 0:
+        if (
+            telemetry["embedding_batch_count"] > 0
+            and telemetry["embedding_elapsed_seconds"] > 0
+        ):
             emb_formula = (
                 f"run_embedding_throughput: {telemetry['embedding_total_texts']}/"
                 f"{telemetry['embedding_elapsed_seconds']:.3f}s"
             )
         else:
             if _strict_embedding_unavailable:
-                embedding_throughput = 0.0
+                embedding_throughput = None
                 emb_formula = (
-                    "0.0 — run_embedding_throughput empty "
-                    "(no embedding work from orchestrator)"
+                    "unavailable — no completed embedding work with measured duration"
                 )
             else:
                 embedding_throughput = max(0.0, 1000.0 / max(1, latency_ms / 100))
@@ -903,7 +920,7 @@ class MetricEngine:
                 # A partial campaign must not report a host-wide CPU
                 # measurement while its provenance says the value is zero —
                 # that corrupts artifacts and creates spurious differences.
-                cpu_pct = 0.0
+                cpu_pct = None
             else:
                 cpu_pct = self._legacy_cpu_percent()
         # Formula: only claim run_resource_samples when both samples exist
@@ -914,10 +931,12 @@ class MetricEngine:
             "telemetry_tables_exist"
         )
         cpu_formula = (
-            f"run_resource_samples: mean({telemetry['cpu_samples']} samples)"
+            "mean(run_resource_samples.value); scope=current benchmark process; "
+            "collector=psutil.Process.cpu_percent(interval=None)/logical_cpu_count; "
+            f"samples={telemetry['cpu_samples']}"
             if _cpu_valid_samples
             else (
-                "0.0 — run_resource_samples empty (no CPU samples from orchestrator)"
+                "unavailable — no measured process-scoped CPU samples in run window"
                 if _strict_cpu_unavailable
                 else (
                     "psutil.cpu_percent(interval=0.1) — single sample"
@@ -932,7 +951,7 @@ class MetricEngine:
         if gpu_mem is None:
             if _strict_gpu_unavailable:
                 # Strict mode: do NOT fall back to a live NVML sample.
-                gpu_mem = 0.0
+                gpu_mem = None
             else:
                 gpu_mem = self._legacy_gpu_memory()
         # Formula: only claim run_resource_samples when both samples exist
@@ -941,10 +960,11 @@ class MetricEngine:
             "telemetry_tables_exist"
         )
         gpu_formula = (
-            f"run_resource_samples: mean({telemetry['gpu_samples']} samples)"
+            "mean(run_resource_samples.value); scope=explicit NVML device identity; "
+            f"samples={telemetry['gpu_samples']}"
             if _gpu_valid_samples
             else (
-                "0.0 — run_resource_samples empty (no GPU samples from orchestrator)"
+                "unavailable — no measured GPU samples in run window"
                 if _strict_gpu_unavailable
                 else (
                     "pynvml.nvmlDeviceGetMemoryInfo — single sample"
@@ -955,21 +975,27 @@ class MetricEngine:
         )
 
         performance = PerformanceMeasurement(
-            schema_version="performance-measurement-v1",
+            schema_version="performance-measurement-v2",
             total_latency_ms=round(latency_ms, 2),
-            total_tokens=total_tokens if total_tokens else 0,
+            total_tokens=total_tokens,
             semantic_calls=semantic_calls,
-            cache_hit_rate=round(max(0.0, min(1.0, cache_hit_rate)), 6),
-            cache_miss_rate=round(max(0.0, min(1.0, 1.0 - cache_hit_rate)), 6),
-            embedding_throughput=round(max(0.0, embedding_throughput), 3),
-            gpu_memory_mb=gpu_mem if gpu_mem is not None else 0.0,
-            cpu_percent=round(max(0.0, min(100.0, cpu_pct)), 2),
+            cache_hit_rate=round(cache_hit_rate, 6)
+            if cache_hit_rate is not None
+            else None,
+            cache_miss_rate=round(1.0 - cache_hit_rate, 6)
+            if cache_hit_rate is not None
+            else None,
+            embedding_throughput=round(embedding_throughput, 3)
+            if embedding_throughput is not None
+            else None,
+            gpu_memory_mb=gpu_mem,
+            cpu_percent=round(cpu_pct, 2) if cpu_pct is not None else None,
         )
 
         # ------------------------------------------------------------------
         # Build PerformanceMetric records with provenance and status.
         # ------------------------------------------------------------------
-        # Strict mode: metrics with 0.0 from empty source → UNAVAILABLE.
+        # Strict mode: metrics with empty sources remain null and UNAVAILABLE.
         _token_status = (
             MetricStatus.UNAVAILABLE
             if _strict_token_unavailable
@@ -1002,6 +1028,37 @@ class MetricEngine:
             )
         )
 
+        cpu_source = self._read_resource_source(run_id, "cpu")
+        gpu_source = self._read_resource_source(run_id, "gpu")
+        cpu_nonmeasured = cpu_source["total_count"] - cpu_source["measured_count"]
+        gpu_nonmeasured = gpu_source["total_count"] - gpu_source["measured_count"]
+        if cpu_source["invalid_count"]:
+            _cpu_status = MetricStatus.INVALID
+        elif cpu_nonmeasured and cpu_source["measured_count"]:
+            _cpu_status = MetricStatus.INCOMPLETE
+        if gpu_source["invalid_count"]:
+            _gpu_status = MetricStatus.INVALID
+        elif gpu_nonmeasured and gpu_source["measured_count"]:
+            _gpu_status = MetricStatus.INCOMPLETE
+        if _gpu_status == MetricStatus.MEASURED and not gpu_source["device_uuid"]:
+            _gpu_status = MetricStatus.INCOMPLETE
+        if _cpu_status != MetricStatus.MEASURED or _gpu_status != MetricStatus.MEASURED:
+            performance = PerformanceMeasurement(
+                **{
+                    **performance.__dict__,
+                    "cpu_percent": (
+                        performance.cpu_percent
+                        if _cpu_status == MetricStatus.MEASURED
+                        else None
+                    ),
+                    "gpu_memory_mb": (
+                        performance.gpu_memory_mb
+                        if _gpu_status == MetricStatus.MEASURED
+                        else None
+                    ),
+                }
+            )
+
         metrics = (
             PerformanceMetric(
                 name="total_latency_ms",
@@ -1029,7 +1086,11 @@ class MetricEngine:
             ),
             PerformanceMetric(
                 name="total_tokens",
-                value=float(performance.total_tokens),
+                value=(
+                    float(performance.total_tokens)
+                    if performance.total_tokens is not None
+                    else None
+                ),
                 source=MetricSource(
                     table="endpoint_usage_records"
                     if token_source != "unavailable"
@@ -1053,6 +1114,7 @@ class MetricEngine:
                     method="ratio",
                     event_ids=_cache_event_ids,
                     stages=_cache_stages,
+                    stage_set_version=RELEASE_CACHE_STAGE_SET_VERSION,
                 ),
                 formula=cache_formula,
                 status=_cache_status,
@@ -1061,14 +1123,10 @@ class MetricEngine:
                 name="embedding_throughput",
                 value=performance.embedding_throughput,
                 source=MetricSource(
-                    table="run_embedding_throughput"
-                    if embedding_throughput > 0
-                    else "model_endpoints",
-                    column="batch_count, elapsed_seconds"
-                    if embedding_throughput > 0
-                    else "N/A",
-                    run_id=str(run_id) if embedding_throughput > 0 else "",
-                    method="ratio" if embedding_throughput > 0 else "unavailable",
+                    table="run_embedding_throughput",
+                    column="total_texts, elapsed_seconds",
+                    run_id=str(run_id),
+                    method="ratio",
                 ),
                 formula=emb_formula,
                 status=_emb_status,
@@ -1077,14 +1135,17 @@ class MetricEngine:
                 name="cpu_percent",
                 value=performance.cpu_percent,
                 source=MetricSource(
-                    table="run_resource_samples"
-                    if _cpu_valid_samples
-                    else ("psutil" if _HAS_PSUTIL else "none"),
-                    column="AVG(value)"
-                    if _cpu_valid_samples
-                    else "cpu_percent(interval=0.1)",
+                    table="run_resource_samples",
+                    column="AVG(value) FILTER (status = 'measured')",
                     run_id=str(run_id),
-                    method="mean" if _cpu_valid_samples else "sample",
+                    method="run_window_mean",
+                    event_ids=cpu_source["record_ids"],
+                    sample_count=cpu_source["measured_count"],
+                    device_type="cpu",
+                    device_index=cpu_source["device_index"],
+                    collector=cpu_source["collector"],
+                    collector_version=cpu_source["collector_version"],
+                    status_counts=cpu_source["status_counts"],
                 ),
                 formula=cpu_formula,
                 status=_cpu_status,
@@ -1093,14 +1154,18 @@ class MetricEngine:
                 name="gpu_memory_mb",
                 value=performance.gpu_memory_mb,
                 source=MetricSource(
-                    table="run_resource_samples"
-                    if _gpu_valid_samples
-                    else ("pynvml" if _HAS_PYNVML else "none"),
-                    column="AVG(value)"
-                    if _gpu_valid_samples
-                    else "nvmlDeviceGetMemoryInfo",
-                    run_id=str(run_id) if _gpu_valid_samples else "",
-                    method="mean" if _gpu_valid_samples else "nvml",
+                    table="run_resource_samples",
+                    column="AVG(value) FILTER (status = 'measured')",
+                    run_id=str(run_id),
+                    method="run_window_mean",
+                    event_ids=gpu_source["record_ids"],
+                    sample_count=gpu_source["measured_count"],
+                    device_type="gpu",
+                    device_index=gpu_source["device_index"],
+                    device_uuid=gpu_source["device_uuid"],
+                    collector=gpu_source["collector"],
+                    collector_version=gpu_source["collector_version"],
+                    status_counts=gpu_source["status_counts"],
                 ),
                 formula=gpu_formula,
                 status=_gpu_status,
@@ -1108,6 +1173,55 @@ class MetricEngine:
         )
 
         return performance, metrics
+
+    def _read_resource_source(self, run_id: UUID, device_type: str) -> dict:
+        """Read exact sample records and collector identity for provenance."""
+        result = {
+            "record_ids": (),
+            "measured_count": 0,
+            "total_count": 0,
+            "invalid_count": 0,
+            "device_index": None,
+            "device_uuid": "",
+            "collector": "",
+            "collector_version": "",
+            "status_counts": (),
+        }
+        try:
+            cur = self._connection.execute(
+                """SELECT id::text, device_index, COALESCE(device_uuid, ''),
+                          collector, collector_version, status
+                   FROM run_resource_samples
+                   WHERE run_id = %s AND device_type = %s
+                   ORDER BY sample_number, id""",
+                (str(run_id), device_type),
+            )
+            rows = cur.fetchall()
+            if not isinstance(rows, (list, tuple)):
+                return result
+        except Exception:  # noqa: BLE001
+            try:
+                self._connection.rollback()
+            except Exception:  # noqa: BLE001, S110
+                pass
+            return result
+        counts: dict[str, int] = {}
+        for row in rows:
+            counts[row[5]] = counts.get(row[5], 0) + 1
+        if rows:
+            first = next((row for row in rows if row[5] == "measured"), rows[0])
+            result.update(
+                record_ids=tuple(row[0] for row in rows),
+                measured_count=counts.get("measured", 0),
+                total_count=len(rows),
+                invalid_count=counts.get("invalid", 0),
+                device_index=first[1],
+                device_uuid=first[2],
+                collector=first[3],
+                collector_version=first[4],
+                status_counts=tuple(sorted(counts.items())),
+            )
+        return result
 
     # ------------------------------------------------------------------
     # New telemetry path (migration 0036+)
@@ -1127,6 +1241,7 @@ class MetricEngine:
             "cache_lookups": 0,
             "cache_hits": 0,
             "cache_misses": 0,
+            "embedding_batch_count": 0,
             "embedding_throughput": 0.0,
             "embedding_total_texts": 0,
             "embedding_elapsed_seconds": 0.0,
@@ -1142,20 +1257,12 @@ class MetricEngine:
             cur = self._connection.execute(
                 """SELECT total_tokens, token_source,
                           cache_lookups, cache_hits, cache_misses,
-                          embedding_throughput,
-                          COALESCE(SUM(rte.total_texts), 0),
-                          COALESCE(SUM(rte.elapsed_seconds), 0.0),
-                          COALESCE(AVG(rs.value) FILTER (WHERE rs.device_type = 'cpu' AND rs.status = 'measured'), 0),
-                          COUNT(rs.id) FILTER (WHERE rs.device_type = 'cpu' AND rs.status = 'measured'),
-                          COALESCE(AVG(rs.value) FILTER (WHERE rs.device_type = 'gpu' AND rs.status = 'measured'), 0),
-                          COUNT(rs.id) FILTER (WHERE rs.device_type = 'gpu' AND rs.status = 'measured')
-                   FROM run_performance_telemetry t
-                   LEFT JOIN run_embedding_throughput rte ON rte.run_id = t.run_id
-                   LEFT JOIN run_resource_samples rs ON rs.run_id = t.run_id
-                   WHERE t.run_id = %s
-                   GROUP BY t.total_tokens, t.token_source,
-                            t.cache_lookups, t.cache_hits, t.cache_misses,
-                            t.embedding_throughput""",
+                          embedding_batch_count, embedding_throughput,
+                          embedding_vector_count, embedding_elapsed_seconds,
+                          cpu_mean_percent, cpu_samples,
+                          gpu_mean_memory_mb, gpu_samples
+                   FROM run_performance_telemetry
+                   WHERE run_id = %s""",
                 (str(run_id),),
             )
             row = cur.fetchone()
@@ -1167,13 +1274,14 @@ class MetricEngine:
                 result["cache_lookups"] = row[2] or 0
                 result["cache_hits"] = row[3] or 0
                 result["cache_misses"] = row[4] or 0
-                result["embedding_throughput"] = row[5] or 0.0
-                result["embedding_total_texts"] = row[6] or 0
-                result["embedding_elapsed_seconds"] = row[7] or 0.0
-                cpu_mean = row[8]
-                cpu_cnt = row[9] or 0
-                gpu_mean = row[10]
-                gpu_cnt = row[11] or 0
+                result["embedding_batch_count"] = row[5] or 0
+                result["embedding_throughput"] = row[6] or 0.0
+                result["embedding_total_texts"] = row[7] or 0
+                result["embedding_elapsed_seconds"] = row[8] or 0.0
+                cpu_mean = row[9]
+                cpu_cnt = row[10] or 0
+                gpu_mean = row[11]
+                gpu_cnt = row[12] or 0
                 if cpu_mean is not None and cpu_cnt > 0:
                     result["cpu_mean_percent"] = round(float(cpu_mean), 2)
                 if gpu_mean is not None and gpu_cnt > 0:
@@ -1523,6 +1631,7 @@ class ReleaseBenchmarkRunner:
         quality_metrics: tuple[QualityMetric, ...] = ()
         performance_metrics: tuple[PerformanceMetric, ...] = ()
         integrity_checks: tuple[DeterministicIntegrityCheck, ...] = ()
+        resource_samples: tuple[object, ...] = ()
 
         try:
             from research_store.config import StoreConfig
@@ -1572,6 +1681,7 @@ class ReleaseBenchmarkRunner:
             spec = serialize_model(spec_model)
 
             # Build the search plan
+            configured_queries = objective.search_queries or (objective.objective,)
             search_plan = {
                 "schema_version": "search-plan-v1",
                 "research_spec_id": spec["research_spec_id"],
@@ -1579,11 +1689,15 @@ class ReleaseBenchmarkRunner:
                 "queries": [
                     {
                         "query_id": str(uuid4()),
-                        "query": objective.objective[:100],
+                        "query": query,
                         "facet": "primary",
-                        "target_question_ids": [spec["questions"][0]["question_id"]],
+                        "target_question_ids": [
+                            question["question_id"] for question in spec["questions"]
+                        ],
                         "target_claim_ids": [],
-                        "intended_source_classes": [],
+                        "intended_source_classes": list(
+                            objective.expected_source_classes
+                        ),
                         "expected_organizations": [],
                         "freshness_requirement": spec["time_window"],
                         "expected_contribution": "answer",
@@ -1591,18 +1705,23 @@ class ReleaseBenchmarkRunner:
                         "negative_terms": [],
                         "priority": 1,
                     }
+                    for query in configured_queries
                 ],
             }
 
-            # Execute the orchestrator
-            _ = orchestrator.run(
-                run_id=run_status.id,
-                spec=spec,
-                search_plan=search_plan,
-            )
+            from research_store.resource_sampler import ResourceSampler
 
-            # Compute run duration early — needed for resource sample collection.
-            _run_duration_ms = (time.monotonic() - start) * 1000
+            sampler = ResourceSampler(interval_seconds=1.0, max_samples=10)
+            sampler.begin_window()
+            try:
+                _ = orchestrator.run(
+                    run_id=run_status.id,
+                    spec=spec,
+                    search_plan=search_plan,
+                )
+            finally:
+                cpu_samples, gpu_samples = sampler.end_window()
+                resource_samples = tuple(cpu_samples + gpu_samples)
 
             # ── Wire telemetry collection BEFORE metric extraction ────────
             # This must happen after the orchestrator completes so that all
@@ -1621,13 +1740,12 @@ class ReleaseBenchmarkRunner:
                     telemetry_svc, UUID(run_id), metric_engine._connection
                 )
 
-                # Collect CPU/GPU samples during the run window.
-                self._collect_resource_samples(
-                    telemetry_svc, UUID(run_id), _run_duration_ms
+                self._persist_resource_samples(
+                    telemetry_svc, UUID(run_id), resource_samples
                 )
 
                 # Build and persist the aggregated summary.
-                telemetry_svc.build_summary(UUID(run_id))
+                telemetry_svc.build_summary(UUID(run_id), stages=RELEASE_CACHE_STAGES)
 
             # Extract real metrics from persisted state (if engine available)
             if metric_engine is not None:
@@ -1640,9 +1758,6 @@ class ReleaseBenchmarkRunner:
             else:
                 errors.append("no metric engine available — metrics not extracted")
 
-        except RuntimeError:
-            # Re-raise runtime errors (simulation fallback blocked)
-            raise
         except Exception as exc:
             logger.exception(
                 "benchmark execution FAILED for mode=%s objective=%s",
@@ -1650,13 +1765,9 @@ class ReleaseBenchmarkRunner:
                 objective.id,
             )
             errors.append(f"execution failed: {exc}")
-            # In strict mode, fail the benchmark. Otherwise record errors
-            # but continue with simulation fallback for this run.
-            if self.config.strict:
-                raise RuntimeError(
-                    f"Benchmark real execution failed for mode={mode}: {exc}. "
-                    "Simulation fallback is not permitted when strict=True."
-                ) from exc
+            # Preserve the failed run in campaign output. Strict recommendation
+            # logic rejects the missing measurements; it must not erase the run
+            # by aborting before artifacts are written.
 
         # P5: Run integrity checks after execution (even if execution failed)
         try:
@@ -1731,51 +1842,21 @@ class ReleaseBenchmarkRunner:
                 )
                 telemetry_svc.record_endpoint_usage(record)
 
-    def _collect_resource_samples(
+    def _persist_resource_samples(
         self,
         telemetry_svc,
         run_id: UUID,
-        duration_ms: float,
+        samples: tuple[object, ...],
     ) -> None:
-        """Collect CPU/GPU resource samples over the run window.
-
-        Uses ResourceSampler to collect samples at a fixed interval.
-        If psutil/pynvml are unavailable, samples are marked unavailable.
-        """
-
-        from research_store.resource_sampler import ResourceSampler
-
-        sampler = ResourceSampler(interval_seconds=1.0, max_samples=10)
-
-        # Collect CPU samples.
-        if sampler.cpu_available:
-            for i in range(min(5, max(1, int(duration_ms / 1000)))):
-                sample = sampler.collect_cpu_sample()
-                if sample is None:
-                    break
-                sample = sample.__class__(
-                    **{
-                        **sample.__dict__,
-                        "run_id": str(run_id),
-                        "sample_number": i,
-                    }
-                )
-                telemetry_svc.record_resource_sample(sample)
-
-        # Collect GPU samples.
-        if sampler.gpu_available:
-            for i in range(min(5, max(1, int(duration_ms / 1000)))):
-                sample = sampler.collect_gpu_sample()
-                if sample is None:
-                    break
-                sample = sample.__class__(
-                    **{
-                        **sample.__dict__,
-                        "run_id": str(run_id),
-                        "sample_number": i,
-                    }
-                )
-                telemetry_svc.record_resource_sample(sample)
+        """Persist samples already collected across the exact workload window."""
+        for sample in samples:
+            bound = sample.__class__(
+                **{
+                    **sample.__dict__,
+                    "run_id": str(run_id),
+                }
+            )
+            telemetry_svc.record_resource_sample(bound)
 
     def _campaign_to_workflow_results(
         self, runs: list[CampaignRun]
@@ -1811,24 +1892,24 @@ class ReleaseBenchmarkRunner:
                         schema_version="workflow-run-result-v1",
                         workflow_mode=run.mode,
                         quality=QualityMeasurement(
-                            schema_version="quality-measurement-v2",
-                            candidate_recall=0.0,
-                            source_quality_score=0.0,
-                            coverage_completeness=0.0,
-                            unsupported_claim_rate=1.0,
-                            citation_accuracy=0.0,
-                            report_quality_score=0.0,
+                            schema_version="quality-measurement-v3",
+                            candidate_recall=None,
+                            source_quality_score=None,
+                            coverage_completeness=None,
+                            unsupported_claim_rate=None,
+                            citation_accuracy=None,
+                            report_quality_score=None,
                         ),
                         performance=PerformanceMeasurement(
-                            schema_version="performance-measurement-v1",
+                            schema_version="performance-measurement-v2",
                             total_latency_ms=0.0,
-                            total_tokens=0,
+                            total_tokens=None,
                             semantic_calls=0,
-                            cache_hit_rate=0.0,
-                            cache_miss_rate=1.0,
-                            embedding_throughput=0.0,
-                            gpu_memory_mb=0.0,
-                            cpu_percent=0.0,
+                            cache_hit_rate=None,
+                            cache_miss_rate=None,
+                            embedding_throughput=None,
+                            gpu_memory_mb=None,
+                            cpu_percent=None,
                         ),
                         integrity_checks=run.integrity_checks,
                         run_id=run.run_id or None,
@@ -1861,31 +1942,21 @@ class ReleaseBenchmarkRunner:
         ) -> QualityMeasurement | None:
             if not modes_results:
                 return None
-            n = len(modes_results)
+
+            def mean(field_name: str) -> float | None:
+                values = [getattr(r.quality, field_name) for r in modes_results]
+                if any(value is None for value in values):
+                    return None
+                return sum(values) / len(values)
+
             return QualityMeasurement(
-                schema_version="quality-measurement-v2",
-                candidate_recall=sum(r.quality.candidate_recall for r in modes_results)
-                / n,
-                source_quality_score=sum(
-                    r.quality.source_quality_score for r in modes_results
-                )
-                / n,
-                coverage_completeness=sum(
-                    r.quality.coverage_completeness for r in modes_results
-                )
-                / n,
-                unsupported_claim_rate=sum(
-                    r.quality.unsupported_claim_rate for r in modes_results
-                )
-                / n,
-                citation_accuracy=sum(
-                    r.quality.citation_accuracy for r in modes_results
-                )
-                / n,
-                report_quality_score=sum(
-                    r.quality.report_quality_score for r in modes_results
-                )
-                / n,
+                schema_version="quality-measurement-v3",
+                candidate_recall=mean("candidate_recall"),
+                source_quality_score=mean("source_quality_score"),
+                coverage_completeness=mean("coverage_completeness"),
+                unsupported_claim_rate=mean("unsupported_claim_rate"),
+                citation_accuracy=mean("citation_accuracy"),
+                report_quality_score=mean("report_quality_score"),
             )
 
         def avg_performance(
@@ -1893,30 +1964,25 @@ class ReleaseBenchmarkRunner:
         ) -> PerformanceMeasurement | None:
             if not modes_results:
                 return None
-            n = len(modes_results)
+
+            def mean(field_name: str) -> float | None:
+                values = [getattr(r.performance, field_name) for r in modes_results]
+                if any(value is None for value in values):
+                    return None
+                return sum(values) / len(values)
+
             return PerformanceMeasurement(
-                schema_version="performance-measurement-v1",
-                total_latency_ms=sum(
-                    r.performance.total_latency_ms for r in modes_results
-                )
-                / n,
-                total_tokens=int(
-                    sum(r.performance.total_tokens for r in modes_results) / n
+                schema_version="performance-measurement-v2",
+                total_latency_ms=mean("total_latency_ms") or 0.0,
+                total_tokens=(
+                    int(value) if (value := mean("total_tokens")) is not None else None
                 ),
-                semantic_calls=int(
-                    sum(r.performance.semantic_calls for r in modes_results) / n
-                ),
-                cache_hit_rate=sum(r.performance.cache_hit_rate for r in modes_results)
-                / n,
-                cache_miss_rate=1.0
-                - sum(r.performance.cache_hit_rate for r in modes_results) / n,
-                embedding_throughput=sum(
-                    r.performance.embedding_throughput for r in modes_results
-                )
-                / n,
-                gpu_memory_mb=sum(r.performance.gpu_memory_mb for r in modes_results)
-                / n,
-                cpu_percent=sum(r.performance.cpu_percent for r in modes_results) / n,
+                semantic_calls=int(mean("semantic_calls") or 0),
+                cache_hit_rate=mean("cache_hit_rate"),
+                cache_miss_rate=None,
+                embedding_throughput=mean("embedding_throughput"),
+                gpu_memory_mb=mean("gpu_memory_mb"),
+                cpu_percent=mean("cpu_percent"),
             )
 
         # Use first mode as baseline for ratio computation
@@ -1932,7 +1998,13 @@ class ReleaseBenchmarkRunner:
                 continue
             avg_q = avg_quality(mode_results_list)
             avg_p = avg_performance(mode_results_list)
-            if baseline_quality and avg_q and baseline_quality.candidate_recall > 0:
+            if (
+                baseline_quality
+                and avg_q
+                and baseline_quality.candidate_recall is not None
+                and avg_q.candidate_recall is not None
+                and baseline_quality.candidate_recall > 0
+            ):
                 quality_vs_baseline[mode] = (
                     avg_q.candidate_recall / baseline_quality.candidate_recall
                 )
@@ -1992,30 +2064,48 @@ class ReleaseBenchmarkRunner:
 
         for mode, mode_results_list in mode_results.items():
             for result in mode_results_list:
-                if result.quality.candidate_recall < min_recall:
+                quality_status = {
+                    metric.name: metric.status for metric in result.quality_metrics
+                }
+
+                release_values = {
+                    name: (
+                        getattr(result.quality, name)
+                        if quality_status.get(name) == MetricStatus.MEASURED
+                        else None
+                    )
+                    for name in MANDATORY_QUALITY_METRICS
+                }
+                candidate_recall = release_values["candidate_recall"]
+                source_quality = release_values["source_quality_score"]
+                coverage = release_values["coverage_completeness"]
+                unsupported = release_values["unsupported_claim_rate"]
+                citation = release_values["citation_accuracy"]
+
+                if candidate_recall is not None and candidate_recall < min_recall:
                     withdrawn.append(
                         f"candidate_recall >= {min_recall} — "
-                        f"{mode} achieved {result.quality.candidate_recall:.3f}"
+                        f"{mode} achieved {candidate_recall:.3f}"
                     )
-                if result.quality.source_quality_score < min_source_quality:
+                if source_quality is not None and source_quality < min_source_quality:
                     withdrawn.append(
                         f"source_quality_score >= {min_source_quality} — "
-                        f"{mode} achieved {result.quality.source_quality_score:.3f}"
+                        f"{mode} achieved {source_quality:.3f}"
                     )
-                if result.quality.coverage_completeness < min_coverage:
+                if coverage is not None and coverage < min_coverage:
                     withdrawn.append(
                         f"coverage_completeness >= {min_coverage} — "
-                        f"{mode} achieved {result.quality.coverage_completeness:.3f}"
+                        f"{mode} achieved {coverage:.3f}"
                     )
-                if result.quality.unsupported_claim_rate > max_unsupported:
+                if unsupported is not None and unsupported > max_unsupported:
                     withdrawn.append(
                         f"unsupported_claim_rate <= {max_unsupported} — "
-                        f"{mode} achieved {result.quality.unsupported_claim_rate:.3f}"
+                        f"{mode} achieved {unsupported:.3f}"
                     )
-                if result.quality.citation_accuracy < min_citation:
+                if citation is not None and citation < min_citation:
                     withdrawn.append(
                         f"citation_accuracy >= {min_citation} — "
-                        f"{mode} achieved {result.quality.citation_accuracy:.3f}"
+                        f"{mode} achieved {citation:.3f}"
                     )
 
         # P7-R09 / #158: strict fail-closed — reject when mandatory metrics
@@ -2085,12 +2175,15 @@ class ReleaseBenchmarkRunner:
                         (
                             r.performance.total_tokens
                             for r in mode_results_list
-                            if r.performance.total_tokens > 0
+                            if r.performance.total_tokens is not None
+                            and r.performance.total_tokens > 0
                         ),
                         0,
                     )
                     if baseline_tokens > 0:
                         mode_tokens = result.performance.total_tokens
+                        if mode_tokens is None:
+                            continue
                         token_ratio = mode_tokens / baseline_tokens
                         if token_ratio > max_token_ratio:
                             withdrawn.append(
@@ -2218,6 +2311,18 @@ class ReleaseBenchmarkRunner:
         for mode, objective_id in sorted(common_keys):
             run_a = idx_a[(mode, objective_id)]
             run_b = idx_b[(mode, objective_id)]
+            quality_status_a = {
+                metric.name: metric.status for metric in run_a.quality_metrics
+            }
+            quality_status_b = {
+                metric.name: metric.status for metric in run_b.quality_metrics
+            }
+            performance_status_a = {
+                metric.name: metric.status for metric in run_a.performance_metrics
+            }
+            performance_status_b = {
+                metric.name: metric.status for metric in run_b.performance_metrics
+            }
 
             if run_a.quality and run_b.quality:
                 for field_name in [
@@ -2230,6 +2335,19 @@ class ReleaseBenchmarkRunner:
                 ]:
                     val_a = getattr(run_a.quality, field_name)
                     val_b = getattr(run_b.quality, field_name)
+                    if (
+                        quality_status_a.get(field_name) != MetricStatus.MEASURED
+                        or quality_status_b.get(field_name) != MetricStatus.MEASURED
+                        or val_a is None
+                        or val_b is None
+                    ):
+                        all_within = False
+                        details.append(
+                            f"{mode}.{objective_id}.{field_name}: not reproducible — "
+                            f"A={quality_status_a.get(field_name, 'missing')}, "
+                            f"B={quality_status_b.get(field_name, 'missing')}"
+                        )
+                        continue
                     denom = abs(val_a) if abs(val_a) > 1e-9 else 1.0
                     rel_diff = abs(val_b - val_a) / denom
                     within = rel_diff <= tolerance
@@ -2256,6 +2374,19 @@ class ReleaseBenchmarkRunner:
                 ]:
                     val_a = getattr(run_a.performance, field_name)
                     val_b = getattr(run_b.performance, field_name)
+                    if (
+                        performance_status_a.get(field_name) != MetricStatus.MEASURED
+                        or performance_status_b.get(field_name) != MetricStatus.MEASURED
+                        or val_a is None
+                        or val_b is None
+                    ):
+                        all_within = False
+                        details.append(
+                            f"{mode}.{objective_id}.{field_name}: not reproducible — "
+                            f"A={performance_status_a.get(field_name, 'missing')}, "
+                            f"B={performance_status_b.get(field_name, 'missing')}"
+                        )
+                        continue
                     denom = abs(val_a) if abs(val_a) > 1e-9 else 1.0
                     rel_diff = abs(val_b - val_a) / denom
                     within = rel_diff <= tolerance

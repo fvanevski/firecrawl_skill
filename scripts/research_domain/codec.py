@@ -241,6 +241,11 @@ def schema_for(model_type) -> dict:
             for item in fields(annotation)
             if item.default is MISSING and item.default_factory is MISSING
         ]
+        required.extend(
+            name
+            for name in getattr(annotation, "REQUIRED_FIELDS", ())
+            if name not in required
+        )
         return {
             "type": "object",
             "additionalProperties": False,

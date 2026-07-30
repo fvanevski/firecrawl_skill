@@ -495,6 +495,97 @@ def test_partial_batch_failure_does_not_falsely_complete_others():
     assert len(state.upsert_calls) == 1
 
 
+def test_microbatch_resolves_all_manifests_in_fingerprint_group():
+    """A fingerprint batch must not restrict lookup to its first manifest."""
+    state = _MicrobatchState()
+    chunk_a, chunk_b = uuid4(), uuid4()
+    manifest_a, manifest_b = uuid4(), uuid4()
+    state.jobs = [
+        state._make_job(chunk_a, manifest_a, dimension=3, fingerprint="fp"),
+        state._make_job(chunk_b, manifest_b, dimension=3, fingerprint="fp"),
+    ]
+    record_a = {**state._make_record(chunk_a), "manifest_id": manifest_a}
+    record_b = {**state._make_record(chunk_b), "manifest_id": manifest_b}
+    state.records = [record_a, record_b]
+    manifest_filters: list[object] = []
+
+    class Repo:
+        def claim_jobs(self, limit, **options):
+            taken = state.jobs[:limit]
+            state.jobs = state.jobs[limit:]
+            return taken
+
+        def renew_job(self, *_args, **_kwargs):
+            return True
+
+        def finish_job(self, job_id, lease_token, error, **options):
+            state.finishes.append((job_id, lease_token, error, options))
+            return True
+
+        def chunks_for_index(self, chunk_ids, manifest_id=None):
+            manifest_filters.append(manifest_id)
+            return [
+                record
+                for record in state.records
+                if record["chunk_id"] in chunk_ids
+                and (manifest_id is None or record["manifest_id"] == manifest_id)
+            ]
+
+        def heartbeat_worker(self, *_args, **_kwargs):
+            return None
+
+    repo = Repo()
+
+    class Uow:
+        def __enter__(self):
+            self.index_jobs = self.chunks = repo
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    qdrant, _calls = _fake_qdrant(state)
+    embedder = lambda _text: [0.1, 0.2, 0.3]
+    embedder.fingerprint = "fp"
+    result = IndexWorker(lambda: Uow(), qdrant, embedder).run_batch(2)
+
+    assert manifest_filters == [None]
+    assert result["complete"] == 2
+    assert result["failed"] == 0
+    assert {point["id"] for point in state.upsert_calls} == {
+        str(chunk_a),
+        str(chunk_b),
+    }
+
+
+def test_unexpected_microbatch_error_is_persisted_without_worker_exit(monkeypatch):
+    """Unexpected batch errors become retryable job failures, not expired leases."""
+    state = _MicrobatchState()
+    chunk_a, chunk_b = uuid4(), uuid4()
+    state.jobs = [
+        state._make_job(chunk_a, uuid4(), fingerprint="fp"),
+        state._make_job(chunk_b, uuid4(), fingerprint="fp"),
+    ]
+    qdrant, _calls = _fake_qdrant(state)
+    embedder = lambda _text: [0.1, 0.2, 0.3]
+    embedder.fingerprint = "fp"
+    worker = IndexWorker(lambda: _make_uow(state), qdrant, embedder)
+    monkeypatch.setattr(
+        worker,
+        "_process_microbatch",
+        lambda _jobs: (_ for _ in ()).throw(RuntimeError("batch exploded")),
+    )
+
+    result = worker.run_batch(2)
+
+    assert result["claimed"] == 2
+    assert result["failed"] == 2
+    assert result["lease_lost"] == 0
+    assert all(
+        "microbatch: RuntimeError: batch exploded" in call[2] for call in state.finishes
+    )
+
+
 def test_lease_expiry_during_batch_stops_processing():
     """When lease is lost, no jobs are completed and no upsert happens."""
     state = _MicrobatchState()

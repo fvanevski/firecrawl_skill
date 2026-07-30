@@ -26,6 +26,17 @@ from hashlib import sha256
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
+
+
+def _qdrant_compatibility_errors(caught_warnings) -> tuple[str, ...]:
+    """Return only client/server compatibility warnings from Qdrant calls."""
+    return tuple(
+        str(item.message)
+        for item in caught_warnings
+        if "incompatible with server version" in str(item.message).lower()
+    )
+
+
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store.release_benchmark import (
@@ -91,6 +102,323 @@ def _write_json_atomic(path: Path, data: object) -> str:
     )
     tmp.replace(path)
     return _compute_file_hash(path)
+
+
+def _preflight_check(
+    database_url: str,
+    blob_root: Path | None,
+    qdrant_url: str,
+    qdrant_api_key: str,
+    dataset_path: Path,
+    campaign_dir: Path,
+) -> tuple[bool, list[str]]:
+    """Validate that all required infrastructure is available before starting campaigns.
+
+    Returns (ok, errors) where ok is True only when the complete release
+    workflow stack is ready. Release campaigns have no degraded preflight.
+
+    Mandatory infrastructure:
+    - PostgreSQL (required for creating research runs)
+    - Dataset file (required for benchmark data)
+    - Campaign directory (required for writing artifacts)
+
+    Required workflow infrastructure:
+    - Qdrant (used for vector indexing)
+    - Firecrawl CLI (used for search/scrape)
+    - Embedding endpoint (used for chunk embedding)
+    - Generative endpoint (used for synthesis)
+    - Reranker endpoint
+    - Blob root (used for content-addressed storage)
+    """
+    errors: list[str] = []
+
+    # 1. Dataset file (MANDATORY)
+    if not dataset_path.is_file():
+        errors.append(f"benchmark dataset not found: {dataset_path}")
+
+    # 2. PostgreSQL connectivity (MANDATORY)
+    try:
+        import psycopg
+
+        conn = psycopg.connect(database_url)
+        cur = conn.cursor()
+        cur.execute("SELECT current_database(), version()")
+        db_name, db_version = cur.fetchone()
+        cur.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'"
+        )
+        table_count = cur.fetchone()[0]
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        alembic_config = Config(str(SCRIPTS.parent.parent / "alembic.ini"))
+        schema_head = ScriptDirectory.from_config(alembic_config).get_current_head()
+        cur.execute("SELECT version_num FROM alembic_version")
+        schema_current = cur.fetchone()[0]
+        if schema_current != schema_head:
+            errors.append(
+                f"PostgreSQL schema is not at head: {schema_current} != {schema_head}"
+            )
+        cur.execute(
+            """SELECT EXTRACT(EPOCH FROM (now() - MAX(heartbeat_at)))
+               FROM index_worker_heartbeats"""
+        )
+        worker_age = cur.fetchone()[0]
+        if worker_age is None or float(worker_age) > 90:
+            errors.append(
+                "index worker heartbeat is missing or stale "
+                f"(age={worker_age if worker_age is not None else 'missing'} seconds)"
+            )
+        conn.close()
+        print(f"  PostgreSQL: {db_name} ({table_count} tables) — {db_version[:60]}")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"PostgreSQL connection failed: {exc}")
+
+    # 3. Qdrant connectivity, active alias, and collection state (MANDATORY)
+    if qdrant_url:
+        try:
+            import warnings
+
+            from qdrant_client import QdrantClient
+
+            with warnings.catch_warnings(record=True) as caught_warnings:
+                warnings.simplefilter("always")
+                qdrant = QdrantClient(url=qdrant_url, api_key=qdrant_api_key or None)
+                alias_name = os.environ.get("QDRANT_ALIAS", "research_chunks_active")
+                aliases = qdrant.get_aliases().aliases
+                alias = next(
+                    (item for item in aliases if item.alias_name == alias_name), None
+                )
+                if alias is None:
+                    raise RuntimeError(
+                        f"required active alias is missing: {alias_name}"
+                    )
+                collection = qdrant.get_collection(alias.collection_name)
+            compatibility_errors = _qdrant_compatibility_errors(caught_warnings)
+            if compatibility_errors:
+                raise RuntimeError(compatibility_errors[0])
+            if "green" not in str(collection.status).lower():
+                raise RuntimeError(
+                    f"active collection is not green: {alias.collection_name} ({collection.status})"
+                )
+            print(
+                f"  Qdrant: alias {alias_name} -> {alias.collection_name}; status={collection.status}"
+            )
+            qdrant.close()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Qdrant readiness failed: {exc}")
+    else:
+        errors.append("QDRANT_URL is required")
+
+    # 4. Firecrawl CLI and backend availability (MANDATORY)
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["firecrawl", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip()
+            print(f"  Firecrawl CLI: {version}")
+        else:
+            errors.append("Firecrawl CLI returned non-zero exit code")
+    except FileNotFoundError:
+        errors.append("Firecrawl CLI not found in PATH")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Firecrawl CLI check failed: {exc}")
+    try:
+        import urllib.request
+
+        firecrawl_url = os.environ.get("FIRECRAWL_API_URL", "")
+        if not firecrawl_url:
+            raise RuntimeError("FIRECRAWL_API_URL is not configured")
+        with urllib.request.urlopen(
+            firecrawl_url.rstrip("/") + "/", timeout=10
+        ) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        if payload.get("message") != "Firecrawl API":
+            raise RuntimeError(f"unexpected API root response: {payload!r}")
+        print(f"  Firecrawl API ({firecrawl_url}): reachable")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Firecrawl backend check failed: {exc}")
+
+    # 5. Embedding endpoint health (MANDATORY)
+    try:
+        import re
+        import urllib.request
+
+        embedding_url = os.environ.get(
+            "EMBEDDING_URL", os.environ.get("FIRECRAWL_EMBEDDING_URL", "")
+        )
+        if embedding_url:
+            # Normalize to the API root: strip any operation suffix
+            # (e.g. /embeddings, /rerank) so /v1/models is correct.
+            # "http://host/v1/embeddings" → "http://host/v1"
+            # "http://host/v1" → "http://host/v1"
+            base = re.sub(r"/v1/[^/]+/?$", "/v1", embedding_url.rstrip("/"))
+            req = urllib.request.Request(
+                f"{base}/models",
+                headers={
+                    "Authorization": f"Bearer {os.environ.get('EMBEDDING_API_KEY', '')}"
+                }
+                if os.environ.get("EMBEDDING_API_KEY")
+                else {},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            models = [m["id"] for m in data.get("data", [])]
+            embed_models = [m for m in models if "embed" in m.lower()]
+            configured_model = os.environ.get("EMBEDDING_MODEL", "")
+            if not embed_models or (
+                configured_model and configured_model not in models
+            ):
+                raise RuntimeError(
+                    f"configured embedding model unavailable: {configured_model or '<unset>'}"
+                )
+            print(
+                f"  Embedding endpoint ({embedding_url}): {len(embed_models)} model(s): {', '.join(embed_models) or 'none'}"
+            )
+        else:
+            errors.append("EMBEDDING_URL not set — embedding unavailable")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Embedding endpoint check failed: {exc}")
+
+    # 6. Generative endpoint health (MANDATORY)
+    try:
+        import urllib.request
+
+        generative_url = os.environ.get(
+            "GENERATIVE_URL", os.environ.get("FIRECRAWL_GENERATIVE_URL", "")
+        )
+        if generative_url:
+            # Normalize to the API root: strip any operation suffix
+            # (e.g. /embeddings, /rerank) so /v1/models is correct.
+            # "http://host/v1" → "http://host/v1" (no change)
+            base = re.sub(r"/v1/[^/]+/?$", "/v1", generative_url.rstrip("/"))
+            req = urllib.request.Request(
+                f"{base}/models",
+                headers={
+                    "Authorization": f"Bearer {os.environ.get('GENERATIVE_API_KEY', '')}"
+                }
+                if os.environ.get("GENERATIVE_API_KEY")
+                else {},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            models = [m["id"] for m in data.get("data", [])]
+            chat_models = [
+                m for m in models if "chat" in m.lower() or "llm" in m.lower()
+            ]
+            configured_model = os.environ.get("GENERATIVE_MODEL", "")
+            if not models or (configured_model and configured_model not in models):
+                raise RuntimeError(
+                    f"configured generative model unavailable: {configured_model or '<unset>'}"
+                )
+            print(
+                f"  Generative endpoint ({generative_url}): {len(chat_models)} model(s): {', '.join(chat_models) or 'none'}"
+            )
+        else:
+            errors.append("GENERATIVE_URL not set — generative LLM unavailable")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Generative endpoint check failed: {exc}")
+
+    # 7. Reranker endpoint health (MANDATORY)
+    try:
+        import urllib.request
+
+        reranker_url = os.environ.get(
+            "RERANKER_URL", os.environ.get("FIRECRAWL_RERANKER_URL", "")
+        )
+        if reranker_url:
+            # Normalize to the API root: strip any operation suffix
+            # (e.g. /embeddings, /rerank) so /v1/models is correct.
+            # "http://host/v1/rerank" → "http://host/v1"
+            base = re.sub(r"/v1/[^/]+/?$", "/v1", reranker_url.rstrip("/"))
+            req = urllib.request.Request(
+                f"{base}/models",
+                headers={
+                    "Authorization": f"Bearer {os.environ.get('RERANKER_API_KEY', '')}"
+                }
+                if os.environ.get("RERANKER_API_KEY")
+                else {},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            models = [m["id"] for m in data.get("data", [])]
+            rerank_models = [m for m in models if "rerank" in m.lower()]
+            configured_model = os.environ.get("RERANKER_MODEL", "")
+            if not rerank_models or (
+                configured_model and configured_model not in models
+            ):
+                raise RuntimeError(
+                    f"configured reranker model unavailable: {configured_model or '<unset>'}"
+                )
+            print(
+                f"  Reranker endpoint ({reranker_url}): {len(rerank_models)} model(s): {', '.join(rerank_models) or 'none'}"
+            )
+        else:
+            errors.append("RERANKER_URL not set — reranker unavailable")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Reranker endpoint check failed: {exc}")
+
+    # 8. Blob root writability (MANDATORY)
+    if blob_root:
+        try:
+            blob_root.mkdir(parents=True, exist_ok=True)
+            test_file = blob_root / ".preflight_test"
+            test_file.write_text("ok", encoding="utf-8")
+            test_file.unlink()
+            print(f"  Blob root ({blob_root}): writable")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Blob root not writable: {exc}")
+    else:
+        errors.append("BLOB_ROOT is required")
+
+    # 9. Resource collectors (MANDATORY for complete CPU/GPU telemetry)
+    try:
+        import importlib.metadata
+
+        import psutil
+
+        print(f"  CPU collector: psutil {getattr(psutil, '__version__', 'unknown')}")
+    except ImportError:
+        errors.append("psutil is required for process-scoped CPU telemetry")
+    try:
+        import pynvml
+
+        version = getattr(pynvml, "__version__", "") or importlib.metadata.version(
+            "nvidia-ml-py"
+        )
+        nvml_initialized = False
+        try:
+            pynvml.nvmlInit()
+            nvml_initialized = True
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            device_uuid = pynvml.nvmlDeviceGetUUID(handle)
+            pynvml.nvmlDeviceGetMemoryInfo(handle)
+        finally:
+            if nvml_initialized:
+                pynvml.nvmlShutdown()
+        if not device_uuid:
+            raise RuntimeError("GPU device 0 did not provide a UUID")
+        print(f"  GPU collector: pynvml {version}; device={device_uuid}")
+    except ImportError:
+        errors.append("nvidia-ml-py is required for GPU telemetry")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"GPU collector readiness failed: {exc}")
+
+    # 10. Campaign directory writability (MANDATORY)
+    try:
+        campaign_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  Campaign directory ({campaign_dir}): writable")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Campaign directory not writable: {exc}")
+
+    return (len(errors) == 0, errors)
 
 
 def _run_campaign(
@@ -243,6 +571,22 @@ def _run_campaign(
                                 qm, "status", MetricStatus.UNEVALUATED
                             ).value,
                             "formula": qm.formula,
+                            "source": {
+                                "table": qm.source.table,
+                                "column": qm.source.column,
+                                "run_id": qm.source.run_id,
+                                "method": qm.source.method,
+                                "record_ids": list(qm.source.event_ids),
+                                "stages": list(qm.source.stages),
+                                "stage_set_version": qm.source.stage_set_version,
+                                "sample_count": qm.source.sample_count,
+                                "device_type": qm.source.device_type,
+                                "device_index": qm.source.device_index,
+                                "device_uuid": qm.source.device_uuid,
+                                "collector": qm.source.collector,
+                                "collector_version": qm.source.collector_version,
+                                "status_counts": dict(qm.source.status_counts),
+                            },
                         }
                         for qm in run.quality_metrics
                     ]
@@ -281,6 +625,22 @@ def _run_campaign(
                                 pm, "status", MetricStatus.UNEVALUATED
                             ).value,
                             "formula": pm.formula,
+                            "source": {
+                                "table": pm.source.table,
+                                "column": pm.source.column,
+                                "run_id": pm.source.run_id,
+                                "method": pm.source.method,
+                                "record_ids": list(pm.source.event_ids),
+                                "stages": list(pm.source.stages),
+                                "stage_set_version": pm.source.stage_set_version,
+                                "sample_count": pm.source.sample_count,
+                                "device_type": pm.source.device_type,
+                                "device_index": pm.source.device_index,
+                                "device_uuid": pm.source.device_uuid,
+                                "collector": pm.source.collector,
+                                "collector_version": pm.source.collector_version,
+                                "status_counts": dict(pm.source.status_counts),
+                            },
                         }
                         for pm in run.performance_metrics
                     ]
@@ -429,6 +789,7 @@ def _build_manifest(
             else None,
             "result_path": str(campaign_a_dir) if campaign_a_dir else None,
             "runs": len(result_a.runs),
+            "run_ids": [run.run_id for run in result_a.runs],
             "recommendation": result_a.recommendation.outcome
             if result_a.recommendation
             else None,
@@ -440,6 +801,7 @@ def _build_manifest(
             else None,
             "result_path": str(campaign_b_dir) if campaign_b_dir else None,
             "runs": len(result_b.runs),
+            "run_ids": [run.run_id for run in result_b.runs],
             "recommendation": result_b.recommendation.outcome
             if result_b.recommendation
             else None,
@@ -524,6 +886,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to write the final manifest (default: <campaign-dir>/manifest.json)",
     )
     parser.add_argument(
+        "--recovery-report",
+        type=Path,
+        default=None,
+        help="Recovery report path (default: <campaign-dir>/recovery-report.txt)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=False,
@@ -579,7 +947,39 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         print("\n[Dry run] Configuration validated. No campaigns executed.")
+        # Still run preflight in dry-run mode to surface infrastructure issues.
+        ok, errors = _preflight_check(
+            database_url=args.database_url,
+            blob_root=args.blob_root,
+            qdrant_url=args.qdrant_url,
+            qdrant_api_key=args.qdrant_api_key,
+            dataset_path=args.dataset,
+            campaign_dir=campaign_dir,
+        )
+        if not ok:
+            print("\n[Preflight] FAILED — required infrastructure unavailable:")
+            for err in errors:
+                print(f"  - {err}")
+            return 1
         return 0
+
+    # ── Preflight: validate infrastructure before starting campaigns ─────
+    print("\n[Preflight] Checking required infrastructure...")
+    ok, errors = _preflight_check(
+        database_url=args.database_url,
+        blob_root=args.blob_root,
+        qdrant_url=args.qdrant_url,
+        qdrant_api_key=args.qdrant_api_key,
+        dataset_path=args.dataset,
+        campaign_dir=campaign_dir,
+    )
+    if not ok:
+        print("\n[Preflight] FAILED — required infrastructure unavailable:")
+        for err in errors:
+            print(f"  - {err}")
+        print("\nCampaign execution aborted. Fix the above issues and retry.")
+        return 1
+    print("[Preflight] OK — all required infrastructure available.\n")
 
     # ── Execute Campaign A ───────────────────────────────────────────────
     result_a, hash_a = _run_campaign(
@@ -629,7 +1029,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Campaign B: {result_b.campaign_id} (hash: {hash_b[:12]})")
     print(f"  Reproducibility: {'PASS' if comparison.all_within_tolerance else 'FAIL'}")
     print(f"  Manifest: {manifest_path}")
-    print(f"  Manifest hash: {_compute_file_hash(manifest_path)[:12]}")
 
     if result_a.recommendation:
         print(f"  Campaign A recommendation: {result_a.recommendation.outcome}")
@@ -637,10 +1036,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Campaign B recommendation: {result_b.recommendation.outcome}")
 
     # ── Recovery report ──────────────────────────────────────────────────
-    # Generate a recovery report at the repository root for release
-    # evidence artifact collection (issue #145).
-    repo_root = SCRIPTS.parent.parent
-    recovery_report_path = repo_root / "recovery-report.txt"
+    recovery_report_path = args.recovery_report or campaign_dir / "recovery-report.txt"
     recovery_lines = [
         "Recovery Report — Strict Benchmark Campaign",
         f"Commit: {_get_commit_sha()}",
@@ -648,6 +1044,16 @@ def main(argv: list[str] | None = None) -> int:
         f"Campaign A: {result_a.campaign_id}",
         f"Campaign B: {result_b.campaign_id}",
         f"Reproducibility: {'PASS' if comparison.all_within_tolerance else 'FAIL'}",
+        "Campaign A run IDs:",
+        *[
+            f"- {run.mode}/{run.objective_id}: {run.run_id or 'MISSING'}"
+            for run in result_a.runs
+        ],
+        "Campaign B run IDs:",
+        *[
+            f"- {run.mode}/{run.objective_id}: {run.run_id or 'MISSING'}"
+            for run in result_b.runs
+        ],
     ]
     if result_a.recommendation:
         recovery_lines.append(
@@ -658,8 +1064,15 @@ def main(argv: list[str] | None = None) -> int:
             f"Campaign B recommendation: {result_b.recommendation.outcome}"
         )
     recovery_lines.append("")
+    recovery_report_path.parent.mkdir(parents=True, exist_ok=True)
     recovery_report_path.write_text("\n".join(recovery_lines) + "\n", encoding="utf-8")
+    manifest["recovery_report"] = {
+        "path": str(recovery_report_path),
+        "sha256": _compute_file_hash(recovery_report_path),
+    }
+    _write_json_atomic(manifest_path, manifest)
     print(f"  Recovery report: {recovery_report_path}")
+    print(f"  Manifest hash: {_compute_file_hash(manifest_path)[:12]}")
 
     print("=" * 60)
 

@@ -26,7 +26,7 @@
       "type": "object"
     }
   },
-  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/benchmark-objective-v1.json",
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/benchmark-objective-v2.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -79,7 +79,7 @@
       "type": "array"
     },
     "schema_version": {
-      "const": "benchmark-objective-v1",
+      "const": "benchmark-objective-v2",
       "type": "string"
     },
     "search_queries": {
@@ -110,7 +110,11 @@
     "expected_source_classes",
     "known_relevant_sources",
     "known_distractor_sources",
-    "expected_unresolved_controversies"
+    "expected_unresolved_controversies",
+    "search_queries",
+    "search_query_expected_sources",
+    "ground_truth_answers",
+    "citation_support_labels"
   ],
   "title": "BenchmarkObjective",
   "type": "object"

@@ -3943,6 +3943,23 @@ class TestIndexRebuildRecovery:
         assert result1["selected_chunks"] == 1
         assert result1["scheduled"] == 1
 
+        # Simulate an exhausted job. An explicit operator-authorized rebuild
+        # must restore a fresh attempt budget; otherwise the next claim marks
+        # the pending row dead again without doing any work.
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE index_jobs SET status='dead',attempt_count=5,
+                   error='lease expired after final allowed attempt'
+                   WHERE index_definition_id=%s""",
+                (result1["index_definition"]["id"],),
+            )
+            cur.execute(
+                """UPDATE embedding_manifests SET index_status='failed',
+                   error='lease expired after final allowed attempt'
+                   WHERE index_definition_id=%s""",
+                (result1["index_definition"]["id"],),
+            )
+
         # Second run — should be idempotent: no duplicate jobs created.
         # The manifest is still pending and the chunk is not in Qdrant,
         # so it is requeued (scheduled == 1), but the INSERT uses
@@ -3951,14 +3968,17 @@ class TestIndexRebuildRecovery:
         assert result2["selected_chunks"] == 1
         assert result2["scheduled"] == 1  # Requeued, but no duplicate job
 
-        # Verify only one job exists
+        # Verify only one job exists and its retry budget was reset.
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT count(*) FROM index_jobs
+                """SELECT count(*),min(status),min(attempt_count) FROM index_jobs
                 WHERE index_definition_id=%s""",
                 (result1["index_definition"]["id"],),
             )
-            assert cur.fetchone()[0] == 1
+            count, status, attempt_count = cur.fetchone()
+            assert count == 1
+            assert status == "pending"
+            assert attempt_count == 0
 
     def test_index_build_resume_interrupted_build(self, service):
         """When some manifests are complete and some pending, index-build

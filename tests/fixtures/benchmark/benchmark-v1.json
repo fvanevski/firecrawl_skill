@@ -38,6 +38,40 @@
         "obj-001-q1": "SUPPORTED",
         "obj-001-q2": "SUPPORTED",
         "obj-001-q3": "SUPPORTED"
+      },
+      "search_queries": [
+        "ONNX embedding model nomic bge-m3 comparison",
+        "OpenAI embeddings vs local embedding CPU latency",
+        "Qdrant embedding dimension mismatch index failure",
+        "benchmark retrieval recall firecrawl_skill",
+        "model gateway embedding configuration"
+      ],
+      "search_query_expected_sources": {
+        "ONNX embedding model nomic bge-m3 comparison": [
+          "scripts/research_store/benchmark.py",
+          "scripts/research_domain/models.py"
+        ],
+        "OpenAI embeddings vs local embedding CPU latency": [
+          "scripts/research_store/benchmark.py",
+          "scripts/test_retrieval_benchmark.py"
+        ],
+        "Qdrant embedding dimension mismatch index failure": [
+          "scripts/research_store/benchmark.py",
+          "references/research-store-architecture.md"
+        ],
+        "benchmark retrieval recall firecrawl_skill": [
+          "scripts/test_retrieval_benchmark.py",
+          "scripts/research_store/benchmark.py"
+        ],
+        "model gateway embedding configuration": [
+          "scripts/research_domain/models.py",
+          "references/research-store-architecture.md"
+        ]
+      },
+      "ground_truth_answers": {
+        "obj-001-q1": "nomic-embed-text achieves comparable recall to bge-m3 on the firecrawl_skill corpus; both fall short of OpenAI embeddings for complex semantic retrieval.",
+        "obj-001-q2": "ONNX embeddings run on CPU with ~50-100ms per batch, significantly slower than OpenAI API calls (~200ms total including network).",
+        "obj-001-q3": "Dimension mismatch (e.g., 768 vs 1024) causes Qdrant index build failures; the codebase validates dimensions at index creation time."
       }
     },
     {
@@ -74,6 +108,39 @@
         "obj-002-q1": "SUPPORTED",
         "obj-002-q2": "SUPPORTED",
         "obj-002-q3": "SUPPORTED"
+      },
+      "search_queries": [
+        "coverage-led research completion orchestrator",
+        "coverage gaps adaptive cycles authorization",
+        "page count vs coverage terminal decision",
+        "research_store coverage_service.py implementation",
+        "terminal_decision_service coverage completeness"
+      ],
+      "search_query_expected_sources": {
+        "coverage-led research completion orchestrator": [
+          "scripts/research_store/orchestrator.py",
+          "scripts/research_store/coverage_service.py"
+        ],
+        "coverage gaps adaptive cycles authorization": [
+          "scripts/research_store/coverage_service.py",
+          "scripts/research_store/stages.py"
+        ],
+        "page count vs coverage terminal decision": [
+          "scripts/research_store/terminal_decision_service.py",
+          "scripts/research_store/orchestrator.py"
+        ],
+        "research_store coverage_service.py implementation": [
+          "scripts/research_store/coverage_service.py"
+        ],
+        "terminal_decision_service coverage completeness": [
+          "scripts/research_store/terminal_decision_service.py",
+          "scripts/research_store/strategy_service.py"
+        ]
+      },
+      "ground_truth_answers": {
+        "obj-002-q1": "The orchestrator stops when coverage is complete even if page targets are not met — coverage is the authority, not page counts.",
+        "obj-002-q2": "The orchestrator prevents completion when coverage is incomplete even if page targets are exceeded — coverage gaps must be resolved.",
+        "obj-002-q3": "Adaptive cycles are authorized by unresolved coverage gaps; each cycle targets the largest remaining gap."
       }
     },
     {
@@ -109,6 +176,39 @@
         "obj-003-q1": "SUPPORTED",
         "obj-003-q2": "SUPPORTED",
         "obj-003-q3": "SUPPORTED"
+      },
+      "search_queries": [
+        "evidence packet citation binding invented citations",
+        "corroboration contradiction groups evidence grouping",
+        "report validator claim passage resolution",
+        "claim binding service evidence links",
+        "evidence packet validator schema"
+      ],
+      "search_query_expected_sources": {
+        "evidence packet citation binding invented citations": [
+          "scripts/research_store/evidence.py",
+          "scripts/research_store/report_validator.py"
+        ],
+        "corroboration contradiction groups evidence grouping": [
+          "scripts/research_store/evidence_grouping.py",
+          "scripts/research_store/evidence.py"
+        ],
+        "report validator claim passage resolution": [
+          "scripts/research_store/report_validator.py",
+          "scripts/research_store/claim_binding_service.py"
+        ],
+        "claim binding service evidence links": [
+          "scripts/research_store/claim_binding_service.py"
+        ],
+        "evidence packet validator schema": [
+          "scripts/research_store/evidence.py",
+          "scripts/research_store/report_validator.py"
+        ]
+      },
+      "ground_truth_answers": {
+        "obj-003-q1": "The packet validator detects invented citations by verifying all claim_id and passage_id references exist in the packet's claims and passages lists.",
+        "obj-003-q2": "Corroboration and contradiction groups are populated by the evidence grouping service based on semantic similarity of claim-evidence bindings.",
+        "obj-003-q3": "The report validator ensures every claim in the final report resolves to exact packet passages via claim_evidence_links."
       }
     },
     {
@@ -143,6 +243,39 @@
         "obj-004-q1": "SUPPORTED",
         "obj-004-q2": "SUPPORTED",
         "obj-004-q3": "SUPPORTED"
+      },
+      "search_queries": [
+        "resource governor token batch caps enforcement",
+        "endpoint health tracking unhealthy endpoints",
+        "backpressure limit concurrent semantic calls",
+        "resource_governor.py concurrency control",
+        "semantic_service backpressure handling"
+      ],
+      "search_query_expected_sources": {
+        "resource governor token batch caps enforcement": [
+          "scripts/research_store/resource_governor.py",
+          "scripts/test_resource_governor.py"
+        ],
+        "endpoint health tracking unhealthy endpoints": [
+          "scripts/research_store/resource_governor.py",
+          "scripts/research_store/semantic_service.py"
+        ],
+        "backpressure limit concurrent semantic calls": [
+          "scripts/research_store/semantic_service.py",
+          "scripts/research_store/resource_governor.py"
+        ],
+        "resource_governor.py concurrency control": [
+          "scripts/research_store/resource_governor.py"
+        ],
+        "semantic_service backpressure handling": [
+          "scripts/research_store/semantic_service.py",
+          "scripts/model_gateway.py"
+        ]
+      },
+      "ground_truth_answers": {
+        "obj-004-q1": "The governor enforces token and batch caps through configurable limits on each endpoint; exceeding caps triggers backpressure.",
+        "obj-004-q2": "Endpoint health tracking prevents calls to unhealthy endpoints by maintaining a health status per endpoint and rejecting calls when status is 'unhealthy'.",
+        "obj-004-q3": "Backpressure limits concurrent semantic calls by throttling based on the endpoint's configured backpressure_threshold."
       }
     },
     {
@@ -176,6 +309,37 @@
         "obj-005-q1": "SUPPORTED",
         "obj-005-q2": "SUPPORTED",
         "obj-005-q3": "SUPPORTED"
+      },
+      "search_queries": [
+        "embedding microbatching lease ownership",
+        "partial batch failure false job completion",
+        "retry ledger idempotent embedding",
+        "indexing.py microbatch lease management",
+        "alembic 0033 resource governance embedding"
+      ],
+      "search_query_expected_sources": {
+        "embedding microbatching lease ownership": [
+          "scripts/research_store/indexing.py",
+          "scripts/test_index_runtime.py"
+        ],
+        "partial batch failure false job completion": [
+          "scripts/research_store/indexing.py"
+        ],
+        "retry ledger idempotent embedding": [
+          "scripts/research_store/indexing.py",
+          "scripts/test_index_runtime.py"
+        ],
+        "indexing.py microbatch lease management": [
+          "scripts/research_store/indexing.py"
+        ],
+        "alembic 0033 resource governance embedding": [
+          "scripts/research_store/alembic/versions/0033_resource_governance.py"
+        ]
+      },
+      "ground_truth_answers": {
+        "obj-005-q1": "Each microbatch maintains lease ownership independently; the lease is refreshed on each microbatch completion.",
+        "obj-005-q2": "Partial batch failure does not falsely complete jobs — the job remains in-progress and will be retried or marked failed.",
+        "obj-005-q3": "The retry ledger is idempotent — retrying a completed microbatch is a no-op, and the ledger tracks completion status."
       }
     }
   ],
