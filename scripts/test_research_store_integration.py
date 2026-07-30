@@ -3821,15 +3821,14 @@ class TestIndexRebuildRecovery:
             cur.execute("DELETE FROM sources;")
             conn.commit()
 
-        import httpx
+        import contextlib
 
-        try:
+        import httpx
+        with contextlib.suppress(httpx.RequestError, KeyError, ValueError):
             r = httpx.get("http://localhost:6333/collections", timeout=2.0)
             if r.status_code == 200:
                 for c in r.json().get("result", {}).get("collections", []):
                     httpx.delete(f"http://localhost:6333/collections/{c['name']}")
-        except Exception:
-            pass
 
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
         """Every eligible chunk gets a manifest AND a pending job."""
