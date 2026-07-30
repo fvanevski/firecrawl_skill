@@ -593,7 +593,34 @@ class TestAcquisitionStage(unittest.TestCase):
         )
 
         self.assertIsNone(result.error)
-        self.assertEqual(run_svc._state, "indexing")
+        self.assertEqual(run_svc._state, "extracting")
+
+    def test_acquisition_serializes_uuid_candidate_ids_for_coverage(self):
+        run_svc = MockRunService(initial_state="acquiring", revision=1)
+        coverage_svc = MockCoverageService()
+        strategy_svc = MockStrategyService()
+        acquisition_svc = MagicMock()
+        candidate_id = uuid4()
+        mock_result = MagicMock()
+        mock_result.search_response_id = uuid4()
+        mock_result.candidate_count = 1
+        mock_result.candidates = [{"candidate_id": candidate_id}]
+        acquisition_svc.execute_search.return_value = mock_result
+
+        stage = AcquisitionStage(
+            run_svc, acquisition_svc, coverage_svc, strategy_svc, MockConfig()
+        )
+        result = stage.execute(
+            run_id=uuid4(),
+            run_revision=1,
+            coverage_revision=1,
+            run_state="acquiring",
+            context={"search_plan": {"queries": [{"query": "test query"}]}},
+        )
+
+        self.assertIsNone(result.error)
+        event = coverage_svc.events_applied[0]
+        self.assertEqual(event["payload"]["candidate_id"], str(candidate_id))
 
     def test_acquisition_empty_yields_coverage_review(self):
         run_svc = MockRunService(initial_state="acquiring", revision=1)
