@@ -129,7 +129,7 @@ class SemanticCallService:
     def __init__(
         self,
         uow_factory: Callable,
-        host_artifact_supplier: "HostArtifactSupplier | None" = None,
+        host_artifact_supplier: HostArtifactSupplier | None = None,
     ):
         self.uow_factory = uow_factory
         self.execution_policy = ExecutionModePolicy()

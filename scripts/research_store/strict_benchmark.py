@@ -22,10 +22,6 @@ import json
 import os
 import sys
 import time
-import httpx
-import model_gateway
-from model_gateway import StructuredResult
-from packaging.version import Version
 from hashlib import sha256
 from pathlib import Path
 
