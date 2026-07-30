@@ -201,6 +201,40 @@ def test_valkey_wakeup_is_best_effort_and_finite():
     assert ValkeyQueue("redis://unused", client=broken).notify(uuid4()) is False
 
 
+def test_valkey_round_trip_returns_exact_token_and_discards_only_that_token():
+    token = uuid4()
+
+    class ExactRedis(FakeRedis):
+        def __init__(self):
+            super().__init__()
+            self.items = []
+
+        def lpush(self, key, value):
+            self.items.insert(0, str(value).encode())
+            return len(self.items)
+
+        def blpop(self, key, timeout):
+            return (key, self.items.pop()) if self.items else None
+
+        def delete(self, key):
+            count = int(bool(self.items))
+            self.items.clear()
+            return count
+
+        def lrem(self, key, count, value):
+            encoded = str(value).encode()
+            before = len(self.items)
+            self.items = [item for item in self.items if item != encoded]
+            return before - len(self.items)
+
+    redis = ExactRedis()
+    queue = ValkeyQueue("redis://unused", namespace="preflight", client=redis)
+    assert queue.round_trip(token, 0.25) == token
+    queue.notify(token)
+    assert queue.discard(token) == 1
+    assert redis.items == []
+
+
 class FakeQdrant(QdrantIndex):
     def __init__(self, responses):
         super().__init__("http://qdrant", "", "physical", 3)
@@ -229,6 +263,27 @@ def test_qdrant_schema_inspection_is_read_only():
     result = qdrant.inspect_schema()
     assert result["compatible"] is True
     assert qdrant.requests == [("GET", "/collections/physical", None)]
+
+
+def test_qdrant_retrieve_uses_exact_point_ids_without_vectors():
+    point_id = uuid4()
+    qdrant = FakeQdrant(
+        [{"result": [{"id": str(point_id), "payload": {"probe": "ok"}}]}]
+    )
+    assert qdrant.retrieve([point_id]) == [
+        {"id": str(point_id), "payload": {"probe": "ok"}}
+    ]
+    assert qdrant.requests == [
+        (
+            "POST",
+            "/collections/physical/points",
+            {
+                "ids": [str(point_id)],
+                "with_payload": True,
+                "with_vector": False,
+            },
+        )
+    ]
 
 
 def test_qdrant_schema_rejects_unexpected_sparse_vectors():

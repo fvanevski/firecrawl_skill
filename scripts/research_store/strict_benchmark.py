@@ -219,26 +219,34 @@ def _preflight_check(
     campaign_dir: Path,
     candidate_sha: str,
 ) -> tuple[bool, list[str]]:
-    """Validate that all required infrastructure is available before starting campaigns.
+    """Run the complete release preflight through production adapters."""
+    from .preflight import run_complete_preflight
 
-    Returns (ok, errors) where ok is True only when the complete release
-    workflow stack is ready. Release campaigns have no degraded preflight.
+    return run_complete_preflight(
+        database_url=database_url,
+        blob_root=blob_root,
+        qdrant_url=qdrant_url,
+        qdrant_api_key=qdrant_api_key,
+        dataset_path=dataset_path,
+        campaign_dir=campaign_dir,
+        candidate_sha=candidate_sha,
+        get_full_sha=_get_full_sha,
+    )
 
-    Mandatory infrastructure:
-    - Git HEAD equals the candidate SHA
-    - PostgreSQL (required for creating research runs)
-    - Dataset file (required for benchmark data)
-    - Campaign directory (required for writing artifacts)
 
-    Required workflow infrastructure:
-    - Qdrant (used for vector indexing, write/read operations)
-    - Firecrawl CLI + search (used for search/scrape)
-    - Valkey (used for worker wakeup/coordination)
-    - Embedding endpoint (used for chunk embedding, functional request)
-    - Generative endpoint (used for synthesis, functional request)
-    - Reranker endpoint (used for relevance scoring, functional request)
-    - Index-worker queue (used for job processing)
-    - Blob root (used for content-addressed storage)
+def _legacy_preflight_check(
+    database_url: str,
+    blob_root: Path | None,
+    qdrant_url: str,
+    qdrant_api_key: str,
+    dataset_path: Path,
+    campaign_dir: Path,
+    candidate_sha: str,
+) -> tuple[bool, list[str]]:
+    """Deprecated inline probes retained temporarily for rollback diagnostics.
+
+    The active release path is ``_preflight_check`` above. This implementation
+    is not called by the CLI and must not be used as release evidence.
     """
     errors: list[str] = []
 
