@@ -171,6 +171,71 @@ COVERAGE_EVENT_CREATED = "item_created"
 
 
 # ---------------------------------------------------------------------------
+# Canonical identity matching helper
+# ---------------------------------------------------------------------------
+
+
+def _canonical_match(file_path: str, canonical_url: str) -> bool:
+    """Check whether a benchmark file_path matches a candidate canonical_url.
+
+    Uses normalized path comparison — not substring or basename matching.
+
+    Matching rules (applied in order):
+
+    1. **Exact match** after stripping leading ``file://`` and normalizing
+       slashes.  ``scripts/foo.py`` matches ``file://scripts/foo.py`` and
+       ``/abs/path/scripts/foo.py``.
+    2. **Path containment**: the file_path is a path component of the
+       canonical_url.  ``scripts/foo.py`` matches
+       ``file://project/scripts/foo.py`` or ``https://example.com/scripts/foo.py``.
+    3. **URL-path suffix**: the canonical_url's path component ends with
+       the file_path.  This handles cases where the URL encodes the full
+       path.
+
+    Args:
+        file_path: Benchmark source file_path (e.g. ``scripts/foo.py``).
+        canonical_url: Candidate canonical_url (URL or file path).
+
+    Returns:
+        True when the file_path matches the canonical_url by canonical
+        identity, False otherwise.
+    """
+    from urllib.parse import urlparse
+
+    # Normalise both strings.
+    fp = file_path.strip().rstrip("/")
+    cu = canonical_url.strip()
+
+    # Strip file:// prefix if present.
+    cu = cu.removeprefix("file://")
+
+    # Rule 1: exact match after normalisation.
+    if fp == cu:
+        return True
+
+    # Rule 2: file_path is a path component of canonical_url.
+    # Extract the path portion of the URL.
+    parsed = urlparse(cu)
+    path = parsed.path
+    if path:
+        # Normalise slashes.
+        path = path.replace("\\", "/").rstrip("/")
+        if fp == path:
+            return True
+        # Check if file_path is a suffix of the URL path.
+        if path.endswith("/" + fp):
+            return True
+        # Check if file_path appears as a path component.
+        if "/" + fp + "/" in ("/" + path + "/"):
+            return True
+
+    # Rule 3: URL query or fragment contains the file_path.
+    if parsed.query and fp in parsed.query:
+        return True
+    return bool(parsed.fragment and fp in parsed.fragment)
+
+
+# ---------------------------------------------------------------------------
 # Metric engine — reads from persisted PostgreSQL artifacts
 # ---------------------------------------------------------------------------
 
@@ -347,19 +412,21 @@ class MetricEngine:
 
         candidate_count = len(candidates)
 
-        # Match relevant sources using canonical identity matching.
-        # A relevant source "matches" if its file_path appears as a substring
-        # in any candidate URL, or if the candidate URL's path component
-        # matches the file_path's basename.
+        # Canonical identity matching: match benchmark file_path against
+        # candidate canonical_url using normalized path comparison.
+        # A relevant source "matches" when the file_path is an exact
+        # normalized match against the canonical_url, or when the
+        # canonical_url contains the file_path as a path component
+        # (for file:// URLs or absolute paths).
         matched_relevant: set[str] = set()
         matched_distractors: set[str] = set()
         for url, _domain in candidates:
             for path in relevant_paths:
-                if path in url or path.split("/")[-1] in url:
+                if _canonical_match(path, url):
                     matched_relevant.add(path)
                     break
             for path in distractor_paths:
-                if path in url or path.split("/")[-1] in url:
+                if _canonical_match(path, url):
                     matched_distractors.add(path)
                     break
 
@@ -387,58 +454,110 @@ class MetricEngine:
             )
 
         # ------------------------------------------------------------------
-        # 2. Source quality — URL matching against benchmark annotations
+        # 2. Source quality — benchmark source-class annotations
         # ------------------------------------------------------------------
-        # Match candidate URLs against known_relevant_sources and
-        # known_distractor_sources file_paths.  A candidate "matches" a
-        # relevant source when the source file_path appears as a substring
-        # in the candidate URL (or the URL's path component matches the
-        # file_path's basename).  This is the same matching logic used for
-        # recall, ensuring consistency.
-        relevant_hits = 0
-        distractor_hits = 0
-        other_hits = 0
-        for url, _domain in candidates:
-            matched_relevant = False
-            matched_distractor = False
-            for path in relevant_paths:
-                if path in url or path.split("/")[-1] in url:
-                    matched_relevant = True
-                    break
-            if matched_relevant:
-                relevant_hits += 1
-                continue
-            for path in distractor_paths:
-                if path in url or path.split("/")[-1] in url:
-                    matched_distractor = True
-                    break
-            if matched_distractor:
-                distractor_hits += 1
+        # Use the benchmark's expected_source_classes to classify candidates.
+        # A candidate "matches" a source class when its registered_domain or
+        # canonical_url indicates that class (e.g., GitHub → "docs", academic
+        # domains → "primary").  The benchmark's expected_source_classes define
+        # which source classes are required for this objective.
+        expected_classes: set[str] = set()
+        if objective is not None:
+            expected_classes = set(objective.expected_source_classes)
+
+        # Classify candidates by source class.
+        # For now, use domain heuristics to assign classes:
+        # - GitHub, GitLab, Bitbucket → "code"
+        # - arxiv, academia, scholar → "academic"
+        # - docs, readthedocs, microsoft, google → "docs"
+        # - news, blog, medium → "news"
+        # - Otherwise → "other"
+        def _classify_source(url: str, domain: str) -> str:
+            url_lower = (url + domain).lower()
+            if any(h in domain for h in ("github", "gitlab", "bitbucket")):
+                return "code"
+            if any(h in domain for h in ("arxiv", "academia", "scholar")):
+                return "academic"
+            if any(
+                h in domain
+                for h in ("docs", "readthedocs", "microsoft.com/docs", "google.com")
+            ):
+                return "docs"
+            if any(h in url_lower for h in ("medium", "blog", "news", "reddit")):
+                return "news"
+            return "other"
+
+        class_hits: dict[str, int] = {}
+        for url, domain in candidates:
+            cls = _classify_source(url, domain)
+            class_hits[cls] = class_hits.get(cls, 0) + 1
+
+        # Source quality = fraction of candidates that match an expected class.
+        # If no expected classes are defined, fall back to the existing
+        # heuristic (relevant/distractor matching).
+        if expected_classes:
+            expected_hit = sum(
+                count for cls, count in class_hits.items() if cls in expected_classes
+            )
+            total_classified = len(candidates)
+            if total_classified > 0:
+                source_quality = expected_hit / total_classified
             else:
-                other_hits += 1
-
-        total_classified = relevant_hits + distractor_hits + other_hits
-        if total_classified > 0:
-            # Source quality = (relevant_hits - distractor_penalty) / total
-            # Distractor hits penalize by 2× to discourage them.
-            distractor_penalty = distractor_hits * 2
-            numerator = max(0, relevant_hits - distractor_penalty)
-            source_quality = min(1.0, numerator / total_classified)
+                source_quality = None
+            source_quality_formula = (
+                f"expected_class_hits({expected_hit}) / total_candidates({total_classified})"
+                if total_classified > 0
+                else "unavailable — no candidates"
+            )
+            _source_quality_status = (
+                MetricStatus.MEASURED
+                if total_classified > 0 and expected_classes
+                else MetricStatus.UNAVAILABLE
+            )
         else:
-            source_quality = None
+            # Fallback: use existing heuristic when no expected classes.
+            # Match candidate URLs against known_relevant_sources and
+            # known_distractor_sources file_paths.
+            relevant_hits = 0
+            distractor_hits = 0
+            other_hits = 0
+            for url, _domain in candidates:
+                matched_relevant = False
+                matched_distractor = False
+                for path in relevant_paths:
+                    if _canonical_match(path, url):
+                        matched_relevant = True
+                        break
+                if matched_relevant:
+                    relevant_hits += 1
+                    continue
+                for path in distractor_paths:
+                    if _canonical_match(path, url):
+                        matched_distractor = True
+                        break
+                if matched_distractor:
+                    distractor_hits += 1
+                else:
+                    other_hits += 1
 
-        source_quality_formula = (
-            f"max(0, relevant_hits-{distractor_hits}*2) / total_classified"
-            if total_classified > 0
-            else "unavailable — no classified acquired candidates"
-        )
+            total_classified = relevant_hits + distractor_hits + other_hits
+            if total_classified > 0:
+                distractor_penalty = distractor_hits * 2
+                numerator = max(0, relevant_hits - distractor_penalty)
+                source_quality = min(1.0, numerator / total_classified)
+            else:
+                source_quality = None
 
-        # NF1: source_quality status reflects whether source-class data was
-        # available (MEASURED) or only a heuristic fallback was used
-        # (UNEVALUATED).
-        _source_quality_status = (
-            MetricStatus.MEASURED if total_classified > 0 else MetricStatus.UNAVAILABLE
-        )
+            source_quality_formula = (
+                f"max(0, relevant_hits-{distractor_hits}*2) / total_classified"
+                if total_classified > 0
+                else "unavailable — no classified acquired candidates"
+            )
+            _source_quality_status = (
+                MetricStatus.MEASURED
+                if total_classified > 0
+                else MetricStatus.UNAVAILABLE
+            )
 
         # ------------------------------------------------------------------
         # 3. Coverage completeness — reconstruct projection from ALL revisions
@@ -544,45 +663,109 @@ class MetricEngine:
             unsupported_source_table = "research_claims"
 
         # ------------------------------------------------------------------
-        # 5. Citation accuracy — claim evidence links
+        # 5. Citation accuracy — citation_pass validation outcomes
         # ------------------------------------------------------------------
+        # Read the citation_pass artifact from synthesis_stages.
+        # Use validation_results to determine how many assessed claims
+        # have valid citations (status="valid") with exact passage and
+        # relationship validation.
+        citation_pass_valid = 0
+        citation_pass_total = 0
+        _citation_accuracy_status = MetricStatus.UNAVAILABLE
+        citation_formula = "unavailable — no citation_pass artifact"
+        citation_source_table = "synthesis_stages"
+
         with self._connection.cursor() as cur:
-            # Count claims that have at least one evidence link
             cur.execute(
-                """SELECT COUNT(DISTINCT c.claim_id) AS total_assessed,
-                          COUNT(DISTINCT cl.claim_id) AS with_evidence
-                       FROM research_claims c
-                       LEFT JOIN claim_evidence_links cl
-                         ON c.claim_id = cl.claim_id
-                         AND c.run_id = cl.run_id
-                       WHERE c.run_id = %s
-                         AND c.semantic_status != 'unassessed'""",
+                """SELECT artifact FROM synthesis_stages
+                   WHERE run_id = %s AND stage_name = 'citation_pass'
+                     AND stage_status = 'completed'
+                   ORDER BY updated_at DESC LIMIT 1""",
                 (run_id,),
             )
             row = cur.fetchone()
-            total_assessed = row[0] or 0
-            with_evidence = row[1] or 0
 
-        if total_assessed > 0:
-            citation_accuracy = with_evidence / total_assessed
-            citation_formula = (
-                f"with_evidence({with_evidence}) / assessed({total_assessed})"
-            )
-            citation_source_table = "claim_evidence_links"
+        if row is not None and row[0] is not None:
+            artifact = row[0]
+            if isinstance(artifact, str):
+                import json
+
+                try:
+                    artifact = json.loads(artifact)
+                except (json.JSONDecodeError, TypeError):
+                    artifact = None
+
+            if isinstance(artifact, dict):
+                validation_results = artifact.get("validation_results", [])
+                if isinstance(validation_results, list) and len(validation_results) > 0:
+                    citation_pass_total = len(validation_results)
+                    citation_pass_valid = sum(
+                        1
+                        for vr in validation_results
+                        if isinstance(vr, dict) and vr.get("status") == "valid"
+                    )
+                    citation_formula = (
+                        f"valid_citations({citation_pass_valid}) / "
+                        f"total_validation_results({citation_pass_total})"
+                    )
+                    _citation_accuracy_status = MetricStatus.MEASURED
+
+        # Fallback: if no citation_pass artifact, use claim_evidence_links.
+        if citation_pass_total == 0:
+            with self._connection.cursor() as cur:
+                # Count claims that have at least one evidence link
+                cur.execute(
+                    """SELECT COUNT(DISTINCT c.claim_id) AS total_assessed,
+                              COUNT(DISTINCT cl.claim_id) AS with_evidence
+                           FROM research_claims c
+                           LEFT JOIN claim_evidence_links cl
+                             ON c.claim_id = cl.claim_id
+                             AND c.run_id = cl.run_id
+                           WHERE c.run_id = %s
+                             AND c.semantic_status != 'unassessed'""",
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                total_assessed = row[0] or 0
+                with_evidence = row[1] or 0
+
+            if total_assessed > 0:
+                citation_pass_total = total_assessed
+                citation_pass_valid = with_evidence
+                citation_accuracy = with_evidence / total_assessed
+                citation_formula = (
+                    f"with_evidence({with_evidence}) / assessed({total_assessed})"
+                )
+                citation_source_table = "claim_evidence_links"
+                _citation_accuracy_status = MetricStatus.MEASURED
+            else:
+                citation_accuracy = None
+                citation_formula = "unavailable — no assessed claims with evidence"
+                citation_source_table = "claim_evidence_links"
         else:
-            # Strict mode: we consulted the authoritative source (claim_evidence_links
-            # joined with research_claims) but it was empty — the orchestrator did
-            # not produce assessed claims or evidence links for this run.
-            _citation_accuracy_status = MetricStatus.UNAVAILABLE
+            citation_accuracy = (
+                citation_pass_valid / citation_pass_total
+                if citation_pass_total > 0
+                else None
+            )
+            if citation_pass_total > 0 and citation_accuracy is not None:
+                citation_accuracy = round(citation_accuracy, 6)
+
+        if citation_accuracy is None and citation_pass_total == 0:
             citation_accuracy = None
-            citation_formula = "unavailable — no assessed claims with evidence"
-            citation_source_table = "claim_evidence_links"
+            _citation_accuracy_status = MetricStatus.UNAVAILABLE
 
         # ------------------------------------------------------------------
-        # 6. Report quality — versioned rubric
+        # 6. Report quality — persisted validation artifact
         # ------------------------------------------------------------------
-        # Deterministic components: coverage completeness, citation accuracy,
-        # claim support rate.
+        # Read the validation stage artifact from synthesis_stages.
+        # The validation artifact contains a claim_manifest with per-claim
+        # resolution, cited_passage_ids, and binding_relationship.
+        # Report quality = weighted combination of:
+        #   - coverage_completeness (0.30)
+        #   - citation_accuracy (0.30)
+        #   - claim_support_rate from validation artifact (0.25)
+        #   - packet_present (0.15)
         supported_count = claim_status_counts.get("supported", 0)
         contradicted_count = claim_status_counts.get("contradicted", 0)
         qualified_count = claim_status_counts.get("qualified", 0)
@@ -593,7 +776,6 @@ class MetricEngine:
         )
 
         # Versioned rubric v1 — documented weights
-        # Each component is computed directly from authoritative state.
         _COVERAGE_WEIGHT = 0.30
         _CITATION_WEIGHT = 0.30
         _SUPPORT_WEIGHT = 0.25
@@ -608,10 +790,66 @@ class MetricEngine:
             packet_count = cur.fetchone()[0] or 0
         packet_present = 1.0 if packet_count > 0 else 0.0
 
+        # Read validation artifact for claim_manifest-based support rate.
+        # The validation artifact supersedes the raw claim_status_counts.
+        validation_support_rate: float | None = None
+        with self._connection.cursor() as cur:
+            cur.execute(
+                """SELECT artifact FROM synthesis_stages
+                   WHERE run_id = %s AND stage_name = 'validation'
+                     AND stage_status IN ('completed', 'failed')
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (run_id,),
+            )
+            val_row = cur.fetchone()
+
+        if val_row is not None and val_row[0] is not None:
+            val_artifact = val_row[0]
+            if isinstance(val_artifact, str):
+                import json
+
+                try:
+                    val_artifact = json.loads(val_artifact)
+                except (json.JSONDecodeError, TypeError):
+                    val_artifact = None
+
+            if isinstance(val_artifact, dict):
+                claim_manifest = val_artifact.get("claim_manifest", [])
+                if isinstance(claim_manifest, list) and len(claim_manifest) > 0:
+                    # Count resolved claims with positive support.
+                    # A claim is "supported" if resolution is one of:
+                    # supported, contradicted, qualified.
+                    resolved = 0
+                    positive = 0
+                    for cr in claim_manifest:
+                        if not isinstance(cr, dict):
+                            continue
+                        resolution = cr.get("resolution", "")
+                        if resolution in (
+                            "supported",
+                            "contradicted",
+                            "qualified",
+                            "unsupported",
+                            "unassessed",
+                        ):
+                            resolved += 1
+                            if resolution in ("supported", "contradicted", "qualified"):
+                                positive += 1
+                    if resolved > 0:
+                        validation_support_rate = positive / resolved
+
+        # Use validation support rate if available, otherwise fall back
+        # to the raw claim_status_counts.
+        effective_support_rate = (
+            validation_support_rate
+            if validation_support_rate is not None
+            else claim_support_rate
+        )
+
         report_inputs_complete = (
             coverage_completeness is not None
             and citation_accuracy is not None
-            and claim_support_rate is not None
+            and effective_support_rate is not None
             and packet_count > 0
         )
         report_quality = None
@@ -619,7 +857,7 @@ class MetricEngine:
             report_quality = (
                 _COVERAGE_WEIGHT * coverage_completeness
                 + _CITATION_WEIGHT * citation_accuracy
-                + _SUPPORT_WEIGHT * claim_support_rate
+                + _SUPPORT_WEIGHT * effective_support_rate
                 + _PACKET_WEIGHT * packet_present
             )
             report_quality = min(1.0, max(0.0, report_quality))
