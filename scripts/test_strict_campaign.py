@@ -722,49 +722,91 @@ class TestStrictCampaignIntegration:
         )
         assert rc == 1
 
-    def test_preflight_rejects_incomplete_index_infrastructure(self):
-        """Reachability alone cannot satisfy worker and active-alias checks.
-
-        In environments where the worker heartbeat or Qdrant alias are not
-        fully configured, preflight should report errors.  In CI environments
-        that have complete infrastructure the test is skipped to avoid flakiness.
-        """
+    def test_preflight_rejects_incomplete_index_infrastructure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A stale worker or missing active alias fails preflight deterministically."""
         database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
-        # Use the actual git HEAD so the candidate SHA check passes.
-        import subprocess
 
         from research_store.strict_benchmark import _preflight_check
 
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        candidate_sha = result.stdout.strip() if result.returncode == 0 else "a" * 40
+        candidate_sha = "a" * 40
 
-        with mock.patch(
-            "research_store.strict_benchmark._get_full_sha",
-            return_value=candidate_sha,
+        cursor = mock.Mock()
+        cursor.fetchone.side_effect = [
+            ("firecrawl_test", "PostgreSQL 16"),
+            (42,),
+            ("test-head",),
+            (None,),
+        ]
+        connection = mock.Mock()
+        connection.cursor.return_value = cursor
+
+        script_directory = mock.Mock()
+        script_directory.get_current_head.return_value = "test-head"
+
+        qdrant = mock.Mock()
+        qdrant.get_aliases.return_value = mock.Mock(aliases=[])
+
+        firecrawl_version = mock.Mock(
+            returncode=0,
+            stdout="firecrawl 1.19.27\n",
+        )
+        http_response = mock.MagicMock()
+        http_response.__enter__.return_value.read.side_effect = [
+            b'{"message":"Firecrawl API"}',
+            b'{"data":[{"id":"embedding-test"}]}',
+            b'{"data":[{"id":"chat-test"}]}',
+            b'{"data":[{"id":"reranker-test"}]}',
+        ]
+
+        pynvml = mock.Mock()
+        pynvml.__version__ = "test"
+        pynvml.nvmlDeviceGetHandleByIndex.return_value = object()
+        pynvml.nvmlDeviceGetUUID.return_value = "GPU-test"
+        pynvml.nvmlDeviceGetMemoryInfo.return_value = mock.Mock()
+
+        monkeypatch.setenv("FIRECRAWL_API_URL", "http://firecrawl.test")
+        monkeypatch.setenv("EMBEDDING_MODEL", "embedding-test")
+        monkeypatch.setenv("GENERATIVE_MODEL", "chat-test")
+        monkeypatch.setenv("RERANKER_MODEL", "reranker-test")
+        monkeypatch.setenv("QDRANT_ALIAS", "research_chunks_active")
+
+        with (
+            mock.patch(
+                "research_store.strict_benchmark._get_full_sha",
+                return_value=candidate_sha,
+            ),
+            mock.patch("psycopg.connect", return_value=connection),
+            mock.patch(
+                "alembic.script.ScriptDirectory.from_config",
+                return_value=script_directory,
+            ),
+            mock.patch("qdrant_client.QdrantClient", return_value=qdrant),
+            mock.patch("subprocess.run", return_value=firecrawl_version),
+            mock.patch("urllib.request.urlopen", return_value=http_response),
+            mock.patch.dict(sys.modules, {"pynvml": pynvml}),
         ):
             ok, errors = _preflight_check(
                 database_url=database_url,
-                blob_root=Path("/tmp"),
+                blob_root=tmp_path / "blobs",
                 qdrant_url="http://localhost:6333",
                 qdrant_api_key="",
                 dataset_path=BENCHMARK_FIXTURE,
-                campaign_dir=Path("/tmp/preflight_test"),
+                campaign_dir=tmp_path / "campaign",
                 candidate_sha=candidate_sha,
             )
-        # If preflight passes, CI has complete infrastructure — nothing to test.
-        if ok:
-            pytest.skip("CI has complete infrastructure; nothing to verify")
-        assert errors
-        assert any(
-            "worker" in error.lower() or "alias" in error.lower() for error in errors
+
+        assert ok is False
+        assert len(errors) == 2
+        assert errors[0].startswith("index worker heartbeat is missing or stale")
+        assert errors[1] == (
+            "Qdrant readiness failed: required active alias is missing: "
+            "research_chunks_active"
         )
 
     def test_preflight_fails_without_dataset(self):
