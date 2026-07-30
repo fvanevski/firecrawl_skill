@@ -30,12 +30,13 @@ jobs:
       - name: Verify exact checkout
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements-research-store.txt
+      - name: Set up isolated Python
+        shell: bash
+        run: |
+          command -v python3.12
+          python3.12 --version
+          python3.12 -m venv "$RUNNER_TEMP/release-campaign-venv"
+          echo "$RUNNER_TEMP/release-campaign-venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: |
