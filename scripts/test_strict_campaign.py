@@ -755,7 +755,7 @@ class TestStrictCampaignIntegration:
                 blob_root=Path("/tmp"),
                 qdrant_url="http://localhost:6333",
                 qdrant_api_key="",
-                dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+                dataset_path=BENCHMARK_FIXTURE,
                 campaign_dir=Path("/tmp/preflight_test"),
                 candidate_sha=candidate_sha,
             )
