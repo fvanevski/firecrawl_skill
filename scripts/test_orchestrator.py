@@ -65,9 +65,7 @@ from research_store.orchestrator import (
 
 
 def _test_spec() -> dict[str, Any]:
-    return serialize_model(
-        conservative_research_spec("Test objective", "fact_finding")
-    )
+    return serialize_model(conservative_research_spec("Test objective", "fact_finding"))
 
 
 def test_extraction_failure_class_uses_registered_taxonomy():

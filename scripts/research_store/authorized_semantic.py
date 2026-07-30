@@ -82,7 +82,9 @@ def call_authorized_structured(
     raise ExecutionModeError(f"unsupported execution mode: {mode}")
 
 
-def _as_structured(result: Any, attempts: tuple[Any, ...] | list[Any]) -> StructuredResult:
+def _as_structured(
+    result: Any, attempts: tuple[Any, ...] | list[Any]
+) -> StructuredResult:
     call_id = result.provenance.get("semantic_call_id")
     artifact_id = result.provenance.get("semantic_artifact_id")
     return StructuredResult(

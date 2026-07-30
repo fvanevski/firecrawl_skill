@@ -920,9 +920,9 @@ class LocalSynthesisService:
                 binding["claim_id"]: binding
                 for binding in packet.get("claim_evidence_bindings", [])
             }
-            default_passage_ids = [
-                packet["passages"][0]["passage_id"]
-            ] if packet.get("passages") else []
+            default_passage_ids = (
+                [packet["passages"][0]["passage_id"]] if packet.get("passages") else []
+            )
             deterministic_fixture = {
                 "schema_version": "synthesis-outline-v1",
                 "run_id": str(run_id),

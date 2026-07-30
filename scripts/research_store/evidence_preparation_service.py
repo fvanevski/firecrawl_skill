@@ -120,9 +120,9 @@ class EvidencePreparationService:
             str(requirement["source_class"])
             for requirement in spec.get("required_source_classes", ())
         ]
-        schema["properties"]["claims"]["items"]["properties"][
-            "authority_class"
-        ]["enum"] = sorted(set(required_authority_classes + ["unclassified"]))
+        schema["properties"]["claims"]["items"]["properties"]["authority_class"][
+            "enum"
+        ] = sorted(set(required_authority_classes + ["unclassified"]))
         prompt_payload = {
             "objective": spec.get("objective", ""),
             "coverage_items": semantic_items,

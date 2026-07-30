@@ -198,7 +198,9 @@ class ClaimBindingService:
 
         evaluated_claim_ids = [item.get("claim_id") for item in evaluations]
         if len(evaluated_claim_ids) != len(set(evaluated_claim_ids)):
-            raise ValueError("claim binding output contains duplicate claim evaluations")
+            raise ValueError(
+                "claim binding output contains duplicate claim evaluations"
+            )
         if set(evaluated_claim_ids) != valid_claim_ids:
             raise ValueError("claim binding output must evaluate every packet claim")
 

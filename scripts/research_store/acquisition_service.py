@@ -211,8 +211,7 @@ class FirecrawlSearchAdapter:
             ):
                 break
         error = (
-            f"Firecrawl scrape failed (exit {last_code}): "
-            f"{last_stderr.strip()[:300]}"
+            f"Firecrawl scrape failed (exit {last_code}): {last_stderr.strip()[:300]}"
         )
         return SearchAdapterResult(
             raw_payload=json.dumps({"success": False, "error": error}).encode(),

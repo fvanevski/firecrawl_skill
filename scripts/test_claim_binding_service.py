@@ -262,9 +262,7 @@ def test_call_structured_error_raises_runtime_error(service, mock_packet, monkey
         )
 
 
-def test_missing_evaluations_key_fails_closed(
-    service, mock_packet, monkeypatch
-):
+def test_missing_evaluations_key_fails_closed(service, mock_packet, monkeypatch):
     """Every packet claim must receive an authoritative evaluation."""
 
     def mock_prompt(*args, **kwargs):

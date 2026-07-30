@@ -94,6 +94,7 @@ def _minimum_authoritative_source_target(spec: dict[str, Any]) -> int:
     ]
     return max(3, max(declared, default=0))
 
+
 # ---------------------------------------------------------------------------
 # Orchestrator configuration
 # ---------------------------------------------------------------------------
@@ -498,9 +499,7 @@ class AcquisitionStage:
         )
         executed_queries: set[str] = context.setdefault("executed_query_texts", set())
         extraction_attempt_count = int(context.get("extraction_attempt_count", 0))
-        successful_extraction_count = int(
-            context.get("successful_extraction_count", 0)
-        )
+        successful_extraction_count = int(context.get("successful_extraction_count", 0))
         coverage_by_subject = {
             str(item["subject_id"]): str(item["coverage_item_id"])
             for item in context.get("coverage_items", [])
@@ -581,10 +580,7 @@ class AcquisitionStage:
                         },
                     }
                     if isinstance(markdown, str) and markdown.strip() and cid:
-                        if (
-                            successful_extraction_count
-                            >= source_target
-                        ):
+                        if successful_extraction_count >= source_target:
                             continue
                         from .domain import IngestRequest
 
@@ -1014,8 +1010,7 @@ class IndexingStage:
             if batch_result.get("failed", 0) or batch_result.get("lease_lost", 0):
                 return StageResult.failed(
                     "indexing",
-                    "vector indexing did not complete cleanly: "
-                    f"{batch_result}",
+                    f"vector indexing did not complete cleanly: {batch_result}",
                 )
             fingerprint = getattr(
                 self.corpus_service.embedder, "fingerprint", index_fingerprint
