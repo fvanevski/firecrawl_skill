@@ -759,14 +759,13 @@ class TestStrictCampaignIntegration:
                 campaign_dir=Path("/tmp/preflight_test"),
                 candidate_sha=candidate_sha,
             )
-        # Preflight may pass if CI has complete infrastructure.
-        # When it fails, expect worker or alias related errors.
-        if not ok:
-            assert errors
-            assert any(
-                "worker" in error.lower() or "alias" in error.lower()
-                for error in errors
-            )
+        # If preflight passes, CI has complete infrastructure — nothing to test.
+        if ok:
+            pytest.skip("CI has complete infrastructure; nothing to verify")
+        assert errors
+        assert any(
+            "worker" in error.lower() or "alias" in error.lower() for error in errors
+        )
 
     def test_preflight_fails_without_dataset(self):
         """Preflight fails when benchmark dataset is missing."""
