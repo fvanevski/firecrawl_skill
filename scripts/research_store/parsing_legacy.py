@@ -13,6 +13,27 @@ _LIST = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+")
 _QUOTE = re.compile(r"^\s*>\s?")
 
 
+def extract_search_response_items(data: Any) -> list[Any]:
+    """Return ordered candidates from supported Firecrawl search envelopes."""
+    if isinstance(data, list):
+        return data
+    if not isinstance(data, dict):
+        return []
+
+    for key in ("data", "results", "candidates", "items"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return value
+        if key == "data" and isinstance(value, dict):
+            items: list[Any] = []
+            for source in ("web", "news", "images"):
+                source_items = value.get(source)
+                if isinstance(source_items, list):
+                    items.extend(source_items)
+            return items
+    return []
+
+
 def structural_blocks(markdown: str) -> list[Block]:
     """Parse stable, ordered Markdown blocks without losing source offsets."""
     blocks: list[Block] = []
@@ -212,18 +233,7 @@ def parse_raw_search_response(
             str(error_msg),
         )
 
-    items = []
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        if isinstance(data.get("data"), list):
-            items = data["data"]
-        elif isinstance(data.get("results"), list):
-            items = data["results"]
-        elif isinstance(data.get("candidates"), list):
-            items = data["candidates"]
-        elif isinstance(data.get("items"), list):
-            items = data["items"]
+    items = extract_search_response_items(data)
 
     result_count = len(items)
     status = "succeeded" if result_count > 0 else "empty"

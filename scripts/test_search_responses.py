@@ -53,6 +53,27 @@ def test_parse_raw_search_response_succeeded():
     assert err is None
 
 
+def test_parse_raw_search_response_succeeded_for_grouped_cli_data():
+    raw = json.dumps(
+        {
+            "success": True,
+            "data": {
+                "web": [{"url": "https://example.com/web", "title": "Web result"}],
+                "news": [{"url": "https://example.com/news", "title": "News result"}],
+                "images": [],
+            },
+        }
+    )
+    status, count, summary, err = parse_raw_search_response(raw)
+    assert status == "succeeded"
+    assert count == 2
+    assert [item["url"] for item in summary["sample_candidates"]] == [
+        "https://example.com/web",
+        "https://example.com/news",
+    ]
+    assert err is None
+
+
 def test_parse_raw_search_response_empty():
     raw = json.dumps({"success": True, "data": []})
     status, count, summary, err = parse_raw_search_response(raw)
@@ -151,10 +172,12 @@ def test_record_search_response_integration(tmp_path, prepared_database):
     raw_payload = json.dumps(
         {
             "success": True,
-            "data": [
-                {"url": "https://example.com/1", "title": "Result 1"},
-                {"url": "https://example.com/2", "title": "Result 2"},
-            ],
+            "data": {
+                "web": [
+                    {"url": "https://example.com/1", "title": "Result 1"},
+                    {"url": "https://example.com/2", "title": "Result 2"},
+                ]
+            },
         }
     )
 
@@ -190,7 +213,11 @@ def test_record_search_response_integration(tmp_path, prepared_database):
     assert replay.verify_integrity() is True
     assert replay.result_count == 2
     assert isinstance(replay.parsed_json, dict)
-    assert len(replay.parsed_json["data"]) == 2
+    assert len(replay.parsed_json["data"]["web"]) == 2
+
+    occurrences = run_svc.record_response_candidates(run_id, rec["id"])
+    assert len(occurrences) == 2
+    assert {item["rank"] for item in occurrences} == {1, 2}
 
 
 @pytest.mark.skipif(

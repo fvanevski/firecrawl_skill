@@ -363,7 +363,7 @@ class CorpusReviewStage:
 class AcquisitionStage:
     """Execute search queries and persist candidates.
 
-    Transitions: acquiring -> (indexing | coverage_review)
+    Transitions: acquiring -> (extracting | coverage_review)
     """
 
     def __init__(
@@ -447,7 +447,7 @@ class AcquisitionStage:
                 for cand in result.candidates[:5]:
                     cid = cand.get("id") or cand.get("candidate_id")
                     if cid:
-                        candidate_ids.append(cid)
+                        candidate_ids.append(str(cid))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("acquisition query failed: %s — %s", query_text, exc)
 
@@ -479,17 +479,17 @@ class AcquisitionStage:
         context[ContextKeys.CANDIDATE_COUNT] = candidate_count
         context[ContextKeys.SUCCESSFUL_URLS] = successful_urls
 
-        # Transition to indexing or coverage_review
+        # Transition to extraction or coverage_review
         if candidate_count > 0:
             try:
                 self.run_service.transition(
                     run_id,
-                    "indexing",
+                    "extracting",
                     expected_revision=run_revision,
                     idempotency_key=f"stage:acquisition_done:{run_id}:{uuid4()}",
                     actor_type="orchestrator",
                     actor_identifier="AcquisitionStage",
-                    triggering_event="run.indexing",
+                    triggering_event="run.extracting",
                     reason=f"acquired {candidate_count} candidates",
                 )
             except (RunStateError, StaleRunRevisionError) as exc:
@@ -1800,7 +1800,7 @@ class ResearchOrchestrator:
                 getattr(run_status, "current_coverage_revision", 0) or 1
             )
 
-            # Main loop: acquisition -> indexing -> coverage_review -> ...
+            # Main loop: acquisition -> extraction -> indexing -> coverage_review -> ...
             while cycle_count < max_cycles:
                 cycle_count += 1
 
@@ -1840,8 +1840,25 @@ class ResearchOrchestrator:
                 if result.outcome == StageOutcome.TERMINAL:
                     break
 
-                # Stage: Indexing (only if transitioned to indexing/extracting)
-                if current_state in ("indexing", "extracting"):
+                # Stage: Extraction (only when acquisition found candidates)
+                if current_state == "extracting":
+                    result = self._execute_stage(
+                        "extraction",
+                        run_id,
+                        current_revision,
+                        coverage_revision_num,
+                        current_state,
+                        ctx,
+                    )
+                    if result.error:
+                        return self._failed_result(run_id, result.error)
+
+                    run_status = self.run_service.status(run_id=run_id)
+                    current_revision = run_status.lifecycle_revision
+                    current_state = run_status.state
+
+                # Stage: Indexing (only after successful extraction)
+                if current_state == "indexing":
                     result = self._execute_stage(
                         "indexing",
                         run_id,
