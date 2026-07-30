@@ -19,6 +19,9 @@
     "device_uuid": {
       "type": "string"
     },
+    "failure_reason": {
+      "type": "string"
+    },
     "metric_version": {
       "type": "string"
     },
@@ -34,6 +37,9 @@
     "sample_type": {
       "type": "string"
     },
+    "sampling_interval_seconds": {
+      "type": "number"
+    },
     "schema_version": {
       "const": "resource-sample-v1",
       "type": "string"
@@ -42,7 +48,20 @@
       "type": "string"
     },
     "value": {
-      "type": "number"
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "window_end": {
+      "type": "string"
+    },
+    "window_start": {
+      "type": "string"
     }
   },
   "required": [],
