@@ -655,8 +655,30 @@ class TestStrictCampaignIntegration:
             dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
             campaign_dir=Path("/tmp/preflight_test"),
         )
-        assert ok is False
-        assert any("Qdrant" in e for e in errors)
+        # Qdrant is optional — unreachable Qdrant produces a warning,
+        # not an error. Preflight still passes.
+        assert ok is True
+        assert len(errors) == 0
+
+    def test_preflight_qdrant_is_optional(self):
+        """Preflight passes when Qdrant is unreachable (optional infrastructure)."""
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
+        from research_store.strict_benchmark import _preflight_check
+
+        ok, errors = _preflight_check(
+            database_url=database_url,
+            blob_root=Path("/tmp"),
+            qdrant_url="http://localhost:99999",
+            qdrant_api_key="",
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            campaign_dir=Path("/tmp/preflight_test"),
+        )
+        # Qdrant is optional — unreachable Qdrant produces a warning,
+        # not an error. Preflight still passes.
+        assert ok is True
+        assert len(errors) == 0
 
     def test_preflight_dry_run_aborts_before_campaign(self):
         """Dry-run mode validates config and preflight but does not execute campaigns."""
