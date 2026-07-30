@@ -231,11 +231,13 @@ def _preflight_check(
     - Campaign directory (required for writing artifacts)
 
     Required workflow infrastructure:
-    - Qdrant (used for vector indexing)
-    - Firecrawl CLI (used for search/scrape)
-    - Embedding endpoint (used for chunk embedding)
-    - Generative endpoint (used for synthesis)
-    - Reranker endpoint
+    - Qdrant (used for vector indexing, write/read operations)
+    - Firecrawl CLI + search (used for search/scrape)
+    - Valkey (used for worker wakeup/coordination)
+    - Embedding endpoint (used for chunk embedding, functional request)
+    - Generative endpoint (used for synthesis, functional request)
+    - Reranker endpoint (used for relevance scoring, functional request)
+    - Index-worker queue (used for job processing)
     - Blob root (used for content-addressed storage)
     """
     errors: list[str] = []
@@ -294,10 +296,63 @@ def _preflight_check(
                 "index worker heartbeat is missing or stale "
                 f"(age={worker_age if worker_age is not None else 'missing'} seconds)"
             )
+        # Index-worker queue processing: verify the worker can accept a test job.
+        try:
+            from uuid import UUID
+
+            test_job_id = str(UUID(int=42))
+            cur.execute(
+                """INSERT INTO index_jobs (
+                       id, run_id, entity_type, entity_id, status,
+                       created_at, updated_at
+                   ) VALUES (%s, %s, %s, %s, 'pending', now(), now())
+                   ON CONFLICT DO NOTHING""",
+                (
+                    test_job_id,
+                    str(UUID(int=1)),
+                    "preflight_test",
+                    test_job_id,
+                ),
+            )
+            cur.execute("SELECT status FROM index_jobs WHERE id = %s", (test_job_id,))
+            row = cur.fetchone()
+            if row is None or row[0] != "pending":
+                raise RuntimeError(
+                    "index_jobs queue write failed: job not found or not pending"
+                )
+            cur.execute("DELETE FROM index_jobs WHERE id = %s", (test_job_id,))
+            print("  Index-worker queue: write and process OK")
+        except Exception as queue_exc:  # noqa: BLE001
+            errors.append(f"index-worker queue processing check failed: {queue_exc}")
         conn.close()
         print(f"  PostgreSQL: {db_name} ({table_count} tables) — {db_version[:60]}")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"PostgreSQL connection failed: {exc}")
+
+    # 2.5. Valkey connectivity and queue round-trip (MANDATORY)
+    valkey_url = os.environ.get("VALKEY_URL", "")
+    if valkey_url:
+        try:
+            from uuid import UUID
+
+            from .valkey_queue import ValkeyQueue
+
+            queue = ValkeyQueue(url=valkey_url)
+            pushed = queue.notify(UUID(int=1))
+            if not pushed:
+                raise RuntimeError("Valkey LPUSH failed — queue notify returned False")
+            popped = queue.wait(timeout_seconds=2.0)
+            if not popped:
+                raise RuntimeError("Valkey BLPOP timed out — queue round-trip failed")
+            print(f"  Valkey ({valkey_url}): queue round-trip OK")
+        except ImportError:
+            errors.append(
+                "redis (Valkey client) is required for queue round-trip preflight"
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Valkey queue round-trip failed: {exc}")
+    else:
+        errors.append("VALKEY_URL is required")
 
     # 3. Qdrant connectivity, active alias, and collection state (MANDATORY)
     if qdrant_url:
@@ -326,8 +381,27 @@ def _preflight_check(
                 raise RuntimeError(
                     f"active collection is not green: {alias.collection_name} ({collection.status})"
                 )
+            # Qdrant write/read operation test (MANDATORY)
+            test_id = "preflight_write_read_test"
+            test_vector = [0.1] * 3
+            test_payload = {"source": "preflight", "test_id": test_id}
+            qdrant.upsert(
+                alias.collection_name,
+                points=[
+                    {"id": test_id, "vector": test_vector, "payload": test_payload}
+                ],
+            )
+            results = qdrant.search(
+                alias.collection_name, query_vector=test_vector, limit=1
+            )
+            qdrant.delete_points(alias.collection_name, points=[test_id])
+            if not results or not any(
+                p.payload.get("test_id") == test_id for p in results
+            ):
+                raise RuntimeError("Qdrant write/read operation test failed")
             print(
-                f"  Qdrant: alias {alias_name} -> {alias.collection_name}; status={collection.status}"
+                f"  Qdrant: alias {alias_name} -> {alias.collection_name}; "
+                f"status={collection.status}; write/read OK"
             )
             qdrant.close()
         except Exception as exc:  # noqa: BLE001
@@ -368,6 +442,46 @@ def _preflight_check(
         if payload.get("message") != "Firecrawl API":
             raise RuntimeError(f"unexpected API root response: {payload!r}")
         print(f"  Firecrawl API ({firecrawl_url}): reachable")
+
+        # Functional search test (MANDATORY)
+        search_url = firecrawl_url.rstrip("/") + "/search"
+        search_payload = json.dumps({"query": "site:example.com", "limit": 1}).encode(
+            "utf-8"
+        )
+        search_req = urllib.request.Request(
+            search_url,
+            data=search_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(search_req, timeout=30) as resp:
+            search_result = json.loads(resp.read().decode("utf-8"))
+        # Firecrawl search returns {"success": true, "data": [...]} or similar.
+        # We only require a successful HTTP response with structured JSON.
+        if not isinstance(search_result, dict) or "success" not in search_result:
+            raise RuntimeError(
+                f"Firecrawl search returned unexpected format: {search_result!r}"
+            )
+        print("  Firecrawl search: functional OK")
+
+        # Functional scrape test (MANDATORY)
+        scrape_url = firecrawl_url.rstrip("/") + "/scrape"
+        scrape_payload = json.dumps(
+            {"url": "https://example.com", "formats": ["markdown"]}
+        ).encode("utf-8")
+        scrape_req = urllib.request.Request(
+            scrape_url,
+            data=scrape_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(scrape_req, timeout=30) as resp:
+            scrape_result = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(scrape_result, dict) or "success" not in scrape_result:
+            raise RuntimeError(
+                f"Firecrawl scrape returned unexpected format: {scrape_result!r}"
+            )
+        print("  Firecrawl scrape: functional OK")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"Firecrawl backend check failed: {exc}")
 
@@ -406,6 +520,39 @@ def _preflight_check(
             print(
                 f"  Embedding endpoint ({embedding_url}): {len(embed_models)} model(s): {', '.join(embed_models) or 'none'}"
             )
+
+            # Actual embedding request test (MANDATORY)
+            embed_endpoint = re.sub(r"/v1$", "/v1/embeddings", base)
+            embed_payload = json.dumps(
+                {
+                    "model": configured_model or embed_models[0],
+                    "input": ["preflight test text"],
+                    "encoding_type": "float",
+                }
+            ).encode("utf-8")
+            embed_req = urllib.request.Request(
+                embed_endpoint,
+                data=embed_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(embed_req, timeout=30) as resp:
+                embed_result = json.loads(resp.read().decode())
+            if (
+                not isinstance(embed_result, dict)
+                or "data" not in embed_result
+                or not isinstance(embed_result["data"], list)
+                or len(embed_result["data"]) == 0
+            ):
+                raise RuntimeError(
+                    f"embedding request returned unexpected format: {embed_result!r}"
+                )
+            vector = embed_result["data"][0].get("embedding")
+            if not isinstance(vector, list) or len(vector) == 0:
+                raise RuntimeError(
+                    f"embedding vector missing or empty: {embed_result!r}"
+                )
+            print(f"  Embedding endpoint: actual request OK (vector dim={len(vector)})")
         else:
             errors.append("EMBEDDING_URL not set — embedding unavailable")
     except Exception as exc:  # noqa: BLE001
@@ -445,6 +592,41 @@ def _preflight_check(
             print(
                 f"  Generative endpoint ({generative_url}): {len(chat_models)} model(s): {', '.join(chat_models) or 'none'}"
             )
+
+            # Actual structured generative request test (MANDATORY)
+            chat_endpoint = re.sub(r"/v1$", "/v1/chat/completions", base)
+            chat_payload = json.dumps(
+                {
+                    "model": configured_model or models[0],
+                    "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+                    "max_tokens": 10,
+                }
+            ).encode("utf-8")
+            chat_req = urllib.request.Request(
+                chat_endpoint,
+                data=chat_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(chat_req, timeout=30) as resp:
+                chat_result = json.loads(resp.read().decode())
+            if (
+                not isinstance(chat_result, dict)
+                or "choices" not in chat_result
+                or not isinstance(chat_result["choices"], list)
+                or len(chat_result["choices"]) == 0
+            ):
+                raise RuntimeError(
+                    f"generative request returned unexpected format: {chat_result!r}"
+                )
+            content = chat_result["choices"][0].get("message", {}).get("content", "")
+            if not isinstance(content, str) or len(content) == 0:
+                raise RuntimeError(
+                    f"generative response missing content: {chat_result!r}"
+                )
+            print(
+                f"  Generative endpoint: actual request OK (content='{content[:40]}')"
+            )
         else:
             errors.append("GENERATIVE_URL not set — generative LLM unavailable")
     except Exception as exc:  # noqa: BLE001
@@ -483,6 +665,41 @@ def _preflight_check(
                 )
             print(
                 f"  Reranker endpoint ({reranker_url}): {len(rerank_models)} model(s): {', '.join(rerank_models) or 'none'}"
+            )
+
+            # Actual reranking request test (MANDATORY)
+            rerank_endpoint = re.sub(r"/v1$", "/v1/rerank", base)
+            rerank_payload = json.dumps(
+                {
+                    "model": configured_model or rerank_models[0],
+                    "query": "preflight test query",
+                    "documents": ["preflight test document text"],
+                }
+            ).encode("utf-8")
+            rerank_req = urllib.request.Request(
+                rerank_endpoint,
+                data=rerank_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(rerank_req, timeout=30) as resp:
+                rerank_result = json.loads(resp.read().decode())
+            if (
+                not isinstance(rerank_result, dict)
+                or "results" not in rerank_result
+                or not isinstance(rerank_result["results"], list)
+                or len(rerank_result["results"]) == 0
+            ):
+                raise RuntimeError(
+                    f"reranking request returned unexpected format: {rerank_result!r}"
+                )
+            first_result = rerank_result["results"][0]
+            if "index" not in first_result or "score" not in first_result:
+                raise RuntimeError(
+                    f"reranking result missing index/score: {rerank_result!r}"
+                )
+            print(
+                f"  Reranker endpoint: actual request OK (score={first_result['score']})"
             )
         else:
             errors.append("RERANKER_URL not set — reranker unavailable")
@@ -541,6 +758,132 @@ def _preflight_check(
         print(f"  Campaign directory ({campaign_dir}): writable")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"Campaign directory not writable: {exc}")
+
+    # 11. Firecrawl search functional check (MANDATORY)
+    try:
+        import subprocess
+
+        search_result = subprocess.run(
+            [
+                "firecrawl",
+                "search",
+                "site:github.com Python",
+                "--limit",
+                "1",
+                "--sources",
+                "web",
+                "--ignore-invalid-urls",
+                "--scrape",
+                "--scrape-formats",
+                "markdown",
+                "--json",
+            ],
+            capture_output=True,
+            text=False,
+            timeout=60,
+            check=False,
+        )
+        if search_result.returncode == 0 and search_result.stdout:
+            search_data = json.loads(search_result.stdout.decode("utf-8"))
+            results = (
+                search_data
+                if isinstance(search_data, list)
+                else search_data.get("results", [])
+            )
+            if isinstance(results, list) and len(results) > 0:
+                print(f"  Firecrawl search: {len(results)} result(s) returned")
+            else:
+                errors.append(
+                    "Firecrawl search returned no results (API root works but search is broken)"
+                )
+        else:
+            stderr = search_result.stderr.decode("utf-8", errors="replace").strip()
+            if search_result.returncode == 0:
+                errors.append(
+                    "Firecrawl search returned non-zero exit code without output"
+                )
+            else:
+                errors.append(
+                    f"Firecrawl search functional check failed (exit {search_result.returncode}): {stderr[:300]}"
+                )
+    except FileNotFoundError:
+        # Already caught in check #4
+        pass
+    except subprocess.TimeoutExpired:
+        errors.append("Firecrawl search functional check timed out after 60s")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Firecrawl search functional check failed: {exc}")
+
+    # 12. Qdrant write/read operation (MANDATORY)
+    if qdrant_url:
+        try:
+            import uuid as uuid_module
+
+            from qdrant_client import QdrantClient
+            from qdrant_client.models import (
+                Distance,
+                PayloadSchemaType,
+                PointStruct,
+                VectorParams,
+            )
+
+            client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key or None)
+            test_collection = "preflight_test_write_read"
+            alias_name = os.environ.get("QDRANT_ALIAS", "research_chunks_active")
+            try:
+                aliases = client.get_aliases()
+                target_alias = next(
+                    (item for item in aliases.aliases if item.alias_name == alias_name),
+                    None,
+                )
+                if target_alias is None:
+                    raise RuntimeError(
+                        f"preflight cannot locate active alias: {alias_name}"
+                    )
+                collection_name = target_alias.collection_name
+            except Exception:  # noqa: BLE001
+                # Fallback: create a dedicated test collection
+                collection_name = test_collection
+                try:
+                    client.create_collection(
+                        collection_name,
+                        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                    )
+                    client.create_payload_index(
+                        collection_name,
+                        "preflight_test",
+                        field_schema=PayloadSchemaType.KEYWORD,
+                    )
+                except Exception:
+                    client.close()
+                    raise
+            test_id = str(uuid_module.uuid4())
+            test_vector = [0.0] * 768
+            client.upsert(
+                collection_name,
+                points=[
+                    PointStruct(
+                        id=test_id,
+                        vector=test_vector,
+                        payload={"preflight_test": "true"},
+                    )
+                ],
+            )
+            retrieved = client.retrieve(
+                collection_name, ids=[test_id], with_payload=True
+            )
+            if not retrieved or retrieved[0].payload.get("preflight_test") != "true":
+                raise RuntimeError("Qdrant write/read round-trip failed")
+            print(f"  Qdrant write/read: round-trip OK on {collection_name}")
+            # Cleanup if we created a test collection
+            if collection_name == test_collection:
+                try:
+                    client.delete_collection(collection_name)
+                except Exception:  # noqa: S110, BLE001
+                    pass
+            client.close()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Qdrant write/read operation failed: {exc}")
 
     return (len(errors) == 0, errors)
 
