@@ -2152,7 +2152,12 @@ class ReleaseBenchmarkRunner:
             spec = serialize_model(spec_model)
 
             # Build the search plan
-            candidate_sha = os.environ.get("CANDIDATE_SHA", "main")
+            candidate_sha = os.environ.get("CANDIDATE_SHA")
+            if not candidate_sha:
+                raise ValueError(
+                    "CANDIDATE_SHA environment variable is required for "
+                    "strict benchmark campaigns"
+                )
             configured_sources = tuple(
                 source.file_path for source in objective.known_relevant_sources[:3]
             )

@@ -9,10 +9,11 @@ Strict mode is mandatory and cannot be disabled through ordinary flags.
 Simulation and workflow substitution are impossible in release campaigns.
 
 Usage:
-    strict_benchmark [--campaign-dir DIR] [--dataset PATH] [--database-url URL]
-                     [--blob-root PATH] [--qdrant-url URL] [--qdrant-api-key KEY]
-                     [--objectives OBJ1,OBJ2,...] [--tolerance FLOAT]
-                     [--manifest PATH] [--dry-run]
+    strict_benchmark --candidate-sha <40-char-hex> [--campaign-dir DIR]
+                     [--dataset PATH] [--database-url URL]
+                     [--blob-root PATH] [--qdrant-url URL]
+                     [--qdrant-api-key KEY] [--objectives OBJ1,OBJ2,...]
+                     [--tolerance FLOAT] [--manifest PATH] [--dry-run]
 """
 
 from __future__ import annotations
@@ -20,12 +21,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from hashlib import sha256
 from pathlib import Path
 
-SCRIPTS = Path(__file__).resolve().parent
+SCRIPTS = Path(__file__).resolve()
 
 
 def _qdrant_compatibility_errors(caught_warnings) -> tuple[str, ...]:
@@ -59,37 +61,141 @@ def _compute_file_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def _build_env_manifest() -> dict:
-    """Build runtime environment metadata for the campaign."""
-    import platform
+def _get_full_sha(repo: Path | None = None) -> str:
+    """Return the current git commit SHA as a full 40-character hex string.
 
-    return {
-        "python_version": platform.python_version(),
-        "platform": platform.platform(),
-        "machine": platform.machine(),
-        "processor": platform.processor() or "unknown",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
-        "commit": _get_commit_sha(),
-    }
+    Raises ``ValueError`` when the repository cannot be resolved or the
+    resolved SHA is not exactly 40 hexadecimal characters.
+    """
+    try:
+        import subprocess
+
+        cmd = ["git", "rev-parse", "HEAD"]
+        cwd = str(repo) if repo else None
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            cwd=cwd,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "git rev-parse failed")
+        sha = result.stdout.strip()
+        if len(sha) != 40 or not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError(f"expected 40-char hex SHA, got {len(sha)} chars: {sha!r}")
+        return sha
+    except (RuntimeError, ValueError):
+        raise
+    except Exception as exc:
+        raise ValueError(f"unable to resolve git HEAD: {exc}") from exc
 
 
-def _get_commit_sha() -> str:
-    """Return the current git commit SHA, or 'unknown'."""
+def _get_tree_hash(repo: Path | None = None) -> str:
+    """Return the current git tree hash as a full 40-character hex string."""
+    try:
+        import subprocess
+
+        cmd = ["git", "rev-parse", "HEAD^{tree}"]
+        cwd = str(repo) if repo else None
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            cwd=cwd,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "git rev-parse tree failed")
+        tree = result.stdout.strip()
+        if len(tree) != 40 or not re.fullmatch(r"[0-9a-f]{40}", tree):
+            raise ValueError(
+                f"expected 40-char hex tree hash, got {len(tree)} chars: {tree!r}"
+            )
+        return tree
+    except (RuntimeError, ValueError):
+        raise
+    except Exception as exc:
+        raise ValueError(f"unable to resolve git tree hash: {exc}") from exc
+
+
+def _get_firecrawl_version() -> str:
+    """Return the Firecrawl CLI version string, or 'unknown'."""
     try:
         import subprocess
 
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            ["firecrawl", "--version"],
             capture_output=True,
             text=True,
             timeout=10,
             check=False,
         )
         if result.returncode == 0:
-            return result.stdout.strip()[:12]
-    except Exception:  # noqa: BLE001
-        return "unknown"
+            return result.stdout.strip()
+    except Exception:  # noqa: BLE001, S110
+        pass
     return "unknown"
+
+
+def _build_env_manifest(
+    candidate_sha: str,
+    dataset_path: Path,
+    dataset_hash: str,
+) -> dict:
+    """Build runtime environment metadata for the campaign.
+
+    The manifest captures the exact candidate SHA, tree hash, dataset hash,
+    dependency-lock hash, service versions, Firecrawl CLI version, model IDs
+    and revisions, tokenizer ID and revision, and hardware identity so that
+    every campaign run is reproducible from the same immutable inputs.
+    """
+    import platform
+
+    try:
+        tree_hash = _get_tree_hash()
+    except ValueError:
+        tree_hash = "unresolvable"
+
+    try:
+        lock_hash = _compute_file_hash(
+            SCRIPTS.parent.parent / "requirements-research-store.txt"
+        )
+    except Exception:  # noqa: BLE001
+        lock_hash = "unresolvable"
+
+    # Collect model/tokenizer fingerprints from environment.
+    fingerprints: dict[str, str] = {}
+    for key in (
+        "GENERATIVE_MODEL",
+        "GENERATIVE_URL",
+        "EMBEDDING_MODEL",
+        "EMBEDDING_URL",
+        "RERANKER_MODEL",
+        "RERANKER_URL",
+    ):
+        val = os.environ.get(key, "")
+        if val:
+            fingerprints[key] = val
+
+    firecrawl_version = _get_firecrawl_version()
+
+    return {
+        "candidate_sha": candidate_sha,
+        "tree_hash": tree_hash,
+        "dataset_path": str(dataset_path),
+        "dataset_hash": dataset_hash,
+        "dependency_lock_hash": lock_hash,
+        "firecrawl_version": firecrawl_version,
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": platform.processor() or "unknown",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+        **fingerprints,
+    }
 
 
 def _write_json_atomic(path: Path, data: object) -> str:
@@ -111,6 +217,7 @@ def _preflight_check(
     qdrant_api_key: str,
     dataset_path: Path,
     campaign_dir: Path,
+    candidate_sha: str,
 ) -> tuple[bool, list[str]]:
     """Validate that all required infrastructure is available before starting campaigns.
 
@@ -118,6 +225,7 @@ def _preflight_check(
     workflow stack is ready. Release campaigns have no degraded preflight.
 
     Mandatory infrastructure:
+    - Git HEAD equals the candidate SHA
     - PostgreSQL (required for creating research runs)
     - Dataset file (required for benchmark data)
     - Campaign directory (required for writing artifacts)
@@ -132,7 +240,24 @@ def _preflight_check(
     """
     errors: list[str] = []
 
-    # 1. Dataset file (MANDATORY)
+    # 0. Candidate SHA verification (MANDATORY)
+    if len(candidate_sha) != 40 or not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
+        errors.append(
+            f"candidate SHA must be a full 40-character hex string; "
+            f"got {len(candidate_sha)} chars: {candidate_sha!r}"
+        )
+    else:
+        try:
+            current_sha = _get_full_sha()
+            if current_sha != candidate_sha:
+                errors.append(
+                    f"git HEAD ({current_sha}) does not match "
+                    f"candidate SHA ({candidate_sha})"
+                )
+            else:
+                print(f"  Candidate SHA: {candidate_sha} ✓")
+        except ValueError as exc:
+            errors.append(f"candidate SHA verification failed: {exc}")
     if not dataset_path.is_file():
         errors.append(f"benchmark dataset not found: {dataset_path}")
 
@@ -248,7 +373,6 @@ def _preflight_check(
 
     # 5. Embedding endpoint health (MANDATORY)
     try:
-        import re
         import urllib.request
 
         embedding_url = os.environ.get(
@@ -432,25 +556,32 @@ def _run_campaign(
     strict: bool,
     reproducibility_tolerance: float,
     campaign_dir: Path,
+    candidate_sha: str,
     execution_modes: tuple[str, ...] = ("autonomous_local", "deterministic_debug"),
 ) -> tuple[ReleaseBenchmarkResult, str]:
     """Execute a single strict campaign wave and return its result and integrity hash.
 
     Args:
+        campaign_label: Display label for the campaign run.
         dataset_path: Path to the benchmark dataset.
         database_url: Target PostgreSQL database.
         blob_root: Target blob storage path.
         qdrant_url: Target Qdrant vector database URL.
         qdrant_api_key: Target Qdrant vector database API key.
         objective_ids: Specific objective IDs to run, or None for all.
-        campaign_label: Display label for the campaign run.
         strict: Whether to enforce strict mode (mandatory).
         reproducibility_tolerance: Acceptance threshold for deterministic deviation.
+        campaign_dir: Directory to write campaign artifacts to.
+        candidate_sha: Exact 40-character git commit SHA for the release candidate.
+        execution_modes: Workflow modes to run.
 
     Returns:
         Tuple of (result, campaign_id).
     """
     print(f"[Campaign {campaign_label}] Starting strict benchmark campaign...")
+
+    # Make candidate SHA available to the benchmark runner.
+    os.environ["CANDIDATE_SHA"] = candidate_sha
 
     # Load benchmark dataset
     print(f"[Campaign {campaign_label}] Loading dataset from {dataset_path}")
@@ -664,10 +795,9 @@ def _run_campaign(
     )
 
     # Write environment manifest
+    dataset_hash = _compute_file_hash(dataset_path)
     env_manifest = {
-        **_build_env_manifest(),
-        "dataset_path": str(dataset_path),
-        "dataset_hash": _compute_file_hash(dataset_path),
+        **_build_env_manifest(candidate_sha, dataset_path, dataset_hash),
         "database_url_set": bool(database_url),
         "blob_root_set": bool(blob_root),
         "strict": strict,
@@ -763,6 +893,7 @@ def _build_manifest(
     result_b: ReleaseBenchmarkResult,
     comparison: ReproducibilityComparison,
     dataset_path: Path,
+    candidate_sha: str,
 ) -> dict:
     """Build the durable artifact manifest."""
     campaign_a_dir = None
@@ -775,12 +906,18 @@ def _build_manifest(
             else:
                 campaign_b_dir = latest
 
+    try:
+        tree_hash = _get_tree_hash()
+    except ValueError:
+        tree_hash = "unresolvable"
+
     manifest = {
         "schema_version": "campaign-manifest-v1",
+        "candidate_sha": candidate_sha,
+        "tree_hash": tree_hash,
         "dataset_path": str(dataset_path),
         "dataset_hash": _compute_file_hash(dataset_path),
         "dataset_version": "benchmark-v1",
-        "commit": _get_commit_sha(),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
         "campaign_a": {
             "campaign_id": result_a.campaign_id,
@@ -828,6 +965,12 @@ def main(
     parser = argparse.ArgumentParser(
         description="Strict release benchmark campaign (issue #144). "
         "Strict mode is mandatory and cannot be disabled."
+    )
+    parser.add_argument(
+        "--candidate-sha",
+        type=str,
+        required=True,
+        help="Exact 40-character git commit SHA to benchmark (mandatory)",
     )
     parser.add_argument(
         "--campaign-dir",
@@ -909,6 +1052,15 @@ def main(
     strict = True
 
     # ── Validate inputs ──────────────────────────────────────────────────
+    candidate_sha = args.candidate_sha
+    if len(candidate_sha) != 40 or not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
+        print(
+            f"ERROR: --candidate-sha must be a full 40-character hex string; "
+            f"got {len(candidate_sha)} chars: {candidate_sha!r}",
+            file=sys.stderr,
+        )
+        return 1
+
     if not args.dataset.is_file():
         print(f"ERROR: dataset not found: {args.dataset}", file=sys.stderr)
         return 1
@@ -939,13 +1091,13 @@ def main(
     print("Strict Release Benchmark Campaign (issue #144)")
     print("=" * 60)
     print("  Strict mode:         ON (mandatory)")
+    print(f"  Candidate SHA:       {candidate_sha}")
     print(f"  Dataset:             {args.dataset}")
     print(f"  Database URL:        {'set' if args.database_url else 'NOT SET'}")
     print(f"  Blob root:           {args.blob_root}")
     print(f"  Qdrant URL:          {args.qdrant_url or 'NOT SET'}")
     print(f"  Objectives:          {list(objective_ids) if objective_ids else 'all'}")
     print(f"  Reproducibility tolerance: {args.tolerance}")
-    print(f"  Commit:              {_get_commit_sha()}")
     print("=" * 60)
 
     if args.dry_run:
@@ -958,6 +1110,7 @@ def main(
             qdrant_api_key=args.qdrant_api_key,
             dataset_path=args.dataset,
             campaign_dir=campaign_dir,
+            candidate_sha=candidate_sha,
         )
         if not ok:
             print("\n[Preflight] FAILED — required infrastructure unavailable:")
@@ -975,6 +1128,7 @@ def main(
         qdrant_api_key=args.qdrant_api_key,
         dataset_path=args.dataset,
         campaign_dir=campaign_dir,
+        candidate_sha=candidate_sha,
     )
     if not ok:
         print("\n[Preflight] FAILED — required infrastructure unavailable:")
@@ -996,6 +1150,7 @@ def main(
         strict=strict,
         reproducibility_tolerance=args.tolerance,
         campaign_dir=campaign_dir,
+        candidate_sha=candidate_sha,
         execution_modes=execution_modes,
     )
 
@@ -1011,6 +1166,7 @@ def main(
         strict=strict,
         reproducibility_tolerance=args.tolerance,
         campaign_dir=campaign_dir,
+        candidate_sha=candidate_sha,
         execution_modes=execution_modes,
     )
 
@@ -1021,7 +1177,7 @@ def main(
 
     # ── Build and write manifest ─────────────────────────────────────────
     manifest = _build_manifest(
-        campaign_dir, result_a, result_b, comparison, args.dataset
+        campaign_dir, result_a, result_b, comparison, args.dataset, candidate_sha
     )
     manifest_path = args.manifest or campaign_dir / "manifest.json"
     _write_json_atomic(manifest_path, manifest)
@@ -1030,6 +1186,7 @@ def main(
     print("\n" + "=" * 60)
     print("Campaign Summary")
     print("=" * 60)
+    print(f"  Candidate SHA:       {candidate_sha}")
     print(f"  Campaign A: {result_a.campaign_id} (hash: {hash_a[:12]})")
     print(f"  Campaign B: {result_b.campaign_id} (hash: {hash_b[:12]})")
     print(f"  Reproducibility: {'PASS' if comparison.all_within_tolerance else 'FAIL'}")
@@ -1044,7 +1201,7 @@ def main(
     recovery_report_path = args.recovery_report or campaign_dir / "recovery-report.txt"
     recovery_lines = [
         "Recovery Report — Strict Benchmark Campaign",
-        f"Commit: {_get_commit_sha()}",
+        f"Candidate SHA: {candidate_sha}",
         f"Timestamp: {time.strftime('%Y-%m-%dT%H:%M:%S+00:00', time.gmtime())}",
         f"Campaign A: {result_a.campaign_id}",
         f"Campaign B: {result_b.campaign_id}",

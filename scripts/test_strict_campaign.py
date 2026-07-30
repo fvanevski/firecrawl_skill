@@ -134,7 +134,11 @@ def _make_campaign_result(
         schema_version="release-benchmark-result-v1",
         campaign_id=campaign_id,
         campaign_timestamp="2026-07-28T00:00:00+00:00",
-        environment=_build_env_manifest(),
+        environment=_build_env_manifest(
+            candidate_sha="a" * 40,
+            dataset_path=BENCHMARK_FIXTURE,
+            dataset_hash=sha256(BENCHMARK_FIXTURE.read_bytes()).hexdigest(),
+        ),
         runs=(run,),
         recommendation=recommendation,
         total_duration_ms=5000.0,
@@ -188,6 +192,8 @@ class TestStrictModeMandatory:
         ):
             rc = main(
                 [
+                    "--candidate-sha",
+                    "a" * 40,
                     "--campaign-dir",
                     str(tmp_path),
                     "--database-url",
@@ -209,6 +215,7 @@ class TestStrictModeMandatory:
         import argparse
 
         parser = argparse.ArgumentParser()
+        parser.add_argument("--candidate-sha", type=str, required=True)
         parser.add_argument("--campaign-dir", type=str, default="/tmp")
         parser.add_argument("--dataset", type=str, default=str(BENCHMARK_FIXTURE))
         parser.add_argument("--database-url", type=str, default="")
@@ -288,9 +295,12 @@ class TestArtifactDurability:
                 result_b=result_b,
                 comparison=comparison,
                 dataset_path=BENCHMARK_FIXTURE,
+                candidate_sha="a" * 40,
             )
 
         assert manifest["schema_version"] == "campaign-manifest-v1"
+        assert manifest["candidate_sha"] == "a" * 40
+        assert manifest["tree_hash"] != ""
         assert manifest["campaign_a"]["campaign_id"] == "fr_bench_a"
         assert manifest["campaign_b"]["campaign_id"] == "fr_bench_b"
         assert manifest["reproducibility"]["all_within_tolerance"] is True
@@ -314,11 +324,21 @@ class TestEnvironmentManifest:
     """Tests for environment manifest generation."""
 
     def test_env_manifest_contains_required_fields(self):
-        manifest = _build_env_manifest()
+        manifest = _build_env_manifest(
+            candidate_sha="a" * 40,
+            dataset_path=BENCHMARK_FIXTURE,
+            dataset_hash=sha256(BENCHMARK_FIXTURE.read_bytes()).hexdigest(),
+        )
+        assert "candidate_sha" in manifest
+        assert manifest["candidate_sha"] == "a" * 40
+        assert "tree_hash" in manifest
+        assert "dataset_path" in manifest
+        assert "dataset_hash" in manifest
+        assert "dependency_lock_hash" in manifest
+        assert "firecrawl_version" in manifest
         assert "python_version" in manifest
         assert "platform" in manifest
         assert "timestamp" in manifest
-        assert "commit" in manifest
         assert "machine" in manifest
 
 
@@ -330,11 +350,39 @@ class TestEnvironmentManifest:
 class TestCLIParsing:
     """Tests for CLI argument parsing (unit tests — no DB required)."""
 
+    _CANDIDATE_SHA = "a" * 40
+
     def test_missing_database_url_returns_one(self):
         """Missing DATABASE_URL causes exit 1."""
         rc = main(
             [
+                "--candidate-sha",
+                self._CANDIDATE_SHA,
                 "--dry-run",
+                "--dataset",
+                str(BENCHMARK_FIXTURE),
+            ]
+        )
+        assert rc == 1
+
+    def test_candidate_sha_short_is_rejected(self):
+        """A short candidate SHA is rejected at CLI validation."""
+        rc = main(
+            [
+                "--candidate-sha",
+                "abc123",
+                "--dataset",
+                str(BENCHMARK_FIXTURE),
+            ]
+        )
+        assert rc == 1
+
+    def test_candidate_sha_non_hex_is_rejected(self):
+        """A non-hex candidate SHA is rejected at CLI validation."""
+        rc = main(
+            [
+                "--candidate-sha",
+                "zzzz" + "a" * 36,
                 "--dataset",
                 str(BENCHMARK_FIXTURE),
             ]
@@ -376,6 +424,8 @@ class TestCLIParsing:
                                 mock_hash.return_value = "hash123"
                                 rc = main(
                                     [
+                                        "--candidate-sha",
+                                        self._CANDIDATE_SHA,
                                         "--database-url",
                                         "postgresql://test@test:5432/test",
                                         "--dataset",
@@ -393,11 +443,19 @@ class TestCLIParsing:
                                     "obj-001",
                                     "obj-002",
                                 )
+                                assert (
+                                    call_a_kwargs["candidate_sha"]
+                                    == self._CANDIDATE_SHA
+                                )
                                 # Second call (Campaign B)
                                 call_b_kwargs = mock_run.call_args_list[1][1]
                                 assert call_b_kwargs["objective_ids"] == (
                                     "obj-001",
                                     "obj-002",
+                                )
+                                assert (
+                                    call_b_kwargs["candidate_sha"]
+                                    == self._CANDIDATE_SHA
                                 )
 
 
@@ -512,6 +570,8 @@ class TestStrictCampaignIntegration:
         # NO_GO because quality metrics are all 0.0.
         rc = main(
             [
+                "--candidate-sha",
+                "a" * 40,
                 "--campaign-dir",
                 "/tmp/test_strict_campaign",
                 "--database-url",
@@ -613,6 +673,8 @@ class TestStrictCampaignIntegration:
         ):
             rc = main(
                 [
+                    "--candidate-sha",
+                    "a" * 40,
                     "--dry-run",
                     "--database-url",
                     database_url,
@@ -629,6 +691,8 @@ class TestStrictCampaignIntegration:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         rc = main(
             [
+                "--candidate-sha",
+                "a" * 40,
                 "--dry-run",
                 "--database-url",
                 database_url,
@@ -645,6 +709,8 @@ class TestStrictCampaignIntegration:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         rc = main(
             [
+                "--candidate-sha",
+                "a" * 40,
                 "--dry-run",
                 "--database-url",
                 database_url,
@@ -670,6 +736,7 @@ class TestStrictCampaignIntegration:
             qdrant_api_key="",
             dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
             campaign_dir=Path("/tmp/preflight_test"),
+            candidate_sha="a" * 40,
         )
         assert ok is False
         assert any(
@@ -690,6 +757,7 @@ class TestStrictCampaignIntegration:
             qdrant_api_key="",
             dataset_path=Path("/tmp/nonexistent_dataset.json"),
             campaign_dir=Path("/tmp/preflight_test"),
+            candidate_sha="a" * 40,
         )
         assert ok is False
         assert any("dataset" in e.lower() for e in errors)
@@ -708,6 +776,7 @@ class TestStrictCampaignIntegration:
             qdrant_api_key="",
             dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
             campaign_dir=Path("/tmp/preflight_test"),
+            candidate_sha="a" * 40,
         )
         assert ok is False
         assert any("qdrant" in error.lower() for error in errors)
@@ -723,6 +792,8 @@ class TestStrictCampaignIntegration:
         ):
             rc = main(
                 [
+                    "--candidate-sha",
+                    "a" * 40,
                     "--campaign-dir",
                     "/tmp/test_preflight_dry_run",
                     "--database-url",
@@ -1854,6 +1925,8 @@ class TestStatusSerialization:
         ):
             rc = main(
                 [
+                    "--candidate-sha",
+                    "a" * 40,
                     "--campaign-dir",
                     str(campaign_dir),
                     "--database-url",
@@ -2101,6 +2174,8 @@ class TestCacheRegressionPR157:
         ):
             rc = main(
                 [
+                    "--candidate-sha",
+                    "a" * 40,
                     "--campaign-dir",
                     campaign_dir,
                     "--database-url",
@@ -2237,6 +2312,8 @@ class TestStrictCampaignCacheRejection:
         ):
             rc = main(
                 [
+                    "--candidate-sha",
+                    "a" * 40,
                     "--campaign-dir",
                     campaign_dir,
                     "--database-url",
@@ -2332,6 +2409,39 @@ class TestPreflightCheck:
             qdrant_api_key="",
             dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
             campaign_dir=Path("/tmp/preflight_test"),
+            candidate_sha="a" * 40,
         )
         assert ok is False
         assert any("PostgreSQL" in e for e in errors)
+
+    def test_preflight_rejects_short_candidate_sha(self):
+        """Preflight rejects a candidate SHA that is not 40 hex characters."""
+        from research_store.strict_benchmark import _preflight_check
+
+        ok, errors = _preflight_check(
+            database_url="postgresql://localhost:99999/nonexistent",
+            blob_root=Path("/tmp"),
+            qdrant_url="http://localhost:6333",
+            qdrant_api_key="",
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            campaign_dir=Path("/tmp/preflight_test"),
+            candidate_sha="abc123",
+        )
+        assert ok is False
+        assert any("candidate SHA" in e and "40" in e for e in errors)
+
+    def test_preflight_rejects_sha_mismatch(self):
+        """Preflight fails when HEAD does not match the candidate SHA."""
+        from research_store.strict_benchmark import _preflight_check
+
+        ok, errors = _preflight_check(
+            database_url="postgresql://localhost:99999/nonexistent",
+            blob_root=Path("/tmp"),
+            qdrant_url="http://localhost:6333",
+            qdrant_api_key="",
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            campaign_dir=Path("/tmp/preflight_test"),
+            candidate_sha="0" * 40,
+        )
+        assert ok is False
+        assert any("does not match" in e for e in errors)
