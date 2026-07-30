@@ -133,6 +133,7 @@ class PostgresUnitOfWork:
         self.derivations = self
         self.semantic_cache = self
         self.model_endpoints = self
+        self.synthesis_stages = self
 
         return self
 
@@ -609,6 +610,49 @@ class PostgresUnitOfWork:
                     "url",
                     "retrieved_at",
                 )
+                passages.append(dict(zip(keys, row)))
+                used += row[4]
+            return passages
+
+    def fetch_run_passages(self, run_id, chunk_ids, max_tokens, max_passages):
+        """Fetch only chunks linked to the exact research run.
+
+        The explicit run-asset join prevents strict workflows from falling
+        back to host-wide corpus content when a run has no usable extraction.
+        """
+        if not chunk_ids or max_tokens <= 0 or max_passages <= 0:
+            return []
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT c.id,c.document_id,c.ordinal,c.text,c.token_count,
+                c.metadata->'heading_path',d.snapshot_id,a.source_id,
+                s.canonical_url,a.retrieved_at
+                FROM chunks c
+                JOIN documents d ON d.id=c.document_id
+                JOIN asset_snapshots a ON a.id=d.snapshot_id
+                JOIN sources s ON s.id=a.source_id
+                JOIN research_run_assets rra
+                  ON rra.snapshot_id=d.snapshot_id AND rra.run_id=%s
+                WHERE c.id=ANY(%s)
+                ORDER BY array_position(%s::uuid[],c.id)""",
+                (run_id, chunk_ids, chunk_ids),
+            )
+            passages, used = [], 0
+            keys = (
+                "chunk_id",
+                "document_id",
+                "ordinal",
+                "text",
+                "token_count",
+                "heading_path",
+                "snapshot_id",
+                "source_id",
+                "url",
+                "retrieved_at",
+            )
+            for row in cur.fetchall():
+                if len(passages) >= max_passages or used + row[4] > max_tokens:
+                    break
                 passages.append(dict(zip(keys, row)))
                 used += row[4]
             return passages
@@ -2635,6 +2679,9 @@ class PostgresUnitOfWork:
                         "query_text": query_text,
                         "canonical_url": canonical_url,
                         "original_url": redacted_orig_url,
+                        "title": title,
+                        "snippet": snippet,
+                        "raw_item": raw_item_dict,
                     }
                 )
 
@@ -3756,6 +3803,7 @@ class PostgresUnitOfWork:
         worker_id="compat",
         max_attempts=5,
         fingerprint=None,
+        entity_ids=None,
     ):
         if limit <= 0 or lease_seconds <= 0 or max_attempts <= 0:
             raise ValueError("job limits and lease duration must be positive")
@@ -3786,6 +3834,7 @@ class PostgresUnitOfWork:
                   AND (%s::text IS NULL OR EXISTS(
                     SELECT 1 FROM index_definitions d
                     WHERE d.id=index_jobs.index_definition_id AND d.fingerprint=%s))
+                  AND (%s::uuid[] IS NULL OR entity_id=ANY(%s::uuid[]))
                 ORDER BY coalesce(lease_expires_at,available_at),created_at
                 FOR UPDATE SKIP LOCKED LIMIT %s)
                 UPDATE index_jobs j SET status='running',started_at=coalesce(started_at,now()),
@@ -3801,6 +3850,8 @@ class PostgresUnitOfWork:
                     max_attempts,
                     fingerprint,
                     fingerprint,
+                    entity_ids,
+                    entity_ids,
                     limit,
                     worker_id,
                     lease_seconds,
@@ -3835,6 +3886,21 @@ class PostgresUnitOfWork:
                 (lease_seconds, job_id, lease_token),
             )
             return cur.rowcount == 1
+
+    def count_complete_manifests(self, chunk_ids, fingerprint):
+        """Count exact chunks complete in the requested index definition."""
+        if not chunk_ids:
+            return 0
+        with self.connection.cursor() as cur:
+            cur.execute(
+                """SELECT count(DISTINCT em.chunk_id)
+                FROM embedding_manifests em
+                JOIN index_definitions d ON d.id=em.index_definition_id
+                WHERE em.chunk_id=ANY(%s) AND d.fingerprint=%s
+                  AND em.index_status='complete'""",
+                (chunk_ids, fingerprint),
+            )
+            return int(cur.fetchone()[0])
 
     def finish_job(self, job_id, lease_token, error=None, max_attempts=5):
         if not isinstance(lease_token, UUID):

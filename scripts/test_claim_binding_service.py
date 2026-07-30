@@ -37,7 +37,10 @@ class MockSemanticCallService:
             class runs:
                 @staticmethod
                 def get_run_status(run_id):
-                    return {"lifecycle_revision": 1, "execution_mode": "agent_led"}
+                    return {
+                        "lifecycle_revision": 1,
+                        "execution_mode": "autonomous_local",
+                    }
 
         return MockUOW()
 
@@ -186,7 +189,9 @@ def test_evaluate_claims_rejects_invented_passage_id(service, mock_packet, monke
         )
 
 
-def test_unsupported_claim_has_no_bindings(service, mock_packet, monkeypatch):
+def test_unsupported_claim_without_binding_fails_closed(
+    service, mock_packet, monkeypatch
+):
     claim_id = mock_packet["claims"][0]["claim_id"]
 
     def mock_prompt(*args, **kwargs):
@@ -208,16 +213,13 @@ def test_unsupported_claim_has_no_bindings(service, mock_packet, monkeypatch):
         "research_store.claim_binding_service.call_structured", mock_prompt
     )
 
-    service.evaluate_claims(
-        run_id=UUID(mock_packet["run_id"]),
-        packet_revision=mock_packet["coverage_revision"],
-        prompt_version="v1",
-        model_name="test-model",
-    )
-
-    persisted = service.evidence.persisted[0]
-    assert len(persisted.claim_evidence_bindings) == 0
-    assert persisted.claims[0].semantic_status == "unsupported"
+    with pytest.raises(ValueError, match="no authoritative passage binding"):
+        service.evaluate_claims(
+            run_id=UUID(mock_packet["run_id"]),
+            packet_revision=mock_packet["coverage_revision"],
+            prompt_version="v1",
+            model_name="test-model",
+        )
 
 
 def test_no_claims_returns_same_revision(service, mock_packet, monkeypatch):
@@ -260,10 +262,10 @@ def test_call_structured_error_raises_runtime_error(service, mock_packet, monkey
         )
 
 
-def test_missing_evaluations_key_produces_empty_bindings(
+def test_missing_evaluations_key_fails_closed(
     service, mock_packet, monkeypatch
 ):
-    """When the model returns no evaluations key, the service produces a valid packet with no bindings."""
+    """Every packet claim must receive an authoritative evaluation."""
 
     def mock_prompt(*args, **kwargs):
         return HostArtifactResult(
@@ -276,16 +278,13 @@ def test_missing_evaluations_key_produces_empty_bindings(
         "research_store.claim_binding_service.call_structured", mock_prompt
     )
 
-    new_rev = service.evaluate_claims(
-        run_id=UUID(mock_packet["run_id"]),
-        packet_revision=mock_packet["coverage_revision"],
-        prompt_version="v1",
-        model_name="test-model",
-    )
-
-    assert new_rev == mock_packet["coverage_revision"] + 1
-    persisted = service.evidence.persisted[0]
-    assert len(persisted.claim_evidence_bindings) == 0
+    with pytest.raises(ValueError, match="must evaluate every packet claim"):
+        service.evaluate_claims(
+            run_id=UUID(mock_packet["run_id"]),
+            packet_revision=mock_packet["coverage_revision"],
+            prompt_version="v1",
+            model_name="test-model",
+        )
 
 
 def test_multiple_bindings_per_claim(service, mock_packet, monkeypatch):

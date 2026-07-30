@@ -1649,6 +1649,16 @@ class ReleaseBenchmarkRunner:
                 )
             config.require_database()
 
+            # The release harness is the explicit supplier boundary for the
+            # two non-autonomous modes. Each run receives exactly one
+            # authority; flags are cleared before selecting the next mode.
+            os.environ.pop("FIRECRAWL_RELEASE_HOST_ARTIFACTS", None)
+            os.environ.pop("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES", None)
+            if mode == "agent_led":
+                os.environ["FIRECRAWL_RELEASE_HOST_ARTIFACTS"] = "1"
+            elif mode == "deterministic_debug":
+                os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
+
             # Build orchestrator for the target execution mode
             orchestrator_config = OrchestratorConfig(
                 execution_mode=mode,
@@ -1681,7 +1691,15 @@ class ReleaseBenchmarkRunner:
             spec = serialize_model(spec_model)
 
             # Build the search plan
-            configured_queries = objective.search_queries or (objective.objective,)
+            candidate_sha = os.environ.get("CANDIDATE_SHA", "main")
+            configured_sources = tuple(
+                source.file_path for source in objective.known_relevant_sources[:3]
+            )
+            configured_queries = tuple(
+                f"https://raw.githubusercontent.com/fvanevski/firecrawl_skill/"
+                f"{candidate_sha}/{path}"
+                for path in configured_sources
+            )
             search_plan = {
                 "schema_version": "search-plan-v1",
                 "research_spec_id": spec["research_spec_id"],
@@ -1690,7 +1708,7 @@ class ReleaseBenchmarkRunner:
                     {
                         "query_id": str(uuid4()),
                         "query": query,
-                        "facet": "primary",
+                        "facet": "benchmark_source",
                         "target_question_ids": [
                             question["question_id"] for question in spec["questions"]
                         ],
@@ -1714,11 +1732,17 @@ class ReleaseBenchmarkRunner:
             sampler = ResourceSampler(interval_seconds=1.0, max_samples=10)
             sampler.begin_window()
             try:
-                _ = orchestrator.run(
+                orchestration_result = orchestrator.run(
                     run_id=run_status.id,
                     spec=spec,
                     search_plan=search_plan,
                 )
+                if orchestration_result.outcome != "completed":
+                    errors.append(
+                        "orchestration did not complete: "
+                        f"outcome={orchestration_result.outcome}; "
+                        f"error={orchestration_result.error or 'none'}"
+                    )
             finally:
                 cpu_samples, gpu_samples = sampler.end_window()
                 resource_samples = tuple(cpu_samples + gpu_samples)
@@ -1739,6 +1763,9 @@ class ReleaseBenchmarkRunner:
                 self._populate_endpoint_usage(
                     telemetry_svc, UUID(run_id), metric_engine._connection
                 )
+                self._populate_cache_events(
+                    telemetry_svc, UUID(run_id), metric_engine._connection
+                )
 
                 self._persist_resource_samples(
                     telemetry_svc, UUID(run_id), resource_samples
@@ -1746,6 +1773,7 @@ class ReleaseBenchmarkRunner:
 
                 # Build and persist the aggregated summary.
                 telemetry_svc.build_summary(UUID(run_id), stages=RELEASE_CACHE_STAGES)
+                metric_engine._connection.commit()
 
             # Extract real metrics from persisted state (if engine available)
             if metric_engine is not None:
@@ -1857,6 +1885,33 @@ class ReleaseBenchmarkRunner:
                 }
             )
             telemetry_svc.record_resource_sample(bound)
+
+    def _populate_cache_events(
+        self,
+        telemetry_svc,
+        run_id: UUID,
+        connection,
+    ) -> None:
+        """Persist exact-run cache lookups reported by synthesis stages."""
+        with connection.cursor() as cur:
+            cur.execute(
+                """SELECT stage_name, artifact->>'cache_hit',
+                          semantic_call_id, model_name
+                   FROM synthesis_stages
+                   WHERE run_id=%s AND stage_name=ANY(%s)
+                     AND artifact ? 'cache_hit'""",
+                (str(run_id), list(RELEASE_CACHE_STAGES)),
+            )
+            for stage, raw_hit, call_id, model_name in cur.fetchall():
+                hit = raw_hit == "true"
+                telemetry_svc.record_cache_event(
+                    run_id,
+                    stage,
+                    "lookup",
+                    key_hash=str(call_id or ""),
+                    model_fingerprint=str(model_name or ""),
+                    hit=hit,
+                )
 
     def _campaign_to_workflow_results(
         self, runs: list[CampaignRun]

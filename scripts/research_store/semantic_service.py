@@ -375,21 +375,25 @@ class SemanticCallService:
                 validation_status="invalid" if validation_errors else "valid",
                 validation_errors=redact_sensitive(validation_errors),
             )
+            response_metadata = {
+                "authority": authority.value,
+                "actor_identifier": actor_identifier,
+                "validation_errors": redact_sensitive(validation_errors),
+                "transport_attempts": [],
+                "semantic_coverage": (
+                    "unassessed"
+                    if authority == SemanticAuthority.DETERMINISTIC_FIXTURE
+                    else "assessed"
+                ),
+            }
+            supplied_metadata = context.get("supplied_response_metadata")
+            if isinstance(supplied_metadata, Mapping):
+                response_metadata.update(redact_sensitive(dict(supplied_metadata)))
             uow.runs.finalize_semantic_call(
                 run_id,
                 call_id,
                 "failed" if validation_errors else "complete",
-                {
-                    "authority": authority.value,
-                    "actor_identifier": actor_identifier,
-                    "validation_errors": redact_sensitive(validation_errors),
-                    "transport_attempts": [],
-                    "semantic_coverage": (
-                        "unassessed"
-                        if authority == SemanticAuthority.DETERMINISTIC_FIXTURE
-                        else "assessed"
-                    ),
-                },
+                response_metadata,
                 "; ".join(validation_errors) if validation_errors else None,
             )
         provenance = {

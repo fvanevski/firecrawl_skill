@@ -157,6 +157,7 @@ def _make_service(
 
     mock_config = MagicMock()
     mock_config.embedding_model = "test-model"
+    mock_config.generative_model = "test-model"
     mock_config.database_url = "postgresql://localhost/test"
     mock_config.qdrant_url = "http://localhost:6333"
     mock_config.qdrant_api_key = ""
@@ -649,7 +650,7 @@ def test_synthesis_stage_delegates_to_report_service():
             run_revision=1,
             coverage_revision=2,
             run_state="synthesizing",
-            context={},
+            context={"evidence_packet_revision": 2},
         )
 
     # The orchestrator should have transitioned to "validating".
@@ -670,6 +671,7 @@ def test_synthesis_stage_handles_report_service_error():
 
     mock_config = MagicMock()
     mock_config.embedding_model = "test-model"
+    mock_config.generative_model = "test-model"
 
     stage = SynthesisStage(run_service=mock_run_service, config=mock_config)
 
@@ -686,7 +688,7 @@ def test_synthesis_stage_handles_report_service_error():
             run_revision=1,
             coverage_revision=2,
             run_state="synthesizing",
-            context={},
+            context={"evidence_packet_revision": 2},
         )
 
     assert result.stage == "synthesis"
@@ -745,8 +747,12 @@ def test_binding_stage_uses_injected_service():
     mock_binding = MagicMock()
     mock_binding.evaluate_claims.return_value = 5
 
-    service, _, _, mock_uow = _make_service()
+    service, mock_evidence, _, mock_uow = _make_service()
     service._binding_service = mock_binding
+    unbound_packet = deepcopy(_VALID_PACKET)
+    unbound_packet["claim_evidence_bindings"] = []
+    unbound_packet["claims"][0]["semantic_status"] = "unassessed"
+    mock_evidence.export_packet.return_value = unbound_packet
 
     run_id = UUID(_VALID_PACKET["run_id"])
 
@@ -800,11 +806,9 @@ def test_binding_stage_uses_injected_service():
     )
 
     # The binding stage should have used the injected mock.
-    # Note: packet_revision comes from the EvidencePacket's coverage_revision
-    # which is 2 in _VALID_PACKET.
     mock_binding.evaluate_claims.assert_called_once_with(
         run_id=run_id,
-        packet_revision=2,
+        packet_revision=1,
         prompt_version="synthesis-v1",
         model_name="test-model",
         provider="local",

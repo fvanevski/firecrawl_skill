@@ -4,6 +4,7 @@ import json
 import math
 import os
 import signal
+import time
 from collections import defaultdict
 from threading import Event
 from time import monotonic
@@ -46,7 +47,7 @@ class IndexWorker:
         self.lease_seconds = lease_seconds
         self.max_attempts = max_attempts
 
-    def run_batch(self, limit: int = 64) -> dict:
+    def run_batch(self, limit: int = 64, entity_ids: list[UUID] | None = None) -> dict:
         if limit <= 0:
             raise ValueError("limit must be positive")
         result = {
@@ -55,17 +56,25 @@ class IndexWorker:
             "complete": 0,
             "failed": 0,
             "lease_lost": 0,
+            "embedding_batches": 0,
+            "embedding_texts": 0,
+            "embedding_elapsed_seconds": 0.0,
         }
+        claim_options = {
+            "lease_seconds": self.lease_seconds,
+            "worker_id": self.worker_id,
+            "max_attempts": self.max_attempts,
+            "fingerprint": getattr(self.embedder, "fingerprint", None),
+        }
+        if entity_ids is not None:
+            claim_options["entity_ids"] = entity_ids
         if limit <= 1:
             # Original single-job path for backward compatibility.
             for _ in range(limit):
                 with self.uow_factory() as uow:
                     jobs = uow.index_jobs.claim_jobs(
                         1,
-                        lease_seconds=self.lease_seconds,
-                        worker_id=self.worker_id,
-                        max_attempts=self.max_attempts,
-                        fingerprint=getattr(self.embedder, "fingerprint", None),
+                        **claim_options,
                     )
                 if not jobs:
                     break
@@ -102,10 +111,7 @@ class IndexWorker:
             with self.uow_factory() as uow:
                 jobs = uow.index_jobs.claim_jobs(
                     limit,
-                    lease_seconds=self.lease_seconds,
-                    worker_id=self.worker_id,
-                    max_attempts=self.max_attempts,
-                    fingerprint=getattr(self.embedder, "fingerprint", None),
+                    **claim_options,
                 )
             if not jobs:
                 self._heartbeat(result)
@@ -117,6 +123,11 @@ class IndexWorker:
                 result["complete"] += batch_result["complete"]
                 result["failed"] += batch_result["failed"]
                 result["lease_lost"] += batch_result["lease_lost"]
+                result["embedding_batches"] += batch_result["embedding_batches"]
+                result["embedding_texts"] += batch_result["embedding_texts"]
+                result["embedding_elapsed_seconds"] += batch_result[
+                    "embedding_elapsed_seconds"
+                ]
             except LeaseLost:
                 result["lease_lost"] += 1
             except Exception as exc:  # noqa: BLE001
@@ -155,7 +166,14 @@ class IndexWorker:
             key = job.get("fingerprint", "")
             groups[key].append(job)
 
-        result = {"complete": 0, "failed": 0, "lease_lost": 0}
+        result = {
+            "complete": 0,
+            "failed": 0,
+            "lease_lost": 0,
+            "embedding_batches": 0,
+            "embedding_texts": 0,
+            "embedding_elapsed_seconds": 0.0,
+        }
 
         for group in groups.values():
             self._process_microbatch_group(group, result)
@@ -224,13 +242,20 @@ class IndexWorker:
             valid_texts = [texts[i] for i in valid_indices]
             if hasattr(embedder, "batch"):
                 try:
+                    embedding_started = time.monotonic()
                     batch_vectors = embedder.batch(valid_texts)
                 except ValueError:
                     # Batch endpoint failed — fall back to per-text embedding
                     # so that partial failures only affect the offending job.
                     for idx in valid_indices:
                         try:
+                            embedding_started = time.monotonic()
                             vec = embedder(texts[idx])
+                            result["embedding_elapsed_seconds"] += (
+                                time.monotonic() - embedding_started
+                            )
+                            result["embedding_batches"] += 1
+                            result["embedding_texts"] += 1
                             vectors[idx] = vec
                         except ValueError as inner_exc:
                             job = group[idx]
@@ -238,6 +263,11 @@ class IndexWorker:
                             result["failed"] += 1
                             already_failed.add(idx)
                 else:
+                    result["embedding_elapsed_seconds"] += (
+                        time.monotonic() - embedding_started
+                    )
+                    result["embedding_batches"] += 1
+                    result["embedding_texts"] += len(valid_texts)
                     # Batch succeeded — assign vectors to their indices.
                     for idx, vec in zip(valid_indices, batch_vectors):
                         vectors[idx] = vec
@@ -246,7 +276,13 @@ class IndexWorker:
                 # failures only affect the offending job.
                 for idx in valid_indices:
                     try:
+                        embedding_started = time.monotonic()
                         vec = embedder(texts[idx])
+                        result["embedding_elapsed_seconds"] += (
+                            time.monotonic() - embedding_started
+                        )
+                        result["embedding_batches"] += 1
+                        result["embedding_texts"] += 1
                         vectors[idx] = vec
                     except ValueError as exc:
                         already_failed.add(idx)
@@ -280,9 +316,12 @@ class IndexWorker:
             if point:
                 upsert_points.append(point)
 
-        # Renew leases before upsert.
-        for job in group:
-            self._renew(job)
+        # Renew only jobs that have not already been durably failed. Renewing
+        # an already-finished job reports a false lease loss and discards the
+        # batch's authoritative failure counts.
+        for i, job in enumerate(group):
+            if i not in already_failed:
+                self._renew(job)
 
         if upsert_points:
             try:

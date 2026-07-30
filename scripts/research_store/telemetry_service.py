@@ -208,7 +208,7 @@ class PerformanceTelemetryService:
 
         throughput = 0.0
         if elapsed and elapsed > 0:
-            throughput = round(total_texts / elapsed, 3)
+            throughput = round(float(total_texts) / float(elapsed), 3)
 
         return {
             "batch_count": batch_count or 0,
@@ -347,6 +347,8 @@ class PerformanceTelemetryService:
                      THEN 'endpoint'
                      WHEN SUM(CASE WHEN source = 'tokenizer' THEN 1 ELSE 0 END) > 0
                      THEN 'tokenizer'
+                     WHEN SUM(CASE WHEN source = 'not_invoked' THEN 1 ELSE 0 END) > 0
+                     THEN 'not_invoked'
                      ELSE 'unavailable'
                    END,
                    COUNT(*)

@@ -25,7 +25,7 @@ sys.path.insert(0, str(SCRIPTS))
 from research_domain import load_model, schema_registry, serialize_model
 from research_store import cli as store_cli
 from research_store.config import StoreConfig
-from research_store.container import build_service
+from research_store.container import build_run_service, build_service
 from research_store.domain import IngestRequest
 from research_store.legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from research_store.postgres import connect, migrate, require_disposable_database_reset
@@ -1360,6 +1360,43 @@ def test_batch_records_acquisition_failure_without_losing_success(service):
         )
 
 
+def test_run_scoped_passage_selection_has_two_run_isolation(service):
+    run_service = build_run_service(service.config)
+    run_a = run_service.create(
+        objective="run A authoritative extraction",
+        external_id=f"fr_integration_{uuid4().hex}",
+        execution_mode="autonomous_local",
+    )
+    run_b = run_service.create(
+        objective="run B must not see run A",
+        external_id=f"fr_integration_{uuid4().hex}",
+        execution_mode="autonomous_local",
+    )
+    manifest = service.ingest_batch(
+        f"fc_integration_{uuid4().hex}",
+        "orchestration_extract",
+        [
+            IngestRequest(
+                "https://integration.example/run-a", b"# Run A\n\nScoped evidence."
+            )
+        ],
+        research_run_external_id=run_a.external_id,
+    )
+    chunk_id = UUID(str(manifest["assets"][0]["chunk_ids"][0]))
+
+    execution_a, passages_a = service.select_run_passages(
+        run_a.id, [chunk_id], max_tokens=1000, max_passages=1
+    )
+    execution_b, passages_b = service.select_run_passages(
+        run_b.id, [chunk_id], max_tokens=1000, max_passages=1
+    )
+
+    assert execution_a.mechanical_status.value == "succeeded"
+    assert [UUID(str(item["chunk_id"])) for item in passages_a] == [chunk_id]
+    assert execution_b.mechanical_status.value == "failed"
+    assert passages_b == []
+
+
 def test_batch_rejects_invalid_run_and_active_reuse_before_ledger_mutation(service):
     missing_run = f"fr_missing_{uuid4().hex}"
     missing_invocation = f"fc_missing_{uuid4().hex}"
@@ -2022,7 +2059,11 @@ class TestResearchOrchestratorIntegration:
 
         # Create a test run
         run_svc = ResearchRunService(service.uow_factory)
-        run_status = run_svc.create("Integration test objective", f"test-{uuid4()}")
+        run_status = run_svc.create(
+            "Integration test objective",
+            f"test-{uuid4()}",
+            execution_mode="autonomous_local",
+        )
         run_id = run_status.id
 
         from budget_policy import conservative_research_spec

@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from budget_policy import BudgetPolicy, ResourceCaps
 from research_domain.models import (
+    EvidenceClaim,
     EvidenceGroup,
     EvidencePacket,
     EvidencePassage,
@@ -76,6 +77,7 @@ class EvidenceService:
         candidates: list[dict],
         retrieval_events: list[RetrievalProvenance],
         effective_caps: ResourceCaps,
+        claims: tuple[EvidenceClaim, ...] = (),
     ) -> EvidencePacket:
         """Construct a bounded, deterministic EvidencePacket.
 
@@ -110,7 +112,10 @@ class EvidenceService:
 
             source_url = cand.get("source_url") or cand.get("url") or ""
             passage = EvidencePassage(
-                passage_id=uuid4(),
+                # Passage identity is the authoritative persisted chunk ID.
+                # Claim-evidence links reference chunks at the database layer;
+                # allocating a second random UUID makes those links invalid.
+                passage_id=UUID(str(cand["chunk_id"])),
                 candidate_id=UUID(str(cand["candidate_id"])),
                 snapshot_id=UUID(str(cand["snapshot_id"])),
                 chunk_id=UUID(str(cand["chunk_id"])),
@@ -221,7 +226,7 @@ class EvidenceService:
             run_id=run_id,
             research_spec_id=research_spec_id,
             coverage_revision=coverage_revision,
-            claims=(),
+            claims=claims,
             passages=tuple(passages),
             omitted_passages=tuple(omitted_passages),
             claim_evidence_bindings=(),
@@ -297,7 +302,10 @@ class EvidenceService:
                     f"EvidencePacket {run_id} r{revision or 'latest'} not found"
                 )
 
-            packet_dict = packet_rec.to_dict()
+            packet_dict = getattr(packet_rec, "payload", None)
+            if not isinstance(packet_dict, dict):
+                record_dict = packet_rec.to_dict()
+                packet_dict = record_dict.get("payload", record_dict)
             packet = load_model(packet_dict)
 
             # If there are no claim-evidence bindings, there is nothing

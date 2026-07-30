@@ -43,6 +43,13 @@ class DocumentRepository(Protocol):
         max_passages: int,
         include_neighbors: bool,
     ) -> list[dict[str, Any]]: ...
+    def fetch_run_passages(
+        self,
+        run_id: UUID,
+        chunk_ids: list[UUID],
+        max_tokens: int,
+        max_passages: int,
+    ) -> list[dict[str, Any]]: ...
 
 
 class ChunkRepository(Protocol):

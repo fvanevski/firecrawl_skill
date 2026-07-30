@@ -5,9 +5,9 @@ import logging
 from copy import deepcopy
 from uuid import UUID, uuid4
 
-from model_gateway import call_structured
 from research_domain.registry import load_model
 
+from .authorized_semantic import call_authorized_structured as call_structured
 from .evidence import EvidenceService
 from .semantic_service import SemanticCallService
 
@@ -52,9 +52,10 @@ class ClaimBindingService:
         Returns:
             The revision of the newly persisted EvidencePacket.
         """
-        packet_dict = self.evidence.export_packet(run_id, packet_revision)
-        if not packet_dict:
+        packet_record = self.evidence.export_packet(run_id, packet_revision)
+        if not packet_record:
             raise ValueError(f"EvidencePacket {run_id} r{packet_revision} not found")
+        packet_dict = packet_record.get("payload", packet_record)
 
         passages = packet_dict.get("passages", [])
         claims = packet_dict.get("claims", [])
@@ -66,6 +67,8 @@ class ClaimBindingService:
             "You are a rigorous evidence evaluator. "
             "Given a list of research claims and a list of passages, "
             "determine if the passages support, contradict, qualify, or provide context for each claim. "
+            "Return exactly one evaluation for every claim and at least one "
+            "binding to a supplied passage for every evaluation. "
             "Respond strictly using the JSON schema provided. "
             "Do not invent IDs. Only use the provided claim_id and passage_id values."
         )
@@ -90,12 +93,17 @@ class ClaimBindingService:
         }
 
         with self.semantic.uow_factory() as uow:
-            status = uow.runs.get_run_status(run_id)
+            status = uow.runs.get_run_status(run_id=run_id)
             context["run_revision"] = status["lifecycle_revision"]
 
         schema = deepcopy(self.schema)
         valid_claim_ids = [c["claim_id"] for c in claims]
         valid_passage_ids = [p["passage_id"] for p in passages]
+        schema["properties"]["evaluations"]["minItems"] = len(valid_claim_ids)
+        schema["properties"]["evaluations"]["maxItems"] = len(valid_claim_ids)
+        schema["properties"]["evaluations"]["items"]["properties"]["bindings"][
+            "minItems"
+        ] = 1
         schema["properties"]["evaluations"]["items"]["properties"]["claim_id"][
             "enum"
         ] = valid_claim_ids
@@ -103,15 +111,36 @@ class ClaimBindingService:
             "properties"
         ]["passage_ids"]["items"]["enum"] = valid_passage_ids
 
+        deterministic_fixture = {
+            "evaluations": [
+                {
+                    "claim_id": claim["claim_id"],
+                    "semantic_status": "supported",
+                    "bindings": [
+                        {
+                            "passage_ids": [
+                                passages[index % len(passages)]["passage_id"]
+                            ],
+                            "relationship": "supports",
+                            "confidence": 0.8,
+                            "uncertainty": "deterministic debug fixture",
+                        }
+                    ],
+                }
+                for index, claim in enumerate(claims)
+            ]
+        }
         result = call_structured(
+            semantic_service=self.semantic,
+            semantic_context=context,
+            deterministic_fixture=deterministic_fixture,
+            actor_identifier="release-campaign-host-claim-binder",
             provider=provider,
             model=model_name,
             schema=schema,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             prompt_version=prompt_version,
-            semantic_persistence=self.semantic,
-            semantic_context=context,
         )
 
         if result.error:
@@ -157,11 +186,21 @@ class ClaimBindingService:
                 )
 
             bindings = eval_item.get("bindings", [])
+            if not bindings:
+                raise ValueError(
+                    f"claim {claim_id_str} has no authoritative passage binding"
+                )
             for b in bindings:
                 passage_ids_str = b.get("passage_ids", [])
                 for pid in passage_ids_str:
                     if pid not in valid_passage_ids:
                         raise ValueError(f"unknown passage IDs: ['{pid}']")
+
+        evaluated_claim_ids = [item.get("claim_id") for item in evaluations]
+        if len(evaluated_claim_ids) != len(set(evaluated_claim_ids)):
+            raise ValueError("claim binding output contains duplicate claim evaluations")
+        if set(evaluated_claim_ids) != valid_claim_ids:
+            raise ValueError("claim binding output must evaluate every packet claim")
 
         # Phase 2: Build bindings and claim updates (safe now that validation passed).
         new_bindings = []

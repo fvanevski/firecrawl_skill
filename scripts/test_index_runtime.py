@@ -362,6 +362,7 @@ class _MicrobatchState:
         self.finishes: list[tuple] = []
         self.claim_history: list[dict] = []
         self.upsert_calls: list[dict] = []
+        self.finished_ids: set[object] = set()
 
     def _make_job(self, chunk_id, manifest_id, dimension=None, fingerprint="fp"):
         return {
@@ -410,10 +411,11 @@ def _make_uow(state):
 
         def renew_job(self, job_id, lease_token, lease_seconds):
             state.renewals.append((job_id, lease_token, lease_seconds))
-            return True
+            return job_id not in state.finished_ids
 
         def finish_job(self, job_id, lease_token, error, **options):
             state.finishes.append((job_id, lease_token, error, options))
+            state.finished_ids.add(job_id)
             return True  # worker still owns lease at finish
 
         def chunks_for_index(self, chunk_ids, manifest_id=None):

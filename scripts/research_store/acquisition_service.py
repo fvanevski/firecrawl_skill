@@ -52,6 +52,9 @@ class FirecrawlSearchAdapter:
         if not query_text.strip():
             raise ValueError("query_text must be non-empty")
 
+        if backend == "firecrawl_scrape":
+            return self._scrape_url(query_text, retries=retries)
+
         cmd = [
             "firecrawl",
             "search",
@@ -61,6 +64,9 @@ class FirecrawlSearchAdapter:
             "--sources",
             sources,
             "--ignore-invalid-urls",
+            "--scrape",
+            "--scrape-formats",
+            "markdown",
             "--json",
         ]
         if tbs:
@@ -140,6 +146,82 @@ class FirecrawlSearchAdapter:
             },
             requested_at=requested_at,
             responded_at=responded_at,
+        )
+
+    def _scrape_url(self, url: str, *, retries: int) -> SearchAdapterResult:
+        """Scrape one labeled benchmark source through the real CLI."""
+        cmd = [
+            "firecrawl",
+            "scrape",
+            url,
+            "--format",
+            "markdown",
+            "--only-main-content",
+            "--json",
+        ]
+        requested_at = utcnow()
+        last_code = 0
+        last_stderr = ""
+        for attempt in range(retries + 1):
+            code, stdout, stderr = self.runner(cmd)
+            responded_at = utcnow()
+            last_code = code
+            last_stderr = stderr
+            if code == 0 and stdout:
+                try:
+                    scraped = json.loads(stdout)
+                    markdown = scraped.get("markdown")
+                    metadata = scraped.get("metadata") or {}
+                    if not isinstance(markdown, str) or not markdown.strip():
+                        raise ValueError("scrape response has no markdown")
+                    payload = {
+                        "success": True,
+                        "data": {
+                            "web": [
+                                {
+                                    "url": metadata.get("url") or url,
+                                    "title": url.rsplit("/", 1)[-1],
+                                    "description": "versioned benchmark source",
+                                    "markdown": markdown,
+                                    "metadata": metadata,
+                                }
+                            ]
+                        },
+                    }
+                except (json.JSONDecodeError, ValueError) as exc:
+                    last_stderr = f"invalid Firecrawl scrape response: {exc}"
+                else:
+                    return SearchAdapterResult(
+                        raw_payload=json.dumps(payload).encode("utf-8"),
+                        http_status=200,
+                        provider_request_id=metadata.get("scrapeId"),
+                        transport_error=None,
+                        transport_metadata={
+                            "attempt": attempt + 1,
+                            "cmd": cmd,
+                            "exit_code": code,
+                            "operation": "scrape",
+                        },
+                        requested_at=requested_at,
+                        responded_at=responded_at,
+                    )
+            if not any(
+                tag in stderr
+                for tag in ("EAI_AGAIN", "ENOTFOUND", "ECONNRESET", "ETIMEDOUT")
+            ):
+                break
+        error = (
+            f"Firecrawl scrape failed (exit {last_code}): "
+            f"{last_stderr.strip()[:300]}"
+        )
+        return SearchAdapterResult(
+            raw_payload=json.dumps({"success": False, "error": error}).encode(),
+            http_status=500,
+            provider_request_id=None,
+            transport_error=error,
+            transport_metadata={"cmd": cmd, "exit_code": last_code},
+            requested_at=requested_at,
+            responded_at=utcnow(),
         )
 
 

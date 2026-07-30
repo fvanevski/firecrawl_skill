@@ -1962,9 +1962,15 @@ class TokenAccounting:
     def __post_init__(self) -> None:
         if self.schema_version != "token-accounting-v1":
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
-        if self.source not in ("endpoint", "tokenizer", "unavailable"):
+        if self.source not in (
+            "endpoint",
+            "tokenizer",
+            "not_invoked",
+            "unavailable",
+        ):
             raise ValueError(
-                f"source must be endpoint, tokenizer, or unavailable; got: {self.source}"
+                "source must be endpoint, tokenizer, not_invoked, or unavailable; "
+                f"got: {self.source}"
             )
 
         # If endpoint source, at least one field must be present.
@@ -2207,9 +2213,15 @@ class EndpointUsageRecord:
     def __post_init__(self) -> None:
         if self.schema_version != "endpoint-usage-v1":
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
-        if self.source not in ("endpoint", "tokenizer", "unavailable"):
+        if self.source not in (
+            "endpoint",
+            "tokenizer",
+            "not_invoked",
+            "unavailable",
+        ):
             raise ValueError(
-                f"source must be endpoint, tokenizer, or unavailable; got: {self.source}"
+                "source must be endpoint, tokenizer, not_invoked, or unavailable; "
+                f"got: {self.source}"
             )
         if self.endpoint_type and self.endpoint_type not in (
             "generative",
@@ -2282,9 +2294,15 @@ class PerformanceTelemetrySummary:
     def __post_init__(self) -> None:
         if self.schema_version != "performance-telemetry-summary-v1":
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
-        if self.token_source not in ("endpoint", "tokenizer", "unavailable"):
+        if self.token_source not in (
+            "endpoint",
+            "tokenizer",
+            "not_invoked",
+            "unavailable",
+        ):
             raise ValueError(
-                f"token_source must be endpoint, tokenizer, or unavailable; got: {self.token_source}"
+                "token_source must be endpoint, tokenizer, not_invoked, or unavailable; "
+                f"got: {self.token_source}"
             )
         if self.cache_hit_rate is not None and not (0.0 <= self.cache_hit_rate <= 1.0):
             raise ValueError("cache_hit_rate must be between 0.0 and 1.0")
