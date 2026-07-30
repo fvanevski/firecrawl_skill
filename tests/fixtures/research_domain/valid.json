@@ -609,6 +609,9 @@
     ],
     "known_distractor_sources": [],
     "expected_unresolved_controversies": [],
+    "search_queries": [],
+    "search_query_expected_sources": {},
+    "ground_truth_answers": {},
     "citation_support_labels": {
       "q1": "SUPPORTED"
     }
@@ -640,6 +643,9 @@
         ],
         "known_distractor_sources": [],
         "expected_unresolved_controversies": [],
+        "search_queries": [],
+        "search_query_expected_sources": {},
+        "ground_truth_answers": {},
         "citation_support_labels": {
           "q1": "SUPPORTED"
         }

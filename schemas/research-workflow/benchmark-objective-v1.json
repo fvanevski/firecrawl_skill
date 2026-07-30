@@ -48,6 +48,12 @@
       },
       "type": "array"
     },
+    "ground_truth_answers": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
     "id": {
       "type": "string"
     },
@@ -76,6 +82,21 @@
       "const": "benchmark-objective-v1",
       "type": "string"
     },
+    "search_queries": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "search_query_expected_sources": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    },
     "title": {
       "type": "string"
     }
@@ -89,8 +110,7 @@
     "expected_source_classes",
     "known_relevant_sources",
     "known_distractor_sources",
-    "expected_unresolved_controversies",
-    "citation_support_labels"
+    "expected_unresolved_controversies"
   ],
   "title": "BenchmarkObjective",
   "type": "object"
