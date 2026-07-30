@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -39,6 +40,11 @@ TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
+
+
+def _now_iso():
+    """Return current UTC time as an ISO-8601 string compatible with timestamptz."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 @pytest.fixture(scope="session")
@@ -365,6 +371,7 @@ class TestRunScopedCacheIsolation:
         reproducible from their own event sets.  Unrelated prior cache
         records cannot alter a benchmark run's metric.
         """
+        import time
         from uuid import uuid4
 
         from research_store.release_benchmark import (
@@ -431,7 +438,6 @@ class TestRunScopedCacheIsolation:
 
         # Also insert global semantic_cache entries that should NOT affect
         # either run in strict mode.
-        import time
 
         with telemetry_connection.cursor() as cur:
             cur.execute(
@@ -486,6 +492,7 @@ class TestRunScopedCacheIsolation:
         Issue #159: when there are no scoped lookups for a run, the cache
         metric must be UNAVAILABLE — not a borrowed global ratio.
         """
+        import time
         from uuid import uuid4
 
         from research_store.release_benchmark import (
@@ -497,7 +504,6 @@ class TestRunScopedCacheIsolation:
         run_id = uuid4()
 
         # Insert global cache entries but NO run-scoped events.
-        import time
 
         with telemetry_connection.cursor() as cur:
             cur.execute(
@@ -542,6 +548,7 @@ class TestRunScopedCacheIsolation:
         Issue #159: unrelated prior cache records cannot alter a benchmark
         run's metric.
         """
+        import time
         from uuid import uuid4
 
         from research_store.release_benchmark import (
@@ -553,7 +560,6 @@ class TestRunScopedCacheIsolation:
         run_id = uuid4()
 
         # Insert many global cache entries with various statuses.
-        import time
 
         with telemetry_connection.cursor() as cur:
             for i in range(20):
@@ -1093,7 +1099,6 @@ class TestTokenCompleteness:
     ):
         """When every semantic call has a matching endpoint_usage_record,
         token status should be MEASURED."""
-        import time
         from uuid import uuid4
 
         from research_domain.models import EndpointUsageRecord
@@ -1120,7 +1125,7 @@ class TestTokenCompleteness:
                     "created",
                     "agent_led",
                     "Test",
-                    "test",
+                    f"test_{uuid4().hex[:8]}",
                 ),
             )
         telemetry_connection.commit()
@@ -1129,9 +1134,10 @@ class TestTokenCompleteness:
         with telemetry_connection.cursor() as cur:
             cur.execute(
                 """INSERT INTO semantic_calls (id, run_id, stage, provider,
-                   model, prompt_version, request, status, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s),
-                          (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                   model, prompt_version, input_sha256, request, status,
+                   idempotency_key, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s),
+                          (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     str(call_id_1),
                     str(run_id),
@@ -1139,18 +1145,22 @@ class TestTokenCompleteness:
                     "openai",
                     "gpt-4",
                     "v1",
+                    "0" * 64,
                     "{}",
-                    "completed",
-                    time.time(),
+                    "complete",
+                    f"idem-{call_id_1}",
+                    _now_iso(),
                     str(call_id_2),
                     str(run_id),
                     "draft",
                     "openai",
                     "gpt-4",
                     "v1",
+                    "0" * 64,
                     "{}",
-                    "completed",
-                    time.time(),
+                    "complete",
+                    f"idem-{call_id_2}",
+                    _now_iso(),
                 ),
             )
         telemetry_connection.commit()
@@ -1171,6 +1181,10 @@ class TestTokenCompleteness:
             )
         telemetry_connection.commit()
 
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
+        telemetry_connection.commit()
+
         engine = MetricEngine(TEST_DSN)
         engine._connection = telemetry_connection
         engine.config = ReleaseBenchmarkConfig(strict=True)
@@ -1182,7 +1196,6 @@ class TestTokenCompleteness:
     def test_token_incomplete_when_calls_lack_usage_records(self, telemetry_connection):
         """When semantic calls exist without matching endpoint_usage_records,
         token status should be INCOMPLETE."""
-        import time
         from uuid import uuid4
 
         from research_domain.models import EndpointUsageRecord
@@ -1209,7 +1222,7 @@ class TestTokenCompleteness:
                     "created",
                     "agent_led",
                     "Test",
-                    "test",
+                    f"test_{uuid4().hex[:8]}",
                 ),
             )
         telemetry_connection.commit()
@@ -1218,9 +1231,10 @@ class TestTokenCompleteness:
         with telemetry_connection.cursor() as cur:
             cur.execute(
                 """INSERT INTO semantic_calls (id, run_id, stage, provider,
-                   model, prompt_version, request, status, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s),
-                          (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                   model, prompt_version, input_sha256, request, status,
+                   idempotency_key, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s),
+                          (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     str(call_id_1),
                     str(run_id),
@@ -1228,18 +1242,22 @@ class TestTokenCompleteness:
                     "openai",
                     "gpt-4",
                     "v1",
+                    "0" * 64,
                     "{}",
-                    "completed",
-                    time.time(),
+                    "complete",
+                    f"idem-{call_id_1}",
+                    _now_iso(),
                     str(call_id_2),
                     str(run_id),
                     "draft",
                     "openai",
                     "gpt-4",
                     "v1",
+                    "0" * 64,
                     "{}",
-                    "completed",
-                    time.time(),
+                    "complete",
+                    f"idem-{call_id_2}",
+                    _now_iso(),
                 ),
             )
         telemetry_connection.commit()
@@ -1257,6 +1275,10 @@ class TestTokenCompleteness:
                 source="endpoint",
             )
         )
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
         telemetry_connection.commit()
 
         engine = MetricEngine(TEST_DSN)
@@ -1297,7 +1319,7 @@ class TestEmbeddingCompleteness:
                     "created",
                     "agent_led",
                     "Test",
-                    "test",
+                    f"test_{uuid4().hex[:8]}",
                 ),
             )
         telemetry_connection.commit()
@@ -1316,6 +1338,10 @@ class TestEmbeddingCompleteness:
             endpoint_model="text-embedding-3-small",
             dimension=1536,
         )
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
         telemetry_connection.commit()
 
         engine = MetricEngine(TEST_DSN)
@@ -1351,7 +1377,7 @@ class TestEmbeddingCompleteness:
                     "created",
                     "agent_led",
                     "Test",
-                    "test",
+                    f"test_{uuid4().hex[:8]}",
                 ),
             )
         telemetry_connection.commit()
@@ -1369,6 +1395,10 @@ class TestEmbeddingCompleteness:
             endpoint_model="text-embedding-3-small",
             dimension=1536,
         )
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
         telemetry_connection.commit()
 
         engine = MetricEngine(TEST_DSN)
@@ -1403,7 +1433,7 @@ class TestEmbeddingCompleteness:
                     "created",
                     "agent_led",
                     "Test",
-                    "test",
+                    f"test_{uuid4().hex[:8]}",
                 ),
             )
         telemetry_connection.commit()
@@ -1421,6 +1451,10 @@ class TestEmbeddingCompleteness:
             endpoint_model="text-embedding-3-small",
             dimension=1536,
         )
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
         telemetry_connection.commit()
 
         engine = MetricEngine(TEST_DSN)
@@ -1460,7 +1494,7 @@ class TestResourceCompleteness:
                     "created",
                     "agent_led",
                     "Test",
-                    "test",
+                    f"test_{uuid4().hex[:8]}",
                 ),
             )
         telemetry_connection.commit()
@@ -1481,6 +1515,10 @@ class TestResourceCompleteness:
             sampling_interval_seconds=1.0,
         )
         svc.record_resource_sample(sample)
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
         telemetry_connection.commit()
 
         engine = MetricEngine(TEST_DSN)
@@ -1516,7 +1554,7 @@ class TestResourceCompleteness:
                     "created",
                     "agent_led",
                     "Test",
-                    "test",
+                    f"test_{uuid4().hex[:8]}",
                 ),
             )
         telemetry_connection.commit()
@@ -1536,6 +1574,18 @@ class TestResourceCompleteness:
         )
         svc.record_resource_sample(sample)
         telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(strict=True)
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cpu_metric = next(m for m in metrics if m.name == "cpu_percent")
+        assert cpu_metric.status == MetricStatus.INCOMPLETE
 
         engine = MetricEngine(TEST_DSN)
         engine._connection = telemetry_connection
