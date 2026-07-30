@@ -732,17 +732,33 @@ class TestStrictCampaignIntegration:
         database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
+        # Use the actual git HEAD so the candidate SHA check passes.
+        import subprocess
+
         from research_store.strict_benchmark import _preflight_check
 
-        ok, errors = _preflight_check(
-            database_url=database_url,
-            blob_root=Path("/tmp"),
-            qdrant_url="http://localhost:6333",
-            qdrant_api_key="",
-            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
-            campaign_dir=Path("/tmp/preflight_test"),
-            candidate_sha="a" * 40,
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
+        candidate_sha = result.stdout.strip() if result.returncode == 0 else "a" * 40
+
+        with mock.patch(
+            "research_store.strict_benchmark._get_full_sha",
+            return_value=candidate_sha,
+        ):
+            ok, errors = _preflight_check(
+                database_url=database_url,
+                blob_root=Path("/tmp"),
+                qdrant_url="http://localhost:6333",
+                qdrant_api_key="",
+                dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+                campaign_dir=Path("/tmp/preflight_test"),
+                candidate_sha=candidate_sha,
+            )
         # Preflight may pass if CI has complete infrastructure.
         # When it fails, expect worker or alias related errors.
         if not ok:
