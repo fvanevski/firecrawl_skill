@@ -1,0 +1,90 @@
+{
+  "$defs": {},
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/performance-measurement-v2.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cache_hit_rate": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cache_miss_rate": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cpu_percent": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "embedding_throughput": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "gpu_memory_mb": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema_version": {
+      "const": "performance-measurement-v2",
+      "type": "string"
+    },
+    "semantic_calls": {
+      "type": "integer"
+    },
+    "total_latency_ms": {
+      "type": "number"
+    },
+    "total_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "total_latency_ms",
+    "total_tokens",
+    "semantic_calls",
+    "cache_hit_rate",
+    "embedding_throughput",
+    "gpu_memory_mb",
+    "cpu_percent"
+  ],
+  "title": "PerformanceMeasurement",
+  "type": "object"
+}

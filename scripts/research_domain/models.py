@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 
@@ -1502,7 +1502,8 @@ class BenchmarkObjective:
     """A single research objective in the benchmark dataset.
 
     Attributes:
-        schema_version: Always ``"benchmark-objective-v1"``.
+        schema_version: ``"benchmark-objective-v2"`` for the executable
+            release objective contract. Version 1 remains readable.
         id: Stable objective identifier (e.g., "obj-001").
         title: Human-readable title.
         objective: The research objective statement.
@@ -1534,16 +1535,38 @@ class BenchmarkObjective:
     ground_truth_answers: dict[str, str] = field(default_factory=dict)
     citation_support_labels: dict[str, str] = field(default_factory=dict)
 
-    SCHEMA_VERSION = "benchmark-objective-v1"
+    SCHEMA_VERSION = "benchmark-objective-v2"
+    SCHEMA_VERSIONS = ("benchmark-objective-v1", "benchmark-objective-v2")
+    REQUIRED_FIELDS: ClassVar[tuple[str, ...]] = (
+        "search_queries",
+        "search_query_expected_sources",
+        "ground_truth_answers",
+        "citation_support_labels",
+    )
 
     def __post_init__(self) -> None:
-        if self.schema_version != self.SCHEMA_VERSION:
+        if self.schema_version not in self.SCHEMA_VERSIONS:
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
         _text(self.id, "benchmark_objective.id")
         _text(self.title, "benchmark_objective.title")
         _text(self.objective, "benchmark_objective.objective")
         if not self.questions:
             raise ValueError("benchmark_objective.questions must not be empty")
+        if self.schema_version == self.SCHEMA_VERSION:
+            if not self.search_queries:
+                raise ValueError("benchmark_objective.search_queries must not be empty")
+            if not self.search_query_expected_sources:
+                raise ValueError(
+                    "benchmark_objective.search_query_expected_sources must not be empty"
+                )
+            if not self.ground_truth_answers:
+                raise ValueError(
+                    "benchmark_objective.ground_truth_answers must not be empty"
+                )
+            if not self.citation_support_labels:
+                raise ValueError(
+                    "benchmark_objective.citation_support_labels must not be empty"
+                )
 
 
 @dataclass(frozen=True)
@@ -1551,7 +1574,8 @@ class BenchmarkDataset:
     """Versioned benchmark dataset for release campaigns.
 
     Attributes:
-        schema_version: Always ``"benchmark-dataset-v1"``.
+        schema_version: ``"benchmark-dataset-v2"`` for the executable release
+            contract. Version 1 remains readable.
         version: Dataset version string.
         description: Human-readable description.
         evaluation_set: Whether this is the evaluation set (not for tuning).
@@ -1570,10 +1594,11 @@ class BenchmarkDataset:
     workflow_modes: tuple[str, ...]
     deterministic_integrity_checks: tuple[str, ...]
 
-    SCHEMA_VERSION = "benchmark-dataset-v1"
+    SCHEMA_VERSION = "benchmark-dataset-v2"
+    SCHEMA_VERSIONS = ("benchmark-dataset-v1", "benchmark-dataset-v2")
 
     def __post_init__(self) -> None:
-        if self.schema_version != self.SCHEMA_VERSION:
+        if self.schema_version not in self.SCHEMA_VERSIONS:
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
         _text(self.version, "benchmark_dataset.version")
         _text(self.description, "benchmark_dataset.description")
@@ -1597,8 +1622,8 @@ class QualityMeasurement:
     """Quality metric measurement for a single workflow run.
 
     Attributes:
-        schema_version: One of ``"quality-measurement-v1"`` (legacy heuristic)
-            or ``"quality-measurement-v2"`` (authoritative metrics from issue #142).
+        schema_version: ``"quality-measurement-v3"`` for status-aware release
+            measurements. Earlier versions remain readable.
         candidate_recall: Fraction of relevant candidates retrieved.
         source_quality_score: Quality score of sources (0.0–1.0).
         coverage_completeness: Fraction of coverage items resolved.
@@ -1608,17 +1633,21 @@ class QualityMeasurement:
     """
 
     schema_version: str
-    candidate_recall: float
-    source_quality_score: float
-    coverage_completeness: float
-    unsupported_claim_rate: float
-    citation_accuracy: float
-    report_quality_score: float
+    candidate_recall: float | None
+    source_quality_score: float | None
+    coverage_completeness: float | None
+    unsupported_claim_rate: float | None
+    citation_accuracy: float | None
+    report_quality_score: float | None
 
     # Backward-compatible attribute used by the schema registry.
-    # The v2 schema is the current write version; v1 is preserved for reading.
-    SCHEMA_VERSION = "quality-measurement-v2"
-    SCHEMA_VERSIONS = ("quality-measurement-v1", "quality-measurement-v2")
+    # The v3 schema is the current write version; v1 and v2 remain readable.
+    SCHEMA_VERSION = "quality-measurement-v3"
+    SCHEMA_VERSIONS = (
+        "quality-measurement-v1",
+        "quality-measurement-v2",
+        "quality-measurement-v3",
+    )
 
     def __post_init__(self) -> None:
         if self.schema_version not in self.SCHEMA_VERSIONS:
@@ -1634,7 +1663,7 @@ class QualityMeasurement:
             ("citation_accuracy", self.citation_accuracy),
             ("report_quality_score", self.report_quality_score),
         ]:
-            if not (0.0 <= value <= 1.0):
+            if value is not None and not (0.0 <= value <= 1.0):
                 raise ValueError(
                     f"{field_name} must be between 0.0 and 1.0, got: {value}"
                 )
@@ -1645,7 +1674,8 @@ class PerformanceMeasurement:
     """Performance metric measurement for a single workflow run.
 
     Attributes:
-        schema_version: Always ``"performance-measurement-v1"``.
+        schema_version: ``"performance-measurement-v2"`` for status-aware
+            release measurements. Version 1 remains readable.
         total_latency_ms: Total wall-clock latency in milliseconds.
         total_tokens: Total tokens consumed.
         semantic_calls: Number of semantic (LLM) calls made.
@@ -1654,50 +1684,59 @@ class PerformanceMeasurement:
             ``None`` as the default and auto-computes
             ``cache_miss_rate = 1.0 - cache_hit_rate`` in ``__post_init__``.
             Callers only need to set ``cache_hit_rate`` — the miss rate is
-            derived deterministically.  After construction the value is
-            always a number (never ``None``).
+            derived deterministically. It remains ``None`` when the hit rate
+            is unavailable.
         embedding_throughput: Embeddings per second.
-        gpu_memory_mb: Peak GPU memory in MB (0 if CPU-only).
+        gpu_memory_mb: Mean run-window GPU memory in MB, or ``None`` when
+            unavailable.
         cpu_percent: Peak CPU usage (0.0–100.0).
     """
 
     schema_version: str
     total_latency_ms: float
-    total_tokens: int
+    total_tokens: int | None
     semantic_calls: int
-    cache_hit_rate: float
-    embedding_throughput: float
-    gpu_memory_mb: float
-    cpu_percent: float
+    cache_hit_rate: float | None
+    embedding_throughput: float | None
+    gpu_memory_mb: float | None
+    cpu_percent: float | None
     cache_miss_rate: float | None = None
 
-    SCHEMA_VERSION = "performance-measurement-v1"
+    SCHEMA_VERSION = "performance-measurement-v2"
+    SCHEMA_VERSIONS = ("performance-measurement-v1", "performance-measurement-v2")
 
     def __post_init__(self) -> None:
-        if self.schema_version != self.SCHEMA_VERSION:
-            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+        if self.schema_version not in self.SCHEMA_VERSIONS:
+            raise ValueError(
+                f"unsupported schema_version: {self.schema_version}. "
+                f"Allowed: {self.SCHEMA_VERSIONS}"
+            )
         if self.total_latency_ms < 0:
             raise ValueError("total_latency_ms must be >= 0")
-        if self.total_tokens < 0:
+        if self.total_tokens is not None and self.total_tokens < 0:
             raise ValueError("total_tokens must be >= 0")
         if self.semantic_calls < 0:
             raise ValueError("semantic_calls must be >= 0")
-        if not (0.0 <= self.cache_hit_rate <= 1.0):
+        if self.cache_hit_rate is not None and not (0.0 <= self.cache_hit_rate <= 1.0):
             raise ValueError("cache_hit_rate must be between 0.0 and 1.0")
         # Auto-compute cache_miss_rate from cache_hit_rate when not provided.
         # This ensures callers only need to set cache_hit_rate and the
         # miss rate is derived deterministically.
-        expected_miss = 1.0 - self.cache_hit_rate
-        if (
+        expected_miss = (
+            None if self.cache_hit_rate is None else 1.0 - self.cache_hit_rate
+        )
+        if expected_miss is None:
+            object.__setattr__(self, "cache_miss_rate", None)
+        elif (
             self.cache_miss_rate is None
             or abs(self.cache_miss_rate - expected_miss) > 1e-9
         ):
             object.__setattr__(self, "cache_miss_rate", expected_miss)
-        if self.embedding_throughput < 0:
+        if self.embedding_throughput is not None and self.embedding_throughput < 0:
             raise ValueError("embedding_throughput must be >= 0")
-        if self.gpu_memory_mb < 0:
+        if self.gpu_memory_mb is not None and self.gpu_memory_mb < 0:
             raise ValueError("gpu_memory_mb must be >= 0")
-        if not (0.0 <= self.cpu_percent <= 100.0):
+        if self.cpu_percent is not None and not (0.0 <= self.cpu_percent <= 100.0):
             raise ValueError("cpu_percent must be between 0.0 and 100.0")
 
 

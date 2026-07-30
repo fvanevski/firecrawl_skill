@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 from importlib import util as importlib_util
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 from uuid import uuid4
 
@@ -442,15 +443,98 @@ class TestResourceSampler:
             assert sampler.cpu_available is True
         # If psutil is absent, cpu_available is False — that's expected.
 
+    def test_process_cpu_window_discards_baseline_and_normalizes(self):
+        """CPU is scoped to this process and the first delta is discarded."""
+        import research_store.resource_sampler as module
+
+        process = mock.Mock()
+        process.cpu_percent.side_effect = [0.0, 384.0]
+        fake_psutil = SimpleNamespace(
+            Process=mock.Mock(return_value=process),
+            cpu_count=mock.Mock(return_value=4),
+            __version__="6.1.1",
+        )
+        with (
+            mock.patch.object(module, "_HAS_PSUTIL", True),
+            mock.patch.object(module, "psutil", fake_psutil, create=True),
+            mock.patch.object(module, "_HAS_PYNVML", False),
+        ):
+            sampler = module.ResourceSampler()
+            sampler.begin_window()
+            cpu_samples, _ = sampler.end_window()
+
+        assert process.cpu_percent.call_args_list == [
+            mock.call(interval=None),
+            mock.call(interval=None),
+        ]
+        assert cpu_samples[0].value == 96.0
+        assert cpu_samples[0].status == "measured"
+        assert cpu_samples[0].sample_type == "process_cpu_percent_normalized"
+
+    def test_gpu_initializes_before_first_sample_and_records_identity(self):
+        """The first GPU observation initializes NVML without recursive locking."""
+        import research_store.resource_sampler as module
+
+        handle = object()
+        fake_nvml = SimpleNamespace(
+            __version__="13.610.43",
+            nvmlInit=mock.Mock(),
+            nvmlShutdown=mock.Mock(),
+            nvmlDeviceGetHandleByIndex=mock.Mock(return_value=handle),
+            nvmlDeviceGetUUID=mock.Mock(return_value="GPU-test-uuid"),
+            nvmlDeviceGetMemoryInfo=mock.Mock(
+                return_value=SimpleNamespace(used=512 * 1024 * 1024)
+            ),
+        )
+        with (
+            mock.patch.object(module, "_HAS_PSUTIL", False),
+            mock.patch.object(module, "_HAS_PYNVML", True),
+            mock.patch.object(module, "pynvml", fake_nvml, create=True),
+        ):
+            sampler = module.ResourceSampler()
+            sampler.begin_window()
+            _, gpu_samples = sampler.end_window()
+
+        assert len(gpu_samples) == 2
+        assert all(sample.status == "measured" for sample in gpu_samples)
+        assert all(sample.device_uuid == "GPU-test-uuid" for sample in gpu_samples)
+        fake_nvml.nvmlInit.assert_called_once_with()
+        fake_nvml.nvmlShutdown.assert_called_once_with()
+
+    def test_gpu_missing_library_and_collector_error_are_distinct(self):
+        """Missing collector is unavailable; an installed collector failure is invalid."""
+        import research_store.resource_sampler as module
+
+        with mock.patch.object(module, "_HAS_PYNVML", False):
+            unavailable = module.ResourceSampler().collect_gpu_sample()
+        assert unavailable is not None
+        assert unavailable.status == "unavailable"
+        assert unavailable.collector_version == "not-installed"
+
+        fake_nvml = SimpleNamespace(
+            __version__="13.610.43",
+            nvmlInit=mock.Mock(side_effect=RuntimeError("driver failure")),
+            nvmlShutdown=mock.Mock(),
+        )
+        with (
+            mock.patch.object(module, "_HAS_PYNVML", True),
+            mock.patch.object(module, "pynvml", fake_nvml, create=True),
+        ):
+            invalid = module.ResourceSampler().collect_gpu_sample()
+        assert invalid is not None
+        assert invalid.status == "invalid"
+        assert invalid.collector_version == "13.610.43"
+
     @pytest.mark.skipif(not _HAS_PSUTIL_TEST, reason="psutil not available")
     def test_collect_cpu_sample(self):
         from research_store.resource_sampler import ResourceSampler
 
         sampler = ResourceSampler()
+        sampler.begin_window()
         sample = sampler.collect_cpu_sample()
         assert sample is not None
         assert sample.device_type == "cpu"
-        assert sample.sample_type == "cpu_percent"
+        assert sample.sample_type == "process_cpu_percent_normalized"
         assert sample.status == "measured"
         assert 0 <= sample.value <= 100
 
@@ -459,6 +543,7 @@ class TestResourceSampler:
         from research_store.resource_sampler import ResourceSampler
 
         sampler = ResourceSampler()
+        sampler.begin_window()
         s1 = sampler.collect_cpu_sample()
         s2 = sampler.collect_cpu_sample()
         assert s1 is not None
@@ -471,6 +556,7 @@ class TestResourceSampler:
         from research_store.resource_sampler import ResourceSampler
 
         sampler = ResourceSampler()
+        sampler.begin_window()
         # Collect a few samples
         for _ in range(3):
             sampler.collect_cpu_sample()
@@ -486,6 +572,7 @@ class TestResourceSampler:
         from research_store.resource_sampler import ResourceSampler
 
         sampler = ResourceSampler(max_samples=2)
+        sampler.begin_window()
         s1 = sampler.collect_cpu_sample()
         s2 = sampler.collect_cpu_sample()
         s3 = sampler.collect_cpu_sample()
@@ -591,11 +678,11 @@ class TestStrictModeRejection:
         )
         assert summary.cpu_samples == 0
 
-    def test_strict_mode_produces_zero_metrics_when_telemetry_tables_absent(self):
-        """Strict mode no longer raises — it produces 0.0 metrics.
+    def test_strict_mode_produces_null_metrics_when_telemetry_tables_absent(self):
+        """Strict mode records unavailable values as null.
 
         When telemetry tables do not exist (pre-migration DB), strict mode
-        now produces 0.0 metrics with clear formulas documenting the empty
+        now produces null metrics with clear formulas documenting the empty
         source, rather than raising RuntimeError. The test verifies that
         the engine completes without error and returns measurable (0.0)
         performance metrics.
@@ -619,7 +706,7 @@ class TestStrictModeRejection:
             strict=True,
         )
 
-        # Strict mode no longer raises — it produces 0.0 metrics.
+        # Strict mode no longer raises; it produces explicit null metrics.
         # The mock connection does not support the context manager protocol,
         # so we need to mock cursor() to return a context manager.
         # Also mock fetchone() to return a proper tuple matching the query
@@ -630,12 +717,11 @@ class TestStrictModeRejection:
         mock_cursor.fetchone.return_value = (0, 0)  # COUNT=0, SUM=0
         mock_conn.cursor.return_value = mock_cursor
         performance, _ = engine.extract_performance_metrics(uuid4(), time.monotonic())
-        # All strict-mode unavailable metrics must be 0.0 — no legacy fallback.
-        assert performance.total_tokens == 0
-        assert performance.embedding_throughput == 0.0
-        assert performance.cache_hit_rate == 0.0
-        assert performance.cpu_percent == 0.0
-        assert performance.gpu_memory_mb == 0.0
+        assert performance.total_tokens is None
+        assert performance.embedding_throughput is None
+        assert performance.cache_hit_rate is None
+        assert performance.cpu_percent is None
+        assert performance.gpu_memory_mb is None
 
     def test_strict_mode_blocks_legacy_fallbacks(self):
         """Strict mode must not fall back to legacy sources when telemetry is unavailable.
@@ -667,6 +753,7 @@ class TestStrictModeRejection:
             0,  # cache_lookups
             0,  # cache_hits
             0,  # cache_misses
+            0,  # embedding_batch_count
             0.0,  # embedding_throughput
             0,  # embedding_total_texts
             0.0,  # embedding_elapsed_seconds
@@ -694,12 +781,11 @@ class TestStrictModeRejection:
 
         performance, _ = engine.extract_performance_metrics(uuid4(), time.monotonic())
 
-        # All strict-mode unavailable metrics must be 0.0 — no legacy fallback.
-        assert performance.total_tokens == 0
-        assert performance.embedding_throughput == 0.0
-        assert performance.cache_hit_rate == 0.0
-        assert performance.cpu_percent == 0.0
-        assert performance.gpu_memory_mb == 0.0
+        assert performance.total_tokens is None
+        assert performance.embedding_throughput is None
+        assert performance.cache_hit_rate is None
+        assert performance.cpu_percent is None
+        assert performance.gpu_memory_mb is None
 
     def test_strict_cache_metric_status_is_unavailable(self):
         """Cache metric status must be UNAVAILABLE when no scoped lookups exist.
@@ -730,6 +816,7 @@ class TestStrictModeRejection:
             0,  # cache_lookups
             0,  # cache_hits
             0,  # cache_misses
+            0,  # embedding_batch_count
             0.0,  # embedding_throughput
             0,  # embedding_total_texts
             0.0,  # embedding_elapsed_seconds
@@ -762,8 +849,7 @@ class TestStrictModeRejection:
         assert cache_metric.status == MetricStatus.UNAVAILABLE, (
             f"Expected UNAVAILABLE, got {cache_metric.status}"
         )
-        # The numeric value is 0.0 but the status is UNAVAILABLE.
-        assert cache_metric.value == 0.0
+        assert cache_metric.value is None
         # Source must always point to run_cache_events (issue #159).
         assert cache_metric.source.table == "run_cache_events"
         assert (
@@ -857,6 +943,7 @@ class TestStrictModeRejection:
             10,  # cache_lookups
             3,  # cache_hits
             7,  # cache_misses
+            1,  # embedding_batch_count
             50.0,  # embedding_throughput
             48,  # embedding_total_texts
             2.5,  # embedding_elapsed_seconds
@@ -989,6 +1076,7 @@ class TestStrictModeRejection:
                 "cache_lookups": 0,
                 "cache_hits": 0,
                 "cache_misses": 0,
+                "embedding_batch_count": 0,
                 "embedding_throughput": 0.0,
                 "embedding_total_texts": 0,
                 "embedding_elapsed_seconds": 0.0,
@@ -1011,17 +1099,15 @@ class TestStrictModeRejection:
             uuid4(), time.monotonic()
         )
 
-        # CPU must be 0.0 — no legacy fallback allowed.
-        assert performance.cpu_percent == 0.0
+        assert performance.cpu_percent is None
 
         # CPU metric status must be UNAVAILABLE.
         cpu_metric = next((m for m in metrics if m.name == "cpu_percent"), None)
         assert cpu_metric is not None
         assert cpu_metric.status == MetricStatus.UNAVAILABLE
-        assert "run_resource_samples empty" in cpu_metric.formula
+        assert "no measured process-scoped CPU samples" in cpu_metric.formula
 
-        # GPU must also be 0.0.
-        assert performance.gpu_memory_mb == 0.0
+        assert performance.gpu_memory_mb is None
         gpu_metric = next((m for m in metrics if m.name == "gpu_memory_mb"), None)
         assert gpu_metric is not None
         assert gpu_metric.status == MetricStatus.UNAVAILABLE
@@ -1062,6 +1148,7 @@ class TestStrictModeRejection:
                 "cache_lookups": 0,
                 "cache_hits": 0,
                 "cache_misses": 0,
+                "embedding_batch_count": 0,
                 "embedding_throughput": 0.0,
                 "embedding_total_texts": 0,
                 "embedding_elapsed_seconds": 0.0,
@@ -1084,7 +1171,7 @@ class TestStrictModeRejection:
         gpu_metric = next((m for m in metrics if m.name == "gpu_memory_mb"), None)
         assert gpu_metric is not None
         assert gpu_metric.status == MetricStatus.UNAVAILABLE
-        assert "run_resource_samples empty" in gpu_metric.formula
+        assert "no measured GPU samples" in gpu_metric.formula
 
 
 class TestCacheCounting:
@@ -1254,8 +1341,8 @@ class TestBenchmarkTelemetryWiring:
         # No record_endpoint_usage call when source is unavailable.
         assert not mock_telemetry_svc.record_endpoint_usage.called
 
-    def test_collect_resource_samples_cpu(self):
-        """_collect_resource_samples collects CPU samples when available."""
+    def test_persist_resource_samples_binds_run_id(self):
+        """Samples collected in the workload window retain exact run scope."""
         from uuid import uuid4
 
         from research_store.release_benchmark import ReleaseBenchmarkRunner
@@ -1264,24 +1351,16 @@ class TestBenchmarkTelemetryWiring:
 
         mock_telemetry_svc = mock.Mock()
 
-        with mock.patch(
-            "research_store.resource_sampler.ResourceSampler"
-        ) as MockSampler:
-            mock_sampler = mock.Mock()
-            mock_sampler.cpu_available = True
-            mock_sampler.gpu_available = False
-            mock_sampler.collect_cpu_sample.return_value = mock.Mock(
-                run_id="", sample_number=0
-            )
-            mock_sampler.collect_gpu_sample.return_value = None
-            MockSampler.return_value = mock_sampler
+        from research_domain.models import ResourceSample
 
-            runner._collect_resource_samples(
-                mock_telemetry_svc,
-                uuid4(),
-                5000.0,  # 5 seconds
-            )
-
-            # Should collect up to 5 samples (min of 5 and duration in seconds)
-            assert mock_sampler.collect_cpu_sample.call_count == 5
-            assert mock_telemetry_svc.record_resource_sample.call_count == 5
+        run_id = uuid4()
+        sample = ResourceSample(
+            run_id="",
+            device_type="cpu",
+            sample_type="process_cpu_percent_normalized",
+            sample_at="2026-01-01T00:00:00+00:00",
+            collector="psutil",
+        )
+        runner._persist_resource_samples(mock_telemetry_svc, run_id, (sample,))
+        persisted = mock_telemetry_svc.record_resource_sample.call_args.args[0]
+        assert persisted.run_id == str(run_id)

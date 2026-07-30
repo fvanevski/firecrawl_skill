@@ -533,12 +533,12 @@ class PerformanceTelemetryService:
             strict_pass = False
         if resource_summary["cpu_samples"] == 0:
             strict_pass = False
+        if resource_summary["gpu_samples"] == 0 or resource_summary["gpu_unavailable"]:
+            strict_pass = False
         if emb_stats["batch_count"] == 0 or emb_stats["elapsed_seconds"] == 0:
             strict_pass = False
         if cache_lookups == 0:
             strict_pass = False
-        # GPU is optional — unavailable does not fail strict.
-
         summary = PerformanceTelemetrySummary(
             run_id=str(run_id),
             schema_version="performance-telemetry-summary-v1",

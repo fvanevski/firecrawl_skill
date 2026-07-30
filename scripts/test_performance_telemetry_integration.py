@@ -165,10 +165,10 @@ class TestTelemetryLifecycle:
         assert summary.strict_pass is False  # No embedding telemetry
 
     def test_strict_mode_rejects_empty_telemetry(self, telemetry_connection):
-        """Strict mode must produce 0.0 metrics with UNAVAILABLE status.
+        """Strict mode must produce null metrics with UNAVAILABLE status.
 
         Strict mode no longer raises RuntimeError for empty telemetry.
-        Instead it produces 0.0 metrics with clear UNAVAILABLE status.
+        Instead it produces null metrics with clear UNAVAILABLE status.
         """
         run_id = uuid4()
 
@@ -198,13 +198,13 @@ class TestTelemetryLifecycle:
             strict=True,
         )
 
-        # Strict mode produces 0.0 metrics with UNAVAILABLE status.
+        # Strict mode produces null metrics with UNAVAILABLE status.
         from research_store.release_benchmark import MetricStatus
 
         _, metrics = engine.extract_performance_metrics(run_id, 0.0)
         cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
         assert cache_metric.status == MetricStatus.UNAVAILABLE
-        assert cache_metric.value == 0.0
+        assert cache_metric.value is None
 
     def test_cache_stats_query(self, telemetry_connection):
         """Cache stats correctly count lookups, hits, and misses."""
@@ -244,6 +244,84 @@ class TestTelemetryLifecycle:
         assert stats["lookups"] == 10
         assert stats["hits"] == 7
         assert stats["misses"] == 3
+
+    def test_mixed_resource_status_and_missing_gpu_identity_fail_closed(
+        self, telemetry_connection
+    ):
+        """Partial/error samples cannot be averaged into measured release metrics."""
+        from research_domain.models import ResourceSample
+
+        run_id = uuid4()
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test objective",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test objective",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        svc = PerformanceTelemetryService(telemetry_connection)
+        for number, status in enumerate(("measured", "invalid")):
+            svc.record_resource_sample(
+                ResourceSample(
+                    run_id=str(run_id),
+                    device_type="cpu",
+                    device_index=0,
+                    sample_type="process_cpu_percent_normalized",
+                    value=25.0,
+                    sample_at=f"2026-07-28T12:00:0{number}+00:00",
+                    collector="psutil",
+                    collector_version="6.1.1",
+                    sample_number=number,
+                    status=status,
+                )
+            )
+        svc.record_resource_sample(
+            ResourceSample(
+                run_id=str(run_id),
+                device_type="gpu",
+                device_index=0,
+                device_uuid="",
+                sample_type="gpu_memory_used_mb",
+                value=512.0,
+                sample_at="2026-07-28T12:00:00+00:00",
+                collector="pynvml",
+                collector_version="13.610.43",
+                sample_number=0,
+                status="measured",
+            )
+        )
+        svc.build_summary(run_id)
+
+        engine = MetricEngine(
+            TEST_DSN,
+            config=ReleaseBenchmarkConfig(
+                database_url=TEST_DSN, blob_root=Path("/tmp"), strict=True
+            ),
+        )
+        engine._connection = telemetry_connection
+        performance, metrics = engine.extract_performance_metrics(run_id, 0)
+        by_name = {metric.name: metric for metric in metrics}
+
+        assert performance.cpu_percent is None
+        assert by_name["cpu_percent"].status == MetricStatus.INVALID
+        assert by_name["cpu_percent"].source.sample_count == 1
+        assert dict(by_name["cpu_percent"].source.status_counts) == {
+            "invalid": 1,
+            "measured": 1,
+        }
+        assert performance.gpu_memory_mb is None
+        assert by_name["gpu_memory_mb"].status == MetricStatus.INCOMPLETE
+        assert by_name["gpu_memory_mb"].source.device_uuid == ""
 
 
 class TestLegacyFallback:
@@ -454,7 +532,7 @@ class TestRunScopedCacheIsolation:
         cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
 
         assert cache_metric.status == MetricStatus.UNAVAILABLE
-        assert cache_metric.value == 0.0
+        assert cache_metric.value is None
         assert cache_metric.source.table == "run_cache_events"
         assert "semantic_cache" not in cache_metric.source.table
 
@@ -513,7 +591,7 @@ class TestRunScopedCacheIsolation:
 
         # The global cache entries must NOT affect the strict metric.
         assert cache_metric.status == MetricStatus.UNAVAILABLE
-        assert cache_metric.value == 0.0
+        assert cache_metric.value is None
 
 
 class TestCacheEventProvenance:
@@ -787,7 +865,7 @@ class TestAbsentTelemetryTables:
     """Integration test for absent telemetry tables — issue #160.
 
     Verifies that ``extract_performance_metrics()`` produces correct
-    ``0.0`` / ``UNAVAILABLE`` metrics when the telemetry tables do not
+    null / ``UNAVAILABLE`` metrics when the telemetry tables do not
     exist (pre-migration database scenario).  The old code would call
     the legacy psutil/NVML fallback in this state, producing a host-wide
     sample whose provenance formula claimed ``0.0`` — a value-provenance
@@ -798,11 +876,11 @@ class TestAbsentTelemetryTables:
     """
 
     def test_strict_metrics_when_tables_dropped(self, telemetry_connection):
-        """Strict mode with dropped telemetry tables yields 0.0 / UNAVAILABLE.
+        """Strict mode with dropped telemetry tables yields null / UNAVAILABLE.
 
         Issue #160: when the telemetry tables do not exist,
         ``_read_telemetry`` returns ``telemetry_tables_exist = False``.
-        In strict mode, both CPU and GPU must be ``0.0`` with
+        In strict mode, both CPU and GPU must be null with
         ``UNAVAILABLE`` status and a formula documenting the empty source.
         No legacy psutil or NVML samples may appear.
         """
@@ -856,21 +934,19 @@ class TestAbsentTelemetryTables:
 
         performance, metrics = engine.extract_performance_metrics(run_id, 0)
 
-        # CPU: value 0.0, UNAVAILABLE status, empty-source formula.
+        # CPU: null value, UNAVAILABLE status, empty-source formula.
         cpu_metric = next(m for m in metrics if m.name == "cpu_percent")
-        assert performance.cpu_percent == 0.0
+        assert performance.cpu_percent is None
         assert cpu_metric.status == MetricStatus.UNAVAILABLE
-        assert "run_resource_samples empty" in cpu_metric.formula
-        # Provenance must NOT claim run_resource_samples.
-        assert cpu_metric.source.table != "run_resource_samples"
+        assert "no measured process-scoped CPU samples" in cpu_metric.formula
+        assert cpu_metric.source.table == "run_resource_samples"
 
-        # GPU: value 0.0, UNAVAILABLE status, empty-source formula.
+        # GPU: null value, UNAVAILABLE status, empty-source formula.
         gpu_metric = next(m for m in metrics if m.name == "gpu_memory_mb")
-        assert performance.gpu_memory_mb == 0.0
+        assert performance.gpu_memory_mb is None
         assert gpu_metric.status == MetricStatus.UNAVAILABLE
-        assert "run_resource_samples empty" in gpu_metric.formula
-        # Provenance must NOT claim run_resource_samples.
-        assert gpu_metric.source.table != "run_resource_samples"
+        assert "no measured GPU samples" in gpu_metric.formula
+        assert gpu_metric.source.table == "run_resource_samples"
 
         # Re-run migrations to recreate the dropped tables so that
         # subsequent tests in this session still have the tables.
@@ -893,7 +969,7 @@ class TestNoSamplesInExistingTables:
         """Strict mode with existing but empty telemetry tables.
 
         When the telemetry tables exist but have no samples, strict mode
-        blocks legacy fallbacks and produces 0.0 / UNAVAILABLE.
+        blocks legacy fallbacks and produces null / UNAVAILABLE.
         """
         from uuid import uuid4
 
@@ -933,15 +1009,15 @@ class TestNoSamplesInExistingTables:
 
         performance, metrics = engine.extract_performance_metrics(run_id, 0)
 
-        # CPU: value 0.0, UNAVAILABLE status, empty-source formula.
+        # CPU: null value, UNAVAILABLE status, empty-source formula.
         cpu_metric = next(m for m in metrics if m.name == "cpu_percent")
-        assert performance.cpu_percent == 0.0
+        assert performance.cpu_percent is None
         assert cpu_metric.status == MetricStatus.UNAVAILABLE
-        assert "run_resource_samples empty" in cpu_metric.formula
+        assert "no measured process-scoped CPU samples" in cpu_metric.formula
 
-        # GPU: value 0.0, UNAVAILABLE status (no samples).
+        # GPU: null value, UNAVAILABLE status (no samples).
         gpu_metric = next(m for m in metrics if m.name == "gpu_memory_mb")
-        assert performance.gpu_memory_mb == 0.0
+        assert performance.gpu_memory_mb is None
         assert gpu_metric.status == MetricStatus.UNAVAILABLE
 
     def test_non_strict_uses_legacy_fallback_no_samples(self, telemetry_connection):

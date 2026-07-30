@@ -17,12 +17,12 @@ This module provides:
 
 ## Invariants
 
-1. CPU sampling uses ``psutil.cpu_percent(interval=...)`` with a
-   configurable interval. When psutil is absent, all CPU samples are
+1. CPU sampling uses ``psutil.Process().cpu_percent()`` across the exact
+   workload window and normalizes by logical CPU count. When psutil is absent, CPU is
    marked ``unavailable``.
 2. GPU sampling uses ``pynvml`` to query ``nvmlDeviceGetMemoryInfo``.
-   When pynvml is absent or NVML init fails, all GPU samples are
-   marked ``unavailable``.
+   An absent library is ``unavailable``; an installed collector or driver
+   failure is ``invalid``.
 3. Samples are collected at a fixed interval over the run window.
 4. The sampler records device index, UUID, collector library, and
    collector version for provenance.
@@ -31,6 +31,7 @@ This module provides:
 from __future__ import annotations
 
 import datetime
+import importlib.metadata
 import logging
 import time
 from dataclasses import dataclass
@@ -53,6 +54,17 @@ except ImportError:
 from research_domain.models import ResourceSample
 
 logger = logging.getLogger(__name__)
+
+
+def _collector_version(module: Any, distribution: str) -> str:
+    """Return an explicit collector version, including namespace packages."""
+    module_version = getattr(module, "__version__", "")
+    if module_version:
+        return str(module_version)
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 @dataclass(frozen=True)
@@ -117,6 +129,9 @@ class ResourceSampler:
         self._nvml_handle: Any = None
         self._nvml_initialized = False
         self._gpu_unavailable = True
+        self._device_uuid = ""
+        self._window_started_at: float | None = None
+        self._cpu_process: Any = psutil.Process() if _HAS_PSUTIL else None
 
     @property
     def cpu_available(self) -> bool:
@@ -125,8 +140,34 @@ class ResourceSampler:
 
     @property
     def gpu_available(self) -> bool:
-        """Return True if NVML is available and initialized for GPU sampling."""
-        return self._gpu_unavailable is False
+        """Return True when the NVML Python collector is installed."""
+        return _HAS_PYNVML
+
+    def begin_window(self) -> None:
+        """Establish collector baselines immediately before the workload."""
+        self._window_started_at = time.monotonic()
+        if self._cpu_process is not None:
+            # Process.cpu_percent() is a delta measurement. The first
+            # non-blocking result is meaningless and must be discarded.
+            self._cpu_process.cpu_percent(interval=None)
+        self.collect_gpu_sample()
+
+    def end_window(self) -> tuple[list[ResourceSample], list[ResourceSample]]:
+        """Collect final samples immediately after the workload."""
+        if self._window_started_at is None:
+            raise RuntimeError("begin_window() must be called before end_window()")
+        self.collect_cpu_sample()
+        self.collect_gpu_sample()
+        self._window_started_at = None
+        if self._nvml_initialized:
+            try:
+                pynvml.nvmlShutdown()
+            except Exception:
+                logger.warning("NVML shutdown failed", exc_info=True)
+            finally:
+                self._nvml_initialized = False
+                self._nvml_handle = None
+        return self._cpu_samples[:], self._gpu_samples[:]
 
     def _init_nvml(self) -> None:
         """Initialize NVML lazily on first GPU sample."""
@@ -165,18 +206,33 @@ class ResourceSampler:
         Returns:
             A ResourceSample, or ``None`` if psutil is unavailable.
         """
-        if not _HAS_PSUTIL:
-            return None
-
         if self.max_samples and self._cpu_sample_number >= self.max_samples:
             return None
 
+        if not _HAS_PSUTIL:
+            sample = ResourceSample(
+                run_id="",
+                device_type="cpu",
+                device_index=self.cpu_device_index,
+                device_uuid="",
+                sample_type="process_cpu_percent_normalized",
+                value=0.0,
+                sample_at=sample_at
+                or datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                collector="psutil",
+                collector_version="not-installed",
+                sample_number=self._cpu_sample_number,
+                status="unavailable",
+            )
+            self._cpu_samples.append(sample)
+            self._cpu_sample_number += 1
+            return sample
+
         try:
-            # psutil.cpu_percent() with interval=0 returns instantaneous.
-            # For a proper sample, we use interval=self.interval_seconds
-            # but that blocks. For per-sample collection, use interval=0
-            # and let the caller handle timing.
-            value = psutil.cpu_percent(interval=0)
+            if self._window_started_at is None:
+                raise RuntimeError("CPU sample is not bound to a workload window")
+            logical_cpus = psutil.cpu_count() or 1
+            value = self._cpu_process.cpu_percent(interval=None) / logical_cpus
         except Exception as exc:  # noqa: BLE001
             logger.warning("CPU sample failed: %s", exc)
             sample = ResourceSample(
@@ -184,12 +240,12 @@ class ResourceSampler:
                 device_type="cpu",
                 device_index=self.cpu_device_index,
                 device_uuid="",
-                sample_type="cpu_percent",
+                sample_type="process_cpu_percent_normalized",
                 value=0.0,
                 sample_at=sample_at
                 or datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 collector="psutil",
-                collector_version=getattr(psutil, "__version__", "unknown"),
+                collector_version=_collector_version(psutil, "psutil"),
                 sample_number=self._cpu_sample_number,
                 status="invalid",
             )
@@ -202,12 +258,12 @@ class ResourceSampler:
             device_type="cpu",
             device_index=self.cpu_device_index,
             device_uuid="",
-            sample_type="cpu_percent",
+            sample_type="process_cpu_percent_normalized",
             value=round(value, 2),
             sample_at=sample_at
             or datetime.datetime.now(datetime.timezone.utc).isoformat(),
             collector="psutil",
-            collector_version=getattr(psutil, "__version__", "unknown"),
+            collector_version=_collector_version(psutil, "psutil"),
             sample_number=self._cpu_sample_number,
             status="measured",
         )
@@ -224,12 +280,32 @@ class ResourceSampler:
         Returns:
             A ResourceSample, or ``None`` if NVML is unavailable.
         """
-        self._init_nvml()
-        if self._gpu_unavailable:
-            return None
-
         if self.max_samples and self._gpu_sample_number >= self.max_samples:
             return None
+
+        self._init_nvml()
+        if self._gpu_unavailable:
+            sample = ResourceSample(
+                run_id="",
+                device_type="gpu",
+                device_index=self.gpu_device_index,
+                device_uuid=self._device_uuid,
+                sample_type="gpu_memory_used_mb",
+                value=0.0,
+                sample_at=sample_at
+                or datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                collector="pynvml",
+                collector_version=(
+                    _collector_version(pynvml, "nvidia-ml-py")
+                    if _HAS_PYNVML
+                    else "not-installed"
+                ),
+                sample_number=self._gpu_sample_number,
+                status="invalid" if _HAS_PYNVML else "unavailable",
+            )
+            self._gpu_samples.append(sample)
+            self._gpu_sample_number += 1
+            return sample
 
         try:
             handle = self._nvml_handle
@@ -247,7 +323,7 @@ class ResourceSampler:
                 sample_at=sample_at
                 or datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 collector="pynvml",
-                collector_version=getattr(pynvml, "__version__", "unknown"),
+                collector_version=_collector_version(pynvml, "nvidia-ml-py"),
                 sample_number=self._gpu_sample_number,
                 status="invalid",
             )
@@ -265,7 +341,7 @@ class ResourceSampler:
             sample_at=sample_at
             or datetime.datetime.now(datetime.timezone.utc).isoformat(),
             collector="pynvml",
-            collector_version=getattr(pynvml, "__version__", "unknown"),
+            collector_version=_collector_version(pynvml, "nvidia-ml-py"),
             sample_number=self._gpu_sample_number,
             status="measured",
         )
@@ -300,9 +376,9 @@ class ResourceSampler:
         Returns:
             A tuple of ``(cpu_samples, gpu_samples)`` lists.
         """
+        self.begin_window()
         start = time.monotonic()
         while True:
-            self.collect()  # Discard per-call results; accumulate in _cpu_samples/_gpu_samples
             elapsed = time.monotonic() - start
             if elapsed >= duration_seconds:
                 break
@@ -310,8 +386,10 @@ class ResourceSampler:
             sleep_time = min(self.interval_seconds, remaining)
             if sleep_time > 0:
                 time.sleep(sleep_time)
+            if time.monotonic() - start < duration_seconds:
+                self.collect()
 
-        return (self._cpu_samples[:], self._gpu_samples[:])
+        return self.end_window()
 
     def summarize_cpu(self) -> ResourceSummary:
         """Summarize CPU samples.

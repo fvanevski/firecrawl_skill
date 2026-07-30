@@ -151,7 +151,7 @@ def _build_objective(obj_data: dict[str, Any]) -> BenchmarkObjective:
     raw_qes = obj_data.get("search_query_expected_sources", {})
     search_query_expected_sources = {k: tuple(v) for k, v in raw_qes.items()}
     return BenchmarkObjective(
-        schema_version="benchmark-objective-v1",
+        schema_version="benchmark-objective-v2",
         id=obj_data["id"],
         title=obj_data["title"],
         objective=obj_data["objective"],
@@ -173,7 +173,7 @@ def _build_dataset(data: dict[str, Any]) -> BenchmarkDataset:
     """Build a BenchmarkDataset from a dictionary."""
     objectives = tuple(_build_objective(obj) for obj in data.get("objectives", []))
     return BenchmarkDataset(
-        schema_version="benchmark-dataset-v1",
+        schema_version="benchmark-dataset-v2",
         version=data.get("version", "benchmark-v1"),
         description=data.get("description", ""),
         evaluation_set=data.get("evaluation_set", False),
@@ -781,7 +781,7 @@ class WorkflowBenchmarkRunner:
 
         # Add simulated latency to performance
         performance = PerformanceMeasurement(
-            schema_version="performance-measurement-v1",
+            schema_version="performance-measurement-v2",
             total_latency_ms=performance.total_latency_ms + latency_ms,
             total_tokens=performance.total_tokens,
             semantic_calls=performance.semantic_calls,
@@ -982,7 +982,7 @@ class WorkflowBenchmarkRunner:
         adjustment = (obj_hash % 100) / 1000.0
 
         return QualityMeasurement(
-            schema_version="quality-measurement-v2",
+            schema_version="quality-measurement-v3",
             candidate_recall=min(1.0, base_recall + adjustment),
             source_quality_score=min(1.0, base_source_quality + adjustment),
             coverage_completeness=min(1.0, base_coverage + adjustment),
@@ -1018,7 +1018,7 @@ class WorkflowBenchmarkRunner:
         base_cpu = 60.0  # Rough estimate for CPU-bound execution
 
         return PerformanceMeasurement(
-            schema_version="performance-measurement-v1",
+            schema_version="performance-measurement-v2",
             total_latency_ms=latency_ms,
             total_tokens=base_tokens,
             semantic_calls=base_semantic,
@@ -1084,7 +1084,7 @@ class WorkflowBenchmarkRunner:
         adjustment = (obj_hash % 100) / 1000.0  # 0.0–0.099
 
         return QualityMeasurement(
-            schema_version="quality-measurement-v2",
+            schema_version="quality-measurement-v3",
             candidate_recall=min(1.0, base_recall + adjustment),
             source_quality_score=min(1.0, base_source_quality + adjustment),
             coverage_completeness=min(1.0, base_coverage + adjustment),
@@ -1150,7 +1150,7 @@ class WorkflowBenchmarkRunner:
         adjustment = (obj_hash % 50) / 100.0
 
         return PerformanceMeasurement(
-            schema_version="performance-measurement-v1",
+            schema_version="performance-measurement-v2",
             total_latency_ms=base_latency * (1.0 + adjustment),
             total_tokens=int(base_tokens * (1.0 + adjustment)),
             semantic_calls=base_semantic + int(adjustment * 3),
@@ -1230,7 +1230,7 @@ class WorkflowBenchmarkRunner:
             return None
         n = len(results)
         return QualityMeasurement(
-            schema_version="quality-measurement-v2",
+            schema_version="quality-measurement-v3",
             candidate_recall=sum(r.quality.candidate_recall for r in results) / n,
             source_quality_score=sum(r.quality.source_quality_score for r in results)
             / n,
@@ -1253,7 +1253,7 @@ class WorkflowBenchmarkRunner:
             return None
         n = len(results)
         return PerformanceMeasurement(
-            schema_version="performance-measurement-v1",
+            schema_version="performance-measurement-v2",
             total_latency_ms=sum(r.performance.total_latency_ms for r in results) / n,
             total_tokens=int(sum(r.performance.total_tokens for r in results) / n),
             semantic_calls=int(sum(r.performance.semantic_calls for r in results) / n),

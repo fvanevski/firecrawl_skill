@@ -54,10 +54,10 @@ The `legacy` mode is permanently forbidden — requesting it raises a
 | --------------------------------- | ------------------------------------------------- |
 | Python 3.11 or 3.12              | Tested on both versions                           |
 | PostgreSQL 16+                    | Required for workflow state, metrics, and events   |
-| Qdrant                            | Required for dense retrieval (optional for dry-run)|
+| Qdrant + active alias             | Required for dense retrieval, including dry-run preflight |
 | Blob root directory               | Required for content-addressed payload storage     |
 | `psycopg`                         | PostgreSQL driver (installed via `requirements-research-store.txt`) |
-| `psutil` (optional)               | Enables CPU sampling for performance telemetry     |
+| `psutil`                          | Required for process-scoped CPU telemetry           |
 | `pynvml` (optional)               | Enables GPU memory sampling for performance telemetry |
 
 ### Database schema
@@ -165,17 +165,18 @@ A critical detail (fixed in commit `255be4e`) is that telemetry population
 happens **before** metric extraction:
 
 ```
-orchestrator.run()
-  → _run_duration_ms = (monotonic() - start) * 1000
+ResourceSampler.begin_window()
+  → orchestrator.run()
+  → ResourceSampler.end_window()
   → _populate_endpoint_usage()       # writes endpoint_usage_records
-  → _collect_resource_samples()       # writes resource_samples
+  → _persist_resource_samples()       # writes exact-window samples
   → telemetry_svc.build_summary()     # writes resource_summary
   → metric_engine.extract_quality_metrics()
   → metric_engine.extract_performance_metrics()
 ```
 
 If telemetry is populated after extraction, strict mode will produce
-0.0 metrics with clear formulas documenting the empty source — it no
+null metrics with clear formulas documenting the empty source — it no
 longer raises `RuntimeError`. This ensures campaigns can complete even
 when the orchestrator produces partial state (coverage events but no
 claims/evidence/telemetry).
@@ -409,7 +410,7 @@ ELSE:
 
 ## 8. Failure modes and recovery
 
-### 0.0 metrics — missing or partial telemetry
+### Null metrics — missing or partial telemetry
 
 **Cause:** The orchestrator failed partway through and did not produce
 telemetry data (no claims, no evidence, no cache events, no resource
@@ -429,8 +430,8 @@ an explicit `status` field:
 | `invalid` | Source exists but the data is invalid |
 | `not_applicable` | This metric does not apply to this mode/objective pair |
 
-A metric with value `0.0` and status `unavailable` or `unevaluated` is
-**not** a valid measurement. Strict release policy rejects any campaign
+A metric with status `unavailable` or `unevaluated` has JSON value `null`,
+never a sentinel zero. Strict release policy rejects any campaign
 where a mandatory quality or performance metric is not `measured`.
 
 **Recovery:** This is expected when infrastructure (Firecrawl, embedding
@@ -458,7 +459,7 @@ host-wide ``psutil`` sample whose provenance formula claimed ``0.0``.
 
 **Correction:** The strict CPU flag now also fires when
 ``telemetry_tables_exist`` is ``False``, preventing the legacy fallback.
-Both CPU and GPU paths produce ``0.0`` with ``unavailable`` status and a
+Both CPU and GPU paths produce ``null`` with ``unavailable`` status and a
 formula that documents the empty source when telemetry tables are absent.
 
 **Verification:** Run the regression test:
@@ -470,8 +471,8 @@ pytest -q -p no:cacheprovider \
 ```
 
 **Expected behavior:** In strict mode with absent telemetry tables, both
-``cpu_percent`` and ``gpu_memory_mb`` must be ``0.0`` with status
-``unavailable`` and a formula containing ``run_resource_samples empty``.
+``cpu_percent`` and ``gpu_memory_mb`` must be ``null`` with status
+``unavailable`` and a formula identifying the missing measured samples.
 No legacy ``psutil`` or ``pynvml`` samples may appear in the artifact.
 
 **Provenance contract:** The engine uses two intermediate booleans to gate
@@ -480,11 +481,10 @@ provenance claims:
 - ``_cpu_valid_samples = cpu_samples > 0 and telemetry_tables_exist``
 - ``_gpu_valid_samples = gpu_samples > 0 and telemetry_tables_exist``
 
-When either boolean is ``False``, the metric's ``source.table`` is set to
-``psutil`` / ``pynvml`` / ``none`` (never ``run_resource_samples``), the
-``source.method`` is ``sample`` / ``nvml`` / ``none`` (never ``mean``), and
-the formula documents the empty source.  This prevents stale sample data from
-claiming authoritative provenance when the telemetry tables do not exist.
+The metric source always names ``run_resource_samples`` and the exact run ID.
+It also records sample IDs, sample count, collector/version, status counts,
+and explicit device identity. Missing libraries are persisted as
+``unavailable`` while collector or initialization failures are ``invalid``.
 
 **Naming convention:** Strict-mode flags use the ``_strict_<resource>_unavailable``
 pattern (``_strict_cpu_unavailable``, ``_strict_gpu_unavailable``,
@@ -567,7 +567,7 @@ strict-campaign:
 
 The integration test `test_strict_campaign_with_real_db` connects to a disposable
 PostgreSQL container and verifies that strict mode correctly produces
-`0.0` metrics with explicit `unevaluated`/`unavailable` status when the
+null metrics with explicit `incomplete`/`unavailable` status when the
 database is empty — not `RuntimeError`. The campaign completes with NO_GO
 because quality thresholds are not met **and** mandatory metrics are
 unavailable.

@@ -1714,8 +1714,8 @@ class TestEdgeCases:
         assert "Test — Python 3.11" in result
         assert "Test — Python 3.12" in result
         assert "Ruff" in result
-        assert "Strict Campaign (issue #144) — Python 3.11" in result
-        assert "Strict Campaign (issue #144) — Python 3.12" in result
+        assert "Strict campaign contract tests — Python 3.11" in result
+        assert "Strict campaign contract tests — Python 3.12" in result
         assert "Release evidence (issue #145)" in result
 
     def test_compute_required_ci_jobs_fallback(self):
@@ -1973,16 +1973,7 @@ class TestIntegration:
         assert manifest.schema_version == "release-evidence-manifest-v1"
 
     def test_verify_requires_tracked_recovery(self):
-        """Verification fails when the manifest includes a recovery artifact
-        but its hash does not match.
-
-        The recovery requirement is now derived from the manifest contents
-        rather than the repository index: if the manifest includes a recovery
-        artifact, its hash must match.  Tracked files that are not in the
-        manifest (such as runtime-generated ``recovery-report.txt``) do not
-        trigger a requirement because their hashes change between generation
-        and verification.
-        """
+        """A tracked recovery file cannot be omitted from the manifest."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
@@ -2024,7 +2015,7 @@ class TestIntegration:
             sha = _current_sha(repo)
 
             # Create a manifest WITHOUT the recovery artifact
-            # (runtime-generated files are not included in the manifest)
+            # (simulates a tampered manifest that removed the recovery entry)
             from research_store.release_evidence import (
                 ArtifactReference,
                 _file_sha256,
@@ -2050,20 +2041,15 @@ class TestIntegration:
                     ),
                     path="scripts/research_store/release_benchmark.py",
                 ),
-                # Deliberately omit recovery-report.txt — it is
-                # runtime-generated and not included in the manifest.
+                # Deliberately omit recovery-report.txt.
             )
 
             manifest = _make_manifest(candidate_sha=sha, artifacts=artifacts)
             verifier = ReleaseEvidenceVerifier(manifest, repo=repo)
             vresult = verifier.verify()
 
-            # Should PASS — recovery-report.txt is not in the manifest,
-            # so the recovery category is not required.  (artifacts_valid
-            # is True even though fingerprints_present is False because
-            # the manifest has no fingerprints.)
-            assert vresult.artifacts_valid is True
-            assert not vresult.passed  # fingerprints_present is False
+            assert vresult.artifacts_valid is False
+            assert not vresult.passed
 
     def test_verify_validates_recovered_artifact_when_present(self):
         """Verification validates recovery artifact hash when it is in the manifest."""

@@ -1,0 +1,121 @@
+{
+  "$defs": {
+    "BenchmarkSource": {
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string"
+        },
+        "relevance": {
+          "type": "boolean"
+        },
+        "role": {
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "benchmark-source-v1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "file_path",
+        "relevance",
+        "role"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/benchmark-objective-v2.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "citation_support_labels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "expected_source_classes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "expected_unresolved_controversies": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "ground_truth_answers": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "id": {
+      "type": "string"
+    },
+    "known_distractor_sources": {
+      "items": {
+        "$ref": "#/$defs/BenchmarkSource"
+      },
+      "type": "array"
+    },
+    "known_relevant_sources": {
+      "items": {
+        "$ref": "#/$defs/BenchmarkSource"
+      },
+      "type": "array"
+    },
+    "objective": {
+      "type": "string"
+    },
+    "questions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "benchmark-objective-v2",
+      "type": "string"
+    },
+    "search_queries": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "search_query_expected_sources": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    },
+    "title": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "objective",
+    "questions",
+    "expected_source_classes",
+    "known_relevant_sources",
+    "known_distractor_sources",
+    "expected_unresolved_controversies",
+    "search_queries",
+    "search_query_expected_sources",
+    "ground_truth_answers",
+    "citation_support_labels"
+  ],
+  "title": "BenchmarkObjective",
+  "type": "object"
+}

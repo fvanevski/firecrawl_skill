@@ -24,8 +24,8 @@ VALID_FIXTURES = {
         "relevance": True,
         "role": "relevant",
     },
-    "benchmark-objective-v1": {
-        "schema_version": "benchmark-objective-v1",
+    "benchmark-objective-v2": {
+        "schema_version": "benchmark-objective-v2",
         "id": "obj-test",
         "title": "Test",
         "objective": "Test objective",
@@ -41,16 +41,19 @@ VALID_FIXTURES = {
         ],
         "known_distractor_sources": [],
         "expected_unresolved_controversies": [],
+        "search_queries": ["test query"],
+        "search_query_expected_sources": {"test query": ["scripts/test.py"]},
+        "ground_truth_answers": {"q1": "Test answer"},
         "citation_support_labels": {"q1": "SUPPORTED"},
     },
-    "benchmark-dataset-v1": {
-        "schema_version": "benchmark-dataset-v1",
+    "benchmark-dataset-v2": {
+        "schema_version": "benchmark-dataset-v2",
         "version": "benchmark-test-v1",
         "description": "Test dataset",
         "evaluation_set": True,
         "objectives": [
             {
-                "schema_version": "benchmark-objective-v1",
+                "schema_version": "benchmark-objective-v2",
                 "id": "obj-001",
                 "title": "Test",
                 "objective": "Test",
@@ -66,6 +69,9 @@ VALID_FIXTURES = {
                 ],
                 "known_distractor_sources": [],
                 "expected_unresolved_controversies": [],
+                "search_queries": ["test query"],
+                "search_query_expected_sources": {"test query": ["scripts/test.py"]},
+                "ground_truth_answers": {"q1": "Test answer"},
                 "citation_support_labels": {"q1": "SUPPORTED"},
             }
         ],
@@ -73,8 +79,8 @@ VALID_FIXTURES = {
         "workflow_modes": ["legacy", "agent_led"],
         "deterministic_integrity_checks": ["state_machine_transitions"],
     },
-    "quality-measurement-v1": {
-        "schema_version": "quality-measurement-v1",
+    "quality-measurement-v3": {
+        "schema_version": "quality-measurement-v3",
         "candidate_recall": 0.75,
         "source_quality_score": 0.80,
         "coverage_completeness": 0.65,
@@ -82,8 +88,8 @@ VALID_FIXTURES = {
         "citation_accuracy": 0.88,
         "report_quality_score": 0.78,
     },
-    "performance-measurement-v1": {
-        "schema_version": "performance-measurement-v1",
+    "performance-measurement-v2": {
+        "schema_version": "performance-measurement-v2",
         "total_latency_ms": 15000.0,
         "total_tokens": 15000,
         "semantic_calls": 8,
@@ -103,7 +109,7 @@ VALID_FIXTURES = {
         "schema_version": "workflow-run-result-v1",
         "workflow_mode": "agent_led",
         "quality": {
-            "schema_version": "quality-measurement-v1",
+            "schema_version": "quality-measurement-v3",
             "candidate_recall": 0.75,
             "source_quality_score": 0.80,
             "coverage_completeness": 0.65,
@@ -112,7 +118,7 @@ VALID_FIXTURES = {
             "report_quality_score": 0.78,
         },
         "performance": {
-            "schema_version": "performance-measurement-v1",
+            "schema_version": "performance-measurement-v2",
             "total_latency_ms": 15000.0,
             "total_tokens": 15000,
             "semantic_calls": 8,
@@ -143,7 +149,7 @@ VALID_FIXTURES = {
                 "schema_version": "workflow-run-result-v1",
                 "workflow_mode": "legacy",
                 "quality": {
-                    "schema_version": "quality-measurement-v1",
+                    "schema_version": "quality-measurement-v3",
                     "candidate_recall": 0.45,
                     "source_quality_score": 0.55,
                     "coverage_completeness": 0.35,
@@ -152,7 +158,7 @@ VALID_FIXTURES = {
                     "report_quality_score": 0.50,
                 },
                 "performance": {
-                    "schema_version": "performance-measurement-v1",
+                    "schema_version": "performance-measurement-v2",
                     "total_latency_ms": 5000.0,
                     "total_tokens": 5000,
                     "semantic_calls": 2,
@@ -172,7 +178,7 @@ VALID_FIXTURES = {
                 "schema_version": "workflow-run-result-v1",
                 "workflow_mode": "agent_led",
                 "quality": {
-                    "schema_version": "quality-measurement-v1",
+                    "schema_version": "quality-measurement-v3",
                     "candidate_recall": 0.75,
                     "source_quality_score": 0.80,
                     "coverage_completeness": 0.65,
@@ -181,7 +187,7 @@ VALID_FIXTURES = {
                     "report_quality_score": 0.78,
                 },
                 "performance": {
-                    "schema_version": "performance-measurement-v1",
+                    "schema_version": "performance-measurement-v2",
                     "total_latency_ms": 15000.0,
                     "total_tokens": 15000,
                     "semantic_calls": 8,
@@ -214,7 +220,7 @@ VALID_FIXTURES = {
                     "schema_version": "workflow-run-result-v1",
                     "workflow_mode": "legacy",
                     "quality": {
-                        "schema_version": "quality-measurement-v1",
+                        "schema_version": "quality-measurement-v3",
                         "candidate_recall": 0.45,
                         "source_quality_score": 0.55,
                         "coverage_completeness": 0.35,
@@ -223,7 +229,7 @@ VALID_FIXTURES = {
                         "report_quality_score": 0.50,
                     },
                     "performance": {
-                        "schema_version": "performance-measurement-v1",
+                        "schema_version": "performance-measurement-v2",
                         "total_latency_ms": 5000.0,
                         "total_tokens": 5000,
                         "semantic_calls": 2,
@@ -243,7 +249,7 @@ VALID_FIXTURES = {
                     "schema_version": "workflow-run-result-v1",
                     "workflow_mode": "agent_led",
                     "quality": {
-                        "schema_version": "quality-measurement-v1",
+                        "schema_version": "quality-measurement-v3",
                         "candidate_recall": 0.75,
                         "source_quality_score": 0.80,
                         "coverage_completeness": 0.65,
@@ -252,7 +258,7 @@ VALID_FIXTURES = {
                         "report_quality_score": 0.78,
                     },
                     "performance": {
-                        "schema_version": "performance-measurement-v1",
+                        "schema_version": "performance-measurement-v2",
                         "total_latency_ms": 15000.0,
                         "total_tokens": 15000,
                         "semantic_calls": 8,
@@ -294,19 +300,19 @@ INVALID_FIXTURES = {
     "benchmark-source-v1": [
         {"path": ["role"], "value": "invalid"},
     ],
-    "benchmark-objective-v1": [
+    "benchmark-objective-v2": [
         {"path": ["id"], "value": ""},
         {"path": ["questions"], "value": []},
     ],
-    "benchmark-dataset-v1": [
+    "benchmark-dataset-v2": [
         {"path": ["objectives"], "value": []},
         {"path": ["workflow_modes", 0], "value": "invalid_mode"},
     ],
-    "quality-measurement-v1": [
+    "quality-measurement-v3": [
         {"path": ["candidate_recall"], "value": -0.1},
         {"path": ["source_quality_score"], "value": 1.1},
     ],
-    "performance-measurement-v1": [
+    "performance-measurement-v2": [
         {"path": ["total_latency_ms"], "value": -1.0},
         {"path": ["cpu_percent"], "value": 101.0},
     ],

@@ -34,24 +34,19 @@ COMPATIBILITY_POLICY = {
 # ---------------------------------------------------------------------------
 # Backward-compatibility: register legacy schema versions as readable.
 #
-# Some models (notably QualityMeasurement) support multiple schema versions.
+# Some models support multiple schema versions.
 # The legacy version must be registered in MODEL_BY_VERSION so that
 # load_model() and serialize_model() can dispatch on it.  The compatibility
 # policy marks it as non-current with the current version as its sole
 # readable predecessor.
 # ---------------------------------------------------------------------------
 
-_QUALITY_V1_MODEL = None
 for _model in CANONICAL_MODELS:
-    if _model.__name__ == "QualityMeasurement":
-        _QUALITY_V1_MODEL = _model
-        break
-if _QUALITY_V1_MODEL is not None:
-    legacy_versions = getattr(_QUALITY_V1_MODEL, "SCHEMA_VERSIONS", ())
+    legacy_versions = getattr(_model, "SCHEMA_VERSIONS", ())
     for legacy_version in legacy_versions:
         if legacy_version not in MODEL_BY_VERSION:
-            MODEL_BY_VERSION[legacy_version] = _QUALITY_V1_MODEL
-            current_version = _QUALITY_V1_MODEL.SCHEMA_VERSION
+            MODEL_BY_VERSION[legacy_version] = _model
+            current_version = _model.SCHEMA_VERSION
             COMPATIBILITY_POLICY[legacy_version] = {
                 "current": False,
                 "readable_versions": (legacy_version, current_version),

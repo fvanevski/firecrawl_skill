@@ -860,28 +860,15 @@ class ReleaseEvidenceVerifier:
         )
 
     def _check_sha_match(self) -> bool:
-        """Check that current state equals the candidate SHA.
-
-        Compares against ``main`` first (the authoritative branch for
-        release candidates), then falls back to HEAD when ``main`` is
-        unavailable or does not exist.  This handles both the normal CI
-        push-to-main scenario (where ``main`` == HEAD == candidate) and
-        the workflow_dispatch / detached-HEAD scenario (where HEAD is
-        checked out at the candidate SHA but ``main`` may point elsewhere).
-        """
+        """Check that current main HEAD equals the candidate SHA."""
         if not self.manifest.candidate_sha:
             return False
-
-        # Primary: compare against main branch ref.
+        # Compare against main branch ref, fall back to HEAD if main doesn't exist
         main_sha = _sha_at_ref(self.repo, "main")
-        if main_sha and main_sha == self.manifest.candidate_sha:
-            return True
-
-        # Fallback: compare against HEAD (handles detached-HEAD /
-        # workflow_dispatch where the checkout is at the candidate SHA
-        # but main may point to a different commit).
-        head_sha = _current_sha(self.repo)
-        return head_sha == self.manifest.candidate_sha
+        if not main_sha:
+            # Fall back to HEAD for repos without a main branch
+            main_sha = _current_sha(self.repo)
+        return main_sha == self.manifest.candidate_sha
 
     def _check_ci_complete(self) -> bool:
         """Check that all required CI jobs passed and are bound to candidate SHA."""
@@ -958,19 +945,10 @@ class ReleaseEvidenceVerifier:
         # Required categories: ci, benchmark, source are always required.
         required_categories: set[str] = {"ci", "benchmark", "source"}
 
-        # Recovery is required only when the manifest explicitly includes
-        # a recovery artifact.  ``_find_tracked_recovery_files`` inspects
-        # the repository index so the requirement is authoritative rather
-        # than derived from the untrusted manifest, but runtime-generated
-        # files such as ``recovery-report.txt`` change hash between
-        # manifest generation and verification, so we only require the
-        # recovery category when a recovery artifact is actually present
-        # in the manifest.
-        has_recovery_in_manifest = any(
-            "recovery" in ref.name.lower() or "recovery" in ref.path.lower()
-            for ref in self.manifest.artifacts
-        )
-        if has_recovery_in_manifest:
+        # Recovery is required only when the candidate repository tracks
+        # recovery files — this prevents the manifest from silently
+        # omitting a tracked recovery artifact to bypass validation.
+        if self._find_tracked_recovery_files():
             required_categories.add("recovery")
 
         return required_categories.issubset(found_categories)

@@ -203,5 +203,62 @@
       ],
       "value": "unknown_source"
     }
+  ],
+  "benchmark-objective-v2": [
+    {
+      "path": [
+        "id"
+      ],
+      "value": ""
+    },
+    {
+      "path": [
+        "questions"
+      ],
+      "value": []
+    }
+  ],
+  "benchmark-dataset-v2": [
+    {
+      "path": [
+        "objectives"
+      ],
+      "value": []
+    },
+    {
+      "path": [
+        "workflow_modes",
+        0
+      ],
+      "value": "invalid_mode"
+    }
+  ],
+  "quality-measurement-v3": [
+    {
+      "path": [
+        "candidate_recall"
+      ],
+      "value": -0.1
+    },
+    {
+      "path": [
+        "source_quality_score"
+      ],
+      "value": 1.1
+    }
+  ],
+  "performance-measurement-v2": [
+    {
+      "path": [
+        "total_latency_ms"
+      ],
+      "value": -1.0
+    },
+    {
+      "path": [
+        "cpu_percent"
+      ],
+      "value": 101.0
+    }
   ]
 }

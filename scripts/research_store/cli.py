@@ -1438,6 +1438,7 @@ def _index_build(config, document_id=None):
         if requeue_ids:
             cur.execute(
                 """UPDATE index_jobs SET status='pending',available_at=now(),
+                attempt_count=0,
                 started_at=NULL,completed_at=NULL,error=NULL,lease_token=NULL,
                 lease_owner=NULL,lease_expires_at=NULL,updated_at=now()
                 WHERE manifest_id=ANY(%s) AND operation='upsert'""",
@@ -1558,7 +1559,8 @@ def _index_reconcile(config, repair=False):
 
         cur.execute(
             """SELECT id,fingerprint,physical_collection,lifecycle_status,
-               activated_at FROM index_definitions ORDER BY created_at"""
+               activated_at,dimension,distance_metric
+               FROM index_definitions ORDER BY created_at"""
         )
         definitions = []
         for row in cur.fetchall():
@@ -1569,6 +1571,8 @@ def _index_reconcile(config, repair=False):
                     "physical_collection": row[2],
                     "lifecycle_status": row[3],
                     "activated_at": row[4],
+                    "dimension": row[5],
+                    "distance_metric": row[6],
                 }
             )
 
@@ -1605,7 +1609,12 @@ def _index_reconcile(config, repair=False):
                 )
                 continue
             row = rows[0]
-            index = _qdrant(config, collection_name, None, None)
+            index = _qdrant(
+                config,
+                collection_name,
+                row["dimension"],
+                row["distance_metric"],
+            )
             schema = index.inspect_schema()
             cached = point_counts.get(row["id"])
             cached_count = cached["count"] if cached else None
@@ -1696,27 +1705,10 @@ def _index_reconcile(config, repair=False):
                 repaired.append(def_id)
             except Exception as exc:  # noqa: BLE001
                 discrepancies.append(f"repair failed for {def_id}: {exc}")
-        # Remove the old broken definitions so the re-check sees a clean state.
-        with _db(config) as conn, conn.cursor() as cur:
-            for def_id in repaired:
-                cur.execute(
-                    "DELETE FROM embedding_manifests WHERE index_definition_id=%s",
-                    (def_id,),
-                )
-                cur.execute(
-                    "DELETE FROM index_jobs WHERE index_definition_id=%s",
-                    (def_id,),
-                )
-                cur.execute(
-                    "DELETE FROM index_point_counts WHERE index_definition_id=%s",
-                    (def_id,),
-                )
-                cur.execute(
-                    "DELETE FROM index_definitions WHERE id=%s",
-                    (def_id,),
-                )
-        # Re-run reconciliation to get a clean result after repair,
-        # preserving the repaired list from this pass.
+        # Re-run reconciliation against the repaired authoritative records,
+        # preserving the repaired list from this pass.  Deleting those records
+        # here would discard the jobs that ``_index_build`` just recreated and
+        # make a successful repair look like an empty index.
         result = _index_reconcile(config, repair=False)
         result["repaired"] = repaired
         return result

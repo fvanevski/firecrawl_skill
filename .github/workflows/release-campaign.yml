@@ -1,0 +1,74 @@
+name: Real release campaign
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate-sha:
+        description: Exact commit SHA to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  campaign:
+    name: "Real release campaigns (issues #146/#153)"
+    runs-on: [self-hosted, firecrawl-release]
+    timeout-minutes: 180
+    environment: release-campaign
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate-sha }}
+
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate-sha }}
+          fetch-depth: 0
+
+      - name: Verify exact checkout
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-research-store.txt
+
+      - name: Execute two strict campaigns
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BLOB_ROOT: ${{ secrets.BLOB_ROOT }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          QDRANT_ALIAS: ${{ vars.QDRANT_ALIAS }}
+          FIRECRAWL_API_URL: ${{ secrets.FIRECRAWL_API_URL }}
+          EMBEDDING_URL: ${{ secrets.EMBEDDING_URL }}
+          EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+          EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL }}
+          GENERATIVE_URL: ${{ secrets.GENERATIVE_URL }}
+          GENERATIVE_API_KEY: ${{ secrets.GENERATIVE_API_KEY }}
+          GENERATIVE_MODEL: ${{ vars.GENERATIVE_MODEL }}
+          RERANKER_URL: ${{ secrets.RERANKER_URL }}
+          RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
+          RERANKER_MODEL: ${{ vars.RERANKER_MODEL }}
+          PYTHONPATH: scripts
+        run: |
+          python -m research_store.strict_benchmark \
+            --campaign-dir "$RUNNER_TEMP/release-campaign-${CANDIDATE_SHA}"
+
+      - name: Upload durable campaign artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-release-campaign-${{ inputs.candidate-sha }}
+          path: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
+          if-no-files-found: error
+          retention-days: 90

@@ -29,7 +29,14 @@
       "additionalProperties": false,
       "properties": {
         "cache_hit_rate": {
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cache_miss_rate": {
           "anyOf": [
@@ -42,16 +49,37 @@
           ]
         },
         "cpu_percent": {
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "embedding_throughput": {
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "gpu_memory_mb": {
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "schema_version": {
-          "const": "performance-measurement-v1",
+          "const": "performance-measurement-v2",
           "type": "string"
         },
         "semantic_calls": {
@@ -61,7 +89,14 @@
           "type": "number"
         },
         "total_tokens": {
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -80,26 +115,68 @@
       "additionalProperties": false,
       "properties": {
         "candidate_recall": {
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "citation_accuracy": {
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "coverage_completeness": {
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "report_quality_score": {
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "schema_version": {
-          "const": "quality-measurement-v2",
+          "const": "quality-measurement-v3",
           "type": "string"
         },
         "source_quality_score": {
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "unsupported_claim_rate": {
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

@@ -119,6 +119,24 @@ class IndexWorker:
                 result["lease_lost"] += batch_result["lease_lost"]
             except LeaseLost:
                 result["lease_lost"] += 1
+            except Exception as exc:  # noqa: BLE001
+                # One unexpected microbatch failure must not terminate the
+                # durable worker and strand every claimed job until lease
+                # expiry. Persist the failure per owned job so normal retry
+                # policy can redrive it with an actionable error.
+                error = f"microbatch: {type(exc).__name__}: {exc}"
+                for job in jobs:
+                    with self.uow_factory() as uow:
+                        owned = uow.index_jobs.finish_job(
+                            job["id"],
+                            job["lease_token"],
+                            error,
+                            max_attempts=self.max_attempts,
+                        )
+                    if owned:
+                        result["failed"] += 1
+                    else:
+                        result["lease_lost"] += 1
             self._heartbeat({**result, "busy": True})
         self._heartbeat(result)
         return result
@@ -154,15 +172,16 @@ class IndexWorker:
         for job in group:
             self._renew(job)
 
-        # Resolve chunk texts for this group.
-        # All jobs in a fingerprint group originate from the same embedding
-        # manifest, so filtering by group[0]["manifest_id"] is safe. If a job
-        # in the group belongs to a different manifest its chunk will be
-        # silently excluded, causing that job to fail with "embedding failed".
+        # Resolve chunk texts for this group. A fingerprint group normally
+        # contains many jobs and therefore many one-chunk manifests. The
+        # claimed entity IDs and definition fingerprint are the authoritative
+        # batch boundary; filtering by the first manifest would silently omit
+        # every other chunk in the group.
         entity_ids = [job["entity_id"] for job in group]
         with self.uow_factory() as uow:
             records = uow.chunks.chunks_for_index(
-                entity_ids, manifest_id=group[0]["manifest_id"]
+                entity_ids,
+                manifest_id=group[0]["manifest_id"] if len(group) == 1 else None,
             )
 
         # Build a map from entity_id to chunk record.
