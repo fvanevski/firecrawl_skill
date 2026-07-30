@@ -2091,26 +2091,34 @@ class TestCacheRegressionPR157:
         from research_store.strict_benchmark import main
 
         campaign_dir = "/tmp/test_cache_regression_159"
-        rc = main(
-            [
-                "--campaign-dir",
-                campaign_dir,
-                "--database-url",
-                database_url,
-                "--dataset",
-                str(
-                    Path(__file__).resolve().parent.parent
-                    / "tests"
-                    / "fixtures"
-                    / "benchmark"
-                    / "benchmark-v1.json"
-                ),
-                "--objectives",
-                "obj-001",
-                "--tolerance",
-                "0.15",
-            ]
-        )
+        # Infrastructure readiness is covered by the dedicated preflight
+        # integration tests.  This regression exercises campaign/cache
+        # behavior and must not depend on host Firecrawl, GPU, or model
+        # services that are intentionally absent from the general CI job.
+        with mock.patch(
+            "research_store.strict_benchmark._preflight_check",
+            return_value=(True, []),
+        ):
+            rc = main(
+                [
+                    "--campaign-dir",
+                    campaign_dir,
+                    "--database-url",
+                    database_url,
+                    "--dataset",
+                    str(
+                        Path(__file__).resolve().parent.parent
+                        / "tests"
+                        / "fixtures"
+                        / "benchmark"
+                        / "benchmark-v1.json"
+                    ),
+                    "--objectives",
+                    "obj-001",
+                    "--tolerance",
+                    "0.15",
+                ]
+            )
 
         # The campaign should complete (not raise RuntimeError) and produce
         # NO_GO because quality metrics are all 0.0 (empty DB).
@@ -2223,26 +2231,30 @@ class TestStrictCampaignCacheRejection:
         from research_store.strict_benchmark import main
 
         campaign_dir = "/tmp/test_strict_cache_rejection_159"
-        rc = main(
-            [
-                "--campaign-dir",
-                campaign_dir,
-                "--database-url",
-                database_url,
-                "--dataset",
-                str(
-                    Path(__file__).resolve().parent.parent
-                    / "tests"
-                    / "fixtures"
-                    / "benchmark"
-                    / "benchmark-v1.json"
-                ),
-                "--objectives",
-                "obj-001",
-                "--tolerance",
-                "0.15",
-            ]
-        )
+        with mock.patch(
+            "research_store.strict_benchmark._preflight_check",
+            return_value=(True, []),
+        ):
+            rc = main(
+                [
+                    "--campaign-dir",
+                    campaign_dir,
+                    "--database-url",
+                    database_url,
+                    "--dataset",
+                    str(
+                        Path(__file__).resolve().parent.parent
+                        / "tests"
+                        / "fixtures"
+                        / "benchmark"
+                        / "benchmark-v1.json"
+                    ),
+                    "--objectives",
+                    "obj-001",
+                    "--tolerance",
+                    "0.15",
+                ]
+            )
 
         # Campaign should complete with NO_GO (quality metrics are 0.0).
         assert rc == 1, "Campaign should complete with NO_GO"
