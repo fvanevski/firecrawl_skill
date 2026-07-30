@@ -1,0 +1,74 @@
+name: Apply release invariant fix
+
+on:
+  push:
+    branches:
+      - agent/issue-170-release-invariant-fix
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply and validate cumulative patch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out temporary fix branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Decode patch bundle
+        run: |
+          mkdir -p /tmp/release-invariant-fix
+          base64 --decode \
+            .github/release-invariant-fix/bundle.tgz.b64 \
+            > /tmp/release-invariant-fix/bundle.tgz
+          tar -xzf /tmp/release-invariant-fix/bundle.tgz \
+            -C /tmp/release-invariant-fix
+          ls -l /tmp/release-invariant-fix
+
+      - name: Apply cumulative fixes
+        run: |
+          set -euxo pipefail
+          root=/tmp/release-invariant-fix
+
+          git apply --check \
+            "$root/release_invariant_regression_gate_fix.patch"
+          git apply \
+            "$root/release_invariant_regression_gate_fix.patch"
+
+          git apply --check \
+            "$root/release_invariant_integration_followup_v2.patch"
+          git apply \
+            "$root/release_invariant_integration_followup_v2.patch"
+
+          # The original v3 artifact has incorrect hunk counts but valid
+          # context and content. --recount reconstructs those counts before
+          # checking and applying it.
+          git apply --recount --check \
+            "$root/release_invariant_test_followup_v3.patch"
+          git apply --recount \
+            "$root/release_invariant_test_followup_v3.patch"
+
+      - name: Validate resulting source tree
+        run: |
+          git diff --check
+          python -m py_compile \
+            scripts/research_store/authorized_semantic.py \
+            scripts/research_store/release_benchmark.py \
+            scripts/test_release_invariant_contracts.py \
+            scripts/test_claims_evidence.py \
+            scripts/test_performance_telemetry_integration.py \
+            scripts/test_strict_campaign.py
+
+      - name: Commit applied fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/ci.yml scripts
+          git commit -m "test: enforce production release invariant gate"
+          git push origin "HEAD:${{ github.ref_name }}"
