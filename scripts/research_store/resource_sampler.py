@@ -231,6 +231,13 @@ class ResourceSampler:
         try:
             if self._window_started_at is None:
                 raise RuntimeError("CPU sample is not bound to a workload window")
+            elapsed = time.monotonic() - self._window_started_at
+            if elapsed < 0.1:
+                # psutil documents non-blocking Process.cpu_percent readings
+                # less than 0.1 seconds apart as meaningless. Extend only a
+                # too-short observation window; normal campaign windows are
+                # already much longer and never sleep here.
+                time.sleep(0.1 - elapsed)
             logical_cpus = psutil.cpu_count() or 1
             value = self._cpu_process.cpu_percent(interval=None) / logical_cpus
         except Exception as exc:  # noqa: BLE001
