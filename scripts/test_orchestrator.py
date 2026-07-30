@@ -1916,9 +1916,14 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
 
         # Mock IndexWorker.run_batch to avoid real DB interactions
         # and ensure the fingerprint is picked up correctly.
-        with unittest.mock.patch(
-            "research_store.indexing.IndexWorker"
-        ) as mock_worker_cls:
+        with (
+            unittest.mock.patch(
+                "research_store.indexing.IndexWorker"
+            ) as mock_worker_cls,
+            unittest.mock.patch(
+                "research_store.telemetry_service.PerformanceTelemetryService.record_embedding_throughput"
+            ) as record_embedding_throughput,
+        ):
             mock_worker = MagicMock()
             mock_worker.run_batch.side_effect = [
                 {
@@ -1948,6 +1953,10 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
             result = stage.execute(run_id, 1, 1, "indexing", ctx)
 
         self.assertEqual(result.outcome, StageOutcome.CONTINUE)
+        record_embedding_throughput.assert_called_once()
+        self.assertEqual(
+            record_embedding_throughput.call_args.kwargs["elapsed_seconds"], 0.1
+        )
         self.assertIn(ContextKeys.INDEX_BUILD_ID, ctx)
         self.assertEqual(ctx[ContextKeys.INDEX_FINGERPRINT], "test_embedder_v1")
         self.assertEqual(

@@ -988,7 +988,11 @@ class IndexingStage:
                     entity_ids=entity_ids,
                 )
                 for name in batch_result:
-                    batch_result[name] += int(current.get(name, 0))
+                    value = current.get(name, 0)
+                    if name == "embedding_elapsed_seconds":
+                        batch_result[name] += float(value)
+                    else:
+                        batch_result[name] += int(value)
                 if current.get("failed", 0) or current.get("lease_lost", 0):
                     break
                 if current.get("claimed", 0) == 0:
