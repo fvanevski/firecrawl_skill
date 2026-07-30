@@ -51,13 +51,10 @@ jobs:
           git apply \
             "$root/release_invariant_integration_followup_v2.patch"
 
-          # The original v3 artifact has incorrect hunk counts but valid
-          # context and content. --recount reconstructs those counts before
-          # checking and applying it.
-          git apply --recount --check \
-            "$root/release_invariant_test_followup_v3.patch"
-          git apply --recount \
-            "$root/release_invariant_test_followup_v3.patch"
+          git apply --check \
+            .github/release-invariant-fix/release_invariant_test_followup_v3_fixed.patch
+          git apply \
+            .github/release-invariant-fix/release_invariant_test_followup_v3_fixed.patch
 
       - name: Validate resulting source tree
         run: |
