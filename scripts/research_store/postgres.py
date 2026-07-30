@@ -15,7 +15,7 @@ from .domain import (
     IngestResult,
     utcnow,
 )
-from .parsing_legacy import parse_raw_search_response
+from .parsing_legacy import extract_search_response_items, parse_raw_search_response
 from .url import canonicalize_candidate_url
 
 try:
@@ -2455,14 +2455,7 @@ class PostgresUnitOfWork:
         except (json.JSONDecodeError, UnicodeDecodeError):
             payload_data = {}
 
-        items = []
-        if isinstance(payload_data, list):
-            items = payload_data
-        elif isinstance(payload_data, dict):
-            for key in ("data", "results", "candidates", "items"):
-                if isinstance(payload_data.get(key), list):
-                    items = payload_data[key]
-                    break
+        items = extract_search_response_items(payload_data)
 
         occurrences_created = []
 

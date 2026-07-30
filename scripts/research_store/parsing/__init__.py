@@ -76,6 +76,7 @@ from ..hierarchical_chunker import (
 # Legacy compatibility — re-export from the old parsing_legacy.py module
 from ..parsing_legacy import (
     deterministic_chunks,
+    extract_search_response_items,
     parse_raw_search_response,
     structural_blocks,
 )
@@ -111,6 +112,7 @@ __all__ = [
     "UnsupportedFormatError",
     "build_default_registry",
     "deterministic_chunks",
+    "extract_search_response_items",
     "get_registry",
     "hierarchical_chunks",
     "parse",
