@@ -3824,6 +3824,7 @@ class TestIndexRebuildRecovery:
         import contextlib
 
         import httpx
+
         with contextlib.suppress(httpx.RequestError, KeyError, ValueError):
             r = httpx.get("http://localhost:6333/collections", timeout=2.0)
             if r.status_code == 200:
