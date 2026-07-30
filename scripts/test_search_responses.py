@@ -58,12 +58,8 @@ def test_parse_raw_search_response_succeeded_for_grouped_cli_data():
         {
             "success": True,
             "data": {
-                "web": [
-                    {"url": "https://example.com/web", "title": "Web result"}
-                ],
-                "news": [
-                    {"url": "https://example.com/news", "title": "News result"}
-                ],
+                "web": [{"url": "https://example.com/web", "title": "Web result"}],
+                "news": [{"url": "https://example.com/news", "title": "News result"}],
                 "images": [],
             },
         }
