@@ -1,9 +1,48 @@
 Recovery Report — Strict Benchmark Campaign
-Commit: 2e484b393599
-Timestamp: 2026-07-29T23:53:03+00:00
-Campaign A: fr_bench_d541ab8f
-Campaign B: fr_bench_97e63907
+Commit: 2a077956133b43fc29e4842fb1c7e8f5765c36b4
+Timestamp: 2026-07-30T04:35:40+00:00
+Workflow run: https://github.com/fvanevski/firecrawl_skill/actions/runs/30514016045
+Artifact: https://github.com/fvanevski/firecrawl_skill/actions/runs/30514016045/artifacts/8748259422
+Artifact SHA-256: fbfb2cab8dbaed838dcb31381c390931085c770a062ba2b3d4ae95e321e8533b
+Manifest SHA-256: 0fd3e9c40024cb7da906b0d26260fb1cc7bed9392b2730fb692106bd18520f4a
+Campaign A: fr_bench_f051ef0f
+Campaign A result SHA-256: 291f0d7740aa85fac2c057ecfa443e4304e9143710a517dd14b9e290168d8896
+Campaign B: fr_bench_95fae10e
+Campaign B result SHA-256: d31960ac7556b43280d9269e81a45c51a778031086e53ca3fff08898db431fb6
 Reproducibility: FAIL
+Campaign A run IDs:
+- agent_led/obj-001: 7a33865e-4852-473b-8dc1-8e691e765ac6
+- agent_led/obj-002: 61176275-d9bf-4754-98e5-892cd0c11ed8
+- agent_led/obj-003: 9b0110ba-5d76-48ba-88b3-e5a17545cae0
+- agent_led/obj-004: 1695504c-0d9e-4fc8-88a2-4e6c146bc1e9
+- agent_led/obj-005: 7f63814e-9c8a-437b-a4ea-6cf0c9277a9e
+- autonomous_local/obj-001: 6c6099c2-25d8-4443-9a0b-e9bd0e9b6b5c
+- autonomous_local/obj-002: a3f10741-ad47-4f08-b19a-bea6f1ee5a88
+- autonomous_local/obj-003: e1ea5ede-8661-4ce5-88d5-11b1ab3c1eeb
+- autonomous_local/obj-004: 8eb95e22-31ce-4774-bc55-4aa06c248ece
+- autonomous_local/obj-005: 064c8b36-d166-4731-8252-f158e3dcb33f
+- deterministic_debug/obj-001: 51de1063-c605-4731-ba8c-7583f9bb061b
+- deterministic_debug/obj-002: c074a8c8-2466-4f26-ad0b-4f155b57f163
+- deterministic_debug/obj-003: 8927b344-68e4-47bc-865e-0c1266b8aa4a
+- deterministic_debug/obj-004: c13ad4d0-8af1-4e5d-857c-5c217e762cd2
+- deterministic_debug/obj-005: 434eedab-9374-4618-8ee9-db020e156795
+Campaign B run IDs:
+- agent_led/obj-001: 0d1bcf1c-5b38-42b0-914b-34ea51919b72
+- agent_led/obj-002: 3f88de3a-76c5-4b8c-ba55-07d395b8081d
+- agent_led/obj-003: ec442e51-8045-4e20-aebc-833024dc051d
+- agent_led/obj-004: 953ecdda-ce6c-4848-9a34-10997308c3a9
+- agent_led/obj-005: 1af10286-effc-4d20-a361-39e1513fa04c
+- autonomous_local/obj-001: c20a9ca8-92a7-4ea4-b3d9-38004168e173
+- autonomous_local/obj-002: b10ff842-4b47-403d-bd4b-82bd16e584f5
+- autonomous_local/obj-003: 4c927bc2-963c-4f95-9408-5396a7521211
+- autonomous_local/obj-004: 17ad72a2-619c-46e8-9d36-327f481858ac
+- autonomous_local/obj-005: 000b6ffe-ae22-487c-b06d-9f43b6cc9373
+- deterministic_debug/obj-001: 7db27f02-19c4-4563-9441-ec3cd7d14689
+- deterministic_debug/obj-002: 08c8962f-c9e4-4ba1-9554-356bc641097a
+- deterministic_debug/obj-003: f1436622-54cd-4953-9c1b-9aca3aca7771
+- deterministic_debug/obj-004: b04e99f1-d301-4232-bc0b-7d35258e6607
+- deterministic_debug/obj-005: de6fc97f-8b54-45c8-8c51-9dd11e7dac7a
 Campaign A recommendation: no_go
 Campaign B recommendation: no_go
-
+Closure status: BLOCKED
+Blocking observation: Firecrawl CLI 1.19.27 returned grouped data.web results, but this candidate parsed the data object as an empty result set. All mandatory quality and workflow-output measurements remained unavailable or incomplete.
