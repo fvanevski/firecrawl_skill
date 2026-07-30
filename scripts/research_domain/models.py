@@ -2131,13 +2131,18 @@ class ResourceSample:
         device_index: Hardware device index (0-based).
         device_uuid: Hardware UUID, when available.
         sample_type: Type of measurement (e.g. ``"cpu_percent"``, ``"gpu_memory_used_mb"``).
-        value: The measured value.
+        value: The measured value. Nullable — samples with ``status != 'measured'``
+            may have ``value=None``.
         sample_at: ISO-8601 timestamp of the sample.
         collector: Library used (e.g. ``"psutil"``, ``"pynvml"``).
         collector_version: Version of the collector library.
         sample_number: Sequential sample number within the run.
         metric_version: Version of the resource-sample schema.
         status: Availability status of this sample.
+        failure_reason: Explicit reason when status is not ``"measured"``.
+        window_start: ISO-8601 timestamp when the workload window began.
+        window_end: ISO-8601 timestamp when the workload window ended.
+        sampling_interval_seconds: Interval between samples in the workload window.
     """
 
     schema_version: str = "resource-sample-v1"
@@ -2146,13 +2151,17 @@ class ResourceSample:
     device_index: int = 0
     device_uuid: str = ""
     sample_type: str = ""
-    value: float = 0.0
+    value: float | None = None
     sample_at: str = ""
     collector: str = ""
     collector_version: str = ""
     sample_number: int = 0
     metric_version: str = "resource-sample-v1"
     status: str = "measured"
+    failure_reason: str = ""
+    window_start: str = ""
+    window_end: str = ""
+    sampling_interval_seconds: float = 0.0
 
     SCHEMA_VERSION = "resource-sample-v1"
     SCHEMA_VERSIONS = ("resource-sample-v1",)

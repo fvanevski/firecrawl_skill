@@ -830,6 +830,19 @@ class MetricEngine:
             semantic_calls = cur.fetchone()[0] or 0
 
         # ----------------------------------------------------------------
+        # Token completeness: compare completed semantic calls against
+        # endpoint_usage_records.  Any uncovered call makes token telemetry
+        # INCOMPLETE rather than MEASURED.
+        # ----------------------------------------------------------------
+        token_completeness = self._check_token_completeness(run_id)
+
+        # ----------------------------------------------------------------
+        # Embedding completeness: read raw throughput records and verify
+        # that all expected invariants hold.
+        # ----------------------------------------------------------------
+        embedding_completeness = self._check_embedding_completeness(run_id)
+
+        # ----------------------------------------------------------------
         # Build PerformanceMeasurement from telemetry or legacy fallback.
         # ----------------------------------------------------------------
         total_tokens = telemetry["total_tokens"]
@@ -847,6 +860,15 @@ class MetricEngine:
             if token_source != "unavailable"
             else "unavailable — endpoint_usage_records has no measured token data"
         )
+        # Enrich formula with completeness info when source is available.
+        if token_source != "unavailable" and token_source != "not_invoked":
+            _uncovered = token_completeness.get("uncovered_calls", 0)
+            if _uncovered > 0:
+                token_formula = (
+                    f"SUM(endpoint_usage_records.total_tokens) — source={token_source};"
+                    f" {semantic_calls} calls, {token_completeness.get('usage_records', 0)} records,"
+                    f" {_uncovered} uncovered → INCOMPLETE"
+                )
 
         # Cache — run-scoped from run_cache_events.
         # No legacy fallback: all modes use the authoritative run-scoped table.
@@ -893,6 +915,16 @@ class MetricEngine:
         # ------------------------------------------------------------------
         # Embedding throughput — from run_embedding_throughput, or fallback.
         embedding_throughput = telemetry["embedding_throughput"]
+        emb_completeness_failures: list[str] = []
+        if embedding_completeness.get("failed_count", 0) > 0:
+            emb_completeness_failures.append(
+                f"failed_count={embedding_completeness['failed_count']}"
+            )
+        if embedding_completeness.get("text_vector_mismatch", False):
+            emb_completeness_failures.append(
+                f"total_texts({embedding_completeness['total_texts']}) != "
+                f"vector_count({embedding_completeness['vector_count']})"
+            )
         if (
             telemetry["embedding_batch_count"] > 0
             and telemetry["embedding_elapsed_seconds"] > 0
@@ -901,6 +933,10 @@ class MetricEngine:
                 f"run_embedding_throughput: {telemetry['embedding_total_texts']}/"
                 f"{telemetry['embedding_elapsed_seconds']:.3f}s"
             )
+            if emb_completeness_failures:
+                emb_formula += " — completeness: " + "; ".join(
+                    emb_completeness_failures
+                )
         else:
             if _strict_embedding_unavailable:
                 embedding_throughput = None
@@ -1002,6 +1038,8 @@ class MetricEngine:
             if token_source == "not_invoked"
             else MetricStatus.UNAVAILABLE
             if _strict_token_unavailable
+            else MetricStatus.INCOMPLETE
+            if token_completeness.get("uncovered_calls", 0) > 0
             else MetricStatus.MEASURED
         )
         _cache_status = (
@@ -1010,6 +1048,9 @@ class MetricEngine:
         _emb_status = (
             MetricStatus.UNAVAILABLE
             if _strict_embedding_unavailable
+            else MetricStatus.INCOMPLETE
+            if embedding_completeness.get("failed_count", 0) > 0
+            or embedding_completeness.get("text_vector_mismatch", False)
             else MetricStatus.MEASURED
         )
         _cpu_status = (
@@ -1033,17 +1074,31 @@ class MetricEngine:
 
         cpu_source = self._read_resource_source(run_id, "cpu")
         gpu_source = self._read_resource_source(run_id, "gpu")
-        cpu_nonmeasured = cpu_source["total_count"] - cpu_source["measured_count"]
-        gpu_nonmeasured = gpu_source["total_count"] - gpu_source["measured_count"]
-        if cpu_source["invalid_count"]:
+
+        # Resource completeness — issue #170 item C.
+        cpu_completeness = self._check_resource_completeness(run_id, "cpu")
+        gpu_completeness = self._check_resource_completeness(run_id, "gpu")
+
+        cpu_nonmeasured = (
+            cpu_completeness["total_count"] - cpu_completeness["measured_count"]
+        )
+        gpu_nonmeasured = (
+            gpu_completeness["total_count"] - gpu_completeness["measured_count"]
+        )
+        if cpu_completeness["invalid_count"]:
             _cpu_status = MetricStatus.INVALID
-        elif cpu_nonmeasured and cpu_source["measured_count"]:
+        elif cpu_nonmeasured and cpu_completeness["measured_count"]:
             _cpu_status = MetricStatus.INCOMPLETE
-        if gpu_source["invalid_count"]:
+        if gpu_completeness["invalid_count"]:
             _gpu_status = MetricStatus.INVALID
-        elif gpu_nonmeasured and gpu_source["measured_count"]:
+        elif gpu_nonmeasured and gpu_completeness["measured_count"]:
             _gpu_status = MetricStatus.INCOMPLETE
         if _gpu_status == MetricStatus.MEASURED and not gpu_source["device_uuid"]:
+            _gpu_status = MetricStatus.INCOMPLETE
+        # Resource samples missing window metadata are INCOMPLETE.
+        if _cpu_status == MetricStatus.MEASURED and cpu_completeness["missing_window"]:
+            _cpu_status = MetricStatus.INCOMPLETE
+        if _gpu_status == MetricStatus.MEASURED and gpu_completeness["missing_window"]:
             _gpu_status = MetricStatus.INCOMPLETE
         if _cpu_status != MetricStatus.MEASURED or _gpu_status != MetricStatus.MEASURED:
             performance = PerformanceMeasurement(
@@ -1176,6 +1231,164 @@ class MetricEngine:
         )
 
         return performance, metrics
+
+    # ------------------------------------------------------------------
+    # Telemetry completeness checks — issue #170 (item C)
+    # ------------------------------------------------------------------
+
+    def _check_token_completeness(self, run_id: UUID) -> dict:
+        """Compare completed semantic calls against endpoint_usage_records.
+
+        Returns a dict with:
+        - ``semantic_calls``: count of semantic calls for the run.
+        - ``usage_records``: count of endpoint_usage_records.
+        - ``uncovered_calls``: number of calls without usage records.
+
+        Any uncovered call makes token telemetry INCOMPLETE.
+        """
+        result = {
+            "semantic_calls": 0,
+            "usage_records": 0,
+            "uncovered_calls": 0,
+        }
+        try:
+            cur = self._connection.execute(
+                """SELECT
+                       (SELECT COUNT(*) FROM semantic_calls WHERE run_id = %s)
+                       AS semantic_calls,
+                       (SELECT COUNT(*) FROM endpoint_usage_records WHERE run_id = %s)
+                       AS usage_records""",
+                (str(run_id), str(run_id)),
+            )
+            row = cur.fetchone()
+            if row and isinstance(row, (list, tuple)) and len(row) >= 2:
+                sc = int(row[0] or 0)
+                ur = int(row[1] or 0)
+                result["semantic_calls"] = sc
+                result["usage_records"] = ur
+                result["uncovered_calls"] = max(0, sc - ur)
+        except Exception:  # noqa: BLE001
+            try:
+                self._connection.rollback()
+            except Exception:  # noqa: S110, BLE001
+                pass
+        return result
+
+    def _check_embedding_completeness(self, run_id: UUID) -> dict:
+        """Validate embedding throughput completeness invariants.
+
+        Checks:
+        - ``failed_count == 0`` — no failed embedding batches.
+        - ``elapsed_seconds > 0`` — measured duration.
+        - ``batch_count > 0`` — at least one batch.
+        - ``total_texts == vector_count`` — every input text produced a vector.
+
+        Returns a dict with:
+        - ``batch_count``: total batches.
+        - ``vector_count``: vectors produced.
+        - ``failed_count``: failed batches.
+        - ``total_texts``: total input texts.
+        - ``elapsed_seconds``: total elapsed time.
+        - ``text_vector_mismatch``: True if total_texts != vector_count.
+        """
+        result = {
+            "batch_count": 0,
+            "vector_count": 0,
+            "failed_count": 0,
+            "total_texts": 0,
+            "elapsed_seconds": 0.0,
+            "text_vector_mismatch": False,
+        }
+        try:
+            cur = self._connection.execute(
+                """SELECT
+                       COALESCE(SUM(batch_count), 0),
+                       COALESCE(SUM(vector_count), 0),
+                       COALESCE(SUM(failed_count), 0),
+                       COALESCE(SUM(total_texts), 0),
+                       COALESCE(SUM(elapsed_seconds), 0.0)
+                     FROM run_embedding_throughput
+                     WHERE run_id = %s""",
+                (str(run_id),),
+            )
+            row = cur.fetchone()
+            if row and isinstance(row, (list, tuple)) and len(row) >= 5:
+                batch_count = int(row[0] or 0)
+                vector_count = int(row[1] or 0)
+                failed_count = int(row[2] or 0)
+                total_texts = int(row[3] or 0)
+                elapsed = float(row[4] or 0.0)
+                result.update(
+                    batch_count=batch_count,
+                    vector_count=vector_count,
+                    failed_count=failed_count,
+                    total_texts=total_texts,
+                    elapsed_seconds=elapsed,
+                    text_vector_mismatch=(total_texts != vector_count),
+                )
+        except Exception:  # noqa: BLE001
+            try:
+                self._connection.rollback()
+            except Exception:  # noqa: S110, BLE001
+                pass
+        return result
+
+    def _check_resource_completeness(self, run_id: UUID, device_type: str) -> dict:
+        """Check resource sample completeness for a device type.
+
+        Returns a dict with:
+        - ``total_count``: total samples.
+        - ``measured_count``: samples with status='measured'.
+        - ``unavailable_count``: samples with status='unavailable'.
+        - ``invalid_count``: samples with status='invalid'.
+        - ``partial_count``: samples with status='partial'.
+        - ``stale_count``: samples with status='stale'.
+        - ``missing_window``: count of samples without window metadata.
+        - ``has_failure_reason``: count of samples with non-empty failure_reason.
+        """
+        result = {
+            "total_count": 0,
+            "measured_count": 0,
+            "unavailable_count": 0,
+            "invalid_count": 0,
+            "partial_count": 0,
+            "stale_count": 0,
+            "missing_window": 0,
+            "has_failure_reason": 0,
+        }
+        try:
+            cur = self._connection.execute(
+                """SELECT
+                       COUNT(*) AS total_count,
+                       COUNT(*) FILTER (WHERE status = 'measured') AS measured_count,
+                       COUNT(*) FILTER (WHERE status = 'unavailable') AS unavailable_count,
+                       COUNT(*) FILTER (WHERE status = 'invalid') AS invalid_count,
+                       COUNT(*) FILTER (WHERE status = 'partial') AS partial_count,
+                       COUNT(*) FILTER (WHERE status = 'stale') AS stale_count,
+                       COUNT(*) FILTER (WHERE window_start IS NULL OR window_end IS NULL) AS missing_window,
+                       COUNT(*) FILTER (WHERE failure_reason IS NOT NULL AND failure_reason != '') AS has_failure_reason
+                     FROM run_resource_samples
+                     WHERE run_id = %s AND device_type = %s""",
+                (str(run_id), device_type),
+            )
+            row = cur.fetchone()
+            if row and isinstance(row, (list, tuple)) and len(row) >= 8:
+                result.update(
+                    total_count=int(row[0] or 0),
+                    measured_count=int(row[1] or 0),
+                    unavailable_count=int(row[2] or 0),
+                    invalid_count=int(row[3] or 0),
+                    partial_count=int(row[4] or 0),
+                    stale_count=int(row[5] or 0),
+                    missing_window=int(row[6] or 0),
+                    has_failure_reason=int(row[7] or 0),
+                )
+        except Exception:  # noqa: BLE001
+            try:
+                self._connection.rollback()
+            except Exception:  # noqa: S110, BLE001
+                pass
+        return result
 
     def _read_resource_source(self, run_id: UUID, device_type: str) -> dict:
         """Read exact sample records and collector identity for provenance."""

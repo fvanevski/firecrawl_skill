@@ -234,8 +234,11 @@ class PerformanceTelemetryService:
             """INSERT INTO run_resource_samples
                (run_id, device_type, device_index, device_uuid, sample_type,
                 value, sample_at, collector, collector_version,
-                sample_number, status, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                sample_number, status, failure_reason,
+                window_start, window_end, sampling_interval_seconds,
+                created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                       %s, %s, %s, %s)""",
             (
                 sample.run_id,
                 sample.device_type,
@@ -248,6 +251,12 @@ class PerformanceTelemetryService:
                 sample.collector_version,
                 sample.sample_number,
                 sample.status,
+                sample.failure_reason if sample.failure_reason else None,
+                sample.window_start if sample.window_start else None,
+                sample.window_end if sample.window_end else None,
+                sample.sampling_interval_seconds
+                if sample.sampling_interval_seconds
+                else None,
                 now,
             ),
         )

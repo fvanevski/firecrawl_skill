@@ -5,6 +5,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 def _integer(name: str, default: int) -> int:
@@ -70,6 +71,8 @@ class StoreConfig:
     reranker_max_batch_size: int
     reranker_health_check_interval: int
     reranker_backpressure_threshold: int
+    # Host artifact supplier for agent-led benchmark runs (issue #170).
+    host_artifact_supplier: Any = None
 
     @classmethod
     def from_env(cls) -> StoreConfig:
