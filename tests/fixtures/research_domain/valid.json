@@ -930,14 +930,18 @@
     "device_index": 0,
     "device_type": "cpu",
     "device_uuid": "cpu-0",
+    "failure_reason": "",
     "metric_version": "resource-sample-v1",
     "run_id": "00000000-0000-0000-0000-000000000401",
     "sample_at": "2026-07-28T10:00:00Z",
     "sample_number": 1,
     "sample_type": "cpu_percent",
+    "sampling_interval_seconds": 1.0,
     "schema_version": "resource-sample-v1",
     "status": "measured",
-    "value": 45.5
+    "value": 45.5,
+    "window_end": "2026-07-28T10:01:00Z",
+    "window_start": "2026-07-28T10:00:00Z"
   },
   "endpoint-usage-v1": {
     "call_id": "00000000-0000-0000-0000-000000000100",

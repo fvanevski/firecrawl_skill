@@ -86,16 +86,25 @@ def provider_config(provider, model=None):
         return {
             "base_url": os.environ.get(
                 "FIRECRAWL_LLM_LOCAL_BASE_URL",
-                os.environ.get("FIRECRAWL_AUDIT_LOCAL_BASE_URL", DEFAULT_LOCAL_URL),
+                os.environ.get(
+                    "GENERATIVE_URL",
+                    os.environ.get("FIRECRAWL_AUDIT_LOCAL_BASE_URL", DEFAULT_LOCAL_URL),
+                ),
             ).rstrip("/"),
             "model": model
             or os.environ.get(
                 "FIRECRAWL_LLM_LOCAL_MODEL",
-                os.environ.get("FIRECRAWL_AUDIT_LOCAL_MODEL", "chat"),
+                os.environ.get(
+                    "GENERATIVE_MODEL",
+                    os.environ.get("FIRECRAWL_AUDIT_LOCAL_MODEL", "chat"),
+                ),
             ),
             "api_key": os.environ.get(
                 "FIRECRAWL_LLM_LOCAL_API_KEY",
-                os.environ.get("FIRECRAWL_AUDIT_LOCAL_API_KEY", ""),
+                os.environ.get(
+                    "GENERATIVE_API_KEY",
+                    os.environ.get("FIRECRAWL_AUDIT_LOCAL_API_KEY", ""),
+                ),
             ),
             "api_surface": "chat_completions",
         }
@@ -293,6 +302,7 @@ def call_structured(
             payload = {
                 "model": config["model"],
                 "temperature": 0,
+                "seed": 0,
                 "max_tokens": output_budget,
                 "messages": [
                     {"role": "system", "content": system_prompt},
@@ -368,6 +378,7 @@ def call_structured(
                     "requested_model": config["model"],
                     "returned_model": raw.get("model"),
                     "api_surface": config["api_surface"],
+                    "seed": 0 if config["api_surface"] == "chat_completions" else None,
                     "prompt_version": prompt_version,
                     "prompt_hash": prompt_hash,
                     "input_token_estimate": estimate_tokens(
@@ -433,6 +444,7 @@ def call_structured(
         "endpoint_alias": "local" if provider == "local" else provider,
         "requested_model": config["model"],
         "api_surface": config["api_surface"],
+        "seed": 0 if config["api_surface"] == "chat_completions" else None,
         "prompt_version": prompt_version,
         "prompt_hash": prompt_hash,
         "capability_probe": capability,

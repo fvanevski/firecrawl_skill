@@ -355,6 +355,23 @@ class TestHierarchicalChunker:
         )
         assert len(chunks) > 0
 
+    def test_oversized_single_table_cell_is_not_dropped(self):
+        """An oversized cell is recursively split instead of discarded."""
+        text = "oversized_cell_token " * 300
+        block = Block(0, "table_row", text, (), 0, len(text))
+
+        chunks = hierarchical_chunks(
+            [block],
+            max_tokens=50,
+            tokenizer_name="cl100k_base",
+            chunker_version="hierarchical-v1",
+            chunker_name="hierarchical",
+        )
+
+        assert len(chunks) > 1
+        assert all(chunk.token_count <= 50 for chunk in chunks)
+        assert all("oversized_cell_token" in chunk.text for chunk in chunks)
+
     def test_list_boundary_preservation(self):
         """List items are preserved in chunks."""
         source = "# Title\n\n- item 1\n- item 2\n- item 3\n"

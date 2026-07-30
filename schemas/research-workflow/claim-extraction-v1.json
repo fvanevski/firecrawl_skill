@@ -1,0 +1,35 @@
+{
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/research-workflow/claim-extraction-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "claims": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "authority_class": { "minLength": 1, "type": "string" },
+          "coverage_item_id": { "format": "uuid", "type": "string" },
+          "freshness_status": {
+            "enum": ["satisfied", "unsatisfied", "uncertain", "not_applicable"],
+            "type": "string"
+          },
+          "source_passage_id": { "format": "uuid", "type": "string" },
+          "statement": { "minLength": 1, "type": "string" }
+        },
+        "required": [
+          "coverage_item_id",
+          "source_passage_id",
+          "statement",
+          "authority_class",
+          "freshness_status"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": ["claims"],
+  "title": "ClaimExtraction",
+  "type": "object"
+}

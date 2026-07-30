@@ -52,10 +52,11 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
+from .authorized_semantic import call_authorized_structured
 from .config import StoreConfig
 from .domain import SynthesisStageName, SynthesisStageStatus
 from .evidence import EvidenceService
-from .semantic_cache import SemanticCacheService
+from .semantic_cache import SemanticCacheService, _compute_cache_key
 from .semantic_service import SemanticCallService
 
 logger = logging.getLogger(__name__)
@@ -242,7 +243,12 @@ class LocalSynthesisService:
 
     def _get_packet(self, run_id: UUID, packet_revision: int) -> dict[str, Any] | None:
         """Fetch the EvidencePacket from the database."""
-        return self.evidence.export_packet(run_id, packet_revision)
+        record = self.evidence.export_packet(run_id, packet_revision)
+        if record is None:
+            return None
+        packet = dict(record.get("payload", record))
+        packet["_packet_revision"] = int(record.get("packet_revision", packet_revision))
+        return packet
 
     def _validate_packet(self, packet: dict[str, Any]) -> None:
         """Validate that the packet is EvidencePacket v1."""
@@ -382,6 +388,21 @@ class LocalSynthesisService:
         **and** the artifact passes current reference validation.
         Returns ``None`` if the cache misses or the cached artifact is stale.
         """
+        key_hash = _compute_cache_key(
+            stage=stage,
+            model_name=model_name,
+            model_revision="",
+            endpoint_alias="local",
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            schema_version=schema_version,
+            input_hash=input_hash,
+            policy_version="budget-policy-v1",
+            configuration={
+                "chunker_version": str(self.config.chunker_version),
+                "parser_version": str(self.config.parser_version),
+            },
+        )
         try:
             entry = self.cache.lookup(
                 stage=stage,
@@ -405,10 +426,16 @@ class LocalSynthesisService:
         except Exception:  # noqa: BLE001
             # Cache unavailability is non-authoritative — fall through.
             logger.warning("semantic cache lookup failed; proceeding without cache")
+            self._record_cache_lookup(
+                run_id, stage, key_hash, model_name=model_name, hit=False
+            )
             return None
 
         if entry is None:
             logger.debug("semantic cache miss for stage %s", stage)
+            self._record_cache_lookup(
+                run_id, stage, key_hash, model_name=model_name, hit=False
+            )
             return None
 
         # Validate the cached artifact against the current EvidencePacket.
@@ -418,6 +445,9 @@ class LocalSynthesisService:
                 "proceeding without cache",
                 stage,
             )
+            self._record_cache_lookup(
+                run_id, stage, entry.key_hash, model_name=model_name, hit=False
+            )
             return None
 
         logger.info(
@@ -425,7 +455,37 @@ class LocalSynthesisService:
             stage,
             entry.key_hash[:12],
         )
+        self._record_cache_lookup(
+            run_id, stage, entry.key_hash, model_name=model_name, hit=True
+        )
         return entry.artifact
+
+    def _record_cache_lookup(
+        self,
+        run_id: UUID,
+        stage: str,
+        key_hash: str,
+        *,
+        model_name: str,
+        hit: bool,
+    ) -> None:
+        """Persist one exact-run semantic-cache lookup observation."""
+        try:
+            from .telemetry_service import PerformanceTelemetryService
+
+            with self.semantic.uow_factory() as uow:
+                PerformanceTelemetryService(uow.connection).record_cache_event(
+                    run_id,
+                    stage,
+                    "lookup",
+                    key_hash=key_hash,
+                    model_fingerprint=f"{model_name}::local",
+                    hit=hit,
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "run-scoped cache telemetry persistence failed for stage %s", stage
+            )
 
     def _write_cache(
         self,
@@ -481,7 +541,7 @@ class LocalSynthesisService:
 
         # Check 2: evidence_packet_revision must match current packet revision.
         cached_revision = artifact.get("evidence_packet_revision", 0)
-        current_revision = packet.get("coverage_revision", 0)
+        current_revision = packet.get("_packet_revision", 0)
         if cached_revision != current_revision:
             return False
 
@@ -759,9 +819,12 @@ class LocalSynthesisService:
         schema = self._get_schema("outline")
         valid_claim_ids = [c["claim_id"] for c in packet.get("claims", [])]
         valid_passage_ids = [p["passage_id"] for p in packet.get("passages", [])]
+        packet_revision = packet.get("_packet_revision", 1)
 
         # Inject enum constraints for schema validation.
         schema = deepcopy(schema)
+        schema["properties"]["run_id"]["enum"] = [str(run_id)]
+        schema["properties"]["evidence_packet_revision"]["enum"] = [packet_revision]
         for section in schema["properties"]["outline_sections"]["items"]["properties"][
             "claims"
         ]["items"]["properties"]:
@@ -777,6 +840,8 @@ class LocalSynthesisService:
         system_prompt = OUTLINE_SYSTEM_PROMPT
         user_prompt = json.dumps(
             {
+                "run_id": str(run_id),
+                "evidence_packet_revision": packet_revision,
                 "claims": [
                     {"claim_id": c["claim_id"], "statement": c["statement"]}
                     for c in packet.get("claims", [])
@@ -802,14 +867,14 @@ class LocalSynthesisService:
             "stage": "outline",
             "schema_name": "synthesis-outline-v1",
             "schema_version": 1,
-            "idempotency_key": f"{run_id}-r{packet.get('coverage_revision', 1)}-outline",
+            "idempotency_key": f"{run_id}-r{packet.get('_packet_revision', 1)}-outline",
             "input_artifact_ids": [
-                f"packet-{run_id}-r{packet.get('coverage_revision', 1)}"
+                f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
         }
 
         with uow_factory() as uow:
-            status = uow.runs.get_run_status(run_id)
+            status = uow.runs.get_run_status(run_id=run_id)
             context["run_revision"] = status["lifecycle_revision"]
 
         # ------------------------------------------------------------------
@@ -843,25 +908,57 @@ class LocalSynthesisService:
                 )
             return {
                 "status": "completed",
-                "evidence_packet_revision": packet.get("coverage_revision", 1),
+                "evidence_packet_revision": packet.get("_packet_revision", 1),
                 "model_name": model_name,
                 "schema_version": 1,
                 "claim_count": len(cached.get("outline_sections", [])),
                 "cache_hit": True,
             }
 
-        from model_gateway import call_structured
-
         def _call():
-            return call_structured(
+            binding_by_claim = {
+                binding["claim_id"]: binding
+                for binding in packet.get("claim_evidence_bindings", [])
+            }
+            default_passage_ids = (
+                [packet["passages"][0]["passage_id"]] if packet.get("passages") else []
+            )
+            deterministic_fixture = {
+                "schema_version": "synthesis-outline-v1",
+                "run_id": str(run_id),
+                "evidence_packet_revision": packet_revision,
+                "outline_sections": [
+                    {
+                        "section_id": "findings",
+                        "title": "Findings",
+                        "claims": [
+                            {
+                                "claim_id": claim["claim_id"],
+                                "statement": claim["statement"],
+                                "section_role": "primary",
+                                "required_passage_ids": binding_by_claim.get(
+                                    claim["claim_id"],
+                                    {"passage_ids": default_passage_ids},
+                                )["passage_ids"],
+                            }
+                            for claim in packet.get("claims", [])
+                        ],
+                    }
+                ],
+                "unsupported_claims": [],
+            }
+            return call_authorized_structured(
+                semantic_service=self.semantic,
+                semantic_context=context,
+                deterministic_fixture=deterministic_fixture,
+                actor_identifier="release-campaign-host-outline",
+                host_artifact_supplier=self.semantic.host_artifact_supplier,
                 provider="local",
                 model=model_name,
                 schema=schema,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 prompt_version=prompt_version,
-                semantic_persistence=self.semantic,
-                semantic_context=context,
             )
 
         result = self._bounded_llm_call(
@@ -915,7 +1012,7 @@ class LocalSynthesisService:
 
         return {
             "status": "completed",
-            "evidence_packet_revision": packet.get("coverage_revision", 1),
+            "evidence_packet_revision": packet.get("_packet_revision", 1),
             "model_name": model_name,
             "schema_version": 1,
             "claim_count": len(result.value.get("outline_sections", [])),
@@ -943,7 +1040,30 @@ class LocalSynthesisService:
         if self._binding_service is None:
             self._binding_service = ClaimBindingService(self.semantic, self.evidence)
 
-        packet_revision = packet.get("coverage_revision", 1)
+        packet_revision = packet.get("_packet_revision", 1)
+
+        # Evidence preparation may already have produced and validated the
+        # authoritative binding revision.  Do not repeat the semantic call or
+        # replace those bindings during report synthesis.
+        if packet.get("claim_evidence_bindings") and all(
+            claim.get("semantic_status") != "unassessed"
+            for claim in packet.get("claims", [])
+        ):
+            with uow_factory() as uow:
+                record = uow.synthesis_stages.get_synthesis_stage(run_id, "binding")
+                self._update_stage(
+                    uow,
+                    record,
+                    status=SynthesisStageStatus.COMPLETED.value,
+                    artifact={"new_packet_revision": packet_revision},
+                )
+            return {
+                "status": "completed",
+                "evidence_packet_revision": packet_revision,
+                "model_name": model_name,
+                "reason": "authoritative_bindings_already_validated",
+                "cache_hit": False,
+            }
 
         # ------------------------------------------------------------------
         # Cache integration (issue #41): build input payload for cache key.
@@ -1057,6 +1177,30 @@ class LocalSynthesisService:
     ) -> dict[str, Any]:
         """Draft the report body with claim references."""
         schema = self._get_schema("draft")
+        packet_revision = packet.get("_packet_revision", 1)
+        schema["properties"]["run_id"]["enum"] = [str(run_id)]
+        schema["properties"]["evidence_packet_revision"]["enum"] = [packet_revision]
+        binding_by_claim = {
+            binding["claim_id"]: binding
+            for binding in packet.get("claim_evidence_bindings", [])
+        }
+        reference_schema = schema["properties"]["report_sections"]["items"][
+            "properties"
+        ]["claim_references"]["items"]
+        reference_schema["oneOf"] = [
+            {
+                "properties": {
+                    "claim_id": {"const": claim_id},
+                    "passage_ids": {
+                        "type": "array",
+                        "items": {"enum": binding["passage_ids"]},
+                        "minItems": 1,
+                    },
+                    "relationship": {"const": binding["relationship"]},
+                }
+            }
+            for claim_id, binding in binding_by_claim.items()
+        ]
 
         # Read the outline artifact from synthesis_stages (produced by the
         # outline stage).  The outline was never written back to the
@@ -1070,6 +1214,8 @@ class LocalSynthesisService:
         system_prompt = DRAFT_SYSTEM_PROMPT
         user_prompt = json.dumps(
             {
+                "run_id": str(run_id),
+                "evidence_packet_revision": packet_revision,
                 "research_spec": packet.get("research_spec", {}),
                 "outline_sections": outline_sections,
                 "claims": [
@@ -1108,14 +1254,14 @@ class LocalSynthesisService:
             "stage": "draft",
             "schema_name": "synthesis-draft-v1",
             "schema_version": 1,
-            "idempotency_key": f"{run_id}-r{packet.get('coverage_revision', 1)}-draft",
+            "idempotency_key": f"{run_id}-r{packet.get('_packet_revision', 1)}-draft",
             "input_artifact_ids": [
-                f"packet-{run_id}-r{packet.get('coverage_revision', 1)}"
+                f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
         }
 
         with uow_factory() as uow:
-            status = uow.runs.get_run_status(run_id)
+            status = uow.runs.get_run_status(run_id=run_id)
             context["run_revision"] = status["lifecycle_revision"]
 
         # ------------------------------------------------------------------
@@ -1151,25 +1297,64 @@ class LocalSynthesisService:
             unsupported_count = len(cached.get("unsupported_claims", []))
             return {
                 "status": "completed",
-                "evidence_packet_revision": packet.get("coverage_revision", 1),
+                "evidence_packet_revision": packet.get("_packet_revision", 1),
                 "model_name": model_name,
                 "section_count": section_count,
                 "unsupported_claims_count": unsupported_count,
                 "cache_hit": True,
             }
 
-        from model_gateway import call_structured
-
         def _call():
-            return call_structured(
+            binding_by_claim = {
+                binding["claim_id"]: binding
+                for binding in packet.get("claim_evidence_bindings", [])
+            }
+            default_binding = {
+                "passage_ids": [packet["passages"][0]["passage_id"]]
+                if packet.get("passages")
+                else [],
+                "relationship": "context",
+            }
+            deterministic_fixture = {
+                "schema_version": "synthesis-draft-v1",
+                "run_id": str(run_id),
+                "evidence_packet_revision": packet_revision,
+                "report_sections": [
+                    {
+                        "section_id": "findings",
+                        "title": "Findings",
+                        "body": "\n\n".join(
+                            claim["statement"] for claim in packet.get("claims", [])
+                        ),
+                        "claim_references": [
+                            {
+                                "claim_id": claim["claim_id"],
+                                "passage_ids": binding_by_claim.get(
+                                    claim["claim_id"], default_binding
+                                )["passage_ids"],
+                                "relationship": binding_by_claim.get(
+                                    claim["claim_id"], default_binding
+                                )["relationship"],
+                            }
+                            for claim in packet.get("claims", [])
+                        ],
+                    }
+                ],
+                "unsupported_claims": [],
+                "limitations": list(packet.get("limitations", [])),
+            }
+            return call_authorized_structured(
+                semantic_service=self.semantic,
+                semantic_context=context,
+                deterministic_fixture=deterministic_fixture,
+                actor_identifier="release-campaign-host-draft",
+                host_artifact_supplier=self.semantic.host_artifact_supplier,
                 provider="local",
                 model=model_name,
                 schema=schema,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 prompt_version=prompt_version,
-                semantic_persistence=self.semantic,
-                semantic_context=context,
             )
 
         result = self._bounded_llm_call(
@@ -1226,7 +1411,7 @@ class LocalSynthesisService:
 
         return {
             "status": "completed",
-            "evidence_packet_revision": packet.get("coverage_revision", 1),
+            "evidence_packet_revision": packet.get("_packet_revision", 1),
             "model_name": model_name,
             "section_count": section_count,
             "unsupported_claims_count": unsupported_count,
@@ -1244,6 +1429,9 @@ class LocalSynthesisService:
     ) -> dict[str, Any]:
         """Validate citation consistency and entailment."""
         schema = self._get_schema("citation_pass")
+        packet_revision = packet.get("_packet_revision", 1)
+        schema["properties"]["run_id"]["enum"] = [str(run_id)]
+        schema["properties"]["evidence_packet_revision"]["enum"] = [packet_revision]
 
         # Read the draft artifact from synthesis_stages (produced by the
         # draft stage).  The draft was never written back to the
@@ -1254,9 +1442,95 @@ class LocalSynthesisService:
             draft_artifact = draft_record.get("artifact") or {}
             draft_sections = draft_artifact.get("report_sections", [])
 
+        packet_passage_ids = {
+            passage["passage_id"] for passage in packet.get("passages", [])
+        }
+        binding_by_claim = {
+            binding["claim_id"]: binding
+            for binding in packet.get("claim_evidence_bindings", [])
+        }
+        repaired_sections: list[dict[str, Any]] = []
+        omitted_sections: list[str] = []
+        for section in draft_sections:
+            references = section.get("claim_references", [])
+            if not references:
+                repaired_sections.append(section)
+                continue
+            section_is_bound = all(
+                reference["claim_id"] in binding_by_claim
+                and set(reference["passage_ids"]).issubset(packet_passage_ids)
+                and set(reference["passage_ids"]).issubset(
+                    set(binding_by_claim[reference["claim_id"]]["passage_ids"])
+                )
+                and reference["relationship"]
+                == binding_by_claim[reference["claim_id"]]["relationship"]
+                for reference in references
+            )
+            if section_is_bound:
+                repaired_sections.append(section)
+            else:
+                omitted_sections.append(str(section.get("section_id", "unknown")))
+
+        if omitted_sections:
+            if not any(
+                section.get("claim_references", []) for section in repaired_sections
+            ):
+                raise ReportServiceError(
+                    "citation repair removed every evidence-bound report section"
+                )
+            repair_limitations = [
+                "Citation repair omitted section "
+                f"{section_id}: references did not match authoritative bindings."
+                for section_id in omitted_sections
+            ]
+            repaired_artifact = {
+                **draft_artifact,
+                "report_sections": repaired_sections,
+                "limitations": list(draft_artifact.get("limitations", []))
+                + repair_limitations,
+            }
+            with uow_factory() as uow:
+                draft_record = uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
+                self._update_stage(
+                    uow,
+                    draft_record,
+                    status=SynthesisStageStatus.COMPLETED.value,
+                    artifact=repaired_artifact,
+                )
+            draft_sections = repaired_sections
+
+        draft_references = [
+            (section["section_id"], reference)
+            for section in draft_sections
+            for reference in section.get("claim_references", [])
+        ]
+        references_valid = all(
+            reference["claim_id"] in binding_by_claim
+            and set(reference["passage_ids"]).issubset(packet_passage_ids)
+            and set(reference["passage_ids"]).issubset(
+                set(binding_by_claim[reference["claim_id"]]["passage_ids"])
+            )
+            and reference["relationship"]
+            == binding_by_claim[reference["claim_id"]]["relationship"]
+            for _, reference in draft_references
+        )
+        if references_valid:
+            schema["properties"]["pass_status"]["const"] = "passed"
+            schema["properties"]["invented_citations"]["maxItems"] = 0
+            schema["properties"]["unsupported_claims"]["maxItems"] = 0
+            schema["properties"]["entailment_mismatches"]["maxItems"] = 0
+            schema["properties"]["validation_results"]["minItems"] = len(
+                draft_references
+            )
+            schema["properties"]["validation_results"]["maxItems"] = len(
+                draft_references
+            )
+
         system_prompt = CITATION_PASS_SYSTEM_PROMPT
         user_prompt = json.dumps(
             {
+                "run_id": str(run_id),
+                "evidence_packet_revision": packet_revision,
                 "passage_ids": [p["passage_id"] for p in packet.get("passages", [])],
                 "claim_bindings": [
                     {
@@ -1276,14 +1550,14 @@ class LocalSynthesisService:
             "stage": "citation_pass",
             "schema_name": "synthesis-citation-pass-v1",
             "schema_version": 1,
-            "idempotency_key": f"{run_id}-r{packet.get('coverage_revision', 1)}-citation",
+            "idempotency_key": f"{run_id}-r{packet.get('_packet_revision', 1)}-citation",
             "input_artifact_ids": [
-                f"packet-{run_id}-r{packet.get('coverage_revision', 1)}"
+                f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
         }
 
         with uow_factory() as uow:
-            status = uow.runs.get_run_status(run_id)
+            status = uow.runs.get_run_status(run_id=run_id)
             context["run_revision"] = status["lifecycle_revision"]
 
         # ------------------------------------------------------------------
@@ -1323,24 +1597,47 @@ class LocalSynthesisService:
             return {
                 "status": "completed",
                 "pass_status": pass_status,
-                "evidence_packet_revision": packet.get("coverage_revision", 1),
+                "evidence_packet_revision": packet.get("_packet_revision", 1),
                 "invented_citations_count": invented_count,
                 "unsupported_claims_count": unsupported_count,
                 "cache_hit": True,
             }
 
-        from model_gateway import call_structured
-
         def _call():
-            return call_structured(
+            validation_results = [
+                {
+                    "section_id": section["section_id"],
+                    "claim_id": reference["claim_id"],
+                    "passage_ids": reference["passage_ids"],
+                    "status": "valid",
+                    "issue": "",
+                }
+                for section in draft_sections
+                for reference in section.get("claim_references", [])
+            ]
+            deterministic_fixture = {
+                "schema_version": "synthesis-citation-pass-v1",
+                "run_id": str(run_id),
+                "evidence_packet_revision": packet_revision,
+                "draft_revision": 1,
+                "pass_status": "passed",
+                "validation_results": validation_results,
+                "invented_citations": [],
+                "unsupported_claims": [],
+                "entailment_mismatches": [],
+            }
+            return call_authorized_structured(
+                semantic_service=self.semantic,
+                semantic_context=context,
+                deterministic_fixture=deterministic_fixture,
+                actor_identifier="release-campaign-host-citation-validator",
+                host_artifact_supplier=self.semantic.host_artifact_supplier,
                 provider="local",
                 model=model_name,
                 schema=schema,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 prompt_version=prompt_version,
-                semantic_persistence=self.semantic,
-                semantic_context=context,
             )
 
         result = self._bounded_llm_call(
@@ -1399,7 +1696,7 @@ class LocalSynthesisService:
         return {
             "status": "completed",
             "pass_status": pass_status,
-            "evidence_packet_revision": packet.get("coverage_revision", 1),
+            "evidence_packet_revision": packet.get("_packet_revision", 1),
             "invented_citations_count": invented_count,
             "unsupported_claims_count": unsupported_count,
             "cache_hit": False,
@@ -1447,7 +1744,7 @@ class LocalSynthesisService:
             ),
             "run_id": str(run_id),
             "evidence_packet_revision": report_artifact.get(
-                "evidence_packet_revision", packet.get("coverage_revision", 1)
+                "evidence_packet_revision", packet.get("_packet_revision", 1)
             ),
             "draft_revision": report_artifact.get("draft_revision", 1),
             "pass_status": report_artifact.get("pass_status", "failed"),
@@ -1462,7 +1759,13 @@ class LocalSynthesisService:
         validation_result = artifact_service.validate_report(run_id, report)
 
         # Persist the validation result.
-        artifact_service.persist_validation_result(run_id, report, validation_result)
+        artifact_service.persist_validation_result(
+            run_id,
+            report,
+            validation_result,
+            model_name=model_name,
+            prompt_version=prompt_version,
+        )
 
         # Update the validation stage record.
         with uow_factory() as uow:

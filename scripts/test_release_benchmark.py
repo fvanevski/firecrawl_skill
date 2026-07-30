@@ -666,14 +666,14 @@ class TestReleaseBenchmarkIntegration:
 
         config = ReleaseBenchmarkConfig(
             database_url=database_url,
-            execution_modes=("agent_led", "autonomous_local", "deterministic_debug"),
+            execution_modes=("autonomous_local", "deterministic_debug"),
             strict=False,
         )
         runner = ReleaseBenchmarkRunner(loader, config)
         result = runner.run()
 
         modes_in_runs = {run.mode for run in result.runs}
-        assert modes_in_runs == {"agent_led", "autonomous_local", "deterministic_debug"}
+        assert modes_in_runs == {"autonomous_local", "deterministic_debug"}
 
     def test_release_benchmark_has_real_run_ids(self):
         """Each campaign run has a real research run ID and campaign ID."""

@@ -235,6 +235,9 @@ def build_orchestrator(
                 orchestrator_config, "legacy_adapter_mode", "authoritative"
             ),
             resource_governor=governor,
+            host_artifact_supplier=getattr(
+                orchestrator_config, "host_artifact_supplier", None
+            ),
         )
 
     return ResearchOrchestrator.build(config, orchestrator_config=orchestrator_config)

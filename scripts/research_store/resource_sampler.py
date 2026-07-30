@@ -81,6 +81,9 @@ class ResourceSummary:
         device_uuid: Hardware UUID, when available.
         collector: Collector library name.
         sample_interval_seconds: Interval between samples.
+        failure_count: Number of samples with status != ``"measured"``.
+        failure_reasons: List of distinct failure reasons (non-empty when
+            ``failure_count > 0``).
     """
 
     device_type: str
@@ -92,6 +95,8 @@ class ResourceSummary:
     device_uuid: str = ""
     collector: str = ""
     sample_interval_seconds: float = 0.0
+    failure_count: int = 0
+    failure_reasons: tuple[str, ...] = ()
 
 
 class ResourceSampler:
@@ -131,6 +136,8 @@ class ResourceSampler:
         self._gpu_unavailable = True
         self._device_uuid = ""
         self._window_started_at: float | None = None
+        self._window_started_iso: str = ""
+        self._window_ended_iso: str = ""
         self._cpu_process: Any = psutil.Process() if _HAS_PSUTIL else None
 
     @property
@@ -146,6 +153,9 @@ class ResourceSampler:
     def begin_window(self) -> None:
         """Establish collector baselines immediately before the workload."""
         self._window_started_at = time.monotonic()
+        self._window_started_iso = datetime.datetime.now(
+            datetime.timezone.utc
+        ).isoformat()
         if self._cpu_process is not None:
             # Process.cpu_percent() is a delta measurement. The first
             # non-blocking result is meaningless and must be discarded.
@@ -156,6 +166,9 @@ class ResourceSampler:
         """Collect final samples immediately after the workload."""
         if self._window_started_at is None:
             raise RuntimeError("begin_window() must be called before end_window()")
+        self._window_ended_iso = datetime.datetime.now(
+            datetime.timezone.utc
+        ).isoformat()
         self.collect_cpu_sample()
         self.collect_gpu_sample()
         self._window_started_at = None
@@ -216,13 +229,17 @@ class ResourceSampler:
                 device_index=self.cpu_device_index,
                 device_uuid="",
                 sample_type="process_cpu_percent_normalized",
-                value=0.0,
+                value=None,
                 sample_at=sample_at
                 or datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 collector="psutil",
                 collector_version="not-installed",
                 sample_number=self._cpu_sample_number,
                 status="unavailable",
+                failure_reason="psutil not installed",
+                window_start=self._window_started_iso,
+                window_end=self._window_ended_iso,
+                sampling_interval_seconds=self.interval_seconds,
             )
             self._cpu_samples.append(sample)
             self._cpu_sample_number += 1
@@ -231,6 +248,13 @@ class ResourceSampler:
         try:
             if self._window_started_at is None:
                 raise RuntimeError("CPU sample is not bound to a workload window")
+            elapsed = time.monotonic() - self._window_started_at
+            if elapsed < 0.1:
+                # psutil documents non-blocking Process.cpu_percent readings
+                # less than 0.1 seconds apart as meaningless. Extend only a
+                # too-short observation window; normal campaign windows are
+                # already much longer and never sleep here.
+                time.sleep(0.1 - elapsed)
             logical_cpus = psutil.cpu_count() or 1
             value = self._cpu_process.cpu_percent(interval=None) / logical_cpus
         except Exception as exc:  # noqa: BLE001
@@ -241,13 +265,17 @@ class ResourceSampler:
                 device_index=self.cpu_device_index,
                 device_uuid="",
                 sample_type="process_cpu_percent_normalized",
-                value=0.0,
+                value=None,
                 sample_at=sample_at
                 or datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 collector="psutil",
                 collector_version=_collector_version(psutil, "psutil"),
                 sample_number=self._cpu_sample_number,
                 status="invalid",
+                failure_reason=str(exc),
+                window_start=self._window_started_iso,
+                window_end=self._window_ended_iso,
+                sampling_interval_seconds=self.interval_seconds,
             )
             self._cpu_samples.append(sample)
             self._cpu_sample_number += 1
@@ -266,6 +294,9 @@ class ResourceSampler:
             collector_version=_collector_version(psutil, "psutil"),
             sample_number=self._cpu_sample_number,
             status="measured",
+            window_start=self._window_started_iso,
+            window_end=self._window_ended_iso,
+            sampling_interval_seconds=self.interval_seconds,
         )
         self._cpu_samples.append(sample)
         self._cpu_sample_number += 1
@@ -291,7 +322,7 @@ class ResourceSampler:
                 device_index=self.gpu_device_index,
                 device_uuid=self._device_uuid,
                 sample_type="gpu_memory_used_mb",
-                value=0.0,
+                value=None,
                 sample_at=sample_at
                 or datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 collector="pynvml",
@@ -302,6 +333,12 @@ class ResourceSampler:
                 ),
                 sample_number=self._gpu_sample_number,
                 status="invalid" if _HAS_PYNVML else "unavailable",
+                failure_reason=(
+                    "NVML driver error" if _HAS_PYNVML else "pynvml not installed"
+                ),
+                window_start=self._window_started_iso,
+                window_end=self._window_ended_iso,
+                sampling_interval_seconds=self.interval_seconds,
             )
             self._gpu_samples.append(sample)
             self._gpu_sample_number += 1
@@ -319,13 +356,17 @@ class ResourceSampler:
                 device_index=self.gpu_device_index,
                 device_uuid=getattr(self, "_device_uuid", ""),
                 sample_type="gpu_memory_used_mb",
-                value=0.0,
+                value=None,
                 sample_at=sample_at
                 or datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 collector="pynvml",
                 collector_version=_collector_version(pynvml, "nvidia-ml-py"),
                 sample_number=self._gpu_sample_number,
                 status="invalid",
+                failure_reason=str(exc),
+                window_start=self._window_started_iso,
+                window_end=self._window_ended_iso,
+                sampling_interval_seconds=self.interval_seconds,
             )
             self._gpu_samples.append(sample)
             self._gpu_sample_number += 1
@@ -344,6 +385,9 @@ class ResourceSampler:
             collector_version=_collector_version(pynvml, "nvidia-ml-py"),
             sample_number=self._gpu_sample_number,
             status="measured",
+            window_start=self._window_started_iso,
+            window_end=self._window_ended_iso,
+            sampling_interval_seconds=self.interval_seconds,
         )
         self._gpu_samples.append(sample)
         self._gpu_sample_number += 1
@@ -398,21 +442,29 @@ class ResourceSampler:
             A ResourceSummary with mean, max, and count.
         """
         measured = [s for s in self._cpu_samples if s.status == "measured"]
+        non_measured = [s for s in self._cpu_samples if s.status != "measured"]
+        failure_reasons = tuple(
+            sorted({s.failure_reason for s in non_measured if s.failure_reason})
+        )
         if not measured:
             return ResourceSummary(
                 device_type="cpu",
                 sample_count=len(self._cpu_samples),
                 status="unavailable" if not _HAS_PSUTIL else "partial",
                 collector="psutil",
+                failure_count=len(non_measured),
+                failure_reasons=failure_reasons,
             )
-        values = [s.value for s in measured]
+        values = [s.value for s in measured if s.value is not None]
         return ResourceSummary(
             device_type="cpu",
             sample_count=len(measured),
-            mean=round(sum(values) / len(values), 2),
-            maximum=round(max(values), 2),
+            mean=round(sum(values) / len(values), 2) if values else None,
+            maximum=round(max(values), 2) if values else None,
             status="measured",
             collector="psutil",
+            failure_count=len(non_measured),
+            failure_reasons=failure_reasons,
         )
 
     def summarize_gpu(self) -> ResourceSummary:
@@ -422,21 +474,29 @@ class ResourceSampler:
             A ResourceSummary with mean, max, and count.
         """
         measured = [s for s in self._gpu_samples if s.status == "measured"]
+        non_measured = [s for s in self._gpu_samples if s.status != "measured"]
+        failure_reasons = tuple(
+            sorted({s.failure_reason for s in non_measured if s.failure_reason})
+        )
         if not measured:
             return ResourceSummary(
                 device_type="gpu",
                 sample_count=len(self._gpu_samples),
                 status="unavailable" if self._gpu_unavailable else "partial",
                 collector="pynvml",
+                failure_count=len(non_measured),
+                failure_reasons=failure_reasons,
             )
-        values = [s.value for s in measured]
+        values = [s.value for s in measured if s.value is not None]
         return ResourceSummary(
             device_type="gpu",
             sample_count=len(measured),
-            mean=round(sum(values) / len(values), 2),
-            maximum=round(max(values), 2),
+            mean=round(sum(values) / len(values), 2) if values else None,
+            maximum=round(max(values), 2) if values else None,
             status="measured",
             collector="pynvml",
+            failure_count=len(non_measured),
+            failure_reasons=failure_reasons,
         )
 
     def shutdown(self) -> None:

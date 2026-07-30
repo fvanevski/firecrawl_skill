@@ -755,3 +755,100 @@ if TEST_DSN:
             )
             rows = cur.fetchall()
             assert len(rows) == 1
+
+
+@INTEGRATION_MARK
+def test_citation_pass_validation_overrides_existing_evidence_link(
+    tmp_path,
+    prepared_database_for_claims,
+):
+    """A completed citation_pass artifact is authoritative over link existence."""
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_claim_service
+    from research_store.postgres import PostgresUnitOfWork
+    from research_store.release_benchmark import (
+        MetricEngine,
+        MetricStatus,
+        ReleaseBenchmarkConfig,
+    )
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=TEST_DSN,
+        blob_root=tmp_path / "blobs",
+    )
+    claim_service = build_claim_service(config)
+    run_id = uuid4()
+    claim_id = uuid4()
+    passage_id = uuid4()
+    snapshot_id = uuid4()
+    ensure_run_exists(TEST_DSN, run_id)
+    ensure_passage_and_snapshot_exist(TEST_DSN, passage_id, snapshot_id)
+
+    claim_service.create_claim(
+        run_id,
+        claim_id,
+        "The linked claim fails exact citation validation.",
+        semantic_status="supported",
+    )
+    claim_service.create_evidence_link(
+        run_id,
+        claim_id,
+        passage_id,
+        snapshot_id,
+        relationship="supports",
+        confidence=0.9,
+    )
+
+    now = datetime.now(timezone.utc)
+    with PostgresUnitOfWork(TEST_DSN, index_name="test") as uow:
+        uow.synthesis_stages.insert_synthesis_stage(
+            {
+                "id": uuid4(),
+                "run_id": run_id,
+                "stage_name": "citation_pass",
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "test-model",
+                "prompt_version": "citation-pass-v1",
+                "schema_version": 1,
+                "artifact": {
+                    "validation_results": [
+                        {
+                            "claim_id": str(claim_id),
+                            "status": "invalid",
+                            "reason": (
+                                "passage does not resolve to the exact cited chunk"
+                            ),
+                        }
+                    ]
+                },
+                "error": None,
+                "attempts": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    engine = MetricEngine(
+        TEST_DSN,
+        config=ReleaseBenchmarkConfig(
+            database_url=TEST_DSN,
+            blob_root=tmp_path / "blobs",
+            strict=True,
+        ),
+    )
+    with engine:
+        quality, metrics = engine.extract_quality_metrics(run_id)
+
+    citation = next(metric for metric in metrics if metric.name == "citation_accuracy")
+    assert quality.citation_accuracy == 0.0
+    assert citation.value == 0.0
+    assert citation.status == MetricStatus.MEASURED
+    assert citation.source.table == "synthesis_stages"
+    assert "valid_citations(0)" in citation.formula

@@ -31,7 +31,10 @@ _SCRIPT_DIR = __file__.rsplit("/", 1)[0] or "."
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
+from budget_policy import conservative_research_spec
+from research_domain import serialize_model
 from research_domain.models import OverallCoverageStatus
+from research_store.domain import BlobReference, IngestRequest
 from research_store.orchestrator import (
     STRATEGY_DECISION_FAIL,
     STRATEGY_DECISION_PARTIAL,
@@ -51,12 +54,36 @@ from research_store.orchestrator import (
     StageResult,
     TerminalStage,
     _coverage_decision,
+    _extraction_failure_class,
+    _minimum_authoritative_source_target,
     decision_to_state,
 )
 
 # ===================================================================
 # In-memory fixtures
 # ===================================================================
+
+
+def _test_spec() -> dict[str, Any]:
+    return serialize_model(conservative_research_spec("Test objective", "fact_finding"))
+
+
+def test_extraction_failure_class_uses_registered_taxonomy():
+    assert _extraction_failure_class("candidate has no scraped markdown") == (
+        "empty_content"
+    )
+    assert _extraction_failure_class("request timed out") == "timeout"
+    assert _extraction_failure_class("unexpected persistence error") == "internal"
+
+
+def test_minimum_authoritative_source_target_honors_declared_minimum():
+    assert _minimum_authoritative_source_target({}) == 3
+    assert (
+        _minimum_authoritative_source_target(
+            {"required_source_classes": [{"minimum_count": 5}]}
+        )
+        == 5
+    )
 
 
 @dataclass(frozen=True)
@@ -214,7 +241,7 @@ class MockRunService:
             run_id = self._external_id_map[external_id]
         return MockRunStatus(
             id=run_id or self._internal_id,
-            external_id=external_id,
+            external_id=external_id or f"fr_test_{(run_id or self._internal_id).hex}",
             state=self._state,
             lifecycle_revision=self._revision,
             execution_mode="autonomous_local",
@@ -294,6 +321,24 @@ class MockCoverageService:
         self.events_applied.append(kwargs)
         return MagicMock(id=uuid4(), coverage_revision=1)
 
+    def apply_candidate_identified(self, run_id, item_id, **kwargs):
+        candidate_id = kwargs.pop("candidate_id")
+        return self.apply_event(
+            run_id,
+            "candidate_identified",
+            item_id=item_id,
+            payload={"candidate_id": str(candidate_id)},
+            **kwargs,
+        )
+
+    def apply_extraction_attempted(self, run_id, item_id, **kwargs):
+        return self.apply_event(
+            run_id, "extraction_attempted", item_id=item_id, **kwargs
+        )
+
+    def apply_asset_acquired(self, run_id, item_id, **kwargs):
+        return self.apply_event(run_id, "asset_acquired", item_id=item_id, **kwargs)
+
     def rebuild_projection(self, run_id, **kwargs):
         self._revision += 1
         return MockCoverageLedger(
@@ -371,6 +416,11 @@ class MockConfig:
         self.blob_root = "/tmp/blob-root"
         # Required by SynthesisStage (issue #63)
         self.embedding_model = "test-model"
+        self.embedding_url = "http://localhost:8005/v1"
+        self.embedding_dimension = 3
+        self.embedding_batch_size = 32
+        self.generative_model = "test-model"
+        self.parser_version = "test-parser-v1"
         # Required by report_service (valkey cache)
         self.valkey_url = "redis://localhost:6379/0"
 
@@ -588,6 +638,7 @@ class TestAcquisitionStage(unittest.TestCase):
             coverage_revision=1,
             run_state="acquiring",
             context={
+                "spec": _test_spec(),
                 "search_plan": {"queries": [{"query": "test query"}]},
             },
         )
@@ -610,12 +661,30 @@ class TestAcquisitionStage(unittest.TestCase):
         stage = AcquisitionStage(
             run_svc, acquisition_svc, coverage_svc, strategy_svc, MockConfig()
         )
+        coverage_item_id = uuid4()
         result = stage.execute(
             run_id=uuid4(),
             run_revision=1,
             coverage_revision=1,
             run_state="acquiring",
-            context={"search_plan": {"queries": [{"query": "test query"}]}},
+            context={
+                "spec": _test_spec(),
+                "search_plan": {
+                    "queries": [
+                        {
+                            "query": "test query",
+                            "target_question_ids": ["question-0"],
+                        }
+                    ]
+                },
+                "coverage_items": [
+                    {
+                        "coverage_item_id": str(coverage_item_id),
+                        "item_type": "question",
+                        "subject_id": "question-0",
+                    }
+                ],
+            },
         )
 
         self.assertIsNone(result.error)
@@ -646,6 +715,7 @@ class TestAcquisitionStage(unittest.TestCase):
             coverage_revision=1,
             run_state="acquiring",
             context={
+                "spec": _test_spec(),
                 "search_plan": {"queries": [{"query": "empty query"}]},
             },
         )
@@ -708,6 +778,7 @@ class TestCoverageReviewStage(unittest.TestCase):
         # transitions to synthesizing.
         self.assertEqual(result.outcome, StageOutcome.TERMINAL)
         self.assertEqual(run_svc._state, "synthesizing")
+        self.assertTrue(strategy_svc.proposals[0]["target_coverage_item_ids"])
         if result.details:
             self.assertEqual(
                 result.details.get(ContextKeys.NEXT_ACTION), "synthesizing"
@@ -722,7 +793,7 @@ class TestCoverageReviewStage(unittest.TestCase):
 class TestIndexingStage(unittest.TestCase):
     """Test the indexing stage."""
 
-    def test_indexing_transitions_to_coverage_review(self):
+    def test_indexing_fails_closed_without_vector_services(self):
         run_svc = MockRunService(initial_state="indexing", revision=2)
         config = MockConfig()
         stage = IndexingStage(run_svc, config)
@@ -735,8 +806,9 @@ class TestIndexingStage(unittest.TestCase):
             context={},
         )
 
-        self.assertIsNone(result.error)
-        self.assertEqual(run_svc._state, "coverage_review")
+        self.assertEqual(result.outcome, StageOutcome.TERMINAL)
+        self.assertIn("vector index and embedding services", result.error)
+        self.assertEqual(run_svc._state, "indexing")
 
 
 # ===================================================================
@@ -919,9 +991,8 @@ class TestResearchOrchestrator(unittest.TestCase):
             search_plan={"queries": [{"query": "test", "facet": "overview"}]},
         )
 
-        # Should reach completed — sufficient coverage triggers synthesis
-        # which transitions to validating, then terminal stage completes
-        self.assertEqual(result.final_state, "completed")
+        # Count-only mocked candidates cannot satisfy the strict pipeline.
+        self.assertEqual(result.final_state, "failed")
         self.assertIsNotNone(result.run_id)
 
     def test_false_completion_prevention(self):
@@ -1003,9 +1074,9 @@ class TestResearchOrchestrator(unittest.TestCase):
             max_adaptive_cycles=1,
         )
 
-        # Budget exhaustion with insufficient coverage should yield partial
-        self.assertEqual(result.outcome, "partial")
-        self.assertEqual(result.final_state, "partial")
+        # Missing authoritative scraped content fails before budget fallback.
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.final_state, "failed")
 
     def test_orchestrator_config(self):
         """Test OrchestratorConfig defaults and overrides."""
@@ -1683,8 +1754,8 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         # and the coverage_review stage should have used it to determine
         # the next action. With insufficient coverage and budget exhausted,
         # the decision should be STRATEGY_DECISION_PARTIAL.
-        self.assertEqual(result.outcome, "partial")
-        self.assertEqual(result.final_state, "partial")
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.final_state, "failed")
 
     def test_budget_exhaustion_with_sufficient_coverage_completes(self):
         """Test that budget exhaustion with sufficient coverage completes."""
@@ -1740,9 +1811,9 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
             search_plan={"queries": [{"query": "test", "facet": "overview"}]},
         )
 
-        # Budget exhaustion with sufficient coverage should complete
-        self.assertEqual(result.outcome, "completed")
-        self.assertEqual(result.final_state, "completed")
+        # Synthetic candidate counts cannot complete a strict run.
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.final_state, "failed")
 
     def test_coverage_decision_budget_exhausted_insufficient(self):
         """Test that _coverage_decision returns PARTIAL when budget exhausted + insufficient."""
@@ -1766,8 +1837,28 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         coverage_svc = MockCoverageService(item_count=3)
         corpus_svc = MagicMock()
         corpus_svc.ingest_batch.return_value = {
-            "assets": [{"status": "complete"}, {"status": "complete"}]
+            "assets": [
+                {
+                    "ordinal": 0,
+                    "requested_url": "https://example.com/a",
+                    "status": "complete",
+                    "snapshot_id": uuid4(),
+                    "chunk_ids": [uuid4()],
+                },
+                {
+                    "ordinal": 1,
+                    "requested_url": "https://example.com/b",
+                    "status": "complete",
+                    "snapshot_id": uuid4(),
+                    "chunk_ids": [uuid4()],
+                },
+            ]
         }
+        extraction_svc = MagicMock()
+        extraction_svc.create_attempt.side_effect = [uuid4(), uuid4()]
+        blob = BlobReference("a" * 64, "sha256:a", 1)
+        extraction_svc.store_raw_blob.return_value = blob
+        extraction_svc.store_normalized_blob.return_value = blob
         config = MockConfig()
 
         stage = ExtractionStage(
@@ -1775,17 +1866,31 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
             coverage_service=coverage_svc,
             config=config,
             corpus_service=corpus_svc,
+            extraction_service=extraction_svc,
         )
 
+        candidate_a = uuid4()
+        candidate_b = uuid4()
+        item_id = uuid4()
         ctx = {
             "raw_ingest_requests": [
-                {"url": "https://example.com/a"},
-                {"url": "https://example.com/b"},
+                {
+                    "request": IngestRequest("https://example.com/a", b"# A"),
+                    "metadata": {"candidate_id": str(candidate_a), "firecrawl": {}},
+                },
+                {
+                    "request": IngestRequest("https://example.com/b", b"# B"),
+                    "metadata": {"candidate_id": str(candidate_b), "firecrawl": {}},
+                },
             ],
             ContextKeys.SUCCESSFUL_URLS: [
                 "https://example.com/a",
                 "https://example.com/b",
             ],
+            "candidate_coverage_items": {
+                str(candidate_a): [str(item_id)],
+                str(candidate_b): [str(item_id)],
+            },
         }
 
         run_id = uuid4()
@@ -1811,28 +1916,85 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
 
         # Mock IndexWorker.run_batch to avoid real DB interactions
         # and ensure the fingerprint is picked up correctly.
-        with unittest.mock.patch(
-            "research_store.indexing.IndexWorker"
-        ) as mock_worker_cls:
+        with (
+            unittest.mock.patch(
+                "research_store.indexing.IndexWorker"
+            ) as mock_worker_cls,
+            unittest.mock.patch(
+                "research_store.telemetry_service.PerformanceTelemetryService.record_embedding_throughput"
+            ) as record_embedding_throughput,
+        ):
             mock_worker = MagicMock()
-            mock_worker.run_batch.return_value = {
-                "claimed": 0,
-                "complete": 0,
-                "failed": 0,
-                "lease_lost": 0,
-            }
+            mock_worker.run_batch.side_effect = [
+                {
+                    "claimed": 1,
+                    "complete": 1,
+                    "failed": 0,
+                    "lease_lost": 0,
+                    "embedding_batches": 1,
+                    "embedding_texts": 1,
+                    "embedding_elapsed_seconds": 0.1,
+                },
+                {
+                    "claimed": 0,
+                    "complete": 0,
+                    "failed": 0,
+                    "lease_lost": 0,
+                    "embedding_batches": 0,
+                    "embedding_texts": 0,
+                    "embedding_elapsed_seconds": 0.0,
+                },
+            ]
             mock_worker_cls.return_value = mock_worker
+            corpus_svc.uow_factory.return_value.__enter__.return_value.index_jobs.count_complete_manifests.return_value = 1
 
-            ctx = {}
+            ctx = {"extracted_assets": [{"chunk_ids": [uuid4()]}]}
             run_id = uuid4()
             result = stage.execute(run_id, 1, 1, "indexing", ctx)
 
         self.assertEqual(result.outcome, StageOutcome.CONTINUE)
+        record_embedding_throughput.assert_called_once()
+        self.assertEqual(
+            record_embedding_throughput.call_args.kwargs["elapsed_seconds"], 0.1
+        )
         self.assertIn(ContextKeys.INDEX_BUILD_ID, ctx)
         self.assertEqual(ctx[ContextKeys.INDEX_FINGERPRINT], "test_embedder_v1")
         self.assertEqual(
             result.details[ContextKeys.INDEX_FINGERPRINT], "test_embedder_v1"
         )
+
+    def test_indexing_stage_fails_when_worker_reports_failure(self):
+        run_svc = MockRunService(initial_state="indexing", revision=1)
+        corpus_svc = MagicMock()
+        corpus_svc.embedder = MagicMock(fingerprint="test_embedder_v1")
+        corpus_svc.index = MagicMock()
+        corpus_svc.uow_factory = MagicMock()
+
+        stage = IndexingStage(
+            run_service=run_svc,
+            config=MockConfig(),
+            corpus_service=corpus_svc,
+        )
+        with unittest.mock.patch(
+            "research_store.indexing.IndexWorker"
+        ) as mock_worker_cls:
+            mock_worker_cls.return_value.run_batch.return_value = {
+                "claimed": 1,
+                "complete": 0,
+                "failed": 1,
+                "lease_lost": 0,
+            }
+            result = stage.execute(
+                uuid4(),
+                1,
+                1,
+                "indexing",
+                {"extracted_assets": [{"chunk_ids": [uuid4()]}]},
+            )
+
+        self.assertEqual(result.outcome, StageOutcome.TERMINAL)
+        self.assertIn("did not complete cleanly", result.error)
+        self.assertEqual(run_svc._state, "indexing")
 
     def test_adaptive_query_generation_replaces_placeholder(self):
         """Test that CoverageReviewStage generates adaptive gap queries instead of placeholders."""
