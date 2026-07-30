@@ -1,9 +1,13 @@
 name: Apply release invariant fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/issue-170-release-invariant-fix
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
@@ -11,6 +15,7 @@ permissions:
 jobs:
   apply:
     name: Apply and validate cumulative patch
+    if: github.head_ref == 'agent/issue-170-release-invariant-fix'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -18,7 +23,7 @@ jobs:
       - name: Check out temporary fix branch
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
 
       - name: Decode patch bundle
@@ -71,4 +76,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .github/workflows/ci.yml scripts
           git commit -m "test: enforce production release invariant gate"
-          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "HEAD:${{ github.head_ref }}"
