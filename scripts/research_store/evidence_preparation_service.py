@@ -111,6 +111,10 @@ class EvidencePreparationService:
         if not semantic_items:
             raise EvidencePreparationError("no question or claim coverage items")
         allowed_item_ids = [str(item["coverage_item_id"]) for item in semantic_items]
+        assigned_passage_by_item = {
+            str(item["coverage_item_id"]): passages[index % len(passages)]
+            for index, item in enumerate(semantic_items)
+        }
 
         schema = json.loads(json.dumps(self.schema))
         schema["properties"]["claims"]["items"]["properties"]["coverage_item_id"][
@@ -123,9 +127,22 @@ class EvidencePreparationService:
         schema["properties"]["claims"]["items"]["properties"]["authority_class"][
             "enum"
         ] = sorted(set(required_authority_classes + ["unclassified"]))
+        schema["properties"]["claims"]["items"]["properties"]["source_passage_id"][
+            "enum"
+        ] = [str(passage["chunk_id"]) for passage in assigned_passage_by_item.values()]
         prompt_payload = {
             "objective": spec.get("objective", ""),
-            "coverage_items": semantic_items,
+            "coverage_items": [
+                {
+                    **item,
+                    "source_passage_id": str(
+                        assigned_passage_by_item[str(item["coverage_item_id"])][
+                            "chunk_id"
+                        ]
+                    ),
+                }
+                for item in semantic_items
+            ],
             "required_source_classes": spec.get("required_source_classes", []),
             "passages": [
                 {
@@ -134,16 +151,20 @@ class EvidencePreparationService:
                     "retrieved_at": passage["retrieved_at"].isoformat(),
                     "text": passage["text"],
                 }
-                for passage in passages
+                for passage in dict.fromkeys(
+                    passage["chunk_id"] for passage in assigned_passage_by_item.values()
+                )
+                for passage in [next(p for p in passages if p["chunk_id"] == passage)]
             ],
         }
         deterministic_claims = []
         for index, item in enumerate(semantic_items):
-            passage = passages[index % len(passages)]
+            passage = assigned_passage_by_item[str(item["coverage_item_id"])]
             excerpt = " ".join(str(passage["text"]).split())[:600]
             deterministic_claims.append(
                 {
                     "coverage_item_id": str(item["coverage_item_id"]),
+                    "source_passage_id": str(passage["chunk_id"]),
                     "statement": (
                         f"The authoritative source evidence for {item.get('text', 'the research item')} "
                         f"states: {excerpt}"
@@ -174,9 +195,11 @@ class EvidencePreparationService:
             schema=schema,
             system_prompt=(
                 "Generate exactly one substantive, source-grounded answer claim for "
-                "each supplied question or claim coverage item. Use only the supplied "
-                "passages. Classify the strongest source authority and freshness. Do "
-                "not invent facts, identifiers, sources, or missing coverage."
+                "each supplied question or claim coverage item. For each item, use only "
+                "its assigned source_passage_id; do not combine facts from another "
+                "passage into that claim. Return that exact source_passage_id with the "
+                "claim. Classify source authority and freshness. Do not invent facts, "
+                "identifiers, sources, or missing coverage."
             ),
             user_prompt=json.dumps(prompt_payload, indent=2, default=str),
             prompt_version=self.PROMPT_VERSION,
@@ -192,6 +215,12 @@ class EvidencePreparationService:
             raise EvidencePreparationError(
                 "claim extraction did not return exactly one claim per coverage item"
             )
+        for item_id, generated in by_item.items():
+            expected_passage_id = str(assigned_passage_by_item[item_id]["chunk_id"])
+            if generated.get("source_passage_id") != expected_passage_id:
+                raise EvidencePreparationError(
+                    "claim extraction did not preserve its assigned passage provenance"
+                )
 
         claim_to_item: dict[UUID, UUID] = {}
         claims: list[EvidenceClaim] = []
@@ -257,6 +286,16 @@ class EvidencePreparationService:
             prompt_version="claim-binding-v1",
             model_name=self.config.generative_model,
             provider="local",
+            required_passage_ids_by_claim={
+                str(claim.claim_id): [
+                    str(
+                        assigned_passage_by_item[str(claim_to_item[claim.claim_id])][
+                            "chunk_id"
+                        ]
+                    )
+                ]
+                for claim in claims
+            },
         )
         final_revision = self.evidence.group_evidence(run_id, bound_revision)
         packet_record = self.evidence.export_packet(run_id, final_revision)

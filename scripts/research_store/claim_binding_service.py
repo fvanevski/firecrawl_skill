@@ -43,6 +43,7 @@ class ClaimBindingService:
         prompt_version: str,
         model_name: str,
         provider: str = "local",
+        required_passage_ids_by_claim: dict[str, list[str]] | None = None,
     ) -> int:
         """Evaluate claims against an EvidencePacket using a semantic model.
 
@@ -63,6 +64,7 @@ class ClaimBindingService:
         if not claims:
             return packet_revision
 
+        required_passage_ids_by_claim = required_passage_ids_by_claim or {}
         system_prompt = (
             "You are a rigorous evidence evaluator. "
             "Given a list of research claims and a list of passages, "
@@ -70,12 +72,21 @@ class ClaimBindingService:
             "Return exactly one evaluation for every claim and at least one "
             "binding to a supplied passage for every evaluation. "
             "Respond strictly using the JSON schema provided. "
-            "Do not invent IDs. Only use the provided claim_id and passage_id values."
+            "Do not invent IDs. Only use the provided claim_id and passage_id values. "
+            "When required_passage_ids are supplied for a claim, evaluate those exact "
+            "source-lineage passages and retain them in its binding."
         )
 
         user_prompt_data = {
             "claims": [
-                {"claim_id": c["claim_id"], "statement": c["statement"]} for c in claims
+                {
+                    "claim_id": c["claim_id"],
+                    "statement": c["statement"],
+                    "required_passage_ids": required_passage_ids_by_claim.get(
+                        c["claim_id"], []
+                    ),
+                }
+                for c in claims
             ],
             "passages": [
                 {"passage_id": p["passage_id"], "text": p["text"]} for p in passages
@@ -153,6 +164,7 @@ class ClaimBindingService:
             prompt_version=prompt_version,
             schema_version=context["schema_version"],
             packet_revision=packet_revision,
+            required_passage_ids_by_claim=required_passage_ids_by_claim,
         )
 
     def _process_evaluations(
@@ -163,12 +175,26 @@ class ClaimBindingService:
         prompt_version: str,
         schema_version: int,
         packet_revision: int,
+        required_passage_ids_by_claim: dict[str, list[str]] | None = None,
     ) -> int:
         from research_domain.models import SemanticStatus
 
+        required_passage_ids_by_claim = required_passage_ids_by_claim or {}
         valid_claim_ids = {c["claim_id"] for c in packet_dict.get("claims", [])}
         valid_passage_ids = {p["passage_id"] for p in packet_dict.get("passages", [])}
         valid_semantic_statuses = {s.value for s in SemanticStatus}
+        unknown_required_claims = set(required_passage_ids_by_claim) - valid_claim_ids
+        if unknown_required_claims:
+            raise ValueError(
+                f"required passage lineage has unknown claim IDs: {sorted(unknown_required_claims)}"
+            )
+        for claim_id, passage_ids in required_passage_ids_by_claim.items():
+            unknown_passages = set(passage_ids) - valid_passage_ids
+            if unknown_passages:
+                raise ValueError(
+                    f"required passage lineage for claim {claim_id} has unknown passage IDs: "
+                    f"{sorted(unknown_passages)}"
+                )
 
         # Phase 1: Validate all evaluations before mutating state.
         # This prevents partial evaluation failures where some bindings are
@@ -192,6 +218,11 @@ class ClaimBindingService:
                 )
             for b in bindings:
                 passage_ids_str = b.get("passage_ids", [])
+                required_passage_ids = required_passage_ids_by_claim.get(
+                    claim_id_str, []
+                )
+                if required_passage_ids:
+                    passage_ids_str = list(dict.fromkeys(required_passage_ids))
                 for pid in passage_ids_str:
                     if pid not in valid_passage_ids:
                         raise ValueError(f"unknown passage IDs: ['{pid}']")

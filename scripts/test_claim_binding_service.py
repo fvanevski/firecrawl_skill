@@ -122,6 +122,49 @@ def test_evaluate_claims_success(service, mock_packet, monkeypatch):
     assert persisted.claims[0].semantic_status == "supported"
 
 
+def test_evaluate_claims_preserves_required_extraction_lineage(
+    service, mock_packet, monkeypatch
+):
+    claim_id = mock_packet["claims"][0]["claim_id"]
+    passage_ids = [p["passage_id"] for p in mock_packet["passages"][:2]]
+
+    def mock_prompt(*args, **kwargs):
+        return HostArtifactResult(
+            value={
+                "evaluations": [
+                    {
+                        "claim_id": claim_id,
+                        "semantic_status": "supported",
+                        "bindings": [
+                            {
+                                "passage_ids": [passage_ids[0]],
+                                "relationship": "supports",
+                                "confidence": 0.95,
+                                "uncertainty": "none",
+                            }
+                        ],
+                    }
+                ]
+            },
+            provenance={},
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+    service.evaluate_claims(
+        run_id=UUID(mock_packet["run_id"]),
+        packet_revision=mock_packet["coverage_revision"],
+        prompt_version="v1",
+        model_name="test-model",
+        required_passage_ids_by_claim={claim_id: passage_ids},
+    )
+
+    binding = service.evidence.persisted[0].claim_evidence_bindings[0]
+    assert [str(passage_id) for passage_id in binding.passage_ids] == passage_ids
+
+
 def test_evaluate_claims_rejects_invented_claim_id(service, mock_packet, monkeypatch):
     def mock_prompt(*args, **kwargs):
         return HostArtifactResult(
