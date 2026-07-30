@@ -2557,7 +2557,7 @@ class TestNewPreflightChecks:
 
     def test_preflight_firecrawl_search_fails(self, monkeypatch: pytest.MonkeyPatch):
         """The active Firecrawl probe reports production-adapter failures."""
-        import research_store.preflight as preflight
+        from research_store import preflight
 
         adapter = mock.Mock()
         adapter.search.return_value = mock.Mock(
@@ -2578,7 +2578,7 @@ class TestNewPreflightChecks:
 
     def test_preflight_qdrant_write_read_fails(self, monkeypatch: pytest.MonkeyPatch):
         """The active Qdrant probe fails closed when the named-vector write fails."""
-        import research_store.preflight as preflight
+        from research_store import preflight
 
         index = mock.Mock()
         index.list_aliases.return_value = {
