@@ -278,21 +278,7 @@ class TestEnvironmentManifest:
 
 
 class TestCLIParsing:
-    """Tests for CLI argument parsing."""
-
-    def test_dry_run_returns_zero(self):
-        """--dry-run validates config and exits 0."""
-        pytest.skip(reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
-        rc = main(
-            [
-                "--dry-run",
-                "--database-url",
-                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
-                "--dataset",
-                str(BENCHMARK_FIXTURE),
-            ]
-        )
-        assert rc == 0
+    """Tests for CLI argument parsing (unit tests — no DB required)."""
 
     def test_missing_database_url_returns_one(self):
         """Missing DATABASE_URL causes exit 1."""
@@ -301,36 +287,6 @@ class TestCLIParsing:
                 "--dry-run",
                 "--dataset",
                 str(BENCHMARK_FIXTURE),
-            ]
-        )
-        assert rc == 1
-
-    def test_missing_dataset_returns_one(self):
-        """Missing dataset causes exit 1."""
-        pytest.skip(reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
-        rc = main(
-            [
-                "--dry-run",
-                "--database-url",
-                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
-                "--dataset",
-                "/nonexistent/benchmark.json",
-            ]
-        )
-        assert rc == 1
-
-    def test_invalid_tolerance_returns_one(self):
-        """Tolerance outside [0, 1] causes exit 1."""
-        pytest.skip(reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
-        rc = main(
-            [
-                "--dry-run",
-                "--database-url",
-                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
-                "--dataset",
-                str(BENCHMARK_FIXTURE),
-                "--tolerance",
-                "1.5",
             ]
         )
         assert rc == 1
@@ -588,6 +544,128 @@ class TestStrictCampaignIntegration:
         running the actual orchestrator, which needs Firecrawl and local LLM.
         """
         # pragma: no cover
+
+    # -----------------------------------------------------------------------
+    # CLI and preflight tests — require a real database (moved from their
+    # own classes so they run in the integration step).
+    # -----------------------------------------------------------------------
+
+    def test_cli_dry_run_returns_zero(self):
+        """--dry-run validates config and exits 0."""
+        rc = main(
+            [
+                "--dry-run",
+                "--database-url",
+                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+                "--dataset",
+                str(BENCHMARK_FIXTURE),
+            ]
+        )
+        assert rc == 0
+
+    def test_cli_missing_dataset_returns_one(self):
+        """Missing dataset causes exit 1."""
+        rc = main(
+            [
+                "--dry-run",
+                "--database-url",
+                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+                "--dataset",
+                "/nonexistent/benchmark.json",
+            ]
+        )
+        assert rc == 1
+
+    def test_cli_invalid_tolerance_returns_one(self):
+        """Tolerance outside [0, 1] causes exit 1."""
+        rc = main(
+            [
+                "--dry-run",
+                "--database-url",
+                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+                "--dataset",
+                str(BENCHMARK_FIXTURE),
+                "--tolerance",
+                "1.5",
+            ]
+        )
+        assert rc == 1
+
+    def test_preflight_passes_with_all_services(self):
+        """Preflight passes when all required services are available."""
+        from research_store.strict_benchmark import _preflight_check
+
+        ok, errors = _preflight_check(
+            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+            blob_root=Path("/tmp"),
+            qdrant_url="http://localhost:6333",
+            qdrant_api_key="",
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            campaign_dir=Path("/tmp/preflight_test"),
+        )
+        # Should pass — PostgreSQL, Qdrant, Firecrawl, blob root, campaign dir
+        # are all available in the test environment.
+        assert ok is True, f"Preflight should pass with all services: {errors}"
+        assert len(errors) == 0
+
+    def test_preflight_fails_without_dataset(self):
+        """Preflight fails when benchmark dataset is missing."""
+        from research_store.strict_benchmark import _preflight_check
+
+        ok, errors = _preflight_check(
+            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+            blob_root=Path("/tmp"),
+            qdrant_url="http://localhost:6333",
+            qdrant_api_key="",
+            dataset_path=Path("/tmp/nonexistent_dataset.json"),
+            campaign_dir=Path("/tmp/preflight_test"),
+        )
+        assert ok is False
+        assert any("dataset" in e.lower() for e in errors)
+
+    def test_preflight_fails_without_qdrant(self):
+        """Preflight fails when Qdrant is unreachable."""
+        from research_store.strict_benchmark import _preflight_check
+
+        ok, errors = _preflight_check(
+            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+            blob_root=Path("/tmp"),
+            qdrant_url="http://localhost:99999",
+            qdrant_api_key="",
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            campaign_dir=Path("/tmp/preflight_test"),
+        )
+        assert ok is False
+        assert any("Qdrant" in e for e in errors)
+
+    def test_preflight_dry_run_aborts_before_campaign(self):
+        """Dry-run mode validates config and preflight but does not execute campaigns."""
+        rc = main(
+            [
+                "--campaign-dir",
+                "/tmp/test_preflight_dry_run",
+                "--database-url",
+                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+                "--blob-root",
+                "/tmp",
+                "--qdrant-url",
+                "http://localhost:6333",
+                "--dataset",
+                str(BENCHMARK_FIXTURE),
+                "--objectives",
+                "obj-001",
+                "--tolerance",
+                "0.15",
+                "--dry-run",
+            ]
+        )
+        # Dry-run exits 0 on success, 1 if preflight fails.
+        # With all services available, it should exit 0.
+        assert rc == 0, "Dry-run should exit 0 when preflight passes"
+
+        # No campaign artifacts should be created.
+        campaign_dirs = list(Path("/tmp/test_preflight_dry_run").glob("*/20*/"))
+        assert len(campaign_dirs) == 0, "Dry-run should not create campaign artifacts"
 
 
 # ---------------------------------------------------------------------------
@@ -2123,25 +2201,7 @@ class TestStrictCampaignCacheRejection:
 
 
 class TestPreflightCheck:
-    """Tests for the campaign preflight infrastructure validation."""
-
-    def test_preflight_passes_with_all_services(self):
-        """Preflight passes when all required services are available."""
-        pytest.skip(reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
-        from research_store.strict_benchmark import _preflight_check
-
-        ok, errors = _preflight_check(
-            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
-            blob_root=Path("/tmp"),
-            qdrant_url="http://localhost:6333",
-            qdrant_api_key="",
-            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
-            campaign_dir=Path("/tmp/preflight_test"),
-        )
-        # Should pass — PostgreSQL, Qdrant, Firecrawl, blob root, campaign dir
-        # are all available in the test environment.
-        assert ok is True, f"Preflight should pass with all services: {errors}"
-        assert len(errors) == 0
+    """Tests for the campaign preflight infrastructure validation (unit tests — no DB required)."""
 
     def test_preflight_fails_without_database(self):
         """Preflight fails when PostgreSQL is unreachable."""
@@ -2157,65 +2217,3 @@ class TestPreflightCheck:
         )
         assert ok is False
         assert any("PostgreSQL" in e for e in errors)
-
-    def test_preflight_fails_without_dataset(self):
-        """Preflight fails when benchmark dataset is missing."""
-        pytest.skip(reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
-        from research_store.strict_benchmark import _preflight_check
-
-        ok, errors = _preflight_check(
-            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
-            blob_root=Path("/tmp"),
-            qdrant_url="http://localhost:6333",
-            qdrant_api_key="",
-            dataset_path=Path("/tmp/nonexistent_dataset.json"),
-            campaign_dir=Path("/tmp/preflight_test"),
-        )
-        assert ok is False
-        assert any("dataset" in e.lower() for e in errors)
-
-    def test_preflight_fails_without_qdrant(self):
-        """Preflight fails when Qdrant is unreachable."""
-        pytest.skip(reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
-        from research_store.strict_benchmark import _preflight_check
-
-        ok, errors = _preflight_check(
-            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
-            blob_root=Path("/tmp"),
-            qdrant_url="http://localhost:99999",
-            qdrant_api_key="",
-            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
-            campaign_dir=Path("/tmp/preflight_test"),
-        )
-        assert ok is False
-        assert any("Qdrant" in e for e in errors)
-
-    def test_preflight_dry_run_aborts_before_campaign(self):
-        """Dry-run mode validates config and preflight but does not execute campaigns."""
-        pytest.skip(reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
-        rc = main(
-            [
-                "--campaign-dir",
-                "/tmp/test_preflight_dry_run",
-                "--database-url",
-                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
-                "--blob-root",
-                "/tmp",
-                "--qdrant-url",
-                "http://localhost:6333",
-                "--dataset",
-                str(BENCHMARK_FIXTURE),
-                "--objectives",
-                "obj-001",
-                "--tolerance",
-                "0.15",
-                "--dry-run",
-            ]
-        )
-        # Dry-run exits 0 on success, 1 if preflight fails.
-        # With all services available, it should exit 0.
-        assert rc == 0, "Dry-run should exit 0 when preflight passes"
-
-        # No campaign artifacts should be created.
-        campaign_dirs = list(Path("/tmp/test_preflight_dry_run").glob("*/20*/"))
-        assert len(campaign_dirs) == 0, "Dry-run should not create campaign artifacts"

@@ -146,6 +146,10 @@ def _build_objective(obj_data: dict[str, Any]) -> BenchmarkObjective:
         )
         for s in obj_data.get("known_distractor_sources", [])
     )
+    # Build search_query_expected_sources: map query strings to tuples
+    # of expected source file paths.
+    raw_qes = obj_data.get("search_query_expected_sources", {})
+    search_query_expected_sources = {k: tuple(v) for k, v in raw_qes.items()}
     return BenchmarkObjective(
         schema_version="benchmark-objective-v1",
         id=obj_data["id"],
@@ -155,6 +159,9 @@ def _build_objective(obj_data: dict[str, Any]) -> BenchmarkObjective:
         expected_source_classes=tuple(obj_data.get("expected_source_classes", [])),
         known_relevant_sources=relevant_sources,
         known_distractor_sources=distractor_sources,
+        search_queries=tuple(obj_data.get("search_queries", [])),
+        search_query_expected_sources=search_query_expected_sources,
+        ground_truth_answers=obj_data.get("ground_truth_answers", {}),
         expected_unresolved_controversies=tuple(
             obj_data.get("expected_unresolved_controversies", [])
         ),

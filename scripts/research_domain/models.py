@@ -7,7 +7,7 @@ may later persist or act upon.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -1510,6 +1510,10 @@ class BenchmarkObjective:
         expected_source_classes: Expected classes of sources.
         known_relevant_sources: List of BenchmarkSource for relevant files.
         known_distractor_sources: List of BenchmarkSource for distractor files.
+        search_queries: List of search query strings for the orchestrator.
+        search_query_expected_sources: Mapping of search query to expected
+            source file paths (subset of known_relevant_sources).
+        ground_truth_answers: Mapping of question ID to expected answer text.
         expected_unresolved_controversies: Expected controversies.
         citation_support_labels: Question ID to support level mapping.
     """
@@ -1523,7 +1527,12 @@ class BenchmarkObjective:
     known_relevant_sources: tuple[BenchmarkSource, ...]
     known_distractor_sources: tuple[BenchmarkSource, ...]
     expected_unresolved_controversies: tuple[str, ...]
-    citation_support_labels: dict[str, str]
+    search_queries: tuple[str, ...] = ()
+    search_query_expected_sources: dict[str, tuple[str, ...]] = field(
+        default_factory=dict
+    )
+    ground_truth_answers: dict[str, str] = field(default_factory=dict)
+    citation_support_labels: dict[str, str] = field(default_factory=dict)
 
     SCHEMA_VERSION = "benchmark-objective-v1"
 
