@@ -997,7 +997,9 @@ class MetricEngine:
         # ------------------------------------------------------------------
         # Strict mode: metrics with empty sources remain null and UNAVAILABLE.
         _token_status = (
-            MetricStatus.UNAVAILABLE
+            MetricStatus.NOT_APPLICABLE
+            if token_source == "not_invoked"
+            else MetricStatus.UNAVAILABLE
             if _strict_token_unavailable
             else MetricStatus.MEASURED
         )
@@ -1443,6 +1445,7 @@ class ReleaseBenchmarkConfig:
     blob_root: Path | str | None = None
     qdrant_url: str = ""
     qdrant_api_key: str = ""
+    host_artifact_supplier: Any = None
     execution_modes: tuple[str, ...] = RELEASE_MODES
     objective_ids: tuple[str, ...] | None = None
     integrity_checks: tuple[str, ...] = (
@@ -1524,6 +1527,11 @@ class ReleaseBenchmarkRunner:
                     f"Valid modes: {', '.join(RELEASE_MODES)}"
                 )
             seen.add(mode)
+
+        if "agent_led" in self.config.execution_modes and self.config.host_artifact_supplier is None:
+            raise RuntimeError(
+                "agent_led benchmark requires a HostArtifactSupplier to ensure genuine external authority"
+            )
 
     def _select_objectives(self) -> list[BenchmarkObjective]:
         """Select objectives based on config."""
@@ -1652,11 +1660,8 @@ class ReleaseBenchmarkRunner:
             # The release harness is the explicit supplier boundary for the
             # two non-autonomous modes. Each run receives exactly one
             # authority; flags are cleared before selecting the next mode.
-            os.environ.pop("FIRECRAWL_RELEASE_HOST_ARTIFACTS", None)
             os.environ.pop("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES", None)
-            if mode == "agent_led":
-                os.environ["FIRECRAWL_RELEASE_HOST_ARTIFACTS"] = "1"
-            elif mode == "deterministic_debug":
+            if mode == "deterministic_debug":
                 os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
 
             # Build orchestrator for the target execution mode
@@ -1664,6 +1669,7 @@ class ReleaseBenchmarkRunner:
                 execution_mode=mode,
                 max_adaptive_cycles=10,
                 legacy_adapter_mode="authoritative",
+                host_artifact_supplier=self.config.host_artifact_supplier,
             )
             orchestrator = build_orchestrator(
                 config, orchestrator_config=orchestrator_config
@@ -2163,52 +2169,47 @@ class ReleaseBenchmarkRunner:
                         f"{mode} achieved {citation:.3f}"
                     )
 
-        # P7-R09 / #158: strict fail-closed — reject when mandatory metrics
-        # are unavailable or missing.  Non-strict mode permits legacy fallbacks.
+        # P7-R09 / #158: strict fail-closed
         if self.config.strict:
             for mode, mode_results_list in mode_results.items():
                 for result in mode_results_list:
-                    # Collect observed metric names
-                    observed_quality = {qm.name for qm in result.quality_metrics}
-                    observed_perf = {pm.name for pm in result.performance_metrics}
-
-                    # Reject missing mandatory quality metrics
-                    missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
-                    if missing_quality:
-                        withdrawn.append(
-                            f"quality metrics {sorted(missing_quality)} missing — "
-                            f"{mode} cannot satisfy release policy"
-                        )
-
-                    # Reject unavailable quality metrics
-                    for qm in result.quality_metrics:
-                        if (
-                            qm.name in MANDATORY_QUALITY_METRICS
-                            and qm.status != MetricStatus.MEASURED
-                        ):
+                    # Reject if run has errors
+                    if result.errors:
+                        withdrawn.append(f"{mode} encountered execution errors: {result.errors}")
+                    
+                    # Reject if orchestration did not complete
+                    if getattr(result, "orchestration_outcome", "completed") != "completed":
+                        withdrawn.append(f"{mode} orchestration did not complete (outcome: {result.orchestration_outcome})")
+                    
+                    # Reject if any mandatory quality metric is missing or not MEASURED (excluding NOT_APPLICABLE)
+                    observed_quality = {qm.name: qm.status for qm in result.quality_metrics}
+                    for metric in MANDATORY_QUALITY_METRICS:
+                        status = observed_quality.get(metric, MetricStatus.UNAVAILABLE)
+                        if status not in (MetricStatus.MEASURED, MetricStatus.NOT_APPLICABLE):
                             withdrawn.append(
-                                f"quality metric {qm.name} is {qm.status.value} "
+                                f"quality metric {metric} is {status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"
                             )
 
-                    # Reject missing mandatory performance metrics
-                    missing_perf = MANDATORY_PERFORMANCE_METRICS - observed_perf
-                    if missing_perf:
-                        withdrawn.append(
-                            f"performance metrics {sorted(missing_perf)} missing — "
-                            f"{mode} cannot satisfy release policy"
-                        )
-
-                    # Reject unavailable performance metrics
-                    for pm in result.performance_metrics:
-                        if (
-                            pm.name in MANDATORY_PERFORMANCE_METRICS
-                            and pm.status != MetricStatus.MEASURED
-                        ):
+                    # Reject if any mandatory performance metric is missing or not MEASURED (excluding NOT_APPLICABLE)
+                    observed_perf = {pm.name: pm.status for pm in result.performance_metrics}
+                    for metric in MANDATORY_PERFORMANCE_METRICS:
+                        status = observed_perf.get(metric, MetricStatus.UNAVAILABLE)
+                        if status not in (MetricStatus.MEASURED, MetricStatus.NOT_APPLICABLE):
                             withdrawn.append(
-                                f"performance metric {pm.name} is {pm.status.value} "
+                                f"performance metric {metric} is {status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"
                             )
+
+                    # Reject if any completeness invariant fails
+                    for check in getattr(result, "completeness_invariants", []):
+                        if not check.passed:
+                            withdrawn.append(f"{mode} failed completeness invariant: {check.name}")
+                    
+                    # Reject if any integrity check fails
+                    for check in getattr(result, "integrity_checks", []):
+                        if not check.passed:
+                            withdrawn.append(f"{mode} failed integrity check: {check.name}")
 
         # P6: Enforce performance thresholds
         max_latency_ratio = thresholds.get("max_latency_ratio_vs_baseline")

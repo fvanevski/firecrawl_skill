@@ -5,10 +5,13 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from .execution_policy import ExecutionModePolicy, SemanticAuthority
+
+if TYPE_CHECKING:
+    from .authorized_semantic import HostArtifactSupplier
 
 _SENSITIVE_KEY = re.compile(
     r"^(?:authorization|proxy[-_]authorization|cookie|set[-_]cookie|password|passwd|secret|client[-_]secret|api[-_]?key|apikey|access[-_]token|refresh[-_]token|auth[-_]token|token)$",
@@ -123,9 +126,14 @@ class HostArtifactResult:
 class SemanticCallService:
     """Persist model calls and host-agent proposals through one validation path."""
 
-    def __init__(self, uow_factory: Callable):
+    def __init__(
+        self,
+        uow_factory: Callable,
+        host_artifact_supplier: "HostArtifactSupplier | None" = None,
+    ):
         self.uow_factory = uow_factory
         self.execution_policy = ExecutionModePolicy()
+        self.host_artifact_supplier = host_artifact_supplier
 
     def _authorize(
         self, context: Mapping[str, Any], authority: SemanticAuthority

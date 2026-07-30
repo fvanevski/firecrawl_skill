@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Protocol
 from uuid import UUID
 
 import model_gateway
@@ -12,12 +13,25 @@ from model_gateway import StructuredResult
 from .execution_policy import ExecutionModeError
 
 
+class HostArtifactSupplier(Protocol):
+    def supply(
+        self,
+        *,
+        semantic_context: dict[str, Any],
+        schema: Mapping[str, Any],
+        **call_kwargs: Any,
+    ) -> StructuredResult:
+        """Provide a genuinely external host-authored semantic artifact."""
+        ...
+
+
 def call_authorized_structured(
     *,
     semantic_service: Any,
     semantic_context: dict[str, Any],
     deterministic_fixture: dict[str, Any],
     actor_identifier: str,
+    host_artifact_supplier: HostArtifactSupplier | None = None,
     **call_kwargs: Any,
 ) -> StructuredResult:
     """Execute or ingest one structured decision under exact run authority.
@@ -39,11 +53,15 @@ def call_authorized_structured(
         )
 
     if mode == "agent_led":
-        if os.environ.get("FIRECRAWL_RELEASE_HOST_ARTIFACTS") != "1":
+        if host_artifact_supplier is None:
             raise ExecutionModeError(
-                "agent_led semantic decisions require an explicit host artifact"
+                "agent_led semantic decisions require an explicit HostArtifactSupplier"
             )
-        generated = model_gateway.call_structured(**call_kwargs)
+        generated = host_artifact_supplier.supply(
+            semantic_context=semantic_context,
+            schema=call_kwargs["schema"],
+            **call_kwargs,
+        )
         if generated.error or not generated.value:
             return generated
         supplied_context = {

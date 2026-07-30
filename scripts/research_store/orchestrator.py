@@ -121,6 +121,7 @@ class OrchestratorConfig:
     resume_on_conflict: bool = True
     legacy_adapter_mode: str = "authoritative"
     resource_governor: Any = None
+    host_artifact_supplier: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -1157,7 +1158,10 @@ class EvidencePreparationStage:
             corpus_service=self.corpus_service,
             evidence_service=self.evidence_service,
             coverage_service=self.coverage_service,
-            semantic_service=SemanticCallService(self.run_service.uow_factory),
+            semantic_service=SemanticCallService(
+                self.run_service.uow_factory,
+                host_artifact_supplier=self.config.host_artifact_supplier,
+            ),
             config=self.config,
         )
         try:
@@ -1780,7 +1784,10 @@ class SynthesisStage:
         )
         from .semantic_service import SemanticCallService
 
-        semantic_service = SemanticCallService(self.run_service.uow_factory)
+        semantic_service = SemanticCallService(
+            self.run_service.uow_factory,
+            host_artifact_supplier=self.config.host_artifact_supplier,
+        )
         report_service = LocalSynthesisService(
             semantic_service=semantic_service,
             evidence_service=self._evidence_service,

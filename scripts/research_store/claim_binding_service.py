@@ -146,6 +146,7 @@ class ClaimBindingService:
             semantic_context=context,
             deterministic_fixture=deterministic_fixture,
             actor_identifier="release-campaign-host-claim-binder",
+            host_artifact_supplier=self.semantic.host_artifact_supplier,
             provider=provider,
             model=model_name,
             schema=schema,

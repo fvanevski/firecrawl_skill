@@ -190,6 +190,7 @@ class EvidencePreparationService:
             },
             deterministic_fixture={"claims": deterministic_claims},
             actor_identifier="release-campaign-host-claim-extractor",
+            host_artifact_supplier=self.semantic.host_artifact_supplier,
             provider="local",
             model=self.config.generative_model,
             schema=schema,

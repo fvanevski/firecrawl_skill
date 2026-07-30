@@ -6,3 +6,4 @@ PyYAML==6.0.3
 qdrant-client==1.18.0
 redis==6.4.0
 SQLAlchemy==2.0.43
+tiktoken==0.13.0

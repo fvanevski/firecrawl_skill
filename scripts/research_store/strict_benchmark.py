@@ -22,6 +22,10 @@ import json
 import os
 import sys
 import time
+import httpx
+import model_gateway
+from model_gateway import StructuredResult
+from packaging.version import Version
 from hashlib import sha256
 from pathlib import Path
 
@@ -432,20 +436,20 @@ def _run_campaign(
     strict: bool,
     reproducibility_tolerance: float,
     campaign_dir: Path,
+    execution_modes: tuple[str, ...] = ("autonomous_local", "deterministic_debug"),
 ) -> tuple[ReleaseBenchmarkResult, str]:
-    """Execute a single strict campaign.
+    """Execute a single strict campaign wave and return its result and integrity hash.
 
     Args:
-        campaign_label: Human-readable label (e.g. "A" or "B").
-        dataset_path: Path to the benchmark dataset JSON file.
-        database_url: PostgreSQL connection string.
-        blob_root: Path to the content-addressed blob store root.
-        qdrant_url: Qdrant URL.
-        qdrant_api_key: Qdrant API key.
-        objective_ids: Specific objective IDs to run (None = all).
-        strict: Whether strict mode is enabled.
-        reproducibility_tolerance: Tolerance for reproducibility comparison.
-        campaign_dir: Directory to write campaign artifacts to.
+        dataset_path: Path to the benchmark dataset.
+        database_url: Target PostgreSQL database.
+        blob_root: Target blob storage path.
+        qdrant_url: Target Qdrant vector database URL.
+        qdrant_api_key: Target Qdrant vector database API key.
+        objective_ids: Specific objective IDs to run, or None for all.
+        campaign_label: Display label for the campaign run.
+        strict: Whether to enforce strict mode (mandatory).
+        reproducibility_tolerance: Acceptance threshold for deterministic deviation.
 
     Returns:
         Tuple of (result, campaign_id).
@@ -462,7 +466,7 @@ def _run_campaign(
         blob_root=blob_root,
         qdrant_url=qdrant_url,
         qdrant_api_key=qdrant_api_key,
-        execution_modes=RELEASE_MODES,
+        execution_modes=execution_modes,
         objective_ids=objective_ids,
         strict=strict,
         reproducibility_tolerance=reproducibility_tolerance,
@@ -817,7 +821,10 @@ def _build_manifest(
     return manifest
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    execution_modes: tuple[str, ...] = ("autonomous_local", "deterministic_debug")
+) -> int:
     """Execute strict release benchmark campaigns.
 
     Returns 0 on success, 1 on failure.
@@ -993,6 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
         strict=strict,
         reproducibility_tolerance=args.tolerance,
         campaign_dir=campaign_dir,
+        execution_modes=execution_modes,
     )
 
     # ── Execute Campaign B ───────────────────────────────────────────────
@@ -1007,6 +1015,7 @@ def main(argv: list[str] | None = None) -> int:
         strict=strict,
         reproducibility_tolerance=args.tolerance,
         campaign_dir=campaign_dir,
+        execution_modes=execution_modes,
     )
 
     # ── Reproducibility comparison ───────────────────────────────────────
@@ -1076,22 +1085,13 @@ def main(argv: list[str] | None = None) -> int:
 
     print("=" * 60)
 
-    # Exit with failure if any campaign failed, reproducibility failed,
-    # or either campaign recommends NO_GO.
-    no_go_a = (
-        result_a.recommendation.outcome == "no_go" if result_a.recommendation else False
-    )
-    no_go_b = (
-        result_b.recommendation.outcome == "no_go" if result_b.recommendation else False
-    )
+    # Exit with failure if either campaign recommends anything other than GO,
+    # or reproducibility failed.
+    def is_go(rec):
+        return rec and rec.outcome == "go"
 
-    if no_go_a or no_go_b:
-        if no_go_a and no_go_b:
-            print("\nFATAL: Both campaigns recommend NO_GO. Release is rejected.")
-        elif no_go_a:
-            print("\nFATAL: Campaign A recommends NO_GO. Release is rejected.")
-        else:
-            print("\nFATAL: Campaign B recommends NO_GO. Release is rejected.")
+    if not is_go(result_a.recommendation) or not is_go(result_b.recommendation):
+        print("\nFATAL: Release policy not met. (Must be unequivocally GO with reproducibility passing)")
         return 1
 
     if not comparison.all_within_tolerance:
