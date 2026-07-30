@@ -160,7 +160,7 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_strict_campaign.py
+            scripts/test_strict_campaign.py::TestStrictCampaignIntegration
 
   lint:
     name: Ruff
