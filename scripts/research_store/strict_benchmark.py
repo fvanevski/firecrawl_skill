@@ -192,15 +192,18 @@ def _preflight_check(
 
     # 5. Embedding endpoint health (OPTIONAL)
     try:
+        import re
         import urllib.request
 
         embedding_url = os.environ.get(
             "EMBEDDING_URL", os.environ.get("FIRECRAWL_EMBEDDING_URL", "")
         )
         if embedding_url:
-            base = embedding_url.rstrip("/")
-            if not base.endswith("/v1"):
-                base = f"{base}/v1"
+            # Normalize to the API root: strip any operation suffix
+            # (e.g. /embeddings, /rerank) so /v1/models is correct.
+            # "http://host/v1/embeddings" → "http://host/v1"
+            # "http://host/v1" → "http://host/v1"
+            base = re.sub(r"/v1/[^/]+/?$", "/v1", embedding_url.rstrip("/"))
             req = urllib.request.Request(
                 f"{base}/models",
                 headers={
@@ -229,9 +232,10 @@ def _preflight_check(
             "GENERATIVE_URL", os.environ.get("FIRECRAWL_GENERATIVE_URL", "")
         )
         if generative_url:
-            base = generative_url.rstrip("/")
-            if not base.endswith("/v1"):
-                base = f"{base}/v1"
+            # Normalize to the API root: strip any operation suffix
+            # (e.g. /embeddings, /rerank) so /v1/models is correct.
+            # "http://host/v1" → "http://host/v1" (no change)
+            base = re.sub(r"/v1/[^/]+/?$", "/v1", generative_url.rstrip("/"))
             req = urllib.request.Request(
                 f"{base}/models",
                 headers={
@@ -262,9 +266,10 @@ def _preflight_check(
             "RERANKER_URL", os.environ.get("FIRECRAWL_RERANKER_URL", "")
         )
         if reranker_url:
-            base = reranker_url.rstrip("/")
-            if not base.endswith("/v1"):
-                base = f"{base}/v1"
+            # Normalize to the API root: strip any operation suffix
+            # (e.g. /embeddings, /rerank) so /v1/models is correct.
+            # "http://host/v1/rerank" → "http://host/v1"
+            base = re.sub(r"/v1/[^/]+/?$", "/v1", reranker_url.rstrip("/"))
             req = urllib.request.Request(
                 f"{base}/models",
                 headers={

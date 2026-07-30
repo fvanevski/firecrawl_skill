@@ -453,7 +453,9 @@ class TestStrictCampaignIntegration:
         The campaign completes with NO_GO recommendation because quality
         thresholds are not met — this is the correct fail-closed behavior.
         """
-        database_url = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
 
         # Run with only deterministic_debug (fastest mode).
         # The campaign should complete (not raise RuntimeError) and produce
@@ -552,11 +554,14 @@ class TestStrictCampaignIntegration:
 
     def test_cli_dry_run_returns_zero(self):
         """--dry-run validates config and exits 0."""
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         rc = main(
             [
                 "--dry-run",
                 "--database-url",
-                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+                database_url,
                 "--dataset",
                 str(BENCHMARK_FIXTURE),
             ]
@@ -565,11 +570,14 @@ class TestStrictCampaignIntegration:
 
     def test_cli_missing_dataset_returns_one(self):
         """Missing dataset causes exit 1."""
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         rc = main(
             [
                 "--dry-run",
                 "--database-url",
-                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+                database_url,
                 "--dataset",
                 "/nonexistent/benchmark.json",
             ]
@@ -578,11 +586,14 @@ class TestStrictCampaignIntegration:
 
     def test_cli_invalid_tolerance_returns_one(self):
         """Tolerance outside [0, 1] causes exit 1."""
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         rc = main(
             [
                 "--dry-run",
                 "--database-url",
-                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+                database_url,
                 "--dataset",
                 str(BENCHMARK_FIXTURE),
                 "--tolerance",
@@ -593,10 +604,13 @@ class TestStrictCampaignIntegration:
 
     def test_preflight_passes_with_all_services(self):
         """Preflight passes when all required services are available."""
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         from research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
-            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+            database_url=database_url,
             blob_root=Path("/tmp"),
             qdrant_url="http://localhost:6333",
             qdrant_api_key="",
@@ -610,10 +624,13 @@ class TestStrictCampaignIntegration:
 
     def test_preflight_fails_without_dataset(self):
         """Preflight fails when benchmark dataset is missing."""
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         from research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
-            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+            database_url=database_url,
             blob_root=Path("/tmp"),
             qdrant_url="http://localhost:6333",
             qdrant_api_key="",
@@ -625,10 +642,13 @@ class TestStrictCampaignIntegration:
 
     def test_preflight_fails_without_qdrant(self):
         """Preflight fails when Qdrant is unreachable."""
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         from research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
-            database_url=os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+            database_url=database_url,
             blob_root=Path("/tmp"),
             qdrant_url="http://localhost:99999",
             qdrant_api_key="",
@@ -640,12 +660,15 @@ class TestStrictCampaignIntegration:
 
     def test_preflight_dry_run_aborts_before_campaign(self):
         """Dry-run mode validates config and preflight but does not execute campaigns."""
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         rc = main(
             [
                 "--campaign-dir",
                 "/tmp/test_preflight_dry_run",
                 "--database-url",
-                os.environ["RESEARCH_STORE_TEST_DATABASE_URL"],
+                database_url,
                 "--blob-root",
                 "/tmp",
                 "--qdrant-url",
@@ -1757,7 +1780,9 @@ class TestStatusSerialization:
         performance_metrics arrays with correct status fields. The DB is empty,
         so all metrics will be 0.0 with unevaluated/unavailable status.
         """
-        database_url = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not database_url:
+            pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
 
         campaign_dir = Path("/tmp/test_status_serialization")
         # Clean up previous run artifacts.
