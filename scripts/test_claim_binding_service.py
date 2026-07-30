@@ -23,6 +23,8 @@ class MockEvidenceService:
 
 
 class MockSemanticCallService:
+    host_artifact_supplier = None
+
     def __init__(self):
         pass
 
@@ -391,6 +393,8 @@ def test_missing_packet_raises_value_error(mock_packet, monkeypatch):
             return 1
 
     class MockSemanticCallService:
+        host_artifact_supplier = None
+
         def uow_factory(self):
             class MockUOW:
                 def __enter__(self):

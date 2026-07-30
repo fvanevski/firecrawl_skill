@@ -3611,7 +3611,10 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     asset = service.ingest(
         IngestRequest(
             "https://trace.example/test",
-            b"# Section A\n\n" + b"A" * 600 + b"\n\n# Section B\n\n" + b"B" * 600,
+            b"# Section A\n\n"
+            + b"word " * 1000
+            + b"\n\n# Section B\n\n"
+            + b"word " * 1000,
         )
     )
     chunk_ids = list(asset.chunk_ids)
@@ -3817,6 +3820,16 @@ class TestIndexRebuildRecovery:
             cur.execute("DELETE FROM asset_snapshots;")
             cur.execute("DELETE FROM sources;")
             conn.commit()
+
+        import httpx
+
+        try:
+            r = httpx.get("http://localhost:6333/collections", timeout=2.0)
+            if r.status_code == 200:
+                for c in r.json().get("result", {}).get("collections", []):
+                    httpx.delete(f"http://localhost:6333/collections/{c['name']}")
+        except Exception:
+            pass
 
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
         """Every eligible chunk gets a manifest AND a pending job."""
