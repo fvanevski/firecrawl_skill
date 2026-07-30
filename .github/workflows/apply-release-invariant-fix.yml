@@ -15,12 +15,12 @@ permissions:
 jobs:
   apply:
     name: Apply and validate cumulative patch
-    if: github.head_ref == 'agent/issue-170-release-invariant-fix'
+    if: github.head_ref == 'agent/issue-170-authoritative-extraction-evidence'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - name: Check out temporary fix branch
+      - name: Check out PR branch
         uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref }}
