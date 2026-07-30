@@ -1447,6 +1447,56 @@ class LocalSynthesisService:
             binding["claim_id"]: binding
             for binding in packet.get("claim_evidence_bindings", [])
         }
+        repaired_sections: list[dict[str, Any]] = []
+        omitted_sections: list[str] = []
+        for section in draft_sections:
+            references = section.get("claim_references", [])
+            if not references:
+                repaired_sections.append(section)
+                continue
+            section_is_bound = all(
+                reference["claim_id"] in binding_by_claim
+                and set(reference["passage_ids"]).issubset(packet_passage_ids)
+                and set(reference["passage_ids"]).issubset(
+                    set(binding_by_claim[reference["claim_id"]]["passage_ids"])
+                )
+                and reference["relationship"]
+                == binding_by_claim[reference["claim_id"]]["relationship"]
+                for reference in references
+            )
+            if section_is_bound:
+                repaired_sections.append(section)
+            else:
+                omitted_sections.append(str(section.get("section_id", "unknown")))
+
+        if omitted_sections:
+            if not any(
+                section.get("claim_references", []) for section in repaired_sections
+            ):
+                raise ReportServiceError(
+                    "citation repair removed every evidence-bound report section"
+                )
+            repair_limitations = [
+                "Citation repair omitted section "
+                f"{section_id}: references did not match authoritative bindings."
+                for section_id in omitted_sections
+            ]
+            repaired_artifact = {
+                **draft_artifact,
+                "report_sections": repaired_sections,
+                "limitations": list(draft_artifact.get("limitations", []))
+                + repair_limitations,
+            }
+            with uow_factory() as uow:
+                draft_record = uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
+                self._update_stage(
+                    uow,
+                    draft_record,
+                    status=SynthesisStageStatus.COMPLETED.value,
+                    artifact=repaired_artifact,
+                )
+            draft_sections = repaired_sections
+
         draft_references = [
             (section["section_id"], reference)
             for section in draft_sections

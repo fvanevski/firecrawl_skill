@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
@@ -1020,6 +1021,111 @@ def test_citation_pass_stage_reads_draft_from_synthesis_stages():
     assert len(prompt_data["draft_sections"]) == 1
     assert prompt_data["draft_sections"][0]["section_id"] == "s1"
     assert summary["stages"]["citation_pass"]["status"] == "completed"
+
+
+def test_citation_pass_repairs_sections_with_non_authoritative_relationship():
+    """Mismatched sections are omitted and recorded without weakening validation."""
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    claim_id = _VALID_PACKET["claims"][0]["claim_id"]
+    binding = _VALID_PACKET["claim_evidence_bindings"][0]
+    passage_id = binding["passage_ids"][0]
+
+    for sname in ("outline", "binding", "draft"):
+        artifact = {}
+        if sname == "draft":
+            artifact = {
+                "report_sections": [
+                    {
+                        "section_id": "supported",
+                        "title": "Supported",
+                        "body": "Grounded body.",
+                        "claim_references": [
+                            {
+                                "claim_id": claim_id,
+                                "passage_ids": [passage_id],
+                                "relationship": binding["relationship"],
+                            }
+                        ],
+                    },
+                    {
+                        "section_id": "unsupported",
+                        "title": "Unsupported",
+                        "body": "Material explicitly outside the binding.",
+                        "claim_references": [
+                            {
+                                "claim_id": claim_id,
+                                "passage_ids": [passage_id],
+                                "relationship": "context",
+                            }
+                        ],
+                    },
+                ],
+                "limitations": [],
+            }
+        mock_uow.synthesis_stages.update_synthesis_stage(
+            {
+                "id": str(uuid4()),
+                "run_id": str(run_id),
+                "stage_name": sname,
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "test-model",
+                "prompt_version": "v1",
+                "schema_version": 1,
+                "artifact": artifact,
+                "error": None,
+                "attempts": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        )
+
+    captured_prompt = None
+
+    def capture_call(*args, **kwargs):
+        nonlocal captured_prompt
+        captured_prompt = json.loads(kwargs["user_prompt"])
+        result = MagicMock()
+        result.error = None
+        result.value = {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 2,
+            "draft_revision": 1,
+            "pass_status": "passed",
+            "validation_results": [
+                {
+                    "section_id": "supported",
+                    "claim_id": claim_id,
+                    "passage_ids": [passage_id],
+                    "status": "valid",
+                    "issue": "",
+                }
+            ],
+            "invented_citations": [],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        }
+        result.semantic_call_id = str(uuid4())
+        result.artifact_ids = [str(uuid4())]
+        return result
+
+    with patch("model_gateway.call_structured", side_effect=capture_call):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=2,
+            model_name="test-model",
+        )
+
+    assert [s["section_id"] for s in captured_prompt["draft_sections"]] == ["supported"]
+    repaired = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "draft")[
+        "artifact"
+    ]
+    assert "unsupported" in repaired["limitations"][0]
+    assert summary["overall_status"] == "completed"
 
 
 # ---------------------------------------------------------------------------

@@ -198,8 +198,10 @@ class EvidencePreparationService:
                 "each supplied question or claim coverage item. For each item, use only "
                 "its assigned source_passage_id; do not combine facts from another "
                 "passage into that claim. Return that exact source_passage_id with the "
-                "claim. Classify source authority and freshness. Do not invent facts, "
-                "identifiers, sources, or missing coverage."
+                "claim. Write a concise quote-like paraphrase of facts explicitly stated "
+                "in that passage; do not infer operational consequences or append a "
+                "clause that the passage does not state. Classify source authority and "
+                "freshness. Do not invent facts, identifiers, sources, or missing coverage."
             ),
             user_prompt=json.dumps(prompt_payload, indent=2, default=str),
             prompt_version=self.PROMPT_VERSION,
