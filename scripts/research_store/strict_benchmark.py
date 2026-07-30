@@ -819,7 +819,7 @@ def _build_manifest(
 
 def main(
     argv: list[str] | None = None,
-    execution_modes: tuple[str, ...] = ("autonomous_local", "deterministic_debug")
+    execution_modes: tuple[str, ...] = ("autonomous_local", "deterministic_debug"),
 ) -> int:
     """Execute strict release benchmark campaigns.
 
@@ -1087,7 +1087,9 @@ def main(
         return rec and rec.outcome == "go"
 
     if not is_go(result_a.recommendation) or not is_go(result_b.recommendation):
-        print("\nFATAL: Release policy not met. (Must be unequivocally GO with reproducibility passing)")
+        print(
+            "\nFATAL: Release policy not met. (Must be unequivocally GO with reproducibility passing)"
+        )
         return 1
 
     if not comparison.all_within_tolerance:

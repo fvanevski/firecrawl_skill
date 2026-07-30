@@ -1529,7 +1529,10 @@ class ReleaseBenchmarkRunner:
                 )
             seen.add(mode)
 
-        if "agent_led" in self.config.execution_modes and self.config.host_artifact_supplier is None:
+        if (
+            "agent_led" in self.config.execution_modes
+            and self.config.host_artifact_supplier is None
+        ):
             raise RuntimeError(
                 "agent_led benchmark requires a HostArtifactSupplier to ensure genuine external authority"
             )
@@ -2176,27 +2179,44 @@ class ReleaseBenchmarkRunner:
                 for result in mode_results_list:
                     # Reject if run has errors
                     if result.errors:
-                        withdrawn.append(f"{mode} encountered execution errors: {result.errors}")
-                    
+                        withdrawn.append(
+                            f"{mode} encountered execution errors: {result.errors}"
+                        )
+
                     # Reject if orchestration did not complete
-                    if getattr(result, "orchestration_outcome", "completed") != "completed":
-                        withdrawn.append(f"{mode} orchestration did not complete (outcome: {result.orchestration_outcome})")
-                    
+                    if (
+                        getattr(result, "orchestration_outcome", "completed")
+                        != "completed"
+                    ):
+                        withdrawn.append(
+                            f"{mode} orchestration did not complete (outcome: {result.orchestration_outcome})"
+                        )
+
                     # Reject if any mandatory quality metric is missing or not MEASURED (excluding NOT_APPLICABLE)
-                    observed_quality = {qm.name: qm.status for qm in result.quality_metrics}
+                    observed_quality = {
+                        qm.name: qm.status for qm in result.quality_metrics
+                    }
                     for metric in MANDATORY_QUALITY_METRICS:
                         status = observed_quality.get(metric, MetricStatus.UNAVAILABLE)
-                        if status not in (MetricStatus.MEASURED, MetricStatus.NOT_APPLICABLE):
+                        if status not in (
+                            MetricStatus.MEASURED,
+                            MetricStatus.NOT_APPLICABLE,
+                        ):
                             withdrawn.append(
                                 f"quality metric {metric} is {status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"
                             )
 
                     # Reject if any mandatory performance metric is missing or not MEASURED (excluding NOT_APPLICABLE)
-                    observed_perf = {pm.name: pm.status for pm in result.performance_metrics}
+                    observed_perf = {
+                        pm.name: pm.status for pm in result.performance_metrics
+                    }
                     for metric in MANDATORY_PERFORMANCE_METRICS:
                         status = observed_perf.get(metric, MetricStatus.UNAVAILABLE)
-                        if status not in (MetricStatus.MEASURED, MetricStatus.NOT_APPLICABLE):
+                        if status not in (
+                            MetricStatus.MEASURED,
+                            MetricStatus.NOT_APPLICABLE,
+                        ):
                             withdrawn.append(
                                 f"performance metric {metric} is {status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"
@@ -2205,12 +2225,16 @@ class ReleaseBenchmarkRunner:
                     # Reject if any completeness invariant fails
                     for check in getattr(result, "completeness_invariants", []):
                         if not check.passed:
-                            withdrawn.append(f"{mode} failed completeness invariant: {check.name}")
-                    
+                            withdrawn.append(
+                                f"{mode} failed completeness invariant: {check.name}"
+                            )
+
                     # Reject if any integrity check fails
                     for check in getattr(result, "integrity_checks", []):
                         if not check.passed:
-                            withdrawn.append(f"{mode} failed integrity check: {check.name}")
+                            withdrawn.append(
+                                f"{mode} failed integrity check: {check.name}"
+                            )
 
         # P6: Enforce performance thresholds
         max_latency_ratio = thresholds.get("max_latency_ratio_vs_baseline")

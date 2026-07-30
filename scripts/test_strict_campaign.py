@@ -2335,4 +2335,3 @@ class TestPreflightCheck:
         )
         assert ok is False
         assert any("PostgreSQL" in e for e in errors)
-
