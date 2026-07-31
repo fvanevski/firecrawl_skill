@@ -1117,10 +1117,12 @@ class EvidencePreparationStage:
         config: StoreConfig,
         corpus_service: Any | None,
         evidence_service: Any | None = None,
+        host_artifact_supplier: Any = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
         self.config = config
+        self.host_artifact_supplier = host_artifact_supplier
         self.corpus_service = corpus_service
         self.evidence_service = evidence_service or getattr(
             run_service, "evidence_service", None
@@ -1160,7 +1162,7 @@ class EvidencePreparationStage:
             coverage_service=self.coverage_service,
             semantic_service=SemanticCallService(
                 self.run_service.uow_factory,
-                host_artifact_supplier=self.config.host_artifact_supplier,
+                host_artifact_supplier=self.host_artifact_supplier,
             ),
             config=self.config,
         )
@@ -1750,10 +1752,12 @@ class SynthesisStage:
         config: StoreConfig,
         resource_governor: Any = None,
         evidence_service: Any | None = None,
+        host_artifact_supplier: Any = None,
     ) -> None:
         self.run_service = run_service
         self.config = config
         self._resource_governor = resource_governor
+        self.host_artifact_supplier = host_artifact_supplier
         self._evidence_service = evidence_service or getattr(
             run_service, "evidence_service", None
         )
@@ -1786,7 +1790,7 @@ class SynthesisStage:
 
         semantic_service = SemanticCallService(
             self.run_service.uow_factory,
-            host_artifact_supplier=self.config.host_artifact_supplier,
+            host_artifact_supplier=self.host_artifact_supplier,
         )
         report_service = LocalSynthesisService(
             semantic_service=semantic_service,
@@ -2013,6 +2017,7 @@ class ResearchOrchestrator:
             config,
             corpus_service,
             evidence_service=evidence_service,
+            host_artifact_supplier=self.orchestrator_config.host_artifact_supplier,
         )
         self._coverage_review = CoverageReviewStage(
             run_service, coverage_service, strategy_service, config
@@ -2023,6 +2028,7 @@ class ResearchOrchestrator:
             config,
             resource_governor=self.orchestrator_config.resource_governor,
             evidence_service=evidence_service,
+            host_artifact_supplier=self.orchestrator_config.host_artifact_supplier,
         )
         self._terminal = TerminalStage(run_service)
 
