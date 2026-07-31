@@ -40,8 +40,8 @@ jobs:
             echo 'Source corrections already applied.'
             echo 'changed=false' >> "$GITHUB_OUTPUT"
           else
-            base64 --decode scripts/_apply_pr157_thread_fixes.py.gz.b64 \
-              | gzip --decompress > scripts/_apply_pr157_thread_fixes.py
+            gzip --decompress --stdout scripts/_apply_pr157_thread_fixes.py.gz \
+              > scripts/_apply_pr157_thread_fixes.py
             python scripts/_apply_pr157_thread_fixes.py
             rm scripts/_apply_pr157_thread_fixes.py
             echo 'changed=true' >> "$GITHUB_OUTPUT"
