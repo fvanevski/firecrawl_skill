@@ -57,3 +57,13 @@ try:
     runpy.run_path(str(GENERATED), run_name="__main__")
 finally:
     GENERATED.unlink(missing_ok=True)
+
+hook = ROOT / ".git/hooks/pre-commit"
+hook.write_text(
+    "#!/bin/sh\n"
+    "set -eu\n"
+    "git checkout HEAD -- .github/workflows/ci.yml\n"
+    "git checkout HEAD -- .github/workflows/apply-benchmark-v2-cleanup.yml\n",
+    encoding="utf-8",
+)
+hook.chmod(0o755)
