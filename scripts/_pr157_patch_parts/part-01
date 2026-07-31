@@ -1,0 +1,83 @@
+        daemon=True,
+        )
+        self._periodic_thread.start()
+
+    def _periodic_sample_loop(self) -> None:
+        """Collect interior samples until the workload window is stopped."""
+        try:
+            while not self._periodic_stop.wait(self.interval_seconds):
+                self.collect()
+                if (
+                    self.max_samples
+                    and self._cpu_sample_number >= self.max_samples
+                    and self._gpu_sample_number >= self.max_samples
+                ):
+                    break
+        except Exception as exc:  # noqa: BLE001
+            self._periodic_error = exc
+            self._periodic_stop.set()
+
+    def stop_periodic_window(
+        self,
+    ) -> tuple[list[ResourceSample], list[ResourceSample]]:
+        """Stop periodic sampling and return completed exact-window samples."""
+        thread = self._periodic_thread
+        if thread is None:
+            raise RuntimeError("start_periodic_window() must be called first")
+        self._periodic_stop.set()
+        thread.join(timeout=max(5.0, self.interval_seconds * 2.0))
+        if thread.is_alive():
+            raise RuntimeError("periodic resource sampler did not stop")
+        self._periodic_thread = None
+        periodic_error = self._periodic_error
+        self._periodic_error = None
+        samples = self.end_window()
+        if periodic_error is not None:
+            raise RuntimeError("periodic resource sampling failed") from periodic_error
+        return samples
+
+    def end_window(self) -> tuple[list[ResourceSample], list[ResourceSample]]:
+        """Collect final samples immediately after the workload."""
+''',
+    )
+
+    replace_once(
+        "scripts/research_store/release_benchmark.py",
+        '''# Mandatory performance metrics — strict mode rejects any non-measured status.
+MANDATORY_PERFORMANCE_METRICS = frozenset(
+''',
+        '''# Mandatory performance metrics. Strict policy accepts MEASURED and an
+# explicitly mode-scoped NOT_APPLICABLE observation; every other state is NO_GO.
+MANDATORY_PERFORMANCE_METRICS = frozenset(
+''',
+    )
+    replace_once(
+        "scripts/research_store/release_benchmark.py",
+        '''MANDATORY_PERFORMANCE_METRICS = frozenset(
+    {
+        "total_tokens",
+        "cache_hit_rate",
+        "embedding_throughput",
+        "cpu_percent",
+        "gpu_memory_mb",
+    }
+)
+''',
+        '''MANDATORY_PERFORMANCE_METRICS = frozenset(
+    {
+        "total_tokens",
+        "cache_hit_rate",
+        "embedding_throughput",
+        "cpu_percent",
+        "gpu_memory_mb",
+    }
+)
+STRICT_ACCEPTABLE_PERFORMANCE_STATUSES = frozenset(
+    {MetricStatus.MEASURED, MetricStatus.NOT_APPLICABLE}
+)
+STRICT_MIN_CPU_SAMPLES = 2
+STRICT_MIN_GPU_SAMPLES = 3
+''',
+    )
+    replace_once(
+        "scripts/research_store
