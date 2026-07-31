@@ -1,0 +1,128 @@
+# Reduced real smoke gate
+
+The reduced smoke gate is diagnostic evidence only. It runs exactly two strict campaigns and one benchmark objective. By default, each repetition runs `autonomous_local` and `deterministic_debug`. The `agent_led` mode is optional.
+
+The gate remains fail-closed: both recommendations must be `go` and the production reproducibility comparison must pass for the selected execution-mode set.
+
+## Default two-mode run
+
+No host-artifact supplier is required for the default run:
+
+```bash
+python scripts/smoke_test.py \
+  --candidate-sha "$(git rev-parse HEAD)" \
+  --objective obj-001 \
+  --database-url "$DATABASE_URL" \
+  --qdrant-url "$QDRANT_URL"
+```
+
+The effective modes are:
+
+- `autonomous_local`
+- `deterministic_debug`
+
+## Optional agent-led run
+
+Add `--include-agent-led` to run all three modes. Only this form requires an external host-artifact supplier:
+
+```bash
+export GENERATIVE_URL='http://127.0.0.1:8002/v1'
+export SMOKE_HOST_SUPPLIER_COMMAND='/path/to/external-agent --stdio'
+export SMOKE_HOST_SUPPLIER_IDENTITY='external-review-agent'
+export SMOKE_HOST_SUPPLIER_ENDPOINT='http://external-review-agent:9000'
+
+python scripts/smoke_test.py \
+  --candidate-sha "$(git rev-parse HEAD)" \
+  --objective obj-001 \
+  --database-url "$DATABASE_URL" \
+  --qdrant-url "$QDRANT_URL" \
+  --include-agent-led
+```
+
+`agent_led` must use a process distinct from the autonomous local-model endpoint. Both authorities must expose explicit endpoint fingerprints. `SMOKE_HOST_SUPPLIER_ENDPOINT` must not resolve to the configured autonomous endpoint, and the supplier must not proxy that endpoint under another label.
+
+The external command receives one JSON document on stdin and returns one JSON document on stdout. Its probe and supply protocol remains `firecrawl-host-artifact-stdio-v1`.
+
+## Administrative environment override
+
+A truthy `SMOKE_DISABLE_AGENT_LED` always disables `agent_led`, even when `--include-agent-led` is present:
+
+```bash
+export SMOKE_DISABLE_AGENT_LED=1
+```
+
+Accepted true values are `1`, `true`, `yes`, and `on`; accepted false values are `0`, `false`, `no`, and `off`, case-insensitively. Any other value fails closed.
+
+For example, this still runs only the default two modes:
+
+```bash
+SMOKE_DISABLE_AGENT_LED=1 python scripts/smoke_test.py \
+  --candidate-sha "$(git rev-parse HEAD)" \
+  --objective obj-001 \
+  --database-url "$DATABASE_URL" \
+  --qdrant-url "$QDRANT_URL" \
+  --include-agent-led
+```
+
+The manifest records whether `agent_led` was requested, disabled by the environment, and effectively selected. When it is not selected, `host_supplier` is `null`.
+
+## Preflight repair and safety behavior
+
+Local schema-constrained calls disable model thinking by default so the
+output budget is reserved for the required JSON artifact. The effective
+thinking setting is recorded in attempt and provenance metadata.
+
+`scripts/research-db index-reconcile --repair` treats physical Qdrant
+coverage as authoritative for the currently configured embedding
+fingerprint. It requeues manifests whose points are missing even when
+PostgreSQL says they are complete, and deletes current-derivation orphan
+points only during the explicit repair operation. Index activation still
+requires exact point-ID equality.
+
+Preflight service messages redact URL passwords before writing terminal
+output or logs.
+
+## Source-quality and reproducibility policy
+
+Release source quality uses `benchmark-source-v2` annotations. Every relevant
+ground-truth source declares one source class, and the set of annotated classes
+must exactly match the objective's `expected_source_classes`. The score is the
+harmonic mean of acquired labeled-source precision and required source-class
+coverage. Distractor and unclassified candidates reduce precision. URL/domain
+heuristics cannot satisfy this metric.
+
+Reproducibility policy `reproducibility-policy-v2` compares every metric.
+Quality, token, semantic-call, and cache observations use the configured
+relative tolerance. Operational latency, embedding throughput, CPU, and GPU
+telemetry additionally use a declared maximum larger/smaller ratio of `2.0`.
+CPU has a 2 percentage-point absolute floor and GPU memory has a 256 MiB
+absolute floor to avoid unstable percentage arithmetic near zero or instrument
+resolution. Missing, partial, differently scoped, or differently classified
+observations still fail before tolerance is evaluated. Operational values
+that exceed the relative tolerance but remain inside the declared ratio or
+absolute envelope are retained as non-blocking observations in comparison and
+manifest artifacts; they are never silently discarded.
+
+## Mandatory run checks
+
+Commit all source changes first. The gate rejects a dirty checkout and any candidate SHA that differs from `HEAD`. The complete real-stack preflight must pass before either campaign starts.
+
+For every selected exact run, the gate requires:
+
+- the expected persisted semantic authority and no competing authority;
+- substantive source candidates, run assets, snapshots, documents, and chunks;
+- claims, claim-evidence links, evidence packets, and completed semantic calls;
+- completed `outline`, `binding`, `draft`, `citation_pass`, and `validation` stages;
+- at least 200 characters of report body from completed `draft.report_sections`;
+- all mandatory metric statuses and values required by strict release policy;
+- `deterministic_debug.total_tokens` recorded as `not_applicable`, because that
+  authority intentionally supplies fixtures without invoking a model;
+- passing completeness and integrity checks.
+
+Artifacts are written below `/tmp/firecrawl_smoke_test/<candidate-sha>/` by default. The manifest records the selected mode set, exact SHA and tree identity, service fingerprints, optional supplier provenance, full result serialization, exact-run evidence counts, semantic authorities, draft report hashes, and the production reproducibility comparison.
+
+Do not start the corresponding full campaign unless the manifest states:
+
+```json
+{"gate":"PASS","full_campaign_authorized":true}
+```

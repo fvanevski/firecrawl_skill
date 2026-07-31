@@ -1,6 +1,6 @@
 {
-  "version": "benchmark-v1",
-  "description": "Fixed benchmark dataset for release campaign. Compares legacy, agent-led, and autonomous-local workflows across quality, performance, and deterministic-integrity metrics.",
+  "version": "benchmark-v2",
+  "description": "Fixed annotated benchmark dataset for release campaign. Compares agent-led, autonomous-local, and deterministic-debug workflows across authoritative quality, measured performance, and deterministic integrity metrics.",
   "created": "2026-07-26",
   "evaluation_set": true,
   "evaluation_set_note": "This dataset is the evaluation set. Do not tune workflow parameters against it without preserving a separate held-out set.",
@@ -15,21 +15,49 @@
         "Does embedding dimension mismatch cause Qdrant index failures?"
       ],
       "expected_source_classes": [
-        "GitHub issues and PRs",
+        "Benchmark implementation",
+        "Domain model implementation",
         "Architecture documentation",
-        "Benchmark test code",
-        "Model gateway implementation"
+        "Benchmark test code"
       ],
       "known_relevant_sources": [
-        "scripts/research_store/benchmark.py",
-        "scripts/research_domain/models.py",
-        "references/research-store-architecture.md",
-        "scripts/test_retrieval_benchmark.py"
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/benchmark.py",
+          "source_class": "Benchmark implementation"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_domain/models.py",
+          "source_class": "Domain model implementation"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "references/research-store-architecture.md",
+          "source_class": "Architecture documentation"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/test_retrieval_benchmark.py",
+          "source_class": "Benchmark test code"
+        }
       ],
       "known_distractor_sources": [
-        "scripts/cleanup.py",
-        "scripts/catalog_v5.py",
-        "references/cli-script-disambiguation.md"
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/cleanup.py",
+          "source_class": "Distractor source"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/catalog_v5.py",
+          "source_class": "Distractor source"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "references/cli-script-disambiguation.md",
+          "source_class": "Distractor source"
+        }
       ],
       "expected_unresolved_controversies": [
         "ONNX model quality may be adequate for retrieval but inferior to OpenAI for semantic reasoning"
@@ -87,19 +115,52 @@
         "Orchestrator implementation",
         "Coverage service",
         "Terminal decision service",
-        "Strategy revision service"
+        "Strategy revision service",
+        "Workflow stage implementation"
       ],
       "known_relevant_sources": [
-        "scripts/research_store/orchestrator.py",
-        "scripts/research_store/coverage_service.py",
-        "scripts/research_store/terminal_decision_service.py",
-        "scripts/research_store/strategy_service.py",
-        "scripts/research_store/stages.py"
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/orchestrator.py",
+          "source_class": "Orchestrator implementation"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/coverage_service.py",
+          "source_class": "Coverage service"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/terminal_decision_service.py",
+          "source_class": "Terminal decision service"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/strategy_service.py",
+          "source_class": "Strategy revision service"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/stages.py",
+          "source_class": "Workflow stage implementation"
+        }
       ],
       "known_distractor_sources": [
-        "scripts/fsearch.py",
-        "scripts/fscrape.py",
-        "scripts/research_store/qdrant.py"
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/fsearch.py",
+          "source_class": "Distractor source"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/fscrape.py",
+          "source_class": "Distractor source"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/qdrant.py",
+          "source_class": "Distractor source"
+        }
       ],
       "expected_unresolved_controversies": [
         "Coverage gaps may not capture all semantic dimensions of the research objective"
@@ -138,8 +199,8 @@
         ]
       },
       "ground_truth_answers": {
-        "obj-002-q1": "The orchestrator stops when coverage is complete even if page targets are not met — coverage is the authority, not page counts.",
-        "obj-002-q2": "The orchestrator prevents completion when coverage is incomplete even if page targets are exceeded — coverage gaps must be resolved.",
+        "obj-002-q1": "The orchestrator stops when coverage is complete even if page targets are not met \u2014 coverage is the authority, not page counts.",
+        "obj-002-q2": "The orchestrator prevents completion when coverage is incomplete even if page targets are exceeded \u2014 coverage gaps must be resolved.",
         "obj-002-q3": "Adaptive cycles are authorized by unresolved coverage gaps; each cycle targets the largest remaining gap."
       }
     },
@@ -153,24 +214,52 @@
         "Does the report validator ensure every claim resolves to exact packet passages?"
       ],
       "expected_source_classes": [
-        "Evidence packet implementation",
-        "Packet validator",
+        "Evidence packet implementation and validator",
         "Report validator",
-        "Claim binding service"
+        "Claim binding service",
+        "Evidence grouping service"
       ],
       "known_relevant_sources": [
-        "scripts/research_store/evidence.py",
-        "scripts/research_store/report_validator.py",
-        "scripts/research_store/claim_binding_service.py",
-        "scripts/research_store/evidence_grouping.py"
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/evidence.py",
+          "source_class": "Evidence packet implementation and validator"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/report_validator.py",
+          "source_class": "Report validator"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/claim_binding_service.py",
+          "source_class": "Claim binding service"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/evidence_grouping.py",
+          "source_class": "Evidence grouping service"
+        }
       ],
       "known_distractor_sources": [
-        "scripts/research_store/derivation_service.py",
-        "scripts/research_store/parsing_legacy.py",
-        "scripts/research_store/catalog_import.py"
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/derivation_service.py",
+          "source_class": "Distractor source"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/parsing_legacy.py",
+          "source_class": "Distractor source"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/catalog_import.py",
+          "source_class": "Distractor source"
+        }
       ],
       "expected_unresolved_controversies": [
-        "Some claims may be partially supported — the system must distinguish supported from unsupported"
+        "Some claims may be partially supported \u2014 the system must distinguish supported from unsupported"
       ],
       "citation_support_labels": {
         "obj-003-q1": "SUPPORTED",
@@ -223,18 +312,47 @@
       "expected_source_classes": [
         "Resource governor implementation",
         "Semantic service",
-        "Model gateway"
+        "Model gateway",
+        "Resource governor tests"
       ],
       "known_relevant_sources": [
-        "scripts/research_store/resource_governor.py",
-        "scripts/research_store/semantic_service.py",
-        "scripts/model_gateway.py",
-        "scripts/test_resource_governor.py"
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/resource_governor.py",
+          "source_class": "Resource governor implementation"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/semantic_service.py",
+          "source_class": "Semantic service"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/model_gateway.py",
+          "source_class": "Model gateway"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/test_resource_governor.py",
+          "source_class": "Resource governor tests"
+        }
       ],
       "known_distractor_sources": [
-        "scripts/research_store/blob.py",
-        "scripts/research_store/url.py",
-        "scripts/research_store/queue.py"
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/blob.py",
+          "source_class": "Distractor source"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/url.py",
+          "source_class": "Distractor source"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/queue.py",
+          "source_class": "Distractor source"
+        }
       ],
       "expected_unresolved_controversies": [
         "GPU is reserved for local LLM; embedding/reranker run on CPU with high latency"
@@ -289,18 +407,42 @@
       ],
       "expected_source_classes": [
         "Indexing service",
-        "Lease management",
-        "Job repository"
+        "Lease management schema",
+        "Index runtime tests"
       ],
       "known_relevant_sources": [
-        "scripts/research_store/indexing.py",
-        "scripts/research_store/alembic/versions/0033_resource_governance.py",
-        "scripts/test_index_runtime.py"
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/indexing.py",
+          "source_class": "Indexing service"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/alembic/versions/0033_resource_governance.py",
+          "source_class": "Lease management schema"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/test_index_runtime.py",
+          "source_class": "Index runtime tests"
+        }
       ],
       "known_distractor_sources": [
-        "scripts/research_store/catalog_export.py",
-        "scripts/research_store/compat_export.py",
-        "scripts/research_store/replay.py"
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/catalog_export.py",
+          "source_class": "Distractor source"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/compat_export.py",
+          "source_class": "Distractor source"
+        },
+        {
+          "schema_version": "benchmark-source-v2",
+          "file_path": "scripts/research_store/replay.py",
+          "source_class": "Distractor source"
+        }
       ],
       "expected_unresolved_controversies": [
         "Lease expiry during long-running batches may require restart"
@@ -338,8 +480,8 @@
       },
       "ground_truth_answers": {
         "obj-005-q1": "Each microbatch maintains lease ownership independently; the lease is refreshed on each microbatch completion.",
-        "obj-005-q2": "Partial batch failure does not falsely complete jobs — the job remains in-progress and will be retried or marked failed.",
-        "obj-005-q3": "The retry ledger is idempotent — retrying a completed microbatch is a no-op, and the ledger tracks completion status."
+        "obj-005-q2": "Partial batch failure does not falsely complete jobs \u2014 the job remains in-progress and will be retried or marked failed.",
+        "obj-005-q3": "The retry ledger is idempotent \u2014 retrying a completed microbatch is a no-op, and the ledger tracks completion status."
       }
     }
   ],
@@ -351,7 +493,8 @@
     "min_citation_accuracy": 0.8,
     "max_latency_ratio_vs_baseline": 2.0,
     "max_token_ratio_vs_baseline": 2.0,
-    "no_p0_deterministic_integrity_regression": true
+    "no_p0_deterministic_integrity_regression": true,
+    "max_operational_reproducibility_ratio": 2.0
   },
   "workflow_modes": [
     "agent_led",

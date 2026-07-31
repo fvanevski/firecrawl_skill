@@ -33,7 +33,7 @@ Usage
     ...     load_benchmark_dataset,
     ...     run_benchmark,
     ... )
-    >>> dataset = load_benchmark_dataset("tests/fixtures/benchmark/benchmark-v1.json")
+    >>> dataset = load_benchmark_dataset("tests/fixtures/benchmark/benchmark-v2.json")
     >>> result = run_benchmark(dataset, workflow_modes=["agent_led", "autonomous_local"])
     >>> print(result.recommendation.summary())
 """
@@ -128,24 +128,41 @@ def load_benchmark_dataset(path: str | Path) -> BenchmarkDatasetLoader:
 
 def _build_objective(obj_data: dict[str, Any]) -> BenchmarkObjective:
     """Build a BenchmarkObjective from a dictionary."""
-    relevant_sources = tuple(
-        BenchmarkSource(
-            schema_version="benchmark-source-v1",
-            file_path=s["file_path"] if isinstance(s, dict) else s,
-            relevance=True,
-            role="relevant",
+
+    def build_source(raw: str | dict[str, Any], *, role: str) -> BenchmarkSource:
+        if not isinstance(raw, dict):
+            raise TypeError("benchmark sources must be versioned objects")
+        file_path = str(raw["file_path"])
+        source_class = str(raw.get("source_class") or "").strip()
+        if not source_class:
+            raise ValueError("benchmark sources require source_class")
+        schema_version = str(raw.get("schema_version", BenchmarkSource.SCHEMA_VERSION))
+        return BenchmarkSource(
+            schema_version=schema_version,
+            file_path=file_path,
+            relevance=role == "relevant",
+            role=role,
+            source_class=source_class,
         )
-        for s in obj_data.get("known_relevant_sources", [])
+
+    relevant_sources = tuple(
+        build_source(source, role="relevant")
+        for source in obj_data.get("known_relevant_sources", [])
     )
     distractor_sources = tuple(
-        BenchmarkSource(
-            schema_version="benchmark-source-v1",
-            file_path=s["file_path"] if isinstance(s, dict) else s,
-            relevance=False,
-            role="distractor",
-        )
-        for s in obj_data.get("known_distractor_sources", [])
+        build_source(source, role="distractor")
+        for source in obj_data.get("known_distractor_sources", [])
     )
+
+    expected_classes = set(obj_data.get("expected_source_classes", []))
+    annotated_classes = {source.source_class for source in relevant_sources}
+    if annotated_classes != expected_classes:
+        missing = sorted(expected_classes - annotated_classes)
+        undeclared = sorted(annotated_classes - expected_classes)
+        raise ValueError(
+            "benchmark source-class annotations do not match "
+            f"expected_source_classes: missing={missing}, undeclared={undeclared}"
+        )
     # Build search_query_expected_sources: map query strings to tuples
     # of expected source file paths.
     raw_qes = obj_data.get("search_query_expected_sources", {})
@@ -174,7 +191,7 @@ def _build_dataset(data: dict[str, Any]) -> BenchmarkDataset:
     objectives = tuple(_build_objective(obj) for obj in data.get("objectives", []))
     return BenchmarkDataset(
         schema_version="benchmark-dataset-v2",
-        version=data.get("version", "benchmark-v1"),
+        version=data.get("version", "benchmark-v2"),
         description=data.get("description", ""),
         evaluation_set=data.get("evaluation_set", False),
         objectives=objectives,

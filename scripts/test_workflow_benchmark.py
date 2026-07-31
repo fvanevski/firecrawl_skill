@@ -54,14 +54,14 @@ from research_store.workflow_benchmark import (
 
 
 BENCHMARK_FIXTURE = (
-    SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+    SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
 )
 
 
 def _make_minimal_dataset():
     """Create a minimal valid benchmark dataset."""
     obj = BenchmarkObjective(
-        schema_version="benchmark-objective-v1",
+        schema_version="benchmark-objective-v2",
         id="obj-minimal",
         title="Minimal objective",
         objective="Test objective",
@@ -69,25 +69,30 @@ def _make_minimal_dataset():
         expected_source_classes=("docs",),
         known_relevant_sources=(
             BenchmarkSource(
-                schema_version="benchmark-source-v1",
+                schema_version="benchmark-source-v2",
                 file_path="scripts/research_store/orchestrator.py",
                 relevance=True,
                 role="relevant",
+                source_class="docs",
             ),
         ),
         known_distractor_sources=(
             BenchmarkSource(
-                schema_version="benchmark-source-v1",
+                schema_version="benchmark-source-v2",
                 file_path="scripts/cleanup.py",
                 relevance=False,
                 role="distractor",
+                source_class="Distractor source",
             ),
         ),
         expected_unresolved_controversies=("Some controversy",),
         citation_support_labels={"obj-minimal-q1": "SUPPORTED"},
+        search_queries=("test query",),
+        search_query_expected_sources={"test query": ("scripts/test.py",)},
+        ground_truth_answers={"q1": "Test answer"},
     )
     return BenchmarkDataset(
-        schema_version="benchmark-dataset-v1",
+        schema_version="benchmark-dataset-v2",
         version="benchmark-test-v1",
         description="Test dataset",
         evaluation_set=True,
@@ -165,7 +170,7 @@ class TestBenchmarkDatasetLoader:
     def test_load_from_file(self):
         """Loading from file produces a valid dataset."""
         loader = load_benchmark_dataset(BENCHMARK_FIXTURE)
-        assert loader.dataset.version == "benchmark-v1"
+        assert loader.dataset.version == "benchmark-v2"
         assert len(loader.objectives) == 5
         assert loader.dataset.evaluation_set is True
 
@@ -174,7 +179,7 @@ class TestBenchmarkDatasetLoader:
         with open(BENCHMARK_FIXTURE, "r", encoding="utf-8") as f:
             data = json.load(f)
         loader = BenchmarkDatasetLoader.from_dict(data)
-        assert loader.dataset.version == "benchmark-v1"
+        assert loader.dataset.version == "benchmark-v2"
         assert len(loader.objectives) == 5
 
     def test_load_missing_file_raises(self):
@@ -216,10 +221,11 @@ class TestBenchmarkSource:
     def test_valid_source(self):
         """A valid BenchmarkSource constructs without error."""
         s = BenchmarkSource(
-            schema_version="benchmark-source-v1",
+            schema_version="benchmark-source-v2",
             file_path="scripts/test.py",
             relevance=True,
             role="relevant",
+            source_class="docs",
         )
         assert s.file_path == "scripts/test.py"
         assert s.relevance is True
@@ -229,10 +235,11 @@ class TestBenchmarkSource:
         """Invalid role raises ValueError."""
         with pytest.raises(ValueError, match="role must be"):
             BenchmarkSource(
-                schema_version="benchmark-source-v1",
+                schema_version="benchmark-source-v2",
                 file_path="scripts/test.py",
                 relevance=True,
                 role="invalid",
+                source_class="docs",
             )
 
 
@@ -242,7 +249,7 @@ class TestBenchmarkObjective:
     def test_valid_objective(self):
         """A valid BenchmarkObjective constructs without error."""
         obj = BenchmarkObjective(
-            schema_version="benchmark-objective-v1",
+            schema_version="benchmark-objective-v2",
             id="obj-test",
             title="Test",
             objective="Test objective",
@@ -252,6 +259,9 @@ class TestBenchmarkObjective:
             known_distractor_sources=(),
             expected_unresolved_controversies=(),
             citation_support_labels={"q1": "SUPPORTED"},
+            search_queries=("test query",),
+            search_query_expected_sources={"test query": ("scripts/test.py",)},
+            ground_truth_answers={"q1": "Test answer"},
         )
         assert obj.id == "obj-test"
 
@@ -259,7 +269,7 @@ class TestBenchmarkObjective:
         """Empty questions raises ValueError."""
         with pytest.raises(ValueError, match="questions must not be empty"):
             BenchmarkObjective(
-                schema_version="benchmark-objective-v1",
+                schema_version="benchmark-objective-v2",
                 id="obj-test",
                 title="Test",
                 objective="Test objective",
@@ -268,14 +278,17 @@ class TestBenchmarkObjective:
                 known_relevant_sources=(),
                 known_distractor_sources=(),
                 expected_unresolved_controversies=(),
-                citation_support_labels={},
+                citation_support_labels={"q1": "SUPPORTED"},
+                search_queries=("test query",),
+                search_query_expected_sources={"test query": ("scripts/test.py",)},
+                ground_truth_answers={"q1": "Test answer"},
             )
 
     def test_empty_id_raises(self):
         """Empty id raises ValueError."""
         with pytest.raises(ValueError, match="benchmark_objective.id"):
             BenchmarkObjective(
-                schema_version="benchmark-objective-v1",
+                schema_version="benchmark-objective-v2",
                 id="",
                 title="Test",
                 objective="Test objective",
@@ -284,7 +297,10 @@ class TestBenchmarkObjective:
                 known_relevant_sources=(),
                 known_distractor_sources=(),
                 expected_unresolved_controversies=(),
-                citation_support_labels={},
+                citation_support_labels={"q1": "SUPPORTED"},
+                search_queries=("test query",),
+                search_query_expected_sources={"test query": ("scripts/test.py",)},
+                ground_truth_answers={"q1": "Test answer"},
             )
 
 
@@ -301,7 +317,7 @@ class TestBenchmarkDataset:
         """Empty objectives raises ValueError."""
         with pytest.raises(ValueError, match="objectives must not be empty"):
             BenchmarkDataset(
-                schema_version="benchmark-dataset-v1",
+                schema_version="benchmark-dataset-v2",
                 version="test",
                 description="Test",
                 evaluation_set=True,
@@ -315,7 +331,7 @@ class TestBenchmarkDataset:
         """Invalid workflow mode raises ValueError."""
         with pytest.raises(ValueError, match="workflow_modes must be one of"):
             BenchmarkDataset(
-                schema_version="benchmark-dataset-v1",
+                schema_version="benchmark-dataset-v2",
                 version="test",
                 description="Test",
                 evaluation_set=True,
@@ -563,7 +579,7 @@ class TestWorkflowComparison:
         )
         c = WorkflowComparison(
             schema_version="workflow-comparison-v1",
-            dataset_version="benchmark-v1",
+            dataset_version="benchmark-v2",
             results=results,
             quality_vs_baseline={"agent_led": 1.67},
             performance_vs_baseline={"agent_led": 3.0},
@@ -577,7 +593,7 @@ class TestWorkflowComparison:
         with pytest.raises(ValueError, match="results must not be empty"):
             WorkflowComparison(
                 schema_version="workflow-comparison-v1",
-                dataset_version="benchmark-v1",
+                dataset_version="benchmark-v2",
                 results=(),
                 quality_vs_baseline={},
                 performance_vs_baseline={},
@@ -600,7 +616,7 @@ class TestWorkflowComparison:
         with pytest.raises(ValueError, match="at least 2 workflow modes"):
             WorkflowComparison(
                 schema_version="workflow-comparison-v1",
-                dataset_version="benchmark-v1",
+                dataset_version="benchmark-v2",
                 results=results,
                 quality_vs_baseline={},
                 performance_vs_baseline={},
@@ -653,7 +669,7 @@ class TestReleaseRecommendation:
         )
         return WorkflowComparison(
             schema_version="workflow-comparison-v1",
-            dataset_version="benchmark-v1",
+            dataset_version="benchmark-v2",
             results=results,
             quality_vs_baseline={"agent_led": 1.67},
             performance_vs_baseline={"agent_led": 3.0},
@@ -665,7 +681,7 @@ class TestReleaseRecommendation:
         rec = ReleaseRecommendation(
             schema_version="release-recommendation-v1",
             outcome="go",
-            dataset_version="benchmark-v1",
+            dataset_version="benchmark-v2",
             comparison=self._make_minimal_comparison(),
             supported_claims=("quality thresholds met",),
             withdrawn_claims=(),
@@ -682,7 +698,7 @@ class TestReleaseRecommendation:
             ReleaseRecommendation(
                 schema_version="release-recommendation-v1",
                 outcome="go",
-                dataset_version="benchmark-v1",
+                dataset_version="benchmark-v2",
                 comparison=self._make_minimal_comparison(),
                 supported_claims=(),
                 withdrawn_claims=("recall too low",),
@@ -697,7 +713,7 @@ class TestReleaseRecommendation:
             ReleaseRecommendation(
                 schema_version="release-recommendation-v1",
                 outcome="go",
-                dataset_version="benchmark-v1",
+                dataset_version="benchmark-v2",
                 comparison=self._make_minimal_comparison(),
                 supported_claims=(),
                 withdrawn_claims=(),
@@ -711,7 +727,7 @@ class TestReleaseRecommendation:
         rec = ReleaseRecommendation(
             schema_version="release-recommendation-v1",
             outcome="go_with_conditions",
-            dataset_version="benchmark-v1",
+            dataset_version="benchmark-v2",
             comparison=self._make_minimal_comparison(),
             supported_claims=(),
             withdrawn_claims=(),
@@ -727,7 +743,7 @@ class TestReleaseRecommendation:
             ReleaseRecommendation(
                 schema_version="release-recommendation-v1",
                 outcome="go_with_conditions",
-                dataset_version="benchmark-v1",
+                dataset_version="benchmark-v2",
                 comparison=self._make_minimal_comparison(),
                 supported_claims=(),
                 withdrawn_claims=(),
@@ -742,7 +758,7 @@ class TestReleaseRecommendation:
             ReleaseRecommendation(
                 schema_version="release-recommendation-v1",
                 outcome="invalid",
-                dataset_version="benchmark-v1",
+                dataset_version="benchmark-v2",
                 comparison=self._make_minimal_comparison(),
                 supported_claims=(),
                 withdrawn_claims=(),
@@ -1034,7 +1050,7 @@ class TestRunBenchmark:
         """run_benchmark works with a BenchmarkDatasetLoader."""
         loader = load_benchmark_dataset(BENCHMARK_FIXTURE)
         result = run_benchmark(loader, workflow_modes=("agent_led", "autonomous_local"))
-        assert result.dataset_version == "benchmark-v1"
+        assert result.dataset_version == "benchmark-v2"
 
     def test_run_benchmark_defaults(self):
         """run_benchmark uses dataset defaults when modes not specified."""
@@ -1062,7 +1078,7 @@ class TestBenchmarkIntegration:
         result = runner.run()
 
         # Verify structure
-        assert result.dataset_version == "benchmark-v1"
+        assert result.dataset_version == "benchmark-v2"
         assert result.comparison is not None
         assert result.recommendation is not None
         assert result.total_duration_ms > 0
@@ -1073,7 +1089,7 @@ class TestBenchmarkIntegration:
 
         # Verify recommendation
         assert result.recommendation.outcome in ("go", "go_with_conditions", "no_go")
-        assert result.recommendation.dataset_version == "benchmark-v1"
+        assert result.recommendation.dataset_version == "benchmark-v2"
 
     def test_reproducibility_full_pipeline(self):
         """Full pipeline is reproducible."""
@@ -1783,7 +1799,7 @@ class TestRealWorkflowExecutionMonkeypatch:
 
         # Load a simple dataset
         loader = BenchmarkDatasetLoader.from_file(
-            "tests/fixtures/benchmark/benchmark-v1.json"
+            "tests/fixtures/benchmark/benchmark-v2.json"
         )
         objective = loader.objectives[0]
 
@@ -1823,7 +1839,7 @@ class TestRealWorkflowExecutionMonkeypatch:
             final_state = "completed"
 
         loader = BenchmarkDatasetLoader.from_file(
-            "tests/fixtures/benchmark/benchmark-v1.json"
+            "tests/fixtures/benchmark/benchmark-v2.json"
         )
         objective = loader.objectives[0]
 
@@ -1854,7 +1870,7 @@ class TestRealWorkflowExecutionMonkeypatch:
             successful_urls = 15
 
         loader = BenchmarkDatasetLoader.from_file(
-            "tests/fixtures/benchmark/benchmark-v1.json"
+            "tests/fixtures/benchmark/benchmark-v2.json"
         )
         runner = WorkflowBenchmarkRunner(loader, WorkflowBenchmarkConfig())
 
@@ -1876,7 +1892,7 @@ class TestRealWorkflowExecutionMonkeypatch:
         )
 
         loader = BenchmarkDatasetLoader.from_file(
-            "tests/fixtures/benchmark/benchmark-v1.json"
+            "tests/fixtures/benchmark/benchmark-v2.json"
         )
         objective = loader.objectives[0]
 
@@ -1922,7 +1938,7 @@ class TestRealWorkflowExecutionMonkeypatch:
         )
 
         loader = BenchmarkDatasetLoader.from_file(
-            "tests/fixtures/benchmark/benchmark-v1.json"
+            "tests/fixtures/benchmark/benchmark-v2.json"
         )
         objective = loader.objectives[0]
 

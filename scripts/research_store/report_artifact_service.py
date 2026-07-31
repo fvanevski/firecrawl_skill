@@ -77,11 +77,12 @@ class ReportArtifactService:
         packet_revision = report.get("evidence_packet_revision", 1)
 
         # Load the EvidencePacket.
-        packet = self._evidence.export_packet(run_id, packet_revision)
-        if packet is None:
+        packet_record = self._evidence.export_packet(run_id, packet_revision)
+        if packet_record is None:
             raise ReportArtifactError(
                 f"EvidencePacket not found for run {run_id} revision {packet_revision}"
             )
+        packet = packet_record.get("payload", packet_record)
 
         # Get the current (most recent) packet revision.
         current_revision = self._get_current_packet_revision(run_id)
@@ -96,7 +97,7 @@ class ReportArtifactService:
         report: dict[str, Any],
         validation_result: ReportValidationResult,
         *,
-        model_name: str | None = None,
+        model_name: str = "deterministic-report-validator-v1",
         prompt_version: str = "synthesis-v1",
     ) -> dict[str, Any]:
         """Persist a report artifact and its validation result as a synthesis stage.
@@ -164,7 +165,17 @@ class ReportArtifactService:
 
         with self._uow_factory() as uow:
             try:
-                uow.insert_synthesis_stage(record)
+                try:
+                    existing = uow.get_synthesis_stage(run_id, "validation")
+                except KeyError:
+                    existing = None
+                if existing is None:
+                    uow.insert_synthesis_stage(record)
+                else:
+                    record["id"] = existing["id"]
+                    record["created_at"] = existing["created_at"]
+                    record["attempts"] = int(existing.get("attempts", 0)) + 1
+                    uow.update_synthesis_stage(record)
             except Exception as exc:
                 raise ReportArtifactError(
                     f"failed to persist validation for run {run_id}: {exc}"

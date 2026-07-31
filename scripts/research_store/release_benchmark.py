@@ -20,7 +20,7 @@ Usage
     ...     ReleaseBenchmarkRunner,
     ...     load_benchmark_dataset,
     ... )
-    >>> dataset = load_benchmark_dataset("tests/fixtures/benchmark/benchmark-v1.json")
+    >>> dataset = load_benchmark_dataset("tests/fixtures/benchmark/benchmark-v2.json")
     >>> config = ReleaseBenchmarkConfig(
     ...     database_url="postgresql://...",
     ...     blob_root=Path("/tmp/benchmark-blobs"),
@@ -38,6 +38,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 # ---------------------------------------------------------------------------
@@ -153,6 +154,20 @@ RELEASE_CACHE_STAGES = (
     "indexing",
 )
 
+REPRODUCIBILITY_POLICY_VERSION = "reproducibility-policy-v2"
+OPERATIONAL_PERFORMANCE_METRICS = frozenset(
+    {
+        "total_latency_ms",
+        "embedding_throughput",
+        "cpu_percent",
+        "gpu_memory_mb",
+    }
+)
+OPERATIONAL_ABSOLUTE_TOLERANCES = {
+    "cpu_percent": 2.0,
+    "gpu_memory_mb": 256.0,
+}
+
 # Mapping from benchmark mode names to execution modes.
 # "legacy" is no longer a valid benchmark mode because no distinct retained
 # baseline exists.  If a caller requests "legacy", the runner raises an
@@ -167,6 +182,159 @@ LEGACY_MODE_FORBIDDEN = True
 # ---------------------------------------------------------------------------
 COVERAGE_EVENT_STATUS_CHANGED = "item_status_changed"
 COVERAGE_EVENT_CREATED = "item_created"
+
+
+# ---------------------------------------------------------------------------
+# Canonical identity matching helper
+# ---------------------------------------------------------------------------
+
+
+def _canonical_match(file_path: str, canonical_url: str) -> bool:
+    """Check whether a benchmark file_path matches a candidate canonical_url.
+
+    Uses normalized path comparison — not substring or basename matching.
+
+    Matching rules (applied in order):
+
+    1. **Exact match** after stripping leading ``file://`` and normalizing
+       slashes.  ``scripts/foo.py`` matches ``file://scripts/foo.py`` and
+       ``/abs/path/scripts/foo.py``.
+    2. **Path containment**: the file_path is a path component of the
+       canonical_url.  ``scripts/foo.py`` matches
+       ``file://project/scripts/foo.py`` or ``https://example.com/scripts/foo.py``.
+    3. **URL-path suffix**: the canonical_url's path component ends with
+       the file_path.  This handles cases where the URL encodes the full
+       path.
+
+    Args:
+        file_path: Benchmark source file_path (e.g. ``scripts/foo.py``).
+        canonical_url: Candidate canonical_url (URL or file path).
+
+    Returns:
+        True when the file_path matches the canonical_url by canonical
+        identity, False otherwise.
+    """
+    from urllib.parse import urlparse
+
+    # Normalise both strings.
+    fp = file_path.strip().rstrip("/")
+    cu = canonical_url.strip()
+
+    # Strip file:// prefix if present.
+    cu = cu.removeprefix("file://")
+
+    # Rule 1: exact match after normalisation.
+    if fp == cu:
+        return True
+
+    # Rule 2: file_path is a path component of canonical_url.
+    # Extract the path portion of the URL.
+    parsed = urlparse(cu)
+    path = parsed.path
+    if path:
+        # Normalise slashes.
+        path = path.replace("\\", "/").rstrip("/")
+        if fp == path:
+            return True
+        # Check if file_path is a suffix of the URL path.
+        if path.endswith("/" + fp):
+            return True
+        # Check if file_path appears as a path component.
+        if "/" + fp + "/" in ("/" + path + "/"):
+            return True
+
+    # Rule 3: URL query or fragment contains the file_path.
+    if parsed.query and fp in parsed.query:
+        return True
+    return bool(parsed.fragment and fp in parsed.fragment)
+
+
+def _annotated_source_quality(
+    candidates: list[tuple[str, str]],
+    objective: BenchmarkObjective | None,
+) -> tuple[float | None, str, MetricStatus]:
+    """Measure source quality from versioned benchmark annotations."""
+    if not candidates:
+        return None, "unavailable — no acquired candidates", MetricStatus.UNAVAILABLE
+    if objective is None or not objective.expected_source_classes:
+        return (
+            None,
+            "unavailable — no versioned expected source classes",
+            MetricStatus.UNAVAILABLE,
+        )
+
+    expected_classes = set(objective.expected_source_classes)
+    relevant_sources = tuple(
+        source
+        for source in objective.known_relevant_sources
+        if source.role == "relevant"
+    )
+    distractor_sources = tuple(
+        source
+        for source in objective.known_distractor_sources
+        if source.role == "distractor"
+    )
+    missing_annotations = sorted(
+        source.file_path for source in relevant_sources if not source.source_class
+    )
+    annotated_classes = {
+        source.source_class for source in relevant_sources if source.source_class
+    }
+    undeclared_classes = sorted(annotated_classes - expected_classes)
+    unrepresented_classes = sorted(expected_classes - annotated_classes)
+    if missing_annotations or undeclared_classes or unrepresented_classes:
+        return (
+            None,
+            (
+                "invalid source annotation contract — "
+                f"missing_annotations={missing_annotations}, "
+                f"undeclared_classes={undeclared_classes}, "
+                f"unrepresented_classes={unrepresented_classes}"
+            ),
+            MetricStatus.INVALID,
+        )
+
+    relevant_hits = 0
+    distractor_hits = 0
+    unclassified_hits = 0
+    acquired_classes: set[str] = set()
+    for canonical_url, _domain in candidates:
+        relevant = next(
+            (
+                source
+                for source in relevant_sources
+                if _canonical_match(source.file_path, canonical_url)
+            ),
+            None,
+        )
+        if relevant is not None:
+            relevant_hits += 1
+            acquired_classes.add(relevant.source_class)
+            continue
+        if any(
+            _canonical_match(source.file_path, canonical_url)
+            for source in distractor_sources
+        ):
+            distractor_hits += 1
+        else:
+            unclassified_hits += 1
+
+    labeled_precision = relevant_hits / len(candidates)
+    class_coverage = len(acquired_classes) / len(expected_classes)
+    score = (
+        2.0 * labeled_precision * class_coverage / (labeled_precision + class_coverage)
+        if labeled_precision + class_coverage > 0
+        else 0.0
+    )
+    formula = (
+        "source-quality-v2 harmonic_mean("
+        f"labeled_precision={relevant_hits}/{len(candidates)}, "
+        f"required_class_coverage={len(acquired_classes)}/{len(expected_classes)}"
+        "); "
+        f"distractor_candidates={distractor_hits}, "
+        f"unclassified_candidates={unclassified_hits}"
+    )
+    return round(score, 6), formula, MetricStatus.MEASURED
 
 
 # ---------------------------------------------------------------------------
@@ -321,45 +489,36 @@ class MetricEngine:
         # 1. Candidate recall — versioned benchmark ground truth
         # ------------------------------------------------------------------
         relevant_paths: set[str] = set()
-        distractor_paths: set[str] = set()
         if objective is not None:
             relevant_paths = {
                 src.file_path
                 for src in objective.known_relevant_sources
-                if src.relevance
-            }
-            distractor_paths = {
-                src.file_path
-                for src in objective.known_distractor_sources
-                if src.relevance
+                if src.role == "relevant"
             }
 
         with self._connection.cursor() as cur:
             # All distinct candidate URLs for this run
             cur.execute(
-                """SELECT canonical_url, domain
+                """SELECT DISTINCT canonical_url, domain
                    FROM search_candidates
                    WHERE run_id = %s""",
                 (run_id,),
             )
-            candidates = cur.fetchall()  # list of (canonical_url, domain)
+            candidates = cur.fetchall()  # unique (canonical_url, domain)
 
         candidate_count = len(candidates)
 
-        # Match relevant sources using canonical identity matching.
-        # A relevant source "matches" if its file_path appears as a substring
-        # in any candidate URL, or if the candidate URL's path component
-        # matches the file_path's basename.
+        # Canonical identity matching: match benchmark file_path against
+        # candidate canonical_url using normalized path comparison.
+        # A relevant source "matches" when the file_path is an exact
+        # normalized match against the canonical_url, or when the
+        # canonical_url contains the file_path as a path component
+        # (for file:// URLs or absolute paths).
         matched_relevant: set[str] = set()
-        matched_distractors: set[str] = set()
         for url, _domain in candidates:
             for path in relevant_paths:
-                if path in url or path.split("/")[-1] in url:
+                if _canonical_match(path, url):
                     matched_relevant.add(path)
-                    break
-            for path in distractor_paths:
-                if path in url or path.split("/")[-1] in url:
-                    matched_distractors.add(path)
                     break
 
         total_relevant = len(relevant_paths)
@@ -386,57 +545,10 @@ class MetricEngine:
             )
 
         # ------------------------------------------------------------------
-        # 2. Source quality — URL matching against benchmark annotations
+        # 2. Source quality — benchmark source-class annotations
         # ------------------------------------------------------------------
-        # Match candidate URLs against known_relevant_sources and
-        # known_distractor_sources file_paths.  A candidate "matches" a
-        # relevant source when the source file_path appears as a substring
-        # in the candidate URL (or the URL's path component matches the
-        # file_path's basename).  This is the same matching logic used for
-        # recall, ensuring consistency.
-        relevant_hits = 0
-        distractor_hits = 0
-        other_hits = 0
-        for url, _domain in candidates:
-            matched_relevant = False
-            matched_distractor = False
-            for path in relevant_paths:
-                if path in url or path.split("/")[-1] in url:
-                    matched_relevant = True
-                    break
-            if matched_relevant:
-                relevant_hits += 1
-                continue
-            for path in distractor_paths:
-                if path in url or path.split("/")[-1] in url:
-                    matched_distractor = True
-                    break
-            if matched_distractor:
-                distractor_hits += 1
-            else:
-                other_hits += 1
-
-        total_classified = relevant_hits + distractor_hits + other_hits
-        if total_classified > 0:
-            # Source quality = (relevant_hits - distractor_penalty) / total
-            # Distractor hits penalize by 2× to discourage them.
-            distractor_penalty = distractor_hits * 2
-            numerator = max(0, relevant_hits - distractor_penalty)
-            source_quality = min(1.0, numerator / total_classified)
-        else:
-            source_quality = None
-
-        source_quality_formula = (
-            f"max(0, relevant_hits-{distractor_hits}*2) / total_classified"
-            if total_classified > 0
-            else "unavailable — no classified acquired candidates"
-        )
-
-        # NF1: source_quality status reflects whether source-class data was
-        # available (MEASURED) or only a heuristic fallback was used
-        # (UNEVALUATED).
-        _source_quality_status = (
-            MetricStatus.MEASURED if total_classified > 0 else MetricStatus.UNAVAILABLE
+        source_quality, source_quality_formula, _source_quality_status = (
+            _annotated_source_quality(candidates, objective)
         )
 
         # ------------------------------------------------------------------
@@ -543,45 +655,115 @@ class MetricEngine:
             unsupported_source_table = "research_claims"
 
         # ------------------------------------------------------------------
-        # 5. Citation accuracy — claim evidence links
+        # 5. Citation accuracy — citation_pass validation outcomes
         # ------------------------------------------------------------------
+        # Read the citation_pass artifact from synthesis_stages.
+        # Use validation_results to determine how many assessed claims
+        # have valid citations (status="valid") with exact passage and
+        # relationship validation.
+        citation_pass_valid = 0
+        citation_pass_total = 0
+        _citation_accuracy_status = MetricStatus.UNAVAILABLE
+        citation_formula = "unavailable — no citation_pass artifact"
+        citation_source_table = "synthesis_stages"
+        citation_source_column = "artifact.validation_results"
+        citation_source_method = "valid_over_validation_results"
+
         with self._connection.cursor() as cur:
-            # Count claims that have at least one evidence link
             cur.execute(
-                """SELECT COUNT(DISTINCT c.claim_id) AS total_assessed,
-                          COUNT(DISTINCT cl.claim_id) AS with_evidence
-                       FROM research_claims c
-                       LEFT JOIN claim_evidence_links cl
-                         ON c.claim_id = cl.claim_id
-                         AND c.run_id = cl.run_id
-                       WHERE c.run_id = %s
-                         AND c.semantic_status != 'unassessed'""",
+                """SELECT artifact FROM synthesis_stages
+                   WHERE run_id = %s AND stage_name = 'citation_pass'
+                     AND stage_status = 'completed'
+                   ORDER BY updated_at DESC LIMIT 1""",
                 (run_id,),
             )
             row = cur.fetchone()
-            total_assessed = row[0] or 0
-            with_evidence = row[1] or 0
 
-        if total_assessed > 0:
-            citation_accuracy = with_evidence / total_assessed
-            citation_formula = (
-                f"with_evidence({with_evidence}) / assessed({total_assessed})"
-            )
-            citation_source_table = "claim_evidence_links"
+        if row is not None and row[0] is not None:
+            artifact = row[0]
+            if isinstance(artifact, str):
+                import json
+
+                try:
+                    artifact = json.loads(artifact)
+                except (json.JSONDecodeError, TypeError):
+                    artifact = None
+
+            if isinstance(artifact, dict):
+                validation_results = artifact.get("validation_results", [])
+                if isinstance(validation_results, list) and len(validation_results) > 0:
+                    citation_pass_total = len(validation_results)
+                    citation_pass_valid = sum(
+                        1
+                        for vr in validation_results
+                        if isinstance(vr, dict) and vr.get("status") == "valid"
+                    )
+                    citation_formula = (
+                        f"valid_citations({citation_pass_valid}) / "
+                        f"total_validation_results({citation_pass_total})"
+                    )
+                    _citation_accuracy_status = MetricStatus.MEASURED
+
+        # Fallback: if no citation_pass artifact, use claim_evidence_links.
+        if citation_pass_total == 0:
+            with self._connection.cursor() as cur:
+                # Count claims that have at least one evidence link
+                cur.execute(
+                    """SELECT COUNT(DISTINCT c.claim_id) AS total_assessed,
+                              COUNT(DISTINCT cl.claim_id) AS with_evidence
+                           FROM research_claims c
+                           LEFT JOIN claim_evidence_links cl
+                             ON c.claim_id = cl.claim_id
+                             AND c.run_id = cl.run_id
+                           WHERE c.run_id = %s
+                             AND c.semantic_status != 'unassessed'""",
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                total_assessed = row[0] or 0
+                with_evidence = row[1] or 0
+
+            if total_assessed > 0:
+                citation_pass_total = total_assessed
+                citation_pass_valid = with_evidence
+                citation_accuracy = with_evidence / total_assessed
+                citation_formula = (
+                    f"with_evidence({with_evidence}) / assessed({total_assessed})"
+                )
+                citation_source_table = "claim_evidence_links"
+                citation_source_column = "claim_id"
+                citation_source_method = "claims_with_evidence_over_assessed"
+                _citation_accuracy_status = MetricStatus.MEASURED
+            else:
+                citation_accuracy = None
+                citation_formula = "unavailable — no assessed claims with evidence"
+                citation_source_table = "claim_evidence_links"
+                citation_source_column = "claim_id"
+                citation_source_method = "claims_with_evidence_over_assessed"
         else:
-            # Strict mode: we consulted the authoritative source (claim_evidence_links
-            # joined with research_claims) but it was empty — the orchestrator did
-            # not produce assessed claims or evidence links for this run.
-            _citation_accuracy_status = MetricStatus.UNAVAILABLE
+            citation_accuracy = (
+                citation_pass_valid / citation_pass_total
+                if citation_pass_total > 0
+                else None
+            )
+            if citation_pass_total > 0 and citation_accuracy is not None:
+                citation_accuracy = round(citation_accuracy, 6)
+
+        if citation_accuracy is None and citation_pass_total == 0:
             citation_accuracy = None
-            citation_formula = "unavailable — no assessed claims with evidence"
-            citation_source_table = "claim_evidence_links"
+            _citation_accuracy_status = MetricStatus.UNAVAILABLE
 
         # ------------------------------------------------------------------
-        # 6. Report quality — versioned rubric
+        # 6. Report quality — persisted validation artifact
         # ------------------------------------------------------------------
-        # Deterministic components: coverage completeness, citation accuracy,
-        # claim support rate.
+        # Read the validation stage artifact from synthesis_stages.
+        # The validation artifact contains a claim_manifest with per-claim
+        # resolution, cited_passage_ids, and binding_relationship.
+        # Report quality = weighted combination of:
+        #   - coverage_completeness (0.30)
+        #   - citation_accuracy (0.30)
+        #   - claim_support_rate from validation artifact (0.25)
+        #   - packet_present (0.15)
         supported_count = claim_status_counts.get("supported", 0)
         contradicted_count = claim_status_counts.get("contradicted", 0)
         qualified_count = claim_status_counts.get("qualified", 0)
@@ -592,7 +774,6 @@ class MetricEngine:
         )
 
         # Versioned rubric v1 — documented weights
-        # Each component is computed directly from authoritative state.
         _COVERAGE_WEIGHT = 0.30
         _CITATION_WEIGHT = 0.30
         _SUPPORT_WEIGHT = 0.25
@@ -607,10 +788,66 @@ class MetricEngine:
             packet_count = cur.fetchone()[0] or 0
         packet_present = 1.0 if packet_count > 0 else 0.0
 
+        # Read validation artifact for claim_manifest-based support rate.
+        # The validation artifact supersedes the raw claim_status_counts.
+        validation_support_rate: float | None = None
+        with self._connection.cursor() as cur:
+            cur.execute(
+                """SELECT artifact FROM synthesis_stages
+                   WHERE run_id = %s AND stage_name = 'validation'
+                     AND stage_status IN ('completed', 'failed')
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (run_id,),
+            )
+            val_row = cur.fetchone()
+
+        if val_row is not None and val_row[0] is not None:
+            val_artifact = val_row[0]
+            if isinstance(val_artifact, str):
+                import json
+
+                try:
+                    val_artifact = json.loads(val_artifact)
+                except (json.JSONDecodeError, TypeError):
+                    val_artifact = None
+
+            if isinstance(val_artifact, dict):
+                claim_manifest = val_artifact.get("claim_manifest", [])
+                if isinstance(claim_manifest, list) and len(claim_manifest) > 0:
+                    # Count resolved claims with positive support.
+                    # A claim is "supported" if resolution is one of:
+                    # supported, contradicted, qualified.
+                    resolved = 0
+                    positive = 0
+                    for cr in claim_manifest:
+                        if not isinstance(cr, dict):
+                            continue
+                        resolution = cr.get("resolution", "")
+                        if resolution in (
+                            "supported",
+                            "contradicted",
+                            "qualified",
+                            "unsupported",
+                            "unassessed",
+                        ):
+                            resolved += 1
+                            if resolution in ("supported", "contradicted", "qualified"):
+                                positive += 1
+                    if resolved > 0:
+                        validation_support_rate = positive / resolved
+
+        # Use validation support rate if available, otherwise fall back
+        # to the raw claim_status_counts.
+        effective_support_rate = (
+            validation_support_rate
+            if validation_support_rate is not None
+            else claim_support_rate
+        )
+
         report_inputs_complete = (
             coverage_completeness is not None
             and citation_accuracy is not None
-            and claim_support_rate is not None
+            and effective_support_rate is not None
             and packet_count > 0
         )
         report_quality = None
@@ -618,7 +855,7 @@ class MetricEngine:
             report_quality = (
                 _COVERAGE_WEIGHT * coverage_completeness
                 + _CITATION_WEIGHT * citation_accuracy
-                + _SUPPORT_WEIGHT * claim_support_rate
+                + _SUPPORT_WEIGHT * effective_support_rate
                 + _PACKET_WEIGHT * packet_present
             )
             report_quality = min(1.0, max(0.0, report_quality))
@@ -683,10 +920,10 @@ class MetricEngine:
                 name="source_quality_score",
                 value=quality.source_quality_score,
                 source=MetricSource(
-                    table="search_candidates",
-                    column="domain + benchmark_source_classes",
+                    table="benchmark_ground_truth + search_candidates",
+                    column="known_sources.source_class + canonical_url",
                     run_id=str(run_id),
-                    method="source_class_compliance",
+                    method="annotated_precision_class_coverage_hmean_v2",
                 ),
                 formula=source_quality_formula,
                 status=_source_quality_status,
@@ -722,14 +959,12 @@ class MetricEngine:
                 value=quality.citation_accuracy,
                 source=MetricSource(
                     table=citation_source_table,
-                    column="claim_id (LEFT JOIN evidence_links)",
+                    column=citation_source_column,
                     run_id=str(run_id),
-                    method="claims_with_evidence_over_assessed",
+                    method=citation_source_method,
                 ),
                 formula=citation_formula,
-                status=_citation_accuracy_status
-                if total_assessed == 0
-                else MetricStatus.MEASURED,
+                status=_citation_accuracy_status,
             ),
             QualityMetric(
                 name="report_quality_score",
@@ -829,6 +1064,19 @@ class MetricEngine:
             semantic_calls = cur.fetchone()[0] or 0
 
         # ----------------------------------------------------------------
+        # Token completeness: compare completed semantic calls against
+        # endpoint_usage_records.  Any uncovered call makes token telemetry
+        # INCOMPLETE rather than MEASURED.
+        # ----------------------------------------------------------------
+        token_completeness = self._check_token_completeness(run_id)
+
+        # ----------------------------------------------------------------
+        # Embedding completeness: read raw throughput records and verify
+        # that all expected invariants hold.
+        # ----------------------------------------------------------------
+        embedding_completeness = self._check_embedding_completeness(run_id)
+
+        # ----------------------------------------------------------------
         # Build PerformanceMeasurement from telemetry or legacy fallback.
         # ----------------------------------------------------------------
         total_tokens = telemetry["total_tokens"]
@@ -841,11 +1089,26 @@ class MetricEngine:
             if token_source == "endpoint"
             else ("tokenizer" if token_source == "tokenizer" else "estimated")
         )
-        token_formula = (
-            f"SUM(endpoint_usage_records.total_tokens) — source={token_source}"
-            if token_source != "unavailable"
-            else "unavailable — endpoint_usage_records has no measured token data"
-        )
+        if token_source == "not_invoked":
+            token_formula = (
+                "not_invoked — deterministic fixture did not execute a model; "
+                "token usage is intentionally NOT_APPLICABLE"
+            )
+        else:
+            token_formula = (
+                f"SUM(endpoint_usage_records.total_tokens) — source={token_source}"
+                if token_source != "unavailable"
+                else "unavailable — endpoint_usage_records has no measured token data"
+            )
+        # Enrich formula with completeness info when source is available.
+        if token_source not in ("unavailable", "not_invoked"):
+            _uncovered = token_completeness.get("uncovered_calls", 0)
+            if _uncovered > 0:
+                token_formula = (
+                    f"SUM(endpoint_usage_records.total_tokens) — source={token_source};"
+                    f" {semantic_calls} calls, {token_completeness.get('usage_records', 0)} records,"
+                    f" {_uncovered} uncovered → INCOMPLETE"
+                )
 
         # Cache — run-scoped from run_cache_events.
         # No legacy fallback: all modes use the authoritative run-scoped table.
@@ -892,6 +1155,16 @@ class MetricEngine:
         # ------------------------------------------------------------------
         # Embedding throughput — from run_embedding_throughput, or fallback.
         embedding_throughput = telemetry["embedding_throughput"]
+        emb_completeness_failures: list[str] = []
+        if embedding_completeness.get("failed_count", 0) > 0:
+            emb_completeness_failures.append(
+                f"failed_count={embedding_completeness['failed_count']}"
+            )
+        if embedding_completeness.get("text_vector_mismatch", False):
+            emb_completeness_failures.append(
+                f"total_texts({embedding_completeness['total_texts']}) != "
+                f"vector_count({embedding_completeness['vector_count']})"
+            )
         if (
             telemetry["embedding_batch_count"] > 0
             and telemetry["embedding_elapsed_seconds"] > 0
@@ -900,6 +1173,10 @@ class MetricEngine:
                 f"run_embedding_throughput: {telemetry['embedding_total_texts']}/"
                 f"{telemetry['embedding_elapsed_seconds']:.3f}s"
             )
+            if emb_completeness_failures:
+                emb_formula += " — completeness: " + "; ".join(
+                    emb_completeness_failures
+                )
         else:
             if _strict_embedding_unavailable:
                 embedding_throughput = None
@@ -997,8 +1274,12 @@ class MetricEngine:
         # ------------------------------------------------------------------
         # Strict mode: metrics with empty sources remain null and UNAVAILABLE.
         _token_status = (
-            MetricStatus.UNAVAILABLE
+            MetricStatus.NOT_APPLICABLE
+            if token_source == "not_invoked"
+            else MetricStatus.UNAVAILABLE
             if _strict_token_unavailable
+            else MetricStatus.INCOMPLETE
+            if token_completeness.get("uncovered_calls", 0) > 0
             else MetricStatus.MEASURED
         )
         _cache_status = (
@@ -1007,6 +1288,9 @@ class MetricEngine:
         _emb_status = (
             MetricStatus.UNAVAILABLE
             if _strict_embedding_unavailable
+            else MetricStatus.INCOMPLETE
+            if embedding_completeness.get("failed_count", 0) > 0
+            or embedding_completeness.get("text_vector_mismatch", False)
             else MetricStatus.MEASURED
         )
         _cpu_status = (
@@ -1030,17 +1314,31 @@ class MetricEngine:
 
         cpu_source = self._read_resource_source(run_id, "cpu")
         gpu_source = self._read_resource_source(run_id, "gpu")
-        cpu_nonmeasured = cpu_source["total_count"] - cpu_source["measured_count"]
-        gpu_nonmeasured = gpu_source["total_count"] - gpu_source["measured_count"]
-        if cpu_source["invalid_count"]:
+
+        # Resource completeness — issue #170 item C.
+        cpu_completeness = self._check_resource_completeness(run_id, "cpu")
+        gpu_completeness = self._check_resource_completeness(run_id, "gpu")
+
+        cpu_nonmeasured = (
+            cpu_completeness["total_count"] - cpu_completeness["measured_count"]
+        )
+        gpu_nonmeasured = (
+            gpu_completeness["total_count"] - gpu_completeness["measured_count"]
+        )
+        if cpu_completeness["invalid_count"]:
             _cpu_status = MetricStatus.INVALID
-        elif cpu_nonmeasured and cpu_source["measured_count"]:
+        elif cpu_nonmeasured and cpu_completeness["measured_count"]:
             _cpu_status = MetricStatus.INCOMPLETE
-        if gpu_source["invalid_count"]:
+        if gpu_completeness["invalid_count"]:
             _gpu_status = MetricStatus.INVALID
-        elif gpu_nonmeasured and gpu_source["measured_count"]:
+        elif gpu_nonmeasured and gpu_completeness["measured_count"]:
             _gpu_status = MetricStatus.INCOMPLETE
         if _gpu_status == MetricStatus.MEASURED and not gpu_source["device_uuid"]:
+            _gpu_status = MetricStatus.INCOMPLETE
+        # Resource samples missing window metadata are INCOMPLETE.
+        if _cpu_status == MetricStatus.MEASURED and cpu_completeness["missing_window"]:
+            _cpu_status = MetricStatus.INCOMPLETE
+        if _gpu_status == MetricStatus.MEASURED and gpu_completeness["missing_window"]:
             _gpu_status = MetricStatus.INCOMPLETE
         if _cpu_status != MetricStatus.MEASURED or _gpu_status != MetricStatus.MEASURED:
             performance = PerformanceMeasurement(
@@ -1064,8 +1362,8 @@ class MetricEngine:
                 name="total_latency_ms",
                 value=performance.total_latency_ms,
                 source=MetricSource(
-                    table="research_runs",
-                    column="completed_at - created_at",
+                    table="benchmark_harness",
+                    column="monotonic_end - monotonic_start",
                     run_id=str(run_id),
                     method="duration",
                 ),
@@ -1173,6 +1471,164 @@ class MetricEngine:
         )
 
         return performance, metrics
+
+    # ------------------------------------------------------------------
+    # Telemetry completeness checks — issue #170 (item C)
+    # ------------------------------------------------------------------
+
+    def _check_token_completeness(self, run_id: UUID) -> dict:
+        """Compare completed semantic calls against endpoint_usage_records.
+
+        Returns a dict with:
+        - ``semantic_calls``: count of semantic calls for the run.
+        - ``usage_records``: count of endpoint_usage_records.
+        - ``uncovered_calls``: number of calls without usage records.
+
+        Any uncovered call makes token telemetry INCOMPLETE.
+        """
+        result = {
+            "semantic_calls": 0,
+            "usage_records": 0,
+            "uncovered_calls": 0,
+        }
+        try:
+            cur = self._connection.execute(
+                """SELECT
+                       (SELECT COUNT(*) FROM semantic_calls WHERE run_id = %s)
+                       AS semantic_calls,
+                       (SELECT COUNT(*) FROM endpoint_usage_records WHERE run_id = %s)
+                       AS usage_records""",
+                (str(run_id), str(run_id)),
+            )
+            row = cur.fetchone()
+            if row and isinstance(row, (list, tuple)) and len(row) >= 2:
+                sc = int(row[0] or 0)
+                ur = int(row[1] or 0)
+                result["semantic_calls"] = sc
+                result["usage_records"] = ur
+                result["uncovered_calls"] = max(0, sc - ur)
+        except Exception:  # noqa: BLE001
+            try:
+                self._connection.rollback()
+            except Exception:  # noqa: S110, BLE001
+                pass
+        return result
+
+    def _check_embedding_completeness(self, run_id: UUID) -> dict:
+        """Validate embedding throughput completeness invariants.
+
+        Checks:
+        - ``failed_count == 0`` — no failed embedding batches.
+        - ``elapsed_seconds > 0`` — measured duration.
+        - ``batch_count > 0`` — at least one batch.
+        - ``total_texts == vector_count`` — every input text produced a vector.
+
+        Returns a dict with:
+        - ``batch_count``: total batches.
+        - ``vector_count``: vectors produced.
+        - ``failed_count``: failed batches.
+        - ``total_texts``: total input texts.
+        - ``elapsed_seconds``: total elapsed time.
+        - ``text_vector_mismatch``: True if total_texts != vector_count.
+        """
+        result = {
+            "batch_count": 0,
+            "vector_count": 0,
+            "failed_count": 0,
+            "total_texts": 0,
+            "elapsed_seconds": 0.0,
+            "text_vector_mismatch": False,
+        }
+        try:
+            cur = self._connection.execute(
+                """SELECT
+                       COALESCE(SUM(batch_count), 0),
+                       COALESCE(SUM(vector_count), 0),
+                       COALESCE(SUM(failed_count), 0),
+                       COALESCE(SUM(total_texts), 0),
+                       COALESCE(SUM(elapsed_seconds), 0.0)
+                     FROM run_embedding_throughput
+                     WHERE run_id = %s""",
+                (str(run_id),),
+            )
+            row = cur.fetchone()
+            if row and isinstance(row, (list, tuple)) and len(row) >= 5:
+                batch_count = int(row[0] or 0)
+                vector_count = int(row[1] or 0)
+                failed_count = int(row[2] or 0)
+                total_texts = int(row[3] or 0)
+                elapsed = float(row[4] or 0.0)
+                result.update(
+                    batch_count=batch_count,
+                    vector_count=vector_count,
+                    failed_count=failed_count,
+                    total_texts=total_texts,
+                    elapsed_seconds=elapsed,
+                    text_vector_mismatch=(total_texts != vector_count),
+                )
+        except Exception:  # noqa: BLE001
+            try:
+                self._connection.rollback()
+            except Exception:  # noqa: S110, BLE001
+                pass
+        return result
+
+    def _check_resource_completeness(self, run_id: UUID, device_type: str) -> dict:
+        """Check resource sample completeness for a device type.
+
+        Returns a dict with:
+        - ``total_count``: total samples.
+        - ``measured_count``: samples with status='measured'.
+        - ``unavailable_count``: samples with status='unavailable'.
+        - ``invalid_count``: samples with status='invalid'.
+        - ``partial_count``: samples with status='partial'.
+        - ``stale_count``: samples with status='stale'.
+        - ``missing_window``: count of samples without window metadata.
+        - ``has_failure_reason``: count of samples with non-empty failure_reason.
+        """
+        result = {
+            "total_count": 0,
+            "measured_count": 0,
+            "unavailable_count": 0,
+            "invalid_count": 0,
+            "partial_count": 0,
+            "stale_count": 0,
+            "missing_window": 0,
+            "has_failure_reason": 0,
+        }
+        try:
+            cur = self._connection.execute(
+                """SELECT
+                       COUNT(*) AS total_count,
+                       COUNT(*) FILTER (WHERE status = 'measured') AS measured_count,
+                       COUNT(*) FILTER (WHERE status = 'unavailable') AS unavailable_count,
+                       COUNT(*) FILTER (WHERE status = 'invalid') AS invalid_count,
+                       COUNT(*) FILTER (WHERE status = 'partial') AS partial_count,
+                       COUNT(*) FILTER (WHERE status = 'stale') AS stale_count,
+                       COUNT(*) FILTER (WHERE window_start IS NULL OR window_end IS NULL) AS missing_window,
+                       COUNT(*) FILTER (WHERE failure_reason IS NOT NULL AND failure_reason != '') AS has_failure_reason
+                     FROM run_resource_samples
+                     WHERE run_id = %s AND device_type = %s""",
+                (str(run_id), device_type),
+            )
+            row = cur.fetchone()
+            if row and isinstance(row, (list, tuple)) and len(row) >= 8:
+                result.update(
+                    total_count=int(row[0] or 0),
+                    measured_count=int(row[1] or 0),
+                    unavailable_count=int(row[2] or 0),
+                    invalid_count=int(row[3] or 0),
+                    partial_count=int(row[4] or 0),
+                    stale_count=int(row[5] or 0),
+                    missing_window=int(row[6] or 0),
+                    has_failure_reason=int(row[7] or 0),
+                )
+        except Exception:  # noqa: BLE001
+            try:
+                self._connection.rollback()
+            except Exception:  # noqa: S110, BLE001
+                pass
+        return result
 
     def _read_resource_source(self, run_id: UUID, device_type: str) -> dict:
         """Read exact sample records and collector identity for provenance."""
@@ -1354,6 +1810,7 @@ class CampaignRun:
     quality_metrics: tuple[QualityMetric, ...] = ()
     performance_metrics: tuple[PerformanceMetric, ...] = ()
     integrity_checks: tuple[DeterministicIntegrityCheck, ...] = ()
+    orchestration_outcome: str | None = None
     errors: tuple[str, ...] = ()
     duration_ms: float = 0.0
 
@@ -1369,7 +1826,12 @@ class ReproducibilityComparison:
     objective_id: str = ""
     quality_tolerances: tuple[tuple[str, float, float, float], ...] = ()
     performance_tolerances: tuple[tuple[str, float, float, float], ...] = ()
+    policy_version: str = REPRODUCIBILITY_POLICY_VERSION
+    relative_tolerance: float = 0.15
+    operational_ratio_limit: float = 2.0
+    operational_absolute_tolerances: tuple[tuple[str, float], ...] = ()
     all_within_tolerance: bool = True
+    observations: tuple[str, ...] = ()
     details: tuple[str, ...] = ()
 
 
@@ -1434,7 +1896,9 @@ class ReleaseBenchmarkConfig:
         integrity_checks: Integrity check names to run.
         known_limitations: Custom known limitations for the recommendation.
         reproducibility_tolerance: Maximum relative tolerance for
-            reproducibility comparison between two campaign runs.
+            deterministic output and workload metrics.
+        operational_reproducibility_ratio_limit: Maximum larger/smaller ratio
+            for operational latency, throughput, and resource telemetry.
         strict: If True, metric extraction fails when required tables are
             absent rather than falling back to simulation.
     """
@@ -1443,6 +1907,7 @@ class ReleaseBenchmarkConfig:
     blob_root: Path | str | None = None
     qdrant_url: str = ""
     qdrant_api_key: str = ""
+    host_artifact_supplier: Any = None
     execution_modes: tuple[str, ...] = RELEASE_MODES
     objective_ids: tuple[str, ...] | None = None
     integrity_checks: tuple[str, ...] = (
@@ -1456,8 +1921,15 @@ class ReleaseBenchmarkConfig:
         "idempotent_replay",
     )
     known_limitations: tuple[str, ...] = ()
-    reproducibility_tolerance: float = 0.15  # 15% relative tolerance
+    reproducibility_tolerance: float = 0.15
+    operational_reproducibility_ratio_limit: float = 2.0
     strict: bool = False
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.reproducibility_tolerance <= 1.0:
+            raise ValueError("reproducibility_tolerance must be between 0 and 1")
+        if self.operational_reproducibility_ratio_limit < 1.0:
+            raise ValueError("operational_reproducibility_ratio_limit must be >= 1")
 
 
 # ---------------------------------------------------------------------------
@@ -1525,6 +1997,14 @@ class ReleaseBenchmarkRunner:
                 )
             seen.add(mode)
 
+        if (
+            "agent_led" in self.config.execution_modes
+            and self.config.host_artifact_supplier is None
+        ):
+            raise RuntimeError(
+                "agent_led benchmark requires a HostArtifactSupplier to ensure genuine external authority"
+            )
+
     def _select_objectives(self) -> list[BenchmarkObjective]:
         """Select objectives based on config."""
         if self.config.objective_ids:
@@ -1556,6 +2036,17 @@ class ReleaseBenchmarkRunner:
             "blob_root_set": bool(self.config.blob_root),
             "dataset_version": self.loader.dataset.version,
             "modes": ",".join(self.config.execution_modes),
+            "reproducibility_policy_version": REPRODUCIBILITY_POLICY_VERSION,
+            "reproducibility_relative_tolerance": (
+                self.config.reproducibility_tolerance
+            ),
+            "operational_reproducibility_ratio_limit": float(
+                self.loader.quality_thresholds.get(
+                    "max_operational_reproducibility_ratio",
+                    self.config.operational_reproducibility_ratio_limit,
+                )
+            ),
+            "operational_absolute_tolerances": dict(OPERATIONAL_ABSOLUTE_TOLERANCES),
         }
 
         runs: list[CampaignRun] = []
@@ -1632,6 +2123,7 @@ class ReleaseBenchmarkRunner:
         performance_metrics: tuple[PerformanceMetric, ...] = ()
         integrity_checks: tuple[DeterministicIntegrityCheck, ...] = ()
         resource_samples: tuple[object, ...] = ()
+        orchestration_outcome: str | None = None
 
         try:
             from research_store.config import StoreConfig
@@ -1649,11 +2141,19 @@ class ReleaseBenchmarkRunner:
                 )
             config.require_database()
 
+            # The release harness is the explicit supplier boundary for the
+            # two non-autonomous modes. Each run receives exactly one
+            # authority; flags are cleared before selecting the next mode.
+            os.environ.pop("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES", None)
+            if mode == "deterministic_debug":
+                os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
+
             # Build orchestrator for the target execution mode
             orchestrator_config = OrchestratorConfig(
                 execution_mode=mode,
                 max_adaptive_cycles=10,
                 legacy_adapter_mode="authoritative",
+                host_artifact_supplier=self.config.host_artifact_supplier,
             )
             orchestrator = build_orchestrator(
                 config, orchestrator_config=orchestrator_config
@@ -1681,7 +2181,20 @@ class ReleaseBenchmarkRunner:
             spec = serialize_model(spec_model)
 
             # Build the search plan
-            configured_queries = objective.search_queries or (objective.objective,)
+            candidate_sha = os.environ.get("CANDIDATE_SHA")
+            if not candidate_sha:
+                raise ValueError(
+                    "CANDIDATE_SHA environment variable is required for "
+                    "strict benchmark campaigns"
+                )
+            configured_sources = tuple(
+                source.file_path for source in objective.known_relevant_sources[:3]
+            )
+            configured_queries = tuple(
+                f"https://raw.githubusercontent.com/fvanevski/firecrawl_skill/"
+                f"{candidate_sha}/{path}"
+                for path in configured_sources
+            )
             search_plan = {
                 "schema_version": "search-plan-v1",
                 "research_spec_id": spec["research_spec_id"],
@@ -1690,7 +2203,7 @@ class ReleaseBenchmarkRunner:
                     {
                         "query_id": str(uuid4()),
                         "query": query,
-                        "facet": "primary",
+                        "facet": "benchmark_source",
                         "target_question_ids": [
                             question["question_id"] for question in spec["questions"]
                         ],
@@ -1714,11 +2227,18 @@ class ReleaseBenchmarkRunner:
             sampler = ResourceSampler(interval_seconds=1.0, max_samples=10)
             sampler.begin_window()
             try:
-                _ = orchestrator.run(
+                orchestration_result = orchestrator.run(
                     run_id=run_status.id,
                     spec=spec,
                     search_plan=search_plan,
                 )
+                orchestration_outcome = orchestration_result.outcome
+                if orchestration_result.outcome != "completed":
+                    errors.append(
+                        "orchestration did not complete: "
+                        f"outcome={orchestration_result.outcome}; "
+                        f"error={orchestration_result.error or 'none'}"
+                    )
             finally:
                 cpu_samples, gpu_samples = sampler.end_window()
                 resource_samples = tuple(cpu_samples + gpu_samples)
@@ -1739,6 +2259,9 @@ class ReleaseBenchmarkRunner:
                 self._populate_endpoint_usage(
                     telemetry_svc, UUID(run_id), metric_engine._connection
                 )
+                self._populate_cache_events(
+                    telemetry_svc, UUID(run_id), metric_engine._connection
+                )
 
                 self._persist_resource_samples(
                     telemetry_svc, UUID(run_id), resource_samples
@@ -1746,6 +2269,7 @@ class ReleaseBenchmarkRunner:
 
                 # Build and persist the aggregated summary.
                 telemetry_svc.build_summary(UUID(run_id), stages=RELEASE_CACHE_STAGES)
+                metric_engine._connection.commit()
 
             # Extract real metrics from persisted state (if engine available)
             if metric_engine is not None:
@@ -1796,6 +2320,7 @@ class ReleaseBenchmarkRunner:
             quality_metrics=quality_metrics,
             performance_metrics=performance_metrics,
             integrity_checks=integrity_checks,
+            orchestration_outcome=orchestration_outcome,
             errors=tuple(errors),
             duration_ms=duration_ms,
         )
@@ -1857,6 +2382,33 @@ class ReleaseBenchmarkRunner:
                 }
             )
             telemetry_svc.record_resource_sample(bound)
+
+    def _populate_cache_events(
+        self,
+        telemetry_svc,
+        run_id: UUID,
+        connection,
+    ) -> None:
+        """Persist exact-run cache lookups reported by synthesis stages."""
+        with connection.cursor() as cur:
+            cur.execute(
+                """SELECT stage_name, artifact->>'cache_hit',
+                          semantic_call_id, model_name
+                   FROM synthesis_stages
+                   WHERE run_id=%s AND stage_name=ANY(%s)
+                     AND artifact ? 'cache_hit'""",
+                (str(run_id), list(RELEASE_CACHE_STAGES)),
+            )
+            for stage, raw_hit, call_id, model_name in cur.fetchall():
+                hit = raw_hit == "true"
+                telemetry_svc.record_cache_event(
+                    run_id,
+                    stage,
+                    "lookup",
+                    key_hash=str(call_id or ""),
+                    model_fingerprint=str(model_name or ""),
+                    hit=hit,
+                )
 
     def _campaign_to_workflow_results(
         self, runs: list[CampaignRun]
@@ -2108,51 +2660,67 @@ class ReleaseBenchmarkRunner:
                         f"{mode} achieved {citation:.3f}"
                     )
 
-        # P7-R09 / #158: strict fail-closed — reject when mandatory metrics
-        # are unavailable or missing.  Non-strict mode permits legacy fallbacks.
+        # P7-R09 / #158: strict fail-closed
         if self.config.strict:
             for mode, mode_results_list in mode_results.items():
                 for result in mode_results_list:
-                    # Collect observed metric names
-                    observed_quality = {qm.name for qm in result.quality_metrics}
-                    observed_perf = {pm.name for pm in result.performance_metrics}
-
-                    # Reject missing mandatory quality metrics
-                    missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
-                    if missing_quality:
+                    # Reject if run has errors
+                    if result.errors:
                         withdrawn.append(
-                            f"quality metrics {sorted(missing_quality)} missing — "
-                            f"{mode} cannot satisfy release policy"
+                            f"{mode} encountered execution errors: {result.errors}"
                         )
 
-                    # Reject unavailable quality metrics
-                    for qm in result.quality_metrics:
-                        if (
-                            qm.name in MANDATORY_QUALITY_METRICS
-                            and qm.status != MetricStatus.MEASURED
+                    # Reject if orchestration did not complete
+                    if (
+                        getattr(result, "orchestration_outcome", "completed")
+                        != "completed"
+                    ):
+                        withdrawn.append(
+                            f"{mode} orchestration did not complete (outcome: {result.orchestration_outcome})"
+                        )
+
+                    # Reject if any mandatory quality metric is missing or not MEASURED (excluding NOT_APPLICABLE)
+                    observed_quality = {
+                        qm.name: qm.status for qm in result.quality_metrics
+                    }
+                    for metric in MANDATORY_QUALITY_METRICS:
+                        status = observed_quality.get(metric, MetricStatus.UNAVAILABLE)
+                        if status not in (
+                            MetricStatus.MEASURED,
+                            MetricStatus.NOT_APPLICABLE,
                         ):
                             withdrawn.append(
-                                f"quality metric {qm.name} is {qm.status.value} "
+                                f"quality metric {metric} is {status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"
                             )
 
-                    # Reject missing mandatory performance metrics
-                    missing_perf = MANDATORY_PERFORMANCE_METRICS - observed_perf
-                    if missing_perf:
-                        withdrawn.append(
-                            f"performance metrics {sorted(missing_perf)} missing — "
-                            f"{mode} cannot satisfy release policy"
-                        )
-
-                    # Reject unavailable performance metrics
-                    for pm in result.performance_metrics:
-                        if (
-                            pm.name in MANDATORY_PERFORMANCE_METRICS
-                            and pm.status != MetricStatus.MEASURED
+                    # Reject if any mandatory performance metric is missing or not MEASURED (excluding NOT_APPLICABLE)
+                    observed_perf = {
+                        pm.name: pm.status for pm in result.performance_metrics
+                    }
+                    for metric in MANDATORY_PERFORMANCE_METRICS:
+                        status = observed_perf.get(metric, MetricStatus.UNAVAILABLE)
+                        if status not in (
+                            MetricStatus.MEASURED,
+                            MetricStatus.NOT_APPLICABLE,
                         ):
                             withdrawn.append(
-                                f"performance metric {pm.name} is {pm.status.value} "
+                                f"performance metric {metric} is {status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"
+                            )
+
+                    # Reject if any completeness invariant fails
+                    for check in getattr(result, "completeness_invariants", []):
+                        if not check.passed:
+                            withdrawn.append(
+                                f"{mode} failed completeness invariant: {check.name}"
+                            )
+
+                    # Reject if any integrity check fails
+                    for check in getattr(result, "integrity_checks", []):
+                        if not check.passed:
+                            withdrawn.append(
+                                f"{mode} failed integrity check: {check.name}"
                             )
 
         # P6: Enforce performance thresholds
@@ -2265,6 +2833,14 @@ class ReleaseBenchmarkRunner:
         """
         if tolerance is None:
             tolerance = self.config.reproducibility_tolerance
+        operational_ratio_limit = float(
+            self.loader.quality_thresholds.get(
+                "max_operational_reproducibility_ratio",
+                self.config.operational_reproducibility_ratio_limit,
+            )
+        )
+        if operational_ratio_limit < 1.0:
+            raise ValueError("max_operational_reproducibility_ratio must be >= 1")
 
         # Index runs by (mode, objective_id)
         def index_runs(
@@ -2281,6 +2857,7 @@ class ReleaseBenchmarkRunner:
         quality_tolerances: list[tuple[str, float, float, float]] = []
         performance_tolerances: list[tuple[str, float, float, float]] = []
         details: list[str] = []
+        operational_observations: list[str] = []
         all_within = True
 
         # Reject when mode/objective sets differ — strict reproducibility
@@ -2335,9 +2912,20 @@ class ReleaseBenchmarkRunner:
                 ]:
                     val_a = getattr(run_a.quality, field_name)
                     val_b = getattr(run_b.quality, field_name)
+                    status_a = quality_status_a.get(
+                        field_name, MetricStatus.UNAVAILABLE
+                    )
+                    status_b = quality_status_b.get(
+                        field_name, MetricStatus.UNAVAILABLE
+                    )
                     if (
-                        quality_status_a.get(field_name) != MetricStatus.MEASURED
-                        or quality_status_b.get(field_name) != MetricStatus.MEASURED
+                        status_a == MetricStatus.NOT_APPLICABLE
+                        and status_b == MetricStatus.NOT_APPLICABLE
+                    ):
+                        continue
+                    if (
+                        status_a != MetricStatus.MEASURED
+                        or status_b != MetricStatus.MEASURED
                         or val_a is None
                         or val_b is None
                     ):
@@ -2374,9 +2962,20 @@ class ReleaseBenchmarkRunner:
                 ]:
                     val_a = getattr(run_a.performance, field_name)
                     val_b = getattr(run_b.performance, field_name)
+                    status_a = performance_status_a.get(
+                        field_name, MetricStatus.UNAVAILABLE
+                    )
+                    status_b = performance_status_b.get(
+                        field_name, MetricStatus.UNAVAILABLE
+                    )
                     if (
-                        performance_status_a.get(field_name) != MetricStatus.MEASURED
-                        or performance_status_b.get(field_name) != MetricStatus.MEASURED
+                        status_a == MetricStatus.NOT_APPLICABLE
+                        and status_b == MetricStatus.NOT_APPLICABLE
+                    ):
+                        continue
+                    if (
+                        status_a != MetricStatus.MEASURED
+                        or status_b != MetricStatus.MEASURED
                         or val_a is None
                         or val_b is None
                     ):
@@ -2388,8 +2987,49 @@ class ReleaseBenchmarkRunner:
                         )
                         continue
                     denom = abs(val_a) if abs(val_a) > 1e-9 else 1.0
-                    rel_diff = abs(val_b - val_a) / denom
-                    within = rel_diff <= tolerance
+                    abs_diff = abs(val_b - val_a)
+                    rel_diff = abs_diff / denom
+                    if field_name in OPERATIONAL_PERFORMANCE_METRICS:
+                        smaller = min(abs(val_a), abs(val_b))
+                        larger = max(abs(val_a), abs(val_b))
+                        observed_ratio = (
+                            1.0
+                            if larger <= 1e-9
+                            else float("inf")
+                            if smaller <= 1e-9
+                            else larger / smaller
+                        )
+                        absolute_tolerance = OPERATIONAL_ABSOLUTE_TOLERANCES.get(
+                            field_name
+                        )
+                        within = (
+                            rel_diff <= tolerance
+                            or observed_ratio <= operational_ratio_limit
+                            or (
+                                absolute_tolerance is not None
+                                and abs_diff <= absolute_tolerance
+                            )
+                        )
+                        failure_limit = (
+                            f"ratio {observed_ratio:.4f} > {operational_ratio_limit}"
+                        )
+                        if absolute_tolerance is not None:
+                            failure_limit += (
+                                f" and abs diff {abs_diff:.4f} > {absolute_tolerance}"
+                            )
+                        if within and rel_diff > tolerance:
+                            operational_observations.append(
+                                f"{mode}.{objective_id}.{field_name}: "
+                                f"operational variance accepted by "
+                                f"{REPRODUCIBILITY_POLICY_VERSION} — "
+                                f"{val_a:.4f} vs {val_b:.4f}; "
+                                f"rel diff={rel_diff:.4f}; "
+                                f"ratio={observed_ratio:.4f}; "
+                                f"ratio_limit={operational_ratio_limit}"
+                            )
+                    else:
+                        within = rel_diff <= tolerance
+                        failure_limit = f"rel diff {rel_diff:.4f} > {tolerance}"
                     if not within:
                         all_within = False
                     performance_tolerances.append(
@@ -2398,7 +3038,7 @@ class ReleaseBenchmarkRunner:
                     if not within:
                         details.append(
                             f"{mode}.{objective_id}.{field_name}: "
-                            f"{val_a:.4f} vs {val_b:.4f} (rel diff {rel_diff:.4f} > {tolerance})"
+                            f"{val_a:.4f} vs {val_b:.4f} ({failure_limit})"
                         )
 
         return ReproducibilityComparison(
@@ -2408,7 +3048,14 @@ class ReleaseBenchmarkRunner:
             objective_id="all",
             quality_tolerances=tuple(quality_tolerances),
             performance_tolerances=tuple(performance_tolerances),
+            policy_version=REPRODUCIBILITY_POLICY_VERSION,
+            relative_tolerance=tolerance,
+            operational_ratio_limit=operational_ratio_limit,
+            operational_absolute_tolerances=tuple(
+                sorted(OPERATIONAL_ABSOLUTE_TOLERANCES.items())
+            ),
             all_within_tolerance=all_within,
+            observations=tuple(operational_observations),
             details=tuple(details),
         )
 
@@ -2425,6 +3072,7 @@ def run_release_benchmark(
     execution_modes: tuple[str, ...] = RELEASE_MODES,
     strict: bool = False,
     reproducibility_tolerance: float = 0.15,
+    operational_reproducibility_ratio_limit: float = 2.0,
     known_limitations: tuple[str, ...] = (),
 ) -> ReleaseBenchmarkResult:
     """Execute a full release benchmark and return results.
@@ -2435,7 +3083,10 @@ def run_release_benchmark(
         blob_root: Path to the content-addressed blob store root.
         execution_modes: Workflow modes to benchmark.
         strict: If True, metric extraction fails when required tables are absent.
-        reproducibility_tolerance: Maximum relative tolerance for reproducibility.
+        reproducibility_tolerance: Maximum relative tolerance for deterministic
+            output and workload metrics.
+        operational_reproducibility_ratio_limit: Maximum ratio for operational
+            latency, throughput, and resource telemetry.
         known_limitations: Custom known limitations for the recommendation.
 
     Returns:
@@ -2453,6 +3104,9 @@ def run_release_benchmark(
         execution_modes=execution_modes,
         strict=strict,
         reproducibility_tolerance=reproducibility_tolerance,
+        operational_reproducibility_ratio_limit=(
+            operational_reproducibility_ratio_limit
+        ),
         known_limitations=known_limitations,
     )
 

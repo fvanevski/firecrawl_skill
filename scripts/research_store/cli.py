@@ -1383,7 +1383,7 @@ def _derivation_filter(config):
     }
 
 
-def _index_build(config, document_id=None):
+def _index_build(config, document_id=None, *, repair_orphans=False):
     with _uow_factory(config)() as uow:
         definition = uow.ensure_index_definition()
     index = _qdrant(
@@ -1401,6 +1401,14 @@ def _index_build(config, document_id=None):
         offset = page.get("next_page_offset")
         if not offset:
             break
+    missing_chunk_ids = selected_chunk_ids - indexed_ids
+    orphaned_chunk_ids = (
+        indexed_ids - selected_chunk_ids if document_id is None else set()
+    )
+    deleted_orphaned = 0
+    if repair_orphans and orphaned_chunk_ids:
+        index.delete(sorted(orphaned_chunk_ids, key=str))
+        deleted_orphaned = len(orphaned_chunk_ids)
     with _db(config) as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO embedding_manifests(
@@ -1426,7 +1434,23 @@ def _index_build(config, document_id=None):
         )
         manifests = cur.fetchall()
         manifest_ids = [row[0] for row in manifests]
-        requeue_ids = [row[0] for row in manifests if row[2] != "complete"]
+        if manifest_ids:
+            cur.execute(
+                """SELECT manifest_id FROM index_jobs
+                WHERE manifest_id=ANY(%s) AND operation='upsert'""",
+                (manifest_ids,),
+            )
+            job_manifest_ids = {row[0] for row in cur.fetchall()}
+        else:
+            job_manifest_ids = set()
+        missing_job_manifest_ids = set(manifest_ids) - job_manifest_ids
+        requeue_ids = [
+            row[0]
+            for row in manifests
+            if row[2] != "complete"
+            or row[1] in missing_chunk_ids
+            or row[0] in missing_job_manifest_ids
+        ]
         cur.execute(
             """INSERT INTO index_jobs(
             entity_type,entity_id,index_name,operation,status,manifest_id,index_definition_id)
@@ -1482,12 +1506,16 @@ def _index_build(config, document_id=None):
             (definition["id"], point_count),
         )
     queue = ValkeyQueue(config.valkey_url)
-    if manifest_ids:
-        queue.notify(manifest_ids[0])
+    if requeue_ids:
+        queue.notify(requeue_ids[0])
     return {
         "index_definition": definition,
         "selected_chunks": len(manifest_ids),
         "scheduled": len(requeue_ids),
+        "missing_points": len(missing_chunk_ids),
+        "orphaned_points": len(orphaned_chunk_ids),
+        "deleted_orphaned": deleted_orphaned,
+        "missing_jobs": len(missing_job_manifest_ids),
         "qdrant_schema": schema,
     }
 
@@ -1668,6 +1696,72 @@ def _index_reconcile(config, repair=False):
             }
             discrepancies.append(f"Qdrant collection {collection_name}: {exc}")
 
+    current_definition = next(
+        (
+            row
+            for row in definitions
+            if row["fingerprint"] == config.embedding_fingerprint
+            and row["physical_collection"] == config.physical_collection
+        ),
+        None,
+    )
+    if (
+        current_definition is not None
+        and current_definition["physical_collection"] not in qdrant["collections"]
+    ):
+        def_id = current_definition["id"]
+        manifest_info = manifests_by_def.get(def_id, {})
+        if total_chunks and manifest_info.get("complete", 0) == total_chunks:
+            collection_name = current_definition["physical_collection"]
+            try:
+                index = _qdrant(
+                    config,
+                    collection_name,
+                    current_definition["dimension"],
+                    current_definition["distance_metric"],
+                )
+                schema = index.inspect_schema()
+                point_ids, offset = set(), None
+                while True:
+                    page = index.point_ids(offset, filters=_derivation_filter(config))
+                    point_ids.update(str(item["id"]) for item in page.get("points", []))
+                    offset = page.get("next_page_offset")
+                    if not offset:
+                        break
+                chunk_ids = {str(value) for value in _active_chunk_ids(config)}
+                missing = chunk_ids - point_ids
+                orphaned = point_ids - chunk_ids
+                cached = point_counts.get(def_id)
+                qdrant["collections"][collection_name] = {
+                    "aliases": [],
+                    "schema": schema,
+                    "point_count": len(point_ids),
+                    "cached_point_count": (cached["count"] if cached else None),
+                    "coverage": {
+                        "missing": len(missing),
+                        "orphaned": len(orphaned),
+                    },
+                    "has_discrepancies": bool(missing or orphaned),
+                }
+                if missing:
+                    discrepancies.append(
+                        f"collection {collection_name}: {len(missing)} missing points"
+                    )
+                    definitions_with_discrepancies.add(def_id)
+                if orphaned:
+                    discrepancies.append(
+                        f"collection {collection_name}: {len(orphaned)} orphaned points"
+                    )
+                    definitions_with_discrepancies.add(def_id)
+            except Exception as exc:  # noqa: BLE001
+                qdrant["collections"][collection_name] = {
+                    "aliases": [],
+                    "status": "error",
+                    "error": str(exc),
+                }
+                discrepancies.append(f"Qdrant collection {collection_name}: {exc}")
+                definitions_with_discrepancies.add(def_id)
+
     # Check all definitions for manifest/job mismatches, even those without
     # a Qdrant alias (e.g. definitions with manifests but no jobs yet).
     for row in definitions:
@@ -1692,25 +1786,48 @@ def _index_reconcile(config, repair=False):
             )
             definitions_with_discrepancies.add(def_id)
 
-    # Repair: re-run index-build only for definitions that have discrepancies.
+    # Explicit repair always reconciles the currently configured
+    # fingerprint. This also repairs physical drift that PostgreSQL alone
+    # cannot reveal, including complete manifests with absent points.
     repaired = []
-    if repair and discrepancies:
-        for defn in definitions:
-            def_id = defn["id"]
-            # Only repair definitions that actually have discrepancies.
-            if def_id not in definitions_with_discrepancies:
-                continue
+    repair_actions = []
+    repair_errors = []
+    if repair:
+        current_definition = next(
+            (
+                row
+                for row in definitions
+                if row["fingerprint"] == config.embedding_fingerprint
+                and row["physical_collection"] == config.physical_collection
+            ),
+            None,
+        )
+        if current_definition is None:
+            repair_errors.append(
+                "repair requires an index definition matching the current "
+                "embedding fingerprint"
+            )
+        else:
             try:
-                _index_build(config, document_id=None)
-                repaired.append(def_id)
+                action = _index_build(
+                    config,
+                    document_id=None,
+                    repair_orphans=True,
+                )
+                repair_actions.append(action)
+                if action["scheduled"] or action["deleted_orphaned"]:
+                    repaired.append(current_definition["id"])
             except Exception as exc:  # noqa: BLE001
-                discrepancies.append(f"repair failed for {def_id}: {exc}")
-        # Re-run reconciliation against the repaired authoritative records,
-        # preserving the repaired list from this pass.  Deleting those records
-        # here would discard the jobs that ``_index_build`` just recreated and
-        # make a successful repair look like an empty index.
+                repair_errors.append(
+                    f"repair failed for {current_definition['id']}: {exc}"
+                )
         result = _index_reconcile(config, repair=False)
         result["repaired"] = repaired
+        result["repair_actions"] = repair_actions
+        result["repair_errors"] = repair_errors
+        if repair_errors:
+            result["discrepancies"].extend(repair_errors)
+            result["ok"] = False
         return result
 
     return {

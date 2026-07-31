@@ -675,6 +675,67 @@ class CorpusService:
                 candidate_ids, max_tokens, max_passages, include_neighboring_blocks
             )
 
+    def select_run_passages(
+        self,
+        run_id: UUID,
+        chunk_ids: list[UUID],
+        *,
+        max_tokens: int = 3000,
+        max_passages: int = 20,
+    ) -> tuple[RetrievalExecution, list[dict[str, Any]]]:
+        """Select and record passages from the exact run-scoped asset set."""
+        if not chunk_ids:
+            raise ValueError("chunk_ids must not be empty")
+        if not 1 <= max_tokens <= 16000 or not 1 <= max_passages <= 50:
+            raise ValueError("run-scoped passage request exceeds hard safety limits")
+
+        started = time.time()
+        with self.uow_factory() as uow:
+            passages = uow.documents.fetch_run_passages(
+                run_id, chunk_ids, max_tokens, max_passages
+            )
+            execution = RetrievalExecution(
+                execution_id=uuid4(),
+                run_id=run_id,
+                requested_mode="run_scoped_extraction",
+                executed_mode="run_scoped_extraction",
+                mechanical_status=(
+                    MechanicalStatus.SUCCEEDED if passages else MechanicalStatus.FAILED
+                ),
+                component_health={"postgres_run_scope": "healthy"},
+                errors=() if passages else ("no run-scoped passages found",),
+                warnings=(),
+                stage_counts={"selected": len(passages)},
+                index_fingerprint=None,
+                filters={"run_id": str(run_id)},
+                skipped_stages=("embedding", "qdrant", "reranker"),
+                timing={"selection": time.time() - started},
+                config_identity="run-scoped-extraction-v1",
+            )
+            uow.record_retrieval_execution(run_id, execution)
+            uow.retrieval_events.log_retrieval_batch(
+                execution.execution_id,
+                run_id,
+                [
+                    {
+                        "stage": "selected",
+                        "query": "run-scoped extracted assets",
+                        "filters": {"run_id": str(run_id)},
+                        "retriever": "postgres_run_scope",
+                        "candidate_type": "chunk",
+                        "candidate_id": str(passage["chunk_id"]),
+                        "raw_score": None,
+                        "normalized_score": None,
+                        "reranker_score": None,
+                        "rank": rank,
+                        "selected": True,
+                        "rejection_reason": None,
+                    }
+                    for rank, passage in enumerate(passages, 1)
+                ],
+            )
+        return execution, passages
+
     def build_evidence_packet(
         self, candidate_ids: list[UUID], *, max_tokens: int = 3000
     ) -> dict:

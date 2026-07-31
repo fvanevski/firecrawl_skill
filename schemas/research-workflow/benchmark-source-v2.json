@@ -1,6 +1,6 @@
 {
   "$defs": {},
-  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/benchmark-source-v1.json",
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/benchmark-source-v2.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -14,7 +14,10 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "benchmark-source-v1",
+      "const": "benchmark-source-v2",
+      "type": "string"
+    },
+    "source_class": {
       "type": "string"
     }
   },
@@ -22,7 +25,8 @@
     "schema_version",
     "file_path",
     "relevance",
-    "role"
+    "role",
+    "source_class"
   ],
   "title": "BenchmarkSource",
   "type": "object"

@@ -109,7 +109,10 @@ def test_firecrawl_search_adapter_success_runner():
         {"success": True, "data": [{"url": "https://example.com"}]}
     ).encode("utf-8")
 
+    commands = []
+
     def success_runner(cmd):
+        commands.append(cmd)
         return 0, payload, ""
 
     adapter = FirecrawlSearchAdapter(runner=success_runner)
@@ -117,6 +120,36 @@ def test_firecrawl_search_adapter_success_runner():
     assert res.http_status == 200
     assert res.transport_error is None
     assert res.raw_payload == payload
+    assert "--scrape" in commands[0]
+    assert commands[0][commands[0].index("--scrape-formats") + 1] == "markdown"
+
+
+def test_firecrawl_direct_scrape_is_wrapped_as_real_candidate():
+    payload = json.dumps(
+        {
+            "markdown": "# Authoritative source",
+            "metadata": {
+                "scrapeId": "scrape-1",
+                "url": "https://raw.example/source.py",
+                "statusCode": 200,
+            },
+        }
+    ).encode()
+    commands = []
+
+    def success_runner(cmd):
+        commands.append(cmd)
+        return 0, payload, ""
+
+    result = FirecrawlSearchAdapter(runner=success_runner).search(
+        "https://raw.example/source.py",
+        backend="firecrawl_scrape",
+    )
+    wrapped = json.loads(result.raw_payload)
+    assert commands[0][1] == "scrape"
+    assert commands[0][commands[0].index("--format") + 1] == "markdown"
+    assert wrapped["data"]["web"][0]["markdown"] == "# Authoritative source"
+    assert result.provider_request_id == "scrape-1"
 
 
 def test_execute_search_invalid_query():

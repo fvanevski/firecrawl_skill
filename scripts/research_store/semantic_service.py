@@ -5,10 +5,13 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from .execution_policy import ExecutionModePolicy, SemanticAuthority
+
+if TYPE_CHECKING:
+    from .authorized_semantic import HostArtifactSupplier
 
 _SENSITIVE_KEY = re.compile(
     r"^(?:authorization|proxy[-_]authorization|cookie|set[-_]cookie|password|passwd|secret|client[-_]secret|api[-_]?key|apikey|access[-_]token|refresh[-_]token|auth[-_]token|token)$",
@@ -123,9 +126,14 @@ class HostArtifactResult:
 class SemanticCallService:
     """Persist model calls and host-agent proposals through one validation path."""
 
-    def __init__(self, uow_factory: Callable):
+    def __init__(
+        self,
+        uow_factory: Callable,
+        host_artifact_supplier: HostArtifactSupplier | None = None,
+    ):
         self.uow_factory = uow_factory
         self.execution_policy = ExecutionModePolicy()
+        self.host_artifact_supplier = host_artifact_supplier
 
     def _authorize(
         self, context: Mapping[str, Any], authority: SemanticAuthority
@@ -188,7 +196,7 @@ class SemanticCallService:
         _run_id, status = self._authorize(context, SemanticAuthority.LOCAL_MODEL)
         request = redact_sensitive(
             {
-                "authority": "model",
+                "authority": SemanticAuthority.LOCAL_MODEL.value,
                 "endpoint_alias": endpoint_alias,
                 "prompt_hash": prompt_hash,
                 "schema_name": schema_name,
@@ -375,21 +383,25 @@ class SemanticCallService:
                 validation_status="invalid" if validation_errors else "valid",
                 validation_errors=redact_sensitive(validation_errors),
             )
+            response_metadata = {
+                "authority": authority.value,
+                "actor_identifier": actor_identifier,
+                "validation_errors": redact_sensitive(validation_errors),
+                "transport_attempts": [],
+                "semantic_coverage": (
+                    "unassessed"
+                    if authority == SemanticAuthority.DETERMINISTIC_FIXTURE
+                    else "assessed"
+                ),
+            }
+            supplied_metadata = context.get("supplied_response_metadata")
+            if isinstance(supplied_metadata, Mapping):
+                response_metadata.update(redact_sensitive(dict(supplied_metadata)))
             uow.runs.finalize_semantic_call(
                 run_id,
                 call_id,
                 "failed" if validation_errors else "complete",
-                {
-                    "authority": authority.value,
-                    "actor_identifier": actor_identifier,
-                    "validation_errors": redact_sensitive(validation_errors),
-                    "transport_attempts": [],
-                    "semantic_coverage": (
-                        "unassessed"
-                        if authority == SemanticAuthority.DETERMINISTIC_FIXTURE
-                        else "assessed"
-                    ),
-                },
+                response_metadata,
                 "; ".join(validation_errors) if validation_errors else None,
             )
         provenance = {

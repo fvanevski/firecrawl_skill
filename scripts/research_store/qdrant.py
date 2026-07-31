@@ -150,6 +150,19 @@ class QdrantIndex:
                     raise
                 time.sleep(min(2**attempt, 10))
 
+    def retrieve(self, ids, *, with_payload: bool = True) -> list[dict]:
+        """Retrieve exact point IDs from the selected physical collection."""
+        response = self._request(
+            "POST",
+            f"/collections/{quote(self.collection, safe='')}/points",
+            {
+                "ids": [str(identifier) for identifier in ids],
+                "with_payload": with_payload,
+                "with_vector": False,
+            },
+        )
+        return response.get("result", [])
+
     def delete(self, ids):
         self._request(
             "POST",

@@ -283,8 +283,39 @@ def _split_by_parts(
     current_tokens = 0
 
     for part in parts:
-        part_text = part + separator
+        part_text = part + separator if separator in template.text else part
         part_tokens = tokenizer.count(part_text)
+        if part_tokens > max_tokens:
+            if current_parts:
+                result.append(
+                    AtomicBlock(
+                        text=separator.join(current_parts) + separator,
+                        block_type=template.block_type,
+                        heading_path=template.heading_path,
+                        ordinal=template.ordinal,
+                        char_start=template.char_start,
+                        char_end=None,
+                        is_atomic=False,
+                    )
+                )
+                current_parts = []
+                current_tokens = 0
+            result.extend(
+                _split_on_whitespace(
+                    AtomicBlock(
+                        text=part_text,
+                        block_type=template.block_type,
+                        heading_path=template.heading_path,
+                        ordinal=template.ordinal,
+                        char_start=template.char_start,
+                        char_end=template.char_end,
+                        is_atomic=False,
+                    ),
+                    tokenizer,
+                    max_tokens,
+                )
+            )
+            continue
         if current_parts and current_tokens + part_tokens > max_tokens:
             result.append(
                 AtomicBlock(

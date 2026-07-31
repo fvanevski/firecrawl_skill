@@ -165,12 +165,15 @@ class LegacyEntryPointAdapter:
                             "authoritative adapter mode requires --research-run-id for "
                             f"{entry_point}"
                         )
+                    invocation_status = legacy_decision.get("status", "complete")
+                    if invocation_status == "completed":
+                        invocation_status = "complete"
                     invocation_id = uow.runs.record_invocation(
                         run["id"],
                         service_operation,
                         f"{resolved_key}:invocation",
                         external_invocation_id=external_invocation_id,
-                        status=legacy_decision.get("status", "complete"),
+                        status=invocation_status,
                         input_payload=legacy_decision.get("input", {}),
                         metadata={"legacy_entry_point": entry_point},
                     )

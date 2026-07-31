@@ -543,7 +543,7 @@ class ReleaseEvidenceGenerator:
         """
         artifacts: list[ArtifactReference] = []
         artifact_paths = [
-            ("benchmark-v1.json", "tests/fixtures/benchmark/benchmark-v1.json"),
+            ("benchmark-v2.json", "tests/fixtures/benchmark/benchmark-v2.json"),
             ("ci.yml", ".github/workflows/ci.yml"),
             ("release_benchmark.py", "scripts/research_store/release_benchmark.py"),
             ("workflow_benchmark.py", "scripts/research_store/workflow_benchmark.py"),

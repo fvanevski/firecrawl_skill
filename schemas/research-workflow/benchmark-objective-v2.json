@@ -13,7 +13,10 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "benchmark-source-v1",
+          "const": "benchmark-source-v2",
+          "type": "string"
+        },
+        "source_class": {
           "type": "string"
         }
       },
@@ -21,7 +24,8 @@
         "schema_version",
         "file_path",
         "relevance",
-        "role"
+        "role",
+        "source_class"
       ],
       "type": "object"
     }

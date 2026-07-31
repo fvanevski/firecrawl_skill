@@ -145,7 +145,7 @@ class TestManifestGeneration:
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
             (
-                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             subprocess.run(
                 ["git", "add", "."], cwd=repo, capture_output=True, check=True
@@ -194,7 +194,7 @@ class TestManifestGeneration:
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
             (
-                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             # Create an untracked file that matches a known artifact path
             (repo / "recovery-report.txt").write_text("untracked recovery")
@@ -817,7 +817,7 @@ class TestVerification:
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
             (
-                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
             (repo / "scripts" / "research_store").mkdir(parents=True)
@@ -858,11 +858,11 @@ class TestVerification:
                     path=".github/workflows/ci.yml",
                 ),
                 ArtifactReference(
-                    name="benchmark-v1.json",
+                    name="benchmark-v2.json",
                     sha256=_file_sha256(
-                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
                     ),
-                    path="tests/fixtures/benchmark/benchmark-v1.json",
+                    path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
                     name="release_benchmark.py",
@@ -1755,7 +1755,7 @@ class TestIntegration:
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
             (
-                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             # Create a requirements file for fingerprints
             (repo / "requirements-research-store.txt").write_text(
@@ -1869,7 +1869,7 @@ class TestIntegration:
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
             (
-                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             # Create requirements file and fingerprint config for fingerprints
             (repo / "requirements-research-store.txt").write_text(
@@ -1985,7 +1985,7 @@ class TestIntegration:
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
             (
-                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
             (repo / "scripts" / "research_store").mkdir(parents=True)
@@ -2028,11 +2028,11 @@ class TestIntegration:
                     path=".github/workflows/ci.yml",
                 ),
                 ArtifactReference(
-                    name="benchmark-v1.json",
+                    name="benchmark-v2.json",
                     sha256=_file_sha256(
-                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
                     ),
-                    path="tests/fixtures/benchmark/benchmark-v1.json",
+                    path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
                     name="release_benchmark.py",
@@ -2064,7 +2064,7 @@ class TestIntegration:
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
             (
-                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
             (repo / "scripts" / "research_store").mkdir(parents=True)
@@ -2106,11 +2106,11 @@ class TestIntegration:
                     path=".github/workflows/ci.yml",
                 ),
                 ArtifactReference(
-                    name="benchmark-v1.json",
+                    name="benchmark-v2.json",
                     sha256=_file_sha256(
-                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
                     ),
-                    path="tests/fixtures/benchmark/benchmark-v1.json",
+                    path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
                     name="release_benchmark.py",
@@ -2175,7 +2175,7 @@ class TestIntegration:
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
             (
-                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
             (repo / "scripts" / "research_store").mkdir(parents=True)
@@ -2273,11 +2273,11 @@ class TestIntegration:
                     path=".github/workflows/ci.yml",
                 ),
                 ArtifactReference(
-                    name="benchmark-v1.json",
+                    name="benchmark-v2.json",
                     sha256=_file_sha256(
-                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+                        repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
                     ),
-                    path="tests/fixtures/benchmark/benchmark-v1.json",
+                    path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
                     name="release_benchmark.py",

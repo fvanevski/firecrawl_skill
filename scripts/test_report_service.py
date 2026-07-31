@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
@@ -157,6 +158,7 @@ def _make_service(
 
     mock_config = MagicMock()
     mock_config.embedding_model = "test-model"
+    mock_config.generative_model = "test-model"
     mock_config.database_url = "postgresql://localhost/test"
     mock_config.qdrant_url = "http://localhost:6333"
     mock_config.qdrant_api_key = ""
@@ -649,7 +651,7 @@ def test_synthesis_stage_delegates_to_report_service():
             run_revision=1,
             coverage_revision=2,
             run_state="synthesizing",
-            context={},
+            context={"evidence_packet_revision": 2},
         )
 
     # The orchestrator should have transitioned to "validating".
@@ -670,6 +672,7 @@ def test_synthesis_stage_handles_report_service_error():
 
     mock_config = MagicMock()
     mock_config.embedding_model = "test-model"
+    mock_config.generative_model = "test-model"
 
     stage = SynthesisStage(run_service=mock_run_service, config=mock_config)
 
@@ -686,7 +689,7 @@ def test_synthesis_stage_handles_report_service_error():
             run_revision=1,
             coverage_revision=2,
             run_state="synthesizing",
-            context={},
+            context={"evidence_packet_revision": 2},
         )
 
     assert result.stage == "synthesis"
@@ -745,8 +748,12 @@ def test_binding_stage_uses_injected_service():
     mock_binding = MagicMock()
     mock_binding.evaluate_claims.return_value = 5
 
-    service, _, _, mock_uow = _make_service()
+    service, mock_evidence, _, mock_uow = _make_service()
     service._binding_service = mock_binding
+    unbound_packet = deepcopy(_VALID_PACKET)
+    unbound_packet["claim_evidence_bindings"] = []
+    unbound_packet["claims"][0]["semantic_status"] = "unassessed"
+    mock_evidence.export_packet.return_value = unbound_packet
 
     run_id = UUID(_VALID_PACKET["run_id"])
 
@@ -800,11 +807,9 @@ def test_binding_stage_uses_injected_service():
     )
 
     # The binding stage should have used the injected mock.
-    # Note: packet_revision comes from the EvidencePacket's coverage_revision
-    # which is 2 in _VALID_PACKET.
     mock_binding.evaluate_claims.assert_called_once_with(
         run_id=run_id,
-        packet_revision=2,
+        packet_revision=1,
         prompt_version="synthesis-v1",
         model_name="test-model",
         provider="local",
@@ -1016,6 +1021,111 @@ def test_citation_pass_stage_reads_draft_from_synthesis_stages():
     assert len(prompt_data["draft_sections"]) == 1
     assert prompt_data["draft_sections"][0]["section_id"] == "s1"
     assert summary["stages"]["citation_pass"]["status"] == "completed"
+
+
+def test_citation_pass_repairs_sections_with_non_authoritative_relationship():
+    """Mismatched sections are omitted and recorded without weakening validation."""
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    claim_id = _VALID_PACKET["claims"][0]["claim_id"]
+    binding = _VALID_PACKET["claim_evidence_bindings"][0]
+    passage_id = binding["passage_ids"][0]
+
+    for sname in ("outline", "binding", "draft"):
+        artifact = {}
+        if sname == "draft":
+            artifact = {
+                "report_sections": [
+                    {
+                        "section_id": "supported",
+                        "title": "Supported",
+                        "body": "Grounded body.",
+                        "claim_references": [
+                            {
+                                "claim_id": claim_id,
+                                "passage_ids": [passage_id],
+                                "relationship": binding["relationship"],
+                            }
+                        ],
+                    },
+                    {
+                        "section_id": "unsupported",
+                        "title": "Unsupported",
+                        "body": "Material explicitly outside the binding.",
+                        "claim_references": [
+                            {
+                                "claim_id": claim_id,
+                                "passage_ids": [passage_id],
+                                "relationship": "context",
+                            }
+                        ],
+                    },
+                ],
+                "limitations": [],
+            }
+        mock_uow.synthesis_stages.update_synthesis_stage(
+            {
+                "id": str(uuid4()),
+                "run_id": str(run_id),
+                "stage_name": sname,
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "test-model",
+                "prompt_version": "v1",
+                "schema_version": 1,
+                "artifact": artifact,
+                "error": None,
+                "attempts": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        )
+
+    captured_prompt = None
+
+    def capture_call(*args, **kwargs):
+        nonlocal captured_prompt
+        captured_prompt = json.loads(kwargs["user_prompt"])
+        result = MagicMock()
+        result.error = None
+        result.value = {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 2,
+            "draft_revision": 1,
+            "pass_status": "passed",
+            "validation_results": [
+                {
+                    "section_id": "supported",
+                    "claim_id": claim_id,
+                    "passage_ids": [passage_id],
+                    "status": "valid",
+                    "issue": "",
+                }
+            ],
+            "invented_citations": [],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        }
+        result.semantic_call_id = str(uuid4())
+        result.artifact_ids = [str(uuid4())]
+        return result
+
+    with patch("model_gateway.call_structured", side_effect=capture_call):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=2,
+            model_name="test-model",
+        )
+
+    assert [s["section_id"] for s in captured_prompt["draft_sections"]] == ["supported"]
+    repaired = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "draft")[
+        "artifact"
+    ]
+    assert "unsupported" in repaired["limitations"][0]
+    assert summary["overall_status"] == "completed"
 
 
 # ---------------------------------------------------------------------------

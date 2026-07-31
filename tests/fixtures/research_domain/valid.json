@@ -582,86 +582,6 @@
     },
     "created_at": "2026-07-25T12:00:00+00:00"
   },
-  "benchmark-source-v1": {
-    "schema_version": "benchmark-source-v1",
-    "file_path": "scripts/test.py",
-    "relevance": true,
-    "role": "relevant"
-  },
-  "benchmark-objective-v1": {
-    "schema_version": "benchmark-objective-v1",
-    "id": "obj-test",
-    "title": "Test",
-    "objective": "Test objective",
-    "questions": [
-      "What?"
-    ],
-    "expected_source_classes": [
-      "docs"
-    ],
-    "known_relevant_sources": [
-      {
-        "schema_version": "benchmark-source-v1",
-        "file_path": "scripts/test.py",
-        "relevance": true,
-        "role": "relevant"
-      }
-    ],
-    "known_distractor_sources": [],
-    "expected_unresolved_controversies": [],
-    "search_queries": [],
-    "search_query_expected_sources": {},
-    "ground_truth_answers": {},
-    "citation_support_labels": {
-      "q1": "SUPPORTED"
-    }
-  },
-  "benchmark-dataset-v1": {
-    "schema_version": "benchmark-dataset-v1",
-    "version": "benchmark-test-v1",
-    "description": "Test dataset",
-    "evaluation_set": true,
-    "objectives": [
-      {
-        "schema_version": "benchmark-objective-v1",
-        "id": "obj-001",
-        "title": "Test",
-        "objective": "Test",
-        "questions": [
-          "What?"
-        ],
-        "expected_source_classes": [
-          "docs"
-        ],
-        "known_relevant_sources": [
-          {
-            "schema_version": "benchmark-source-v1",
-            "file_path": "scripts/test.py",
-            "relevance": true,
-            "role": "relevant"
-          }
-        ],
-        "known_distractor_sources": [],
-        "expected_unresolved_controversies": [],
-        "search_queries": [],
-        "search_query_expected_sources": {},
-        "ground_truth_answers": {},
-        "citation_support_labels": {
-          "q1": "SUPPORTED"
-        }
-      }
-    ],
-    "quality_thresholds": {
-      "min_candidate_recall": 0.5
-    },
-    "workflow_modes": [
-      "legacy",
-      "agent_led"
-    ],
-    "deterministic_integrity_checks": [
-      "state_machine_transitions"
-    ]
-  },
   "quality-measurement-v1": {
     "schema_version": "quality-measurement-v1",
     "candidate_recall": 0.75,
@@ -930,14 +850,18 @@
     "device_index": 0,
     "device_type": "cpu",
     "device_uuid": "cpu-0",
+    "failure_reason": "",
     "metric_version": "resource-sample-v1",
     "run_id": "00000000-0000-0000-0000-000000000401",
     "sample_at": "2026-07-28T10:00:00Z",
     "sample_number": 1,
     "sample_type": "cpu_percent",
+    "sampling_interval_seconds": 1.0,
     "schema_version": "resource-sample-v1",
     "status": "measured",
-    "value": 45.5
+    "value": 45.5,
+    "window_end": "2026-07-28T10:01:00Z",
+    "window_start": "2026-07-28T10:00:00Z"
   },
   "endpoint-usage-v1": {
     "call_id": "00000000-0000-0000-0000-000000000100",
@@ -990,10 +914,11 @@
     ],
     "known_relevant_sources": [
       {
-        "schema_version": "benchmark-source-v1",
+        "schema_version": "benchmark-source-v2",
         "file_path": "scripts/test.py",
         "relevance": true,
-        "role": "relevant"
+        "role": "relevant",
+        "source_class": "docs"
       }
     ],
     "known_distractor_sources": [],
@@ -1032,10 +957,11 @@
         ],
         "known_relevant_sources": [
           {
-            "schema_version": "benchmark-source-v1",
+            "schema_version": "benchmark-source-v2",
             "file_path": "scripts/test.py",
             "relevance": true,
-            "role": "relevant"
+            "role": "relevant",
+            "source_class": "docs"
           }
         ],
         "known_distractor_sources": [],
@@ -1086,5 +1012,12 @@
     "embedding_throughput": 50.0,
     "gpu_memory_mb": 4096.0,
     "cpu_percent": 60.0
+  },
+  "benchmark-source-v2": {
+    "schema_version": "benchmark-source-v2",
+    "file_path": "scripts/test.py",
+    "relevance": true,
+    "role": "relevant",
+    "source_class": "docs"
   }
 }

@@ -1191,7 +1191,7 @@ class BenchmarkConfig:
     min_degraded_recall_ratio: float = 0.3
 
     # Benchmark metadata
-    benchmark_version: str = "benchmark-v1"
+    benchmark_version: str = "benchmark-v2"
     ground_truth_version: str = "ground-truth-v1"
 
 
@@ -1472,29 +1472,36 @@ class RecommendationOutcome(str, Enum):
 
 @dataclass(frozen=True)
 class BenchmarkSource:
-    """A known source referenced in a benchmark objective.
+    """A versioned source annotation referenced by a benchmark objective.
 
-    Attributes:
-        schema_version: Always ``"benchmark-source-v1"``.
-        file_path: Path to the source file (relative to skill root).
-        relevance: Whether this source is expected to be relevant.
-        role: Role of this source in the benchmark ("relevant", "distractor").
+    ``source_class`` is mandatory so release source quality never infers
+    source type from a URL or domain.
     """
 
     schema_version: str
     file_path: str
     relevance: bool
     role: str  # "relevant" | "distractor"
+    source_class: str
 
-    SCHEMA_VERSION = "benchmark-source-v1"
+    SCHEMA_VERSION = "benchmark-source-v2"
 
     def __post_init__(self) -> None:
         if self.schema_version != self.SCHEMA_VERSION:
-            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+            raise ValueError(
+                f"unsupported schema_version: {self.schema_version}; "
+                f"expected {self.SCHEMA_VERSION}"
+            )
+        _text(self.file_path, "benchmark_source.file_path")
         if self.role not in ("relevant", "distractor"):
             raise ValueError(
                 f"role must be 'relevant' or 'distractor', got: {self.role}"
             )
+        if self.relevance is not (self.role == "relevant"):
+            raise ValueError(
+                "benchmark_source.relevance must agree with benchmark_source.role"
+            )
+        _text(self.source_class, "benchmark_source.source_class")
 
 
 @dataclass(frozen=True)
@@ -1502,8 +1509,7 @@ class BenchmarkObjective:
     """A single research objective in the benchmark dataset.
 
     Attributes:
-        schema_version: ``"benchmark-objective-v2"`` for the executable
-            release objective contract. Version 1 remains readable.
+        schema_version: ``"benchmark-objective-v2"``.
         id: Stable objective identifier (e.g., "obj-001").
         title: Human-readable title.
         objective: The research objective statement.
@@ -1536,7 +1542,6 @@ class BenchmarkObjective:
     citation_support_labels: dict[str, str] = field(default_factory=dict)
 
     SCHEMA_VERSION = "benchmark-objective-v2"
-    SCHEMA_VERSIONS = ("benchmark-objective-v1", "benchmark-objective-v2")
     REQUIRED_FIELDS: ClassVar[tuple[str, ...]] = (
         "search_queries",
         "search_query_expected_sources",
@@ -1545,28 +1550,30 @@ class BenchmarkObjective:
     )
 
     def __post_init__(self) -> None:
-        if self.schema_version not in self.SCHEMA_VERSIONS:
-            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported schema_version: {self.schema_version}; "
+                f"expected {self.SCHEMA_VERSION}"
+            )
         _text(self.id, "benchmark_objective.id")
         _text(self.title, "benchmark_objective.title")
         _text(self.objective, "benchmark_objective.objective")
         if not self.questions:
             raise ValueError("benchmark_objective.questions must not be empty")
-        if self.schema_version == self.SCHEMA_VERSION:
-            if not self.search_queries:
-                raise ValueError("benchmark_objective.search_queries must not be empty")
-            if not self.search_query_expected_sources:
-                raise ValueError(
-                    "benchmark_objective.search_query_expected_sources must not be empty"
-                )
-            if not self.ground_truth_answers:
-                raise ValueError(
-                    "benchmark_objective.ground_truth_answers must not be empty"
-                )
-            if not self.citation_support_labels:
-                raise ValueError(
-                    "benchmark_objective.citation_support_labels must not be empty"
-                )
+        if not self.search_queries:
+            raise ValueError("benchmark_objective.search_queries must not be empty")
+        if not self.search_query_expected_sources:
+            raise ValueError(
+                "benchmark_objective.search_query_expected_sources must not be empty"
+            )
+        if not self.ground_truth_answers:
+            raise ValueError(
+                "benchmark_objective.ground_truth_answers must not be empty"
+            )
+        if not self.citation_support_labels:
+            raise ValueError(
+                "benchmark_objective.citation_support_labels must not be empty"
+            )
 
 
 @dataclass(frozen=True)
@@ -1574,8 +1581,7 @@ class BenchmarkDataset:
     """Versioned benchmark dataset for release campaigns.
 
     Attributes:
-        schema_version: ``"benchmark-dataset-v2"`` for the executable release
-            contract. Version 1 remains readable.
+        schema_version: ``"benchmark-dataset-v2"``.
         version: Dataset version string.
         description: Human-readable description.
         evaluation_set: Whether this is the evaluation set (not for tuning).
@@ -1595,11 +1601,13 @@ class BenchmarkDataset:
     deterministic_integrity_checks: tuple[str, ...]
 
     SCHEMA_VERSION = "benchmark-dataset-v2"
-    SCHEMA_VERSIONS = ("benchmark-dataset-v1", "benchmark-dataset-v2")
 
     def __post_init__(self) -> None:
-        if self.schema_version not in self.SCHEMA_VERSIONS:
-            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported schema_version: {self.schema_version}; "
+                f"expected {self.SCHEMA_VERSION}"
+            )
         _text(self.version, "benchmark_dataset.version")
         _text(self.description, "benchmark_dataset.description")
         if not self.objectives:
@@ -1962,9 +1970,15 @@ class TokenAccounting:
     def __post_init__(self) -> None:
         if self.schema_version != "token-accounting-v1":
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
-        if self.source not in ("endpoint", "tokenizer", "unavailable"):
+        if self.source not in (
+            "endpoint",
+            "tokenizer",
+            "not_invoked",
+            "unavailable",
+        ):
             raise ValueError(
-                f"source must be endpoint, tokenizer, or unavailable; got: {self.source}"
+                "source must be endpoint, tokenizer, not_invoked, or unavailable; "
+                f"got: {self.source}"
             )
 
         # If endpoint source, at least one field must be present.
@@ -2125,13 +2139,18 @@ class ResourceSample:
         device_index: Hardware device index (0-based).
         device_uuid: Hardware UUID, when available.
         sample_type: Type of measurement (e.g. ``"cpu_percent"``, ``"gpu_memory_used_mb"``).
-        value: The measured value.
+        value: The measured value. Nullable — samples with ``status != 'measured'``
+            may have ``value=None``.
         sample_at: ISO-8601 timestamp of the sample.
         collector: Library used (e.g. ``"psutil"``, ``"pynvml"``).
         collector_version: Version of the collector library.
         sample_number: Sequential sample number within the run.
         metric_version: Version of the resource-sample schema.
         status: Availability status of this sample.
+        failure_reason: Explicit reason when status is not ``"measured"``.
+        window_start: ISO-8601 timestamp when the workload window began.
+        window_end: ISO-8601 timestamp when the workload window ended.
+        sampling_interval_seconds: Interval between samples in the workload window.
     """
 
     schema_version: str = "resource-sample-v1"
@@ -2140,13 +2159,17 @@ class ResourceSample:
     device_index: int = 0
     device_uuid: str = ""
     sample_type: str = ""
-    value: float = 0.0
+    value: float | None = None
     sample_at: str = ""
     collector: str = ""
     collector_version: str = ""
     sample_number: int = 0
     metric_version: str = "resource-sample-v1"
     status: str = "measured"
+    failure_reason: str = ""
+    window_start: str = ""
+    window_end: str = ""
+    sampling_interval_seconds: float = 0.0
 
     SCHEMA_VERSION = "resource-sample-v1"
     SCHEMA_VERSIONS = ("resource-sample-v1",)
@@ -2207,9 +2230,15 @@ class EndpointUsageRecord:
     def __post_init__(self) -> None:
         if self.schema_version != "endpoint-usage-v1":
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
-        if self.source not in ("endpoint", "tokenizer", "unavailable"):
+        if self.source not in (
+            "endpoint",
+            "tokenizer",
+            "not_invoked",
+            "unavailable",
+        ):
             raise ValueError(
-                f"source must be endpoint, tokenizer, or unavailable; got: {self.source}"
+                "source must be endpoint, tokenizer, not_invoked, or unavailable; "
+                f"got: {self.source}"
             )
         if self.endpoint_type and self.endpoint_type not in (
             "generative",
@@ -2282,9 +2311,15 @@ class PerformanceTelemetrySummary:
     def __post_init__(self) -> None:
         if self.schema_version != "performance-telemetry-summary-v1":
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
-        if self.token_source not in ("endpoint", "tokenizer", "unavailable"):
+        if self.token_source not in (
+            "endpoint",
+            "tokenizer",
+            "not_invoked",
+            "unavailable",
+        ):
             raise ValueError(
-                f"token_source must be endpoint, tokenizer, or unavailable; got: {self.token_source}"
+                "token_source must be endpoint, tokenizer, not_invoked, or unavailable; "
+                f"got: {self.token_source}"
             )
         if self.cache_hit_rate is not None and not (0.0 <= self.cache_hit_rate <= 1.0):
             raise ValueError("cache_hit_rate must be between 0.0 and 1.0")

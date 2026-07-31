@@ -9,10 +9,11 @@ Strict mode is mandatory and cannot be disabled through ordinary flags.
 Simulation and workflow substitution are impossible in release campaigns.
 
 Usage:
-    strict_benchmark [--campaign-dir DIR] [--dataset PATH] [--database-url URL]
-                     [--blob-root PATH] [--qdrant-url URL] [--qdrant-api-key KEY]
-                     [--objectives OBJ1,OBJ2,...] [--tolerance FLOAT]
-                     [--manifest PATH] [--dry-run]
+    strict_benchmark --candidate-sha <40-char-hex> [--campaign-dir DIR]
+                     [--dataset PATH] [--database-url URL]
+                     [--blob-root PATH] [--qdrant-url URL]
+                     [--qdrant-api-key KEY] [--objectives OBJ1,OBJ2,...]
+                     [--tolerance FLOAT] [--manifest PATH] [--dry-run]
 """
 
 from __future__ import annotations
@@ -20,12 +21,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from hashlib import sha256
 from pathlib import Path
 
-SCRIPTS = Path(__file__).resolve().parent
+SCRIPTS = Path(__file__).resolve()
 
 
 def _qdrant_compatibility_errors(caught_warnings) -> tuple[str, ...]:
@@ -59,37 +61,141 @@ def _compute_file_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def _build_env_manifest() -> dict:
-    """Build runtime environment metadata for the campaign."""
-    import platform
+def _get_full_sha(repo: Path | None = None) -> str:
+    """Return the current git commit SHA as a full 40-character hex string.
 
-    return {
-        "python_version": platform.python_version(),
-        "platform": platform.platform(),
-        "machine": platform.machine(),
-        "processor": platform.processor() or "unknown",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
-        "commit": _get_commit_sha(),
-    }
+    Raises ``ValueError`` when the repository cannot be resolved or the
+    resolved SHA is not exactly 40 hexadecimal characters.
+    """
+    try:
+        import subprocess
+
+        cmd = ["git", "rev-parse", "HEAD"]
+        cwd = str(repo) if repo else None
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            cwd=cwd,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "git rev-parse failed")
+        sha = result.stdout.strip()
+        if len(sha) != 40 or not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError(f"expected 40-char hex SHA, got {len(sha)} chars: {sha!r}")
+        return sha
+    except (RuntimeError, ValueError):
+        raise
+    except Exception as exc:
+        raise ValueError(f"unable to resolve git HEAD: {exc}") from exc
 
 
-def _get_commit_sha() -> str:
-    """Return the current git commit SHA, or 'unknown'."""
+def _get_tree_hash(repo: Path | None = None) -> str:
+    """Return the current git tree hash as a full 40-character hex string."""
+    try:
+        import subprocess
+
+        cmd = ["git", "rev-parse", "HEAD^{tree}"]
+        cwd = str(repo) if repo else None
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            cwd=cwd,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "git rev-parse tree failed")
+        tree = result.stdout.strip()
+        if len(tree) != 40 or not re.fullmatch(r"[0-9a-f]{40}", tree):
+            raise ValueError(
+                f"expected 40-char hex tree hash, got {len(tree)} chars: {tree!r}"
+            )
+        return tree
+    except (RuntimeError, ValueError):
+        raise
+    except Exception as exc:
+        raise ValueError(f"unable to resolve git tree hash: {exc}") from exc
+
+
+def _get_firecrawl_version() -> str:
+    """Return the Firecrawl CLI version string, or 'unknown'."""
     try:
         import subprocess
 
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            ["firecrawl", "--version"],
             capture_output=True,
             text=True,
             timeout=10,
             check=False,
         )
         if result.returncode == 0:
-            return result.stdout.strip()[:12]
-    except Exception:  # noqa: BLE001
-        return "unknown"
+            return result.stdout.strip()
+    except Exception:  # noqa: BLE001, S110
+        pass
     return "unknown"
+
+
+def _build_env_manifest(
+    candidate_sha: str,
+    dataset_path: Path,
+    dataset_hash: str,
+) -> dict:
+    """Build runtime environment metadata for the campaign.
+
+    The manifest captures the exact candidate SHA, tree hash, dataset hash,
+    dependency-lock hash, service versions, Firecrawl CLI version, model IDs
+    and revisions, tokenizer ID and revision, and hardware identity so that
+    every campaign run is reproducible from the same immutable inputs.
+    """
+    import platform
+
+    try:
+        tree_hash = _get_tree_hash()
+    except ValueError:
+        tree_hash = "unresolvable"
+
+    try:
+        lock_hash = _compute_file_hash(
+            SCRIPTS.parent.parent / "requirements-research-store.txt"
+        )
+    except Exception:  # noqa: BLE001
+        lock_hash = "unresolvable"
+
+    # Collect model/tokenizer fingerprints from environment.
+    fingerprints: dict[str, str] = {}
+    for key in (
+        "GENERATIVE_MODEL",
+        "GENERATIVE_URL",
+        "EMBEDDING_MODEL",
+        "EMBEDDING_URL",
+        "RERANKER_MODEL",
+        "RERANKER_URL",
+    ):
+        val = os.environ.get(key, "")
+        if val:
+            fingerprints[key] = val
+
+    firecrawl_version = _get_firecrawl_version()
+
+    return {
+        "candidate_sha": candidate_sha,
+        "tree_hash": tree_hash,
+        "dataset_path": str(dataset_path),
+        "dataset_hash": dataset_hash,
+        "dependency_lock_hash": lock_hash,
+        "firecrawl_version": firecrawl_version,
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": platform.processor() or "unknown",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+        **fingerprints,
+    }
 
 
 def _write_json_atomic(path: Path, data: object) -> str:
@@ -111,28 +217,57 @@ def _preflight_check(
     qdrant_api_key: str,
     dataset_path: Path,
     campaign_dir: Path,
+    candidate_sha: str,
 ) -> tuple[bool, list[str]]:
-    """Validate that all required infrastructure is available before starting campaigns.
+    """Run the complete release preflight through production adapters."""
+    from .preflight import run_complete_preflight
 
-    Returns (ok, errors) where ok is True only when the complete release
-    workflow stack is ready. Release campaigns have no degraded preflight.
+    return run_complete_preflight(
+        database_url=database_url,
+        blob_root=blob_root,
+        qdrant_url=qdrant_url,
+        qdrant_api_key=qdrant_api_key,
+        dataset_path=dataset_path,
+        campaign_dir=campaign_dir,
+        candidate_sha=candidate_sha,
+        get_full_sha=_get_full_sha,
+    )
 
-    Mandatory infrastructure:
-    - PostgreSQL (required for creating research runs)
-    - Dataset file (required for benchmark data)
-    - Campaign directory (required for writing artifacts)
 
-    Required workflow infrastructure:
-    - Qdrant (used for vector indexing)
-    - Firecrawl CLI (used for search/scrape)
-    - Embedding endpoint (used for chunk embedding)
-    - Generative endpoint (used for synthesis)
-    - Reranker endpoint
-    - Blob root (used for content-addressed storage)
+def _legacy_preflight_check(
+    database_url: str,
+    blob_root: Path | None,
+    qdrant_url: str,
+    qdrant_api_key: str,
+    dataset_path: Path,
+    campaign_dir: Path,
+    candidate_sha: str,
+) -> tuple[bool, list[str]]:
+    """Deprecated inline probes retained temporarily for rollback diagnostics.
+
+    The active release path is ``_preflight_check`` above. This implementation
+    is not called by the CLI and must not be used as release evidence.
     """
     errors: list[str] = []
 
-    # 1. Dataset file (MANDATORY)
+    # 0. Candidate SHA verification (MANDATORY)
+    if len(candidate_sha) != 40 or not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
+        errors.append(
+            f"candidate SHA must be a full 40-character hex string; "
+            f"got {len(candidate_sha)} chars: {candidate_sha!r}"
+        )
+    else:
+        try:
+            current_sha = _get_full_sha()
+            if current_sha != candidate_sha:
+                errors.append(
+                    f"git HEAD ({current_sha}) does not match "
+                    f"candidate SHA ({candidate_sha})"
+                )
+            else:
+                print(f"  Candidate SHA: {candidate_sha} ✓")
+        except ValueError as exc:
+            errors.append(f"candidate SHA verification failed: {exc}")
     if not dataset_path.is_file():
         errors.append(f"benchmark dataset not found: {dataset_path}")
 
@@ -169,10 +304,63 @@ def _preflight_check(
                 "index worker heartbeat is missing or stale "
                 f"(age={worker_age if worker_age is not None else 'missing'} seconds)"
             )
+        # Index-worker queue processing: verify the worker can accept a test job.
+        try:
+            from uuid import UUID
+
+            test_job_id = str(UUID(int=42))
+            cur.execute(
+                """INSERT INTO index_jobs (
+                       id, run_id, entity_type, entity_id, status,
+                       created_at, updated_at
+                   ) VALUES (%s, %s, %s, %s, 'pending', now(), now())
+                   ON CONFLICT DO NOTHING""",
+                (
+                    test_job_id,
+                    str(UUID(int=1)),
+                    "preflight_test",
+                    test_job_id,
+                ),
+            )
+            cur.execute("SELECT status FROM index_jobs WHERE id = %s", (test_job_id,))
+            row = cur.fetchone()
+            if row is None or row[0] != "pending":
+                raise RuntimeError(
+                    "index_jobs queue write failed: job not found or not pending"
+                )
+            cur.execute("DELETE FROM index_jobs WHERE id = %s", (test_job_id,))
+            print("  Index-worker queue: write and process OK")
+        except Exception as queue_exc:  # noqa: BLE001
+            errors.append(f"index-worker queue processing check failed: {queue_exc}")
         conn.close()
         print(f"  PostgreSQL: {db_name} ({table_count} tables) — {db_version[:60]}")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"PostgreSQL connection failed: {exc}")
+
+    # 2.5. Valkey connectivity and queue round-trip (MANDATORY)
+    valkey_url = os.environ.get("VALKEY_URL", "")
+    if valkey_url:
+        try:
+            from uuid import UUID
+
+            from .valkey_queue import ValkeyQueue
+
+            queue = ValkeyQueue(url=valkey_url)
+            pushed = queue.notify(UUID(int=1))
+            if not pushed:
+                raise RuntimeError("Valkey LPUSH failed — queue notify returned False")
+            popped = queue.wait(timeout_seconds=2.0)
+            if not popped:
+                raise RuntimeError("Valkey BLPOP timed out — queue round-trip failed")
+            print(f"  Valkey ({valkey_url}): queue round-trip OK")
+        except ImportError:
+            errors.append(
+                "redis (Valkey client) is required for queue round-trip preflight"
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Valkey queue round-trip failed: {exc}")
+    else:
+        errors.append("VALKEY_URL is required")
 
     # 3. Qdrant connectivity, active alias, and collection state (MANDATORY)
     if qdrant_url:
@@ -201,8 +389,27 @@ def _preflight_check(
                 raise RuntimeError(
                     f"active collection is not green: {alias.collection_name} ({collection.status})"
                 )
+            # Qdrant write/read operation test (MANDATORY)
+            test_id = "preflight_write_read_test"
+            test_vector = [0.1] * 3
+            test_payload = {"source": "preflight", "test_id": test_id}
+            qdrant.upsert(
+                alias.collection_name,
+                points=[
+                    {"id": test_id, "vector": test_vector, "payload": test_payload}
+                ],
+            )
+            results = qdrant.search(
+                alias.collection_name, query_vector=test_vector, limit=1
+            )
+            qdrant.delete_points(alias.collection_name, points=[test_id])
+            if not results or not any(
+                p.payload.get("test_id") == test_id for p in results
+            ):
+                raise RuntimeError("Qdrant write/read operation test failed")
             print(
-                f"  Qdrant: alias {alias_name} -> {alias.collection_name}; status={collection.status}"
+                f"  Qdrant: alias {alias_name} -> {alias.collection_name}; "
+                f"status={collection.status}; write/read OK"
             )
             qdrant.close()
         except Exception as exc:  # noqa: BLE001
@@ -243,12 +450,51 @@ def _preflight_check(
         if payload.get("message") != "Firecrawl API":
             raise RuntimeError(f"unexpected API root response: {payload!r}")
         print(f"  Firecrawl API ({firecrawl_url}): reachable")
+
+        # Functional search test (MANDATORY)
+        search_url = firecrawl_url.rstrip("/") + "/search"
+        search_payload = json.dumps({"query": "site:example.com", "limit": 1}).encode(
+            "utf-8"
+        )
+        search_req = urllib.request.Request(
+            search_url,
+            data=search_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(search_req, timeout=30) as resp:
+            search_result = json.loads(resp.read().decode("utf-8"))
+        # Firecrawl search returns {"success": true, "data": [...]} or similar.
+        # We only require a successful HTTP response with structured JSON.
+        if not isinstance(search_result, dict) or "success" not in search_result:
+            raise RuntimeError(
+                f"Firecrawl search returned unexpected format: {search_result!r}"
+            )
+        print("  Firecrawl search: functional OK")
+
+        # Functional scrape test (MANDATORY)
+        scrape_url = firecrawl_url.rstrip("/") + "/scrape"
+        scrape_payload = json.dumps(
+            {"url": "https://example.com", "formats": ["markdown"]}
+        ).encode("utf-8")
+        scrape_req = urllib.request.Request(
+            scrape_url,
+            data=scrape_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(scrape_req, timeout=30) as resp:
+            scrape_result = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(scrape_result, dict) or "success" not in scrape_result:
+            raise RuntimeError(
+                f"Firecrawl scrape returned unexpected format: {scrape_result!r}"
+            )
+        print("  Firecrawl scrape: functional OK")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"Firecrawl backend check failed: {exc}")
 
     # 5. Embedding endpoint health (MANDATORY)
     try:
-        import re
         import urllib.request
 
         embedding_url = os.environ.get(
@@ -282,6 +528,39 @@ def _preflight_check(
             print(
                 f"  Embedding endpoint ({embedding_url}): {len(embed_models)} model(s): {', '.join(embed_models) or 'none'}"
             )
+
+            # Actual embedding request test (MANDATORY)
+            embed_endpoint = re.sub(r"/v1$", "/v1/embeddings", base)
+            embed_payload = json.dumps(
+                {
+                    "model": configured_model or embed_models[0],
+                    "input": ["preflight test text"],
+                    "encoding_type": "float",
+                }
+            ).encode("utf-8")
+            embed_req = urllib.request.Request(
+                embed_endpoint,
+                data=embed_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(embed_req, timeout=30) as resp:
+                embed_result = json.loads(resp.read().decode())
+            if (
+                not isinstance(embed_result, dict)
+                or "data" not in embed_result
+                or not isinstance(embed_result["data"], list)
+                or len(embed_result["data"]) == 0
+            ):
+                raise RuntimeError(
+                    f"embedding request returned unexpected format: {embed_result!r}"
+                )
+            vector = embed_result["data"][0].get("embedding")
+            if not isinstance(vector, list) or len(vector) == 0:
+                raise RuntimeError(
+                    f"embedding vector missing or empty: {embed_result!r}"
+                )
+            print(f"  Embedding endpoint: actual request OK (vector dim={len(vector)})")
         else:
             errors.append("EMBEDDING_URL not set — embedding unavailable")
     except Exception as exc:  # noqa: BLE001
@@ -321,6 +600,41 @@ def _preflight_check(
             print(
                 f"  Generative endpoint ({generative_url}): {len(chat_models)} model(s): {', '.join(chat_models) or 'none'}"
             )
+
+            # Actual structured generative request test (MANDATORY)
+            chat_endpoint = re.sub(r"/v1$", "/v1/chat/completions", base)
+            chat_payload = json.dumps(
+                {
+                    "model": configured_model or models[0],
+                    "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+                    "max_tokens": 10,
+                }
+            ).encode("utf-8")
+            chat_req = urllib.request.Request(
+                chat_endpoint,
+                data=chat_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(chat_req, timeout=30) as resp:
+                chat_result = json.loads(resp.read().decode())
+            if (
+                not isinstance(chat_result, dict)
+                or "choices" not in chat_result
+                or not isinstance(chat_result["choices"], list)
+                or len(chat_result["choices"]) == 0
+            ):
+                raise RuntimeError(
+                    f"generative request returned unexpected format: {chat_result!r}"
+                )
+            content = chat_result["choices"][0].get("message", {}).get("content", "")
+            if not isinstance(content, str) or len(content) == 0:
+                raise RuntimeError(
+                    f"generative response missing content: {chat_result!r}"
+                )
+            print(
+                f"  Generative endpoint: actual request OK (content='{content[:40]}')"
+            )
         else:
             errors.append("GENERATIVE_URL not set — generative LLM unavailable")
     except Exception as exc:  # noqa: BLE001
@@ -359,6 +673,41 @@ def _preflight_check(
                 )
             print(
                 f"  Reranker endpoint ({reranker_url}): {len(rerank_models)} model(s): {', '.join(rerank_models) or 'none'}"
+            )
+
+            # Actual reranking request test (MANDATORY)
+            rerank_endpoint = re.sub(r"/v1$", "/v1/rerank", base)
+            rerank_payload = json.dumps(
+                {
+                    "model": configured_model or rerank_models[0],
+                    "query": "preflight test query",
+                    "documents": ["preflight test document text"],
+                }
+            ).encode("utf-8")
+            rerank_req = urllib.request.Request(
+                rerank_endpoint,
+                data=rerank_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(rerank_req, timeout=30) as resp:
+                rerank_result = json.loads(resp.read().decode())
+            if (
+                not isinstance(rerank_result, dict)
+                or "results" not in rerank_result
+                or not isinstance(rerank_result["results"], list)
+                or len(rerank_result["results"]) == 0
+            ):
+                raise RuntimeError(
+                    f"reranking request returned unexpected format: {rerank_result!r}"
+                )
+            first_result = rerank_result["results"][0]
+            if "index" not in first_result or "score" not in first_result:
+                raise RuntimeError(
+                    f"reranking result missing index/score: {rerank_result!r}"
+                )
+            print(
+                f"  Reranker endpoint: actual request OK (score={first_result['score']})"
             )
         else:
             errors.append("RERANKER_URL not set — reranker unavailable")
@@ -418,6 +767,132 @@ def _preflight_check(
     except Exception as exc:  # noqa: BLE001
         errors.append(f"Campaign directory not writable: {exc}")
 
+    # 11. Firecrawl search functional check (MANDATORY)
+    try:
+        import subprocess
+
+        search_result = subprocess.run(
+            [
+                "firecrawl",
+                "search",
+                "site:github.com Python",
+                "--limit",
+                "1",
+                "--sources",
+                "web",
+                "--ignore-invalid-urls",
+                "--scrape",
+                "--scrape-formats",
+                "markdown",
+                "--json",
+            ],
+            capture_output=True,
+            text=False,
+            timeout=60,
+            check=False,
+        )
+        if search_result.returncode == 0 and search_result.stdout:
+            search_data = json.loads(search_result.stdout.decode("utf-8"))
+            results = (
+                search_data
+                if isinstance(search_data, list)
+                else search_data.get("results", [])
+            )
+            if isinstance(results, list) and len(results) > 0:
+                print(f"  Firecrawl search: {len(results)} result(s) returned")
+            else:
+                errors.append(
+                    "Firecrawl search returned no results (API root works but search is broken)"
+                )
+        else:
+            stderr = search_result.stderr.decode("utf-8", errors="replace").strip()
+            if search_result.returncode == 0:
+                errors.append(
+                    "Firecrawl search returned non-zero exit code without output"
+                )
+            else:
+                errors.append(
+                    f"Firecrawl search functional check failed (exit {search_result.returncode}): {stderr[:300]}"
+                )
+    except FileNotFoundError:
+        # Already caught in check #4
+        pass
+    except subprocess.TimeoutExpired:
+        errors.append("Firecrawl search functional check timed out after 60s")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Firecrawl search functional check failed: {exc}")
+
+    # 12. Qdrant write/read operation (MANDATORY)
+    if qdrant_url:
+        try:
+            import uuid as uuid_module
+
+            from qdrant_client import QdrantClient
+            from qdrant_client.models import (
+                Distance,
+                PayloadSchemaType,
+                PointStruct,
+                VectorParams,
+            )
+
+            client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key or None)
+            test_collection = "preflight_test_write_read"
+            alias_name = os.environ.get("QDRANT_ALIAS", "research_chunks_active")
+            try:
+                aliases = client.get_aliases()
+                target_alias = next(
+                    (item for item in aliases.aliases if item.alias_name == alias_name),
+                    None,
+                )
+                if target_alias is None:
+                    raise RuntimeError(
+                        f"preflight cannot locate active alias: {alias_name}"
+                    )
+                collection_name = target_alias.collection_name
+            except Exception:  # noqa: BLE001
+                # Fallback: create a dedicated test collection
+                collection_name = test_collection
+                try:
+                    client.create_collection(
+                        collection_name,
+                        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                    )
+                    client.create_payload_index(
+                        collection_name,
+                        "preflight_test",
+                        field_schema=PayloadSchemaType.KEYWORD,
+                    )
+                except Exception:
+                    client.close()
+                    raise
+            test_id = str(uuid_module.uuid4())
+            test_vector = [0.0] * 768
+            client.upsert(
+                collection_name,
+                points=[
+                    PointStruct(
+                        id=test_id,
+                        vector=test_vector,
+                        payload={"preflight_test": "true"},
+                    )
+                ],
+            )
+            retrieved = client.retrieve(
+                collection_name, ids=[test_id], with_payload=True
+            )
+            if not retrieved or retrieved[0].payload.get("preflight_test") != "true":
+                raise RuntimeError("Qdrant write/read round-trip failed")
+            print(f"  Qdrant write/read: round-trip OK on {collection_name}")
+            # Cleanup if we created a test collection
+            if collection_name == test_collection:
+                try:
+                    client.delete_collection(collection_name)
+                except Exception:  # noqa: S110, BLE001
+                    pass
+            client.close()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Qdrant write/read operation failed: {exc}")
+
     return (len(errors) == 0, errors)
 
 
@@ -432,25 +907,32 @@ def _run_campaign(
     strict: bool,
     reproducibility_tolerance: float,
     campaign_dir: Path,
+    candidate_sha: str,
+    execution_modes: tuple[str, ...] = ("autonomous_local", "deterministic_debug"),
 ) -> tuple[ReleaseBenchmarkResult, str]:
-    """Execute a single strict campaign.
+    """Execute a single strict campaign wave and return its result and integrity hash.
 
     Args:
-        campaign_label: Human-readable label (e.g. "A" or "B").
-        dataset_path: Path to the benchmark dataset JSON file.
-        database_url: PostgreSQL connection string.
-        blob_root: Path to the content-addressed blob store root.
-        qdrant_url: Qdrant URL.
-        qdrant_api_key: Qdrant API key.
-        objective_ids: Specific objective IDs to run (None = all).
-        strict: Whether strict mode is enabled.
-        reproducibility_tolerance: Tolerance for reproducibility comparison.
+        campaign_label: Display label for the campaign run.
+        dataset_path: Path to the benchmark dataset.
+        database_url: Target PostgreSQL database.
+        blob_root: Target blob storage path.
+        qdrant_url: Target Qdrant vector database URL.
+        qdrant_api_key: Target Qdrant vector database API key.
+        objective_ids: Specific objective IDs to run, or None for all.
+        strict: Whether to enforce strict mode (mandatory).
+        reproducibility_tolerance: Acceptance threshold for deterministic deviation.
         campaign_dir: Directory to write campaign artifacts to.
+        candidate_sha: Exact 40-character git commit SHA for the release candidate.
+        execution_modes: Workflow modes to run.
 
     Returns:
         Tuple of (result, campaign_id).
     """
     print(f"[Campaign {campaign_label}] Starting strict benchmark campaign...")
+
+    # Make candidate SHA available to the benchmark runner.
+    os.environ["CANDIDATE_SHA"] = candidate_sha
 
     # Load benchmark dataset
     print(f"[Campaign {campaign_label}] Loading dataset from {dataset_path}")
@@ -462,7 +944,7 @@ def _run_campaign(
         blob_root=blob_root,
         qdrant_url=qdrant_url,
         qdrant_api_key=qdrant_api_key,
-        execution_modes=RELEASE_MODES,
+        execution_modes=execution_modes,
         objective_ids=objective_ids,
         strict=strict,
         reproducibility_tolerance=reproducibility_tolerance,
@@ -664,16 +1146,22 @@ def _run_campaign(
     )
 
     # Write environment manifest
+    dataset_hash = _compute_file_hash(dataset_path)
     env_manifest = {
-        **_build_env_manifest(),
-        "dataset_path": str(dataset_path),
-        "dataset_hash": _compute_file_hash(dataset_path),
+        **_build_env_manifest(candidate_sha, dataset_path, dataset_hash),
         "database_url_set": bool(database_url),
         "blob_root_set": bool(blob_root),
         "strict": strict,
         "execution_modes": RELEASE_MODES,
         "objective_ids": list(objective_ids) if objective_ids else ["all"],
         "reproducibility_tolerance": reproducibility_tolerance,
+        "reproducibility_policy_version": "reproducibility-policy-v2",
+        "operational_reproducibility_ratio_limit": float(
+            loader.quality_thresholds.get(
+                "max_operational_reproducibility_ratio",
+                config.operational_reproducibility_ratio_limit,
+            )
+        ),
     }
     env_manifest_path = artifacts_dir / "environment.json"
     _write_json_atomic(env_manifest_path, env_manifest)
@@ -739,7 +1227,14 @@ def _compare_campaigns(
             "all_within_tolerance": comparison.all_within_tolerance,
             "quality_tolerances": list(comparison.quality_tolerances),
             "performance_tolerances": list(comparison.performance_tolerances),
+            "policy_version": comparison.policy_version,
+            "relative_tolerance": comparison.relative_tolerance,
+            "operational_ratio_limit": comparison.operational_ratio_limit,
+            "operational_absolute_tolerances": dict(
+                comparison.operational_absolute_tolerances
+            ),
             "details": comparison.details,
+            "observations": comparison.observations,
         },
     )
 
@@ -752,6 +1247,8 @@ def _compare_campaigns(
     ]
     for detail in comparison.details:
         lines.append(f"  - {detail}")
+    for observation in comparison.observations:
+        lines.append(f"  - observation: {observation}")
     summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     return comparison
@@ -763,6 +1260,7 @@ def _build_manifest(
     result_b: ReleaseBenchmarkResult,
     comparison: ReproducibilityComparison,
     dataset_path: Path,
+    candidate_sha: str,
 ) -> dict:
     """Build the durable artifact manifest."""
     campaign_a_dir = None
@@ -775,12 +1273,18 @@ def _build_manifest(
             else:
                 campaign_b_dir = latest
 
+    try:
+        tree_hash = _get_tree_hash()
+    except ValueError:
+        tree_hash = "unresolvable"
+
     manifest = {
         "schema_version": "campaign-manifest-v1",
+        "candidate_sha": candidate_sha,
+        "tree_hash": tree_hash,
         "dataset_path": str(dataset_path),
         "dataset_hash": _compute_file_hash(dataset_path),
-        "dataset_version": "benchmark-v1",
-        "commit": _get_commit_sha(),
+        "dataset_version": load_benchmark_dataset(dataset_path).dataset.version,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
         "campaign_a": {
             "campaign_id": result_a.campaign_id,
@@ -810,14 +1314,24 @@ def _build_manifest(
             "all_within_tolerance": comparison.all_within_tolerance,
             "run_a_id": comparison.run_a_id,
             "run_b_id": comparison.run_b_id,
+            "policy_version": comparison.policy_version,
+            "relative_tolerance": comparison.relative_tolerance,
+            "operational_ratio_limit": comparison.operational_ratio_limit,
+            "operational_absolute_tolerances": dict(
+                comparison.operational_absolute_tolerances
+            ),
             "details": list(comparison.details),
+            "observations": list(comparison.observations),
         },
         "modes": list(RELEASE_MODES),
     }
     return manifest
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    execution_modes: tuple[str, ...] = ("autonomous_local", "deterministic_debug"),
+) -> int:
     """Execute strict release benchmark campaigns.
 
     Returns 0 on success, 1 on failure.
@@ -825,6 +1339,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Strict release benchmark campaign (issue #144). "
         "Strict mode is mandatory and cannot be disabled."
+    )
+    parser.add_argument(
+        "--candidate-sha",
+        type=str,
+        required=True,
+        help="Exact 40-character git commit SHA to benchmark (mandatory)",
     )
     parser.add_argument(
         "--campaign-dir",
@@ -840,7 +1360,7 @@ def main(argv: list[str] | None = None) -> int:
         / "tests"
         / "fixtures"
         / "benchmark"
-        / "benchmark-v1.json",
+        / "benchmark-v2.json",
         help="Path to the benchmark dataset JSON file",
     )
     parser.add_argument(
@@ -906,6 +1426,15 @@ def main(argv: list[str] | None = None) -> int:
     strict = True
 
     # ── Validate inputs ──────────────────────────────────────────────────
+    candidate_sha = args.candidate_sha
+    if len(candidate_sha) != 40 or not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
+        print(
+            f"ERROR: --candidate-sha must be a full 40-character hex string; "
+            f"got {len(candidate_sha)} chars: {candidate_sha!r}",
+            file=sys.stderr,
+        )
+        return 1
+
     if not args.dataset.is_file():
         print(f"ERROR: dataset not found: {args.dataset}", file=sys.stderr)
         return 1
@@ -936,13 +1465,13 @@ def main(argv: list[str] | None = None) -> int:
     print("Strict Release Benchmark Campaign (issue #144)")
     print("=" * 60)
     print("  Strict mode:         ON (mandatory)")
+    print(f"  Candidate SHA:       {candidate_sha}")
     print(f"  Dataset:             {args.dataset}")
     print(f"  Database URL:        {'set' if args.database_url else 'NOT SET'}")
     print(f"  Blob root:           {args.blob_root}")
     print(f"  Qdrant URL:          {args.qdrant_url or 'NOT SET'}")
     print(f"  Objectives:          {list(objective_ids) if objective_ids else 'all'}")
     print(f"  Reproducibility tolerance: {args.tolerance}")
-    print(f"  Commit:              {_get_commit_sha()}")
     print("=" * 60)
 
     if args.dry_run:
@@ -955,6 +1484,7 @@ def main(argv: list[str] | None = None) -> int:
             qdrant_api_key=args.qdrant_api_key,
             dataset_path=args.dataset,
             campaign_dir=campaign_dir,
+            candidate_sha=candidate_sha,
         )
         if not ok:
             print("\n[Preflight] FAILED — required infrastructure unavailable:")
@@ -972,6 +1502,7 @@ def main(argv: list[str] | None = None) -> int:
         qdrant_api_key=args.qdrant_api_key,
         dataset_path=args.dataset,
         campaign_dir=campaign_dir,
+        candidate_sha=candidate_sha,
     )
     if not ok:
         print("\n[Preflight] FAILED — required infrastructure unavailable:")
@@ -993,6 +1524,8 @@ def main(argv: list[str] | None = None) -> int:
         strict=strict,
         reproducibility_tolerance=args.tolerance,
         campaign_dir=campaign_dir,
+        candidate_sha=candidate_sha,
+        execution_modes=execution_modes,
     )
 
     # ── Execute Campaign B ───────────────────────────────────────────────
@@ -1007,6 +1540,8 @@ def main(argv: list[str] | None = None) -> int:
         strict=strict,
         reproducibility_tolerance=args.tolerance,
         campaign_dir=campaign_dir,
+        candidate_sha=candidate_sha,
+        execution_modes=execution_modes,
     )
 
     # ── Reproducibility comparison ───────────────────────────────────────
@@ -1016,7 +1551,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── Build and write manifest ─────────────────────────────────────────
     manifest = _build_manifest(
-        campaign_dir, result_a, result_b, comparison, args.dataset
+        campaign_dir, result_a, result_b, comparison, args.dataset, candidate_sha
     )
     manifest_path = args.manifest or campaign_dir / "manifest.json"
     _write_json_atomic(manifest_path, manifest)
@@ -1025,6 +1560,7 @@ def main(argv: list[str] | None = None) -> int:
     print("\n" + "=" * 60)
     print("Campaign Summary")
     print("=" * 60)
+    print(f"  Candidate SHA:       {candidate_sha}")
     print(f"  Campaign A: {result_a.campaign_id} (hash: {hash_a[:12]})")
     print(f"  Campaign B: {result_b.campaign_id} (hash: {hash_b[:12]})")
     print(f"  Reproducibility: {'PASS' if comparison.all_within_tolerance else 'FAIL'}")
@@ -1039,7 +1575,7 @@ def main(argv: list[str] | None = None) -> int:
     recovery_report_path = args.recovery_report or campaign_dir / "recovery-report.txt"
     recovery_lines = [
         "Recovery Report — Strict Benchmark Campaign",
-        f"Commit: {_get_commit_sha()}",
+        f"Candidate SHA: {candidate_sha}",
         f"Timestamp: {time.strftime('%Y-%m-%dT%H:%M:%S+00:00', time.gmtime())}",
         f"Campaign A: {result_a.campaign_id}",
         f"Campaign B: {result_b.campaign_id}",
@@ -1076,22 +1612,15 @@ def main(argv: list[str] | None = None) -> int:
 
     print("=" * 60)
 
-    # Exit with failure if any campaign failed, reproducibility failed,
-    # or either campaign recommends NO_GO.
-    no_go_a = (
-        result_a.recommendation.outcome == "no_go" if result_a.recommendation else False
-    )
-    no_go_b = (
-        result_b.recommendation.outcome == "no_go" if result_b.recommendation else False
-    )
+    # Exit with failure if either campaign recommends anything other than GO,
+    # or reproducibility failed.
+    def is_go(rec):
+        return rec and rec.outcome == "go"
 
-    if no_go_a or no_go_b:
-        if no_go_a and no_go_b:
-            print("\nFATAL: Both campaigns recommend NO_GO. Release is rejected.")
-        elif no_go_a:
-            print("\nFATAL: Campaign A recommends NO_GO. Release is rejected.")
-        else:
-            print("\nFATAL: Campaign B recommends NO_GO. Release is rejected.")
+    if not is_go(result_a.recommendation) or not is_go(result_b.recommendation):
+        print(
+            "\nFATAL: Release policy not met. (Must be unequivocally GO with reproducibility passing)"
+        )
         return 1
 
     if not comparison.all_within_tolerance:

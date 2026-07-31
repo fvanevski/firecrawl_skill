@@ -28,6 +28,7 @@ except ModuleNotFoundError:  # Loaded as scripts.model_gateway from the reposito
 
 DEFAULT_LOCAL_URL = "http://192.168.4.115:8002/v1"
 MAX_RAW_EXCERPT = 4096
+LENGTH_FINISH_REASONS = frozenset({"length", "max_tokens", "MAX_TOKENS"})
 
 
 def estimate_tokens(value) -> int:
@@ -48,9 +49,9 @@ def _json_content(raw):
             "finish_reason": choices[0].get("finish_reason"),
             "stop_reason": choices[0].get("stop_reason"),
             "refusal": message.get("refusal"),
-            "reasoning_excerpt": _redact(message.get("reasoning", ""))[
-                :MAX_RAW_EXCERPT
-            ],
+            "reasoning_excerpt": _redact(
+                message.get("reasoning") or message.get("reasoning_content") or ""
+            )[:MAX_RAW_EXCERPT],
         }
     if raw.get("output_text") is not None:
         return raw.get("output_text"), {"finish_reason": raw.get("status")}
@@ -86,16 +87,25 @@ def provider_config(provider, model=None):
         return {
             "base_url": os.environ.get(
                 "FIRECRAWL_LLM_LOCAL_BASE_URL",
-                os.environ.get("FIRECRAWL_AUDIT_LOCAL_BASE_URL", DEFAULT_LOCAL_URL),
+                os.environ.get(
+                    "GENERATIVE_URL",
+                    os.environ.get("FIRECRAWL_AUDIT_LOCAL_BASE_URL", DEFAULT_LOCAL_URL),
+                ),
             ).rstrip("/"),
             "model": model
             or os.environ.get(
                 "FIRECRAWL_LLM_LOCAL_MODEL",
-                os.environ.get("FIRECRAWL_AUDIT_LOCAL_MODEL", "chat"),
+                os.environ.get(
+                    "GENERATIVE_MODEL",
+                    os.environ.get("FIRECRAWL_AUDIT_LOCAL_MODEL", "chat"),
+                ),
             ),
             "api_key": os.environ.get(
                 "FIRECRAWL_LLM_LOCAL_API_KEY",
-                os.environ.get("FIRECRAWL_AUDIT_LOCAL_API_KEY", ""),
+                os.environ.get(
+                    "GENERATIVE_API_KEY",
+                    os.environ.get("FIRECRAWL_AUDIT_LOCAL_API_KEY", ""),
+                ),
             ),
             "api_surface": "chat_completions",
         }
@@ -201,9 +211,11 @@ def call_structured(
     max_output_tokens=16384,
     timeout=120,
     max_attempts=3,
+    expand_output_on_length=True,
     prompt_version="unversioned",
     semantic_persistence=None,
     semantic_context=None,
+    enable_thinking=False,
 ):
     system_prompt = _redact(system_prompt)
     user_prompt = _redact(user_prompt)
@@ -239,7 +251,7 @@ def call_structured(
     last_error = ""
     for attempt_number in range(1, max_attempts + 1):
         started = time.monotonic()
-        structured_mode = "json_schema" if attempt_number == 1 else "json_object"
+        structured_mode = "json_schema"
         if config["api_surface"] == "responses":
             payload = {
                 "model": config["model"],
@@ -282,18 +294,38 @@ def call_structured(
                 if structured_mode == "json_schema"
                 else {"type": "json_object"}
             )
-            repair = (
-                (
-                    "\nRepair the prior response. Return only one JSON object matching this exact schema:\n"
-                    + json.dumps(schema, sort_keys=True)
+            repair = ""
+            if attempt_number > 1:
+                prior = attempts[-1] if attempts else {}
+                prior_errors = (
+                    prior.get("schema_errors")
+                    or prior.get("validation_errors")
+                    or ([last_error] if last_error else [])
                 )
-                if attempt_number > 1
-                else ""
-            )
+                repair = (
+                    "\nThe previous response was invalid. Return only a JSON instance "
+                    "that satisfies the requested response schema. Do not return, copy, "
+                    "or describe the JSON Schema itself."
+                )
+                if prior_errors:
+                    repair += "\nValidation errors: " + json.dumps(
+                        list(prior_errors)[:10], sort_keys=True
+                    )
+                if prior.get("finish_reason") in LENGTH_FINISH_REASONS:
+                    repair += (
+                        "\nThe previous response reached the output limit. "
+                        "Return the smallest valid JSON instance: include only "
+                        "required array items, do not repeat identifiers, and "
+                        "omit explanatory prose outside schema fields."
+                    )
             payload = {
                 "model": config["model"],
                 "temperature": 0,
+                "seed": 0,
                 "max_tokens": output_budget,
+                "chat_template_kwargs": {
+                    "enable_thinking": bool(enable_thinking),
+                },
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt + repair},
@@ -315,6 +347,11 @@ def call_structured(
                         "attempt": attempt_number,
                         "api_surface": config["api_surface"],
                         "structured_mode": structured_mode,
+                        "thinking_enabled": (
+                            bool(enable_thinking)
+                            if config["api_surface"] == "chat_completions"
+                            else None
+                        ),
                         "latency_ms": int((time.monotonic() - started) * 1000),
                         "http_status": http_status,
                         "request_id": request_id or raw.get("id"),
@@ -340,6 +377,11 @@ def call_structured(
                 "attempt": attempt_number,
                 "api_surface": config["api_surface"],
                 "structured_mode": structured_mode,
+                "thinking_enabled": (
+                    bool(enable_thinking)
+                    if config["api_surface"] == "chat_completions"
+                    else None
+                ),
                 "latency_ms": int((time.monotonic() - started) * 1000),
                 "http_status": http_status,
                 "request_id": request_id or raw.get("id"),
@@ -368,11 +410,19 @@ def call_structured(
                     "requested_model": config["model"],
                     "returned_model": raw.get("model"),
                     "api_surface": config["api_surface"],
+                    "seed": 0 if config["api_surface"] == "chat_completions" else None,
+                    "thinking_enabled": (
+                        bool(enable_thinking)
+                        if config["api_surface"] == "chat_completions"
+                        else None
+                    ),
                     "prompt_version": prompt_version,
                     "prompt_hash": prompt_hash,
                     "input_token_estimate": estimate_tokens(
                         system_prompt + user_prompt
                     ),
+                    "max_output_tokens": max_output_tokens,
+                    "expand_output_on_length": bool(expand_output_on_length),
                     "capability_probe": capability,
                     "attempt_count": attempt_number,
                     "usage": attempt["usage"],
@@ -411,12 +461,17 @@ def call_structured(
                 else "model output failed schema validation: "
                 + "; ".join(validation_errors[:5])
             )
-            if envelope.get("finish_reason") in {
-                "length",
-                "max_tokens",
-                "MAX_TOKENS",
-            } or (not content and envelope.get("reasoning_excerpt")):
-                output_budget = min(output_budget * 2, 32768)
+            hit_output_limit = envelope.get(
+                "finish_reason"
+            ) in LENGTH_FINISH_REASONS or (
+                not content and envelope.get("reasoning_excerpt")
+            )
+            if hit_output_limit:
+                last_error = (
+                    f"model output reached the {output_budget}-token output limit"
+                )
+                if expand_output_on_length:
+                    output_budget = min(output_budget * 2, 32768)
         except (RuntimeError, URLError, TimeoutError, ValueError) as exc:
             last_error = f"{type(exc).__name__}: {exc}"
             attempts.append(
@@ -424,6 +479,11 @@ def call_structured(
                     "attempt": attempt_number,
                     "api_surface": config["api_surface"],
                     "structured_mode": structured_mode,
+                    "thinking_enabled": (
+                        bool(enable_thinking)
+                        if config["api_surface"] == "chat_completions"
+                        else None
+                    ),
                     "latency_ms": int((time.monotonic() - started) * 1000),
                     "error": _redact(last_error)[:MAX_RAW_EXCERPT],
                 }
@@ -433,10 +493,18 @@ def call_structured(
         "endpoint_alias": "local" if provider == "local" else provider,
         "requested_model": config["model"],
         "api_surface": config["api_surface"],
+        "seed": 0 if config["api_surface"] == "chat_completions" else None,
+        "thinking_enabled": (
+            bool(enable_thinking)
+            if config["api_surface"] == "chat_completions"
+            else None
+        ),
         "prompt_version": prompt_version,
         "prompt_hash": prompt_hash,
         "capability_probe": capability,
         "input_token_estimate": estimate_tokens(system_prompt + user_prompt),
+        "max_output_tokens": max_output_tokens,
+        "expand_output_on_length": bool(expand_output_on_length),
         "attempt_count": len(attempts),
         "fallback": {
             "used": bool(context.get("fallback_from_call_id")),

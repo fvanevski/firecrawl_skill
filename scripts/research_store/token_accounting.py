@@ -76,6 +76,14 @@ def extract_endpoint_usage(
         A TokenAccounting with source="endpoint" when usage is found,
         or source="unavailable" when not.
     """
+    if response_metadata.get("not_invoked") is True:
+        return TokenAccounting(
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            source="not_invoked",
+        )
+
     # Look for usage in response_metadata directly.
     usage = (
         response_metadata.get("usage") if isinstance(response_metadata, dict) else None

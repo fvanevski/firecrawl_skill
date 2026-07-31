@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import os
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -39,6 +41,11 @@ TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
+
+
+def _now_iso():
+    """Return current UTC time as an ISO-8601 string compatible with timestamptz."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 @pytest.fixture(scope="session")
@@ -365,6 +372,7 @@ class TestRunScopedCacheIsolation:
         reproducible from their own event sets.  Unrelated prior cache
         records cannot alter a benchmark run's metric.
         """
+        import time
         from uuid import uuid4
 
         from research_store.release_benchmark import (
@@ -431,7 +439,6 @@ class TestRunScopedCacheIsolation:
 
         # Also insert global semantic_cache entries that should NOT affect
         # either run in strict mode.
-        import time
 
         with telemetry_connection.cursor() as cur:
             cur.execute(
@@ -486,6 +493,7 @@ class TestRunScopedCacheIsolation:
         Issue #159: when there are no scoped lookups for a run, the cache
         metric must be UNAVAILABLE — not a borrowed global ratio.
         """
+        import time
         from uuid import uuid4
 
         from research_store.release_benchmark import (
@@ -497,7 +505,6 @@ class TestRunScopedCacheIsolation:
         run_id = uuid4()
 
         # Insert global cache entries but NO run-scoped events.
-        import time
 
         with telemetry_connection.cursor() as cur:
             cur.execute(
@@ -542,6 +549,7 @@ class TestRunScopedCacheIsolation:
         Issue #159: unrelated prior cache records cannot alter a benchmark
         run's metric.
         """
+        import time
         from uuid import uuid4
 
         from research_store.release_benchmark import (
@@ -553,7 +561,6 @@ class TestRunScopedCacheIsolation:
         run_id = uuid4()
 
         # Insert many global cache entries with various statuses.
-        import time
 
         with telemetry_connection.cursor() as cur:
             for i in range(20):
@@ -1078,3 +1085,629 @@ class TestNoSamplesInExistingTables:
         assert gpu_metric.status == MetricStatus.UNAVAILABLE
         # Formula references NVML or "NVML not available" depending on hardware.
         assert "nvml" in gpu_metric.formula.lower()
+
+
+# ---------------------------------------------------------------------------
+# Telemetry completeness checks — issue #170 (item C)
+# ---------------------------------------------------------------------------
+
+
+class TestTokenCompleteness:
+    """Tests for token telemetry completeness (issue #170, item C)."""
+
+    def test_token_complete_when_all_calls_have_usage_records(
+        self, telemetry_connection
+    ):
+        """When every semantic call has a matching endpoint_usage_record,
+        token status should be MEASURED."""
+        from uuid import uuid4
+
+        from research_domain.models import EndpointUsageRecord
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+        call_id_1 = uuid4()
+        call_id_2 = uuid4()
+
+        # Create a research run row.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        # Create semantic calls.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO semantic_calls (id, run_id, stage, provider,
+                   model, prompt_version, input_sha256, request, status,
+                   idempotency_key, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s),
+                          (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(call_id_1),
+                    str(run_id),
+                    "draft",
+                    "openai",
+                    "gpt-4",
+                    "v1",
+                    "0" * 64,
+                    "{}",
+                    "complete",
+                    f"idem-{call_id_1}",
+                    _now_iso(),
+                    str(call_id_2),
+                    str(run_id),
+                    "draft",
+                    "openai",
+                    "gpt-4",
+                    "v1",
+                    "0" * 64,
+                    "{}",
+                    "complete",
+                    f"idem-{call_id_2}",
+                    _now_iso(),
+                ),
+            )
+        telemetry_connection.commit()
+
+        # Create matching endpoint usage records.
+        svc = PerformanceTelemetryService(telemetry_connection)
+        for cid in (call_id_1, call_id_2):
+            svc.record_endpoint_usage(
+                EndpointUsageRecord(
+                    run_id=str(run_id),
+                    call_id=str(cid),
+                    endpoint_type="generative",
+                    provider="openai",
+                    model="gpt-4",
+                    total_tokens=100,
+                    source="endpoint",
+                )
+            )
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(strict=True)
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        token_metric = next(m for m in metrics if m.name == "total_tokens")
+        assert token_metric.status == MetricStatus.MEASURED
+
+    def test_token_incomplete_when_calls_lack_usage_records(self, telemetry_connection):
+        """When semantic calls exist without matching endpoint_usage_records,
+        token status should be INCOMPLETE."""
+        from uuid import uuid4
+
+        from research_domain.models import EndpointUsageRecord
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+        call_id_1 = uuid4()
+        call_id_2 = uuid4()
+
+        # Create a research run row.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        # Create two semantic calls but only one usage record.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO semantic_calls (id, run_id, stage, provider,
+                   model, prompt_version, input_sha256, request, status,
+                   idempotency_key, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s),
+                          (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(call_id_1),
+                    str(run_id),
+                    "draft",
+                    "openai",
+                    "gpt-4",
+                    "v1",
+                    "0" * 64,
+                    "{}",
+                    "complete",
+                    f"idem-{call_id_1}",
+                    _now_iso(),
+                    str(call_id_2),
+                    str(run_id),
+                    "draft",
+                    "openai",
+                    "gpt-4",
+                    "v1",
+                    "0" * 64,
+                    "{}",
+                    "complete",
+                    f"idem-{call_id_2}",
+                    _now_iso(),
+                ),
+            )
+        telemetry_connection.commit()
+
+        # Only one usage record.
+        svc = PerformanceTelemetryService(telemetry_connection)
+        svc.record_endpoint_usage(
+            EndpointUsageRecord(
+                run_id=str(run_id),
+                call_id=str(call_id_1),
+                endpoint_type="generative",
+                provider="openai",
+                model="gpt-4",
+                total_tokens=100,
+                source="endpoint",
+            )
+        )
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(strict=True)
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        token_metric = next(m for m in metrics if m.name == "total_tokens")
+        assert token_metric.status == MetricStatus.INCOMPLETE
+        assert "uncovered" in token_metric.formula.lower()
+
+
+class TestEmbeddingCompleteness:
+    """Tests for embedding telemetry completeness (issue #170, item C)."""
+
+    def test_embedding_complete(self, telemetry_connection):
+        """When all invariants hold, embedding status should be MEASURED."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Create a research run row.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        # Record embedding throughput with all invariants satisfied.
+        svc = PerformanceTelemetryService(telemetry_connection)
+        svc.record_embedding_throughput(
+            run_id=run_id,
+            stage="indexing",
+            batch_count=2,
+            vector_count=100,
+            failed_count=0,
+            total_texts=100,
+            elapsed_seconds=5.0,
+            endpoint_url="http://localhost:8002/embed",
+            endpoint_model="text-embedding-3-small",
+            dimension=1536,
+        )
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(strict=True)
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        emb_metric = next(m for m in metrics if m.name == "embedding_throughput")
+        assert emb_metric.status == MetricStatus.MEASURED
+
+    def test_embedding_incomplete_with_failures(self, telemetry_connection):
+        """When failed_count > 0, embedding status should be INCOMPLETE."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        # Create a research run row.
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        svc = PerformanceTelemetryService(telemetry_connection)
+        svc.record_embedding_throughput(
+            run_id=run_id,
+            stage="indexing",
+            batch_count=2,
+            vector_count=90,
+            failed_count=1,
+            total_texts=100,
+            elapsed_seconds=5.0,
+            endpoint_url="http://localhost:8002/embed",
+            endpoint_model="text-embedding-3-small",
+            dimension=1536,
+        )
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(strict=True)
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        emb_metric = next(m for m in metrics if m.name == "embedding_throughput")
+        assert emb_metric.status == MetricStatus.INCOMPLETE
+
+    def test_embedding_incomplete_text_vector_mismatch(self, telemetry_connection):
+        """When total_texts != vector_count, embedding status should be INCOMPLETE."""
+        from uuid import uuid4
+
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        svc = PerformanceTelemetryService(telemetry_connection)
+        svc.record_embedding_throughput(
+            run_id=run_id,
+            stage="indexing",
+            batch_count=2,
+            vector_count=95,
+            failed_count=0,
+            total_texts=100,
+            elapsed_seconds=5.0,
+            endpoint_url="http://localhost:8002/embed",
+            endpoint_model="text-embedding-3-small",
+            dimension=1536,
+        )
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(strict=True)
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        emb_metric = next(m for m in metrics if m.name == "embedding_throughput")
+        assert emb_metric.status == MetricStatus.INCOMPLETE
+
+
+class TestResourceCompleteness:
+    """Tests for resource sample completeness (issue #170, item C)."""
+
+    def test_resource_complete_with_window_metadata(self, telemetry_connection):
+        """When resource samples have window metadata, status should be MEASURED."""
+        from uuid import uuid4
+
+        from research_domain.models import ResourceSample
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        svc = PerformanceTelemetryService(telemetry_connection)
+        sample = ResourceSample(
+            run_id=str(run_id),
+            device_type="cpu",
+            device_index=0,
+            sample_type="cpu_percent",
+            value=45.0,
+            sample_at="2026-07-30T12:00:00+00:00",
+            collector="psutil",
+            sample_number=0,
+            status="measured",
+            window_start="2026-07-30T11:59:00+00:00",
+            window_end="2026-07-30T12:00:00+00:00",
+            sampling_interval_seconds=1.0,
+        )
+        svc.record_resource_sample(sample)
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(strict=True)
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cpu_metric = next(m for m in metrics if m.name == "cpu_percent")
+        assert cpu_metric.status == MetricStatus.MEASURED
+
+    def test_resource_incomplete_without_window_metadata(self, telemetry_connection):
+        """When resource samples lack window metadata, status should be INCOMPLETE."""
+        from uuid import uuid4
+
+        from research_domain.models import ResourceSample
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+
+        run_id = uuid4()
+
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs (id, original_request, status,
+                   state, execution_mode, objective, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    str(run_id),
+                    "Test",
+                    "running",
+                    "created",
+                    "agent_led",
+                    "Test",
+                    f"test_{uuid4().hex[:8]}",
+                ),
+            )
+        telemetry_connection.commit()
+
+        svc = PerformanceTelemetryService(telemetry_connection)
+        sample = ResourceSample(
+            run_id=str(run_id),
+            device_type="cpu",
+            device_index=0,
+            sample_type="cpu_percent",
+            value=45.0,
+            sample_at="2026-07-30T12:00:00+00:00",
+            collector="psutil",
+            sample_number=0,
+            status="measured",
+            # No window metadata.
+        )
+        svc.record_resource_sample(sample)
+        telemetry_connection.commit()
+
+        # Build summary to populate run_performance_telemetry.
+        svc.build_summary(run_id)
+        telemetry_connection.commit()
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(strict=True)
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cpu_metric = next(m for m in metrics if m.name == "cpu_percent")
+        assert cpu_metric.status == MetricStatus.INCOMPLETE
+
+        engine = MetricEngine(TEST_DSN)
+        engine._connection = telemetry_connection
+        engine.config = ReleaseBenchmarkConfig(strict=True)
+
+        _, metrics = engine.extract_performance_metrics(run_id, 0)
+        cpu_metric = next(m for m in metrics if m.name == "cpu_percent")
+        assert cpu_metric.status == MetricStatus.INCOMPLETE
+
+
+class TestOverlappingCampaignCacheIsolation:
+    """Campaign timestamps and shared keys cannot weaken exact run isolation."""
+
+    def test_overlapping_events_remain_exactly_run_scoped(
+        self,
+        telemetry_connection,
+    ):
+        from research_store.release_benchmark import (
+            MetricEngine,
+            MetricStatus,
+            ReleaseBenchmarkConfig,
+        )
+        from research_store.telemetry_service import PerformanceTelemetryService
+
+        run_a = uuid4()
+        run_b = uuid4()
+        with telemetry_connection.cursor() as cur:
+            for run_id, suffix in ((run_a, "a"), (run_b, "b")):
+                cur.execute(
+                    """INSERT INTO research_runs (
+                           id, original_request, status, state,
+                           execution_mode, objective, external_run_id
+                       ) VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        str(run_id),
+                        "Overlapping cache isolation",
+                        "running",
+                        "created",
+                        "agent_led",
+                        "Overlapping cache isolation",
+                        f"test_overlap_{suffix}_{uuid4().hex[:8]}",
+                    ),
+                )
+        telemetry_connection.commit()
+
+        telemetry = PerformanceTelemetryService(telemetry_connection)
+        for _ in range(2):
+            telemetry.record_cache_event(
+                run_a,
+                "draft",
+                "lookup",
+                "shared-key",
+                "shared-fingerprint",
+                True,
+            )
+            telemetry.record_cache_event(
+                run_b,
+                "draft",
+                "lookup",
+                "shared-key",
+                "shared-fingerprint",
+                False,
+            )
+        telemetry_connection.commit()
+
+        overlap = datetime(2026, 7, 30, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """UPDATE run_cache_events
+                   SET created_at = %s
+                   WHERE run_id IN (%s, %s)""",
+                (overlap, str(run_a), str(run_b)),
+            )
+        telemetry_connection.commit()
+
+        telemetry.build_summary(run_a)
+        telemetry.build_summary(run_b)
+        telemetry_connection.commit()
+
+        engine = MetricEngine(
+            TEST_DSN,
+            config=ReleaseBenchmarkConfig(
+                database_url=TEST_DSN,
+                blob_root=Path("/tmp"),
+                strict=True,
+            ),
+        )
+        engine._connection = telemetry_connection
+        _, metrics_a = engine.extract_performance_metrics(run_a, time.monotonic())
+        _, metrics_b = engine.extract_performance_metrics(run_b, time.monotonic())
+        cache_a = next(
+            metric for metric in metrics_a if metric.name == "cache_hit_rate"
+        )
+        cache_b = next(
+            metric for metric in metrics_b if metric.name == "cache_hit_rate"
+        )
+
+        assert cache_a.status == MetricStatus.MEASURED
+        assert cache_b.status == MetricStatus.MEASURED
+        assert cache_a.value == 1.0
+        assert cache_b.value == 0.0
+        assert set(cache_a.source.event_ids).isdisjoint(cache_b.source.event_ids)
+
+        with telemetry_connection.cursor() as cur:
+            cur.execute(
+                """SELECT id::text
+                   FROM run_cache_events
+                   WHERE run_id = %s AND event_type = 'lookup'
+                   ORDER BY id""",
+                (str(run_a),),
+            )
+            db_a = {row[0] for row in cur.fetchall()}
+            cur.execute(
+                """SELECT id::text
+                   FROM run_cache_events
+                   WHERE run_id = %s AND event_type = 'lookup'
+                   ORDER BY id""",
+                (str(run_b),),
+            )
+            db_b = {row[0] for row in cur.fetchall()}
+
+        assert set(cache_a.source.event_ids) == db_a
+        assert set(cache_b.source.event_ids) == db_b
+        assert db_a.isdisjoint(db_b)

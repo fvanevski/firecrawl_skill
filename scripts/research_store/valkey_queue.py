@@ -45,18 +45,51 @@ class ValkeyQueue:
         except Exception:  # noqa: BLE001
             return False
 
-    def wait(self, timeout_seconds: float = 5.0) -> bool:
-        """Wait for at most a finite interval and then return to PostgreSQL."""
+    def pop(self, timeout_seconds: float = 5.0) -> UUID | None:
+        """Pop and decode one exact wakeup token from this queue namespace."""
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         try:
             client = self._redis()
             if client is None:
-                return False
-            # redis-py accepts float timeouts on current Redis/Valkey servers.
-            return client.blpop(self.wakeup_key, timeout=timeout_seconds) is not None
+                return None
+            result = client.blpop(self.wakeup_key, timeout=timeout_seconds)
+            if result is None:
+                return None
+            raw = result[1]
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            return UUID(str(raw))
+        except Exception:  # noqa: BLE001
+            return None
+
+    def wait(self, timeout_seconds: float = 5.0) -> bool:
+        """Wait for at most a finite interval and then return to PostgreSQL."""
+        return self.pop(timeout_seconds) is not None
+
+    def round_trip(self, job_id: UUID, timeout_seconds: float = 5.0) -> UUID | None:
+        """Push and pop one exact token, suitable for isolated preflight keys."""
+        if not self.notify(job_id):
+            return None
+        return self.pop(timeout_seconds)
+
+    def clear(self) -> bool:
+        """Delete this namespace's wakeup key without touching other queues."""
+        try:
+            client = self._redis()
+            return bool(client is not None and client.delete(self.wakeup_key))
         except Exception:  # noqa: BLE001
             return False
+
+    def discard(self, job_id: UUID) -> int:
+        """Remove one exact wakeup token without consuming unrelated work."""
+        try:
+            client = self._redis()
+            if client is None:
+                return 0
+            return int(client.lrem(self.wakeup_key, 0, str(job_id)))
+        except Exception:  # noqa: BLE001
+            return 0
 
     def prune_cache(self):
         client = self._redis()

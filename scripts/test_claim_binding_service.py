@@ -23,6 +23,8 @@ class MockEvidenceService:
 
 
 class MockSemanticCallService:
+    host_artifact_supplier = None
+
     def __init__(self):
         pass
 
@@ -37,7 +39,10 @@ class MockSemanticCallService:
             class runs:
                 @staticmethod
                 def get_run_status(run_id):
-                    return {"lifecycle_revision": 1, "execution_mode": "agent_led"}
+                    return {
+                        "lifecycle_revision": 1,
+                        "execution_mode": "autonomous_local",
+                    }
 
         return MockUOW()
 
@@ -119,6 +124,49 @@ def test_evaluate_claims_success(service, mock_packet, monkeypatch):
     assert persisted.claims[0].semantic_status == "supported"
 
 
+def test_evaluate_claims_preserves_required_extraction_lineage(
+    service, mock_packet, monkeypatch
+):
+    claim_id = mock_packet["claims"][0]["claim_id"]
+    passage_ids = [p["passage_id"] for p in mock_packet["passages"][:2]]
+
+    def mock_prompt(*args, **kwargs):
+        return HostArtifactResult(
+            value={
+                "evaluations": [
+                    {
+                        "claim_id": claim_id,
+                        "semantic_status": "supported",
+                        "bindings": [
+                            {
+                                "passage_ids": [passage_ids[0]],
+                                "relationship": "supports",
+                                "confidence": 0.95,
+                                "uncertainty": "none",
+                            }
+                        ],
+                    }
+                ]
+            },
+            provenance={},
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+    service.evaluate_claims(
+        run_id=UUID(mock_packet["run_id"]),
+        packet_revision=mock_packet["coverage_revision"],
+        prompt_version="v1",
+        model_name="test-model",
+        required_passage_ids_by_claim={claim_id: passage_ids},
+    )
+
+    binding = service.evidence.persisted[0].claim_evidence_bindings[0]
+    assert [str(passage_id) for passage_id in binding.passage_ids] == passage_ids
+
+
 def test_evaluate_claims_rejects_invented_claim_id(service, mock_packet, monkeypatch):
     def mock_prompt(*args, **kwargs):
         return HostArtifactResult(
@@ -186,7 +234,9 @@ def test_evaluate_claims_rejects_invented_passage_id(service, mock_packet, monke
         )
 
 
-def test_unsupported_claim_has_no_bindings(service, mock_packet, monkeypatch):
+def test_unsupported_claim_without_binding_fails_closed(
+    service, mock_packet, monkeypatch
+):
     claim_id = mock_packet["claims"][0]["claim_id"]
 
     def mock_prompt(*args, **kwargs):
@@ -208,16 +258,13 @@ def test_unsupported_claim_has_no_bindings(service, mock_packet, monkeypatch):
         "research_store.claim_binding_service.call_structured", mock_prompt
     )
 
-    service.evaluate_claims(
-        run_id=UUID(mock_packet["run_id"]),
-        packet_revision=mock_packet["coverage_revision"],
-        prompt_version="v1",
-        model_name="test-model",
-    )
-
-    persisted = service.evidence.persisted[0]
-    assert len(persisted.claim_evidence_bindings) == 0
-    assert persisted.claims[0].semantic_status == "unsupported"
+    with pytest.raises(ValueError, match="no authoritative passage binding"):
+        service.evaluate_claims(
+            run_id=UUID(mock_packet["run_id"]),
+            packet_revision=mock_packet["coverage_revision"],
+            prompt_version="v1",
+            model_name="test-model",
+        )
 
 
 def test_no_claims_returns_same_revision(service, mock_packet, monkeypatch):
@@ -260,10 +307,8 @@ def test_call_structured_error_raises_runtime_error(service, mock_packet, monkey
         )
 
 
-def test_missing_evaluations_key_produces_empty_bindings(
-    service, mock_packet, monkeypatch
-):
-    """When the model returns no evaluations key, the service produces a valid packet with no bindings."""
+def test_missing_evaluations_key_fails_closed(service, mock_packet, monkeypatch):
+    """Every packet claim must receive an authoritative evaluation."""
 
     def mock_prompt(*args, **kwargs):
         return HostArtifactResult(
@@ -276,16 +321,13 @@ def test_missing_evaluations_key_produces_empty_bindings(
         "research_store.claim_binding_service.call_structured", mock_prompt
     )
 
-    new_rev = service.evaluate_claims(
-        run_id=UUID(mock_packet["run_id"]),
-        packet_revision=mock_packet["coverage_revision"],
-        prompt_version="v1",
-        model_name="test-model",
-    )
-
-    assert new_rev == mock_packet["coverage_revision"] + 1
-    persisted = service.evidence.persisted[0]
-    assert len(persisted.claim_evidence_bindings) == 0
+    with pytest.raises(ValueError, match="must evaluate every packet claim"):
+        service.evaluate_claims(
+            run_id=UUID(mock_packet["run_id"]),
+            packet_revision=mock_packet["coverage_revision"],
+            prompt_version="v1",
+            model_name="test-model",
+        )
 
 
 def test_multiple_bindings_per_claim(service, mock_packet, monkeypatch):
@@ -351,6 +393,8 @@ def test_missing_packet_raises_value_error(mock_packet, monkeypatch):
             return 1
 
     class MockSemanticCallService:
+        host_artifact_supplier = None
+
         def uow_factory(self):
             class MockUOW:
                 def __enter__(self):
@@ -559,3 +603,58 @@ def test_evaluate_claims_integration(service, mock_packet):
     assert str(binding.passage_ids[0]) == passage_id
     assert binding.relationship == "supports"
     assert persisted.claims[0].semantic_status == "supported"
+
+
+def test_evaluate_claims_scopes_and_bounds_local_generation(
+    service, mock_packet, monkeypatch
+):
+    claim_id = mock_packet["claims"][0]["claim_id"]
+    required_passage_id = mock_packet["passages"][0]["passage_id"]
+    captured = {}
+
+    def mock_prompt(*args, **kwargs):
+        captured.update(kwargs)
+        return HostArtifactResult(
+            value={
+                "evaluations": [
+                    {
+                        "claim_id": claim_id,
+                        "semantic_status": "supported",
+                        "bindings": [
+                            {
+                                "passage_ids": [required_passage_id],
+                                "relationship": "supports",
+                                "confidence": 0.95,
+                                "uncertainty": "none",
+                            }
+                        ],
+                    }
+                ]
+            },
+            provenance={},
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+
+    service.evaluate_claims(
+        run_id=UUID(mock_packet["run_id"]),
+        packet_revision=mock_packet["coverage_revision"],
+        prompt_version="v1",
+        model_name="test-model",
+        required_passage_ids_by_claim={claim_id: [required_passage_id]},
+    )
+
+    prompt = json.loads(captured["user_prompt"])
+    assert [item["passage_id"] for item in prompt["passages"]] == [required_passage_id]
+    assert captured["max_output_tokens"] == 1024
+    assert captured["expand_output_on_length"] is False
+
+    bindings = captured["schema"]["properties"]["evaluations"]["items"]["properties"][
+        "bindings"
+    ]
+    assert bindings["maxItems"] == 1
+    assert bindings["items"]["properties"]["passage_ids"]["maxItems"] == 1
+    assert bindings["items"]["properties"]["uncertainty"]["maxLength"] == 240

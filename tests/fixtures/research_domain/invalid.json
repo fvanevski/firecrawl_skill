@@ -67,43 +67,6 @@
       "reason": "semantic uncertainty is not mechanical status"
     }
   ],
-  "benchmark-source-v1": [
-    {
-      "path": [
-        "role"
-      ],
-      "value": "invalid"
-    }
-  ],
-  "benchmark-objective-v1": [
-    {
-      "path": [
-        "id"
-      ],
-      "value": ""
-    },
-    {
-      "path": [
-        "questions"
-      ],
-      "value": []
-    }
-  ],
-  "benchmark-dataset-v1": [
-    {
-      "path": [
-        "objectives"
-      ],
-      "value": []
-    },
-    {
-      "path": [
-        "workflow_modes",
-        0
-      ],
-      "value": "invalid_mode"
-    }
-  ],
   "quality-measurement-v1": [
     {
       "path": [
@@ -259,6 +222,26 @@
         "cpu_percent"
       ],
       "value": 101.0
+    }
+  ],
+  "benchmark-source-v2": [
+    {
+      "path": [
+        "role"
+      ],
+      "value": "invalid"
+    },
+    {
+      "path": [
+        "source_class"
+      ],
+      "value": ""
+    },
+    {
+      "path": [
+        "relevance"
+      ],
+      "value": false
     }
   ]
 }

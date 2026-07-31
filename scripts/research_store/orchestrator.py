@@ -28,6 +28,9 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
+from budget_policy import DEFAULT_POLICY
+from research_domain import load_model
+
 from .acquisition_service import AcquisitionService
 from .config import StoreConfig
 from .coverage_service import CoverageService
@@ -61,6 +64,37 @@ from .terminal_decision_service import TerminalDecisionService
 
 logger = logging.getLogger(__name__)
 
+
+def _extraction_failure_class(error: object) -> str:
+    """Map durable ingest errors onto the registered extraction taxonomy."""
+    message = str(error or "").lower()
+    if "no scraped markdown" in message or "empty" in message:
+        return "empty_content"
+    if "timeout" in message or "timed out" in message:
+        return "timeout"
+    if "network" in message or "connection" in message:
+        return "network"
+    if "http" in message:
+        return "http_error"
+    if "parser" in message:
+        return "parser"
+    if "malformed" in message or "decode" in message:
+        return "malformed"
+    return "internal"
+
+
+def _minimum_authoritative_source_target(spec: dict[str, Any]) -> int:
+    """Return a substantive, policy-bounded source target for one run."""
+    requirements = list(spec.get("required_source_classes", ())) + list(
+        spec.get("corroboration_requirements", ())
+    )
+    declared = [
+        int(item.get("minimum_count", item.get("minimum_independent_sources", 0)))
+        for item in requirements
+    ]
+    return max(3, max(declared, default=0))
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator configuration
 # ---------------------------------------------------------------------------
@@ -87,6 +121,7 @@ class OrchestratorConfig:
     resume_on_conflict: bool = True
     legacy_adapter_mode: str = "authoritative"
     resource_governor: Any = None
+    host_artifact_supplier: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +334,16 @@ class CorpusReviewStage:
                 "corpus_review", f"coverage creation failed: {exc}"
             )
 
+        context["coverage_items"] = [
+            {
+                "coverage_item_id": str(item.coverage_item_id),
+                "item_type": item.item_type.value,
+                "subject_id": item.subject_id,
+                "remaining_gap": item.remaining_gap,
+            }
+            for item in items
+        ]
+
         # Create initial snapshot
         try:
             self.coverage_service.create_snapshot(
@@ -402,6 +447,24 @@ class AcquisitionStage:
 
         queries = search_plan.get("queries", [])
 
+        try:
+            budget = DEFAULT_POLICY.evaluate(
+                load_model(context["spec"]),
+                spec_revision=int(context.get(ContextKeys.SPEC_REVISION, 1)),
+                run_revision=run_revision,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return StageResult.failed(
+                "acquisition", f"could not evaluate acquisition budget: {exc}"
+            )
+        caps = budget.effective_caps
+        context["effective_resource_caps"] = caps.to_dict()
+        source_target = min(
+            caps.max_successful_extractions,
+            _minimum_authoritative_source_target(context["spec"]),
+        )
+        attempt_target = min(caps.max_extraction_attempts, source_target + 3)
+
         # Pass Strategy Queries to AcquisitionStage: In cycle 2+, extract
         # authorized queries from strategy proposals and merge with the
         # original search plan. This allows the orchestrator to execute
@@ -428,26 +491,136 @@ class AcquisitionStage:
         candidate_count = 0
         successful_urls = 0
         candidate_ids = []  # Collect actual candidate IDs for coverage events
+        raw_ingest_requests: list[dict[str, Any]] = []
+        candidate_targets: dict[str, list[str]] = context.setdefault(
+            "candidate_coverage_items", {}
+        )
+        scheduled_candidates: set[str] = context.setdefault(
+            "scheduled_candidate_ids", set()
+        )
+        executed_queries: set[str] = context.setdefault("executed_query_texts", set())
+        extraction_attempt_count = int(context.get("extraction_attempt_count", 0))
+        successful_extraction_count = int(context.get("successful_extraction_count", 0))
+        coverage_by_subject = {
+            str(item["subject_id"]): str(item["coverage_item_id"])
+            for item in context.get("coverage_items", [])
+        }
 
         for query in queries:
             query_text = query.get("query", "")
-            if not query_text:
+            if not query_text or query_text in executed_queries:
                 continue
+            if len(executed_queries) >= caps.max_search_branches:
+                break
 
             try:
                 result = self.acquisition_service.execute_search(
                     run_id,
                     query_text,
+                    backend=(
+                        "firecrawl_scrape"
+                        if query.get("facet") == "benchmark_source"
+                        else "firecrawl"
+                    ),
                     idempotency_key=f"acquire:{run_id}:{query_text}",
+                    limit=caps.results_per_branch,
                 )
+                executed_queries.add(query_text)
                 response_ids.append(str(result.search_response_id))
                 candidate_count += result.candidate_count
-                successful_urls += len(result.candidates)
-                # Collect candidate IDs for coverage events
-                for cand in result.candidates[:5]:
-                    cid = cand.get("id") or cand.get("candidate_id")
+                query_targets = [
+                    coverage_by_subject[target]
+                    for target in (
+                        list(query.get("target_question_ids", []))
+                        + list(query.get("target_claim_ids", []))
+                    )
+                    if target in coverage_by_subject
+                ]
+                if query.get("intended_source_classes"):
+                    query_targets.extend(
+                        str(item["coverage_item_id"])
+                        for item in context.get("coverage_items", [])
+                        if item.get("item_type") == "source_requirement"
+                    )
+                if query.get("freshness_requirement"):
+                    query_targets.extend(
+                        str(item["coverage_item_id"])
+                        for item in context.get("coverage_items", [])
+                        if item.get("item_type") == "freshness_requirement"
+                    )
+                query_targets = list(dict.fromkeys(query_targets))
+                for cand in result.candidates:
+                    cid = cand.get("candidate_id") or cand.get("id")
                     if cid:
-                        candidate_ids.append(str(cid))
+                        cid_str = str(cid)
+                        candidate_ids.append(cid_str)
+                        existing_targets = candidate_targets.setdefault(cid_str, [])
+                        for target in query_targets:
+                            if target not in existing_targets:
+                                existing_targets.append(target)
+
+                        if cid_str in scheduled_candidates:
+                            continue
+                        if extraction_attempt_count >= attempt_target:
+                            continue
+                        scheduled_candidates.add(cid_str)
+
+                    raw_item = cand.get("raw_item") or {}
+                    markdown = raw_item.get("markdown")
+                    metadata = raw_item.get("metadata") or {}
+                    request_metadata = {
+                        "candidate_id": str(cid) if cid else None,
+                        "candidate_occurrence_id": str(cand.get("id")),
+                        "search_response_id": str(result.search_response_id),
+                        "firecrawl": {
+                            "result_index": len(raw_ingest_requests),
+                            "scrape_id": metadata.get("scrapeId"),
+                            "source_url": metadata.get("sourceURL")
+                            or cand.get("canonical_url"),
+                            "status_code": metadata.get("statusCode"),
+                        },
+                    }
+                    if isinstance(markdown, str) and markdown.strip() and cid:
+                        if successful_extraction_count >= source_target:
+                            continue
+                        from .domain import IngestRequest
+
+                        raw_ingest_requests.append(
+                            {
+                                "request": IngestRequest(
+                                    requested_url=cand.get("canonical_url")
+                                    or cand.get("original_url"),
+                                    final_url=metadata.get("url")
+                                    or metadata.get("sourceURL")
+                                    or cand.get("canonical_url"),
+                                    content=markdown.encode("utf-8"),
+                                    normalized_content=markdown.encode("utf-8"),
+                                    mime_type="text/markdown",
+                                    title=cand.get("title"),
+                                    http_status=metadata.get("statusCode"),
+                                    firecrawl_version="cli-1.19.27",
+                                    crawl_options={
+                                        "operation": "search --scrape",
+                                        "formats": ["markdown"],
+                                    },
+                                    metadata=request_metadata,
+                                ),
+                                "metadata": request_metadata,
+                            }
+                        )
+                        successful_urls += 1
+                        successful_extraction_count += 1
+                    else:
+                        raw_ingest_requests.append(
+                            {
+                                "requested_url": cand.get("canonical_url")
+                                or cand.get("original_url")
+                                or "unknown:",
+                                "error": "Firecrawl candidate has no scraped markdown",
+                                "metadata": request_metadata,
+                            }
+                        )
+                    extraction_attempt_count += 1
             except Exception as exc:  # noqa: BLE001
                 logger.warning("acquisition query failed: %s — %s", query_text, exc)
 
@@ -459,18 +632,16 @@ class AcquisitionStage:
 
                 # Apply one event per candidate to track individual discoveries
                 # Use cycle-scoped idempotency keys and actual candidate IDs
-                # Limit to first 5 candidates per wave to avoid overwhelming the ledger
-                for i, cand_id in enumerate(candidate_ids[:5]):
-                    self.coverage_service.apply_event(
-                        run_id,
-                        "candidate_identified",
-                        item_id=None,
-                        idempotency_key=f"acquire:cand:{run_id}:w{wave_count}:{i}",
-                        payload={
-                            "candidate_id": cand_id,
-                            "candidate_count": candidate_count,
-                        },
-                    )
+                for i, cand_id in enumerate(candidate_ids):
+                    for item_id in candidate_targets.get(cand_id, []):
+                        self.coverage_service.apply_candidate_identified(
+                            run_id,
+                            UUID(item_id),
+                            candidate_id=UUID(cand_id),
+                            idempotency_key=(
+                                f"acquire:cand:{run_id}:w{wave_count}:{i}:{item_id}"
+                            ),
+                        )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("coverage update after acquisition failed: %s", exc)
 
@@ -478,9 +649,12 @@ class AcquisitionStage:
         context[ContextKeys.SEARCH_RESPONSE_IDS] = response_ids
         context[ContextKeys.CANDIDATE_COUNT] = candidate_count
         context[ContextKeys.SUCCESSFUL_URLS] = successful_urls
+        context["raw_ingest_requests"] = raw_ingest_requests
+        context["extraction_attempt_count"] = extraction_attempt_count
+        context["successful_extraction_count"] = successful_extraction_count
 
         # Transition to extraction or coverage_review
-        if candidate_count > 0:
+        if raw_ingest_requests:
             try:
                 self.run_service.transition(
                     run_id,
@@ -565,101 +739,135 @@ class ExtractionStage:
                 f"extraction stage requires extracting/coverage_review state, got {run_state}",
             )
 
-        # Extraction processes acquired content via CorpusService.
-        # This stage ingests requests into snapshots/chunks and emits extraction_attempted events.
+        raw_requests = list(context.get("raw_ingest_requests") or [])
+        if not self.corpus_service or not self.extraction_service:
+            return StageResult.failed(
+                "extraction", "authoritative corpus/extraction services unavailable"
+            )
+        if not raw_requests:
+            return StageResult.failed(
+                "extraction", "candidates contain no authoritative scraped content"
+            )
 
-        extraction_success_count = context.get(ContextKeys.EXTRACTION_SUCCESS_COUNT, 0)
-        successful_urls = context.get(ContextKeys.SUCCESSFUL_URLS, [])
+        from dataclasses import replace
 
-        # Process deep ingestion if raw ingest requests are provided in context
-        raw_requests = context.get("raw_ingest_requests")
-        if self.corpus_service and raw_requests:
-            attempt_map = {}
-            if self.extraction_service:
-                from dataclasses import replace
+        attempt_by_ordinal: dict[int, dict[str, Any]] = {}
+        for ordinal, item in enumerate(raw_requests):
+            metadata = item.get("metadata", {})
+            candidate_raw = metadata.get("candidate_id")
+            if not candidate_raw:
+                return StageResult.failed(
+                    "extraction", "extraction request is missing candidate provenance"
+                )
+            candidate_id = UUID(str(candidate_raw))
+            attempt_id = self.extraction_service.create_attempt(
+                candidate_id=candidate_id,
+                run_id=run_id,
+                method="firecrawl_main_content",
+                method_version="cli-1.19.27",
+                requested_format="markdown",
+            )
+            request = item.get("request")
+            raw_blob = normalized_blob = None
+            if request is not None:
+                raw_blob = self.extraction_service.store_raw_blob(request.content)
+                normalized = request.normalized_content or request.content
+                normalized_blob = self.extraction_service.store_normalized_blob(
+                    normalized
+                )
+                item["request"] = replace(request, extraction_attempt_id=attempt_id)
+            attempt_by_ordinal[ordinal] = {
+                "attempt_id": attempt_id,
+                "candidate_id": candidate_id,
+                "raw_blob": raw_blob,
+                "normalized_blob": normalized_blob,
+                "metadata": metadata,
+            }
 
-                for idx, req in enumerate(raw_requests):
-                    if isinstance(req, dict):
-                        meta = req.get("metadata", {})
-                        url = req.get("requested_url")
-                    else:
-                        meta = getattr(req, "metadata", {})
-                        url = getattr(req, "requested_url", None)
+        invocation_id = f"extract:{run_id}:w{context.get(ContextKeys.WAVE_COUNT, 0)}"
+        run_status = self.run_service.status(run_id=run_id)
+        if not run_status.external_id:
+            return StageResult.failed(
+                "extraction", "research run has no external ID for asset linkage"
+            )
+        try:
+            manifest = self.corpus_service.ingest_batch(
+                invocation_id=invocation_id,
+                operation="orchestration_extract",
+                requests=raw_requests,
+                research_run_external_id=run_status.external_id,
+                metadata={"run_id": str(run_id), "authority": "firecrawl-cli-1.19.27"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            return StageResult.failed(
+                "extraction", f"authoritative corpus ingestion failed: {exc}"
+            )
 
-                    candidate_id = meta.get("candidate_id")
-                    if candidate_id:
-                        try:
-                            from uuid import UUID
-
-                            cid = UUID(str(candidate_id))
-                            aid = self.extraction_service.create_attempt(
-                                candidate_id=cid, run_id=run_id
-                            )
-                            if isinstance(req, dict):
-                                req["extraction_attempt_id"] = aid
-                            else:
-                                raw_requests[idx] = replace(
-                                    req, extraction_attempt_id=aid
-                                )
-                            attempt_map[url] = aid
-                        except Exception as exc:  # noqa: BLE001
-                            logger.warning(
-                                "Failed to create extraction attempt for %s: %s",
-                                url,
-                                exc,
-                            )
-
-            try:
-                invocation_id = f"extract:{run_id}:{uuid4()}"
-                manifest = self.corpus_service.ingest_batch(
-                    invocation_id=invocation_id,
-                    operation="orchestration_extract",
-                    requests=raw_requests,
-                    research_run_external_id=str(run_id),
+        completed_assets: list[dict[str, Any]] = []
+        wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
+        targets = context.get("candidate_coverage_items", {})
+        for asset in manifest.get("assets", []):
+            ordinal = int(asset["ordinal"])
+            attempt = attempt_by_ordinal[ordinal]
+            succeeded = asset.get("status") == "complete"
+            self.extraction_service.complete_attempt(
+                attempt_id=attempt["attempt_id"],
+                exit_status="succeeded" if succeeded else "failed",
+                raw_blob=attempt["raw_blob"],
+                normalized_blob=attempt["normalized_blob"],
+                parser_used=self.config.parser_version if succeeded else None,
+                failure_class=(
+                    "none"
+                    if succeeded
+                    else _extraction_failure_class(asset.get("error"))
+                ),
+                http_status=attempt["metadata"].get("firecrawl", {}).get("status_code"),
+                backend_status=asset.get("status"),
+                error_message=asset.get("error"),
+            )
+            candidate_id = attempt["candidate_id"]
+            source_url = asset.get("requested_url")
+            for item_id in targets.get(str(candidate_id), []):
+                self.coverage_service.apply_extraction_attempted(
+                    run_id,
+                    UUID(item_id),
+                    source_url=source_url,
+                    extraction_status="success" if succeeded else "failed",
+                    idempotency_key=(
+                        f"extract:{run_id}:w{wave_count}:{candidate_id}:{item_id}"
+                    ),
+                )
+            if not succeeded:
+                continue
+            if not asset.get("snapshot_id") or not asset.get("chunk_ids"):
+                return StageResult.failed(
+                    "extraction", "complete corpus asset lacks snapshot/chunk identity"
+                )
+            self.extraction_service.select_final_attempt(
+                candidate_id=candidate_id,
+                attempt_id=attempt["attempt_id"],
+                selection_reason="authoritative Firecrawl markdown persisted",
+            )
+            authoritative_asset = {
+                **asset,
+                "candidate_id": str(candidate_id),
+                "extraction_attempt_id": str(attempt["attempt_id"]),
+            }
+            completed_assets.append(authoritative_asset)
+            for item_id in targets.get(str(candidate_id), []):
+                self.coverage_service.apply_asset_acquired(
+                    run_id,
+                    UUID(item_id),
+                    source_url=source_url,
+                    idempotency_key=(
+                        f"acquired:{run_id}:w{wave_count}:{candidate_id}:{item_id}"
+                    ),
                 )
 
-                if self.extraction_service:
-                    for asset in manifest.get("assets", []):
-                        url = asset.get("requested_url")
-                        aid = attempt_map.get(url)
-                        if aid:
-                            status = (
-                                "succeeded"
-                                if asset.get("status") == "complete"
-                                else "failed"
-                            )
-                            try:
-                                self.extraction_service.complete_attempt(
-                                    attempt_id=aid, exit_status=status
-                                )
-                                if status == "succeeded":
-                                    self.extraction_service.select_final_attempt(
-                                        attempt_id=aid
-                                    )
-                            except Exception as exc:  # noqa: BLE001
-                                logger.warning(
-                                    "Failed to complete extraction attempt %s: %s",
-                                    aid,
-                                    exc,
-                                )
-
-                completed_assets = [
-                    asset
-                    for asset in manifest.get("assets", [])
-                    if asset.get("status") == "complete"
-                ]
-                extraction_success_count = len(completed_assets)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("corpus_service ingestion batch failed: %s", exc)
-
-        if isinstance(successful_urls, int):  # noqa: SIM102
-            if extraction_success_count == 0 and successful_urls > 0:
-                extraction_success_count = successful_urls
-
+        extraction_success_count = len(completed_assets)
+        context.setdefault("extracted_assets", []).extend(completed_assets)
         context[ContextKeys.EXTRACTION_SUCCESS_COUNT] = extraction_success_count
-        context[ContextKeys.EXTRACTION_ATTEMPTS] = (
-            len(raw_requests) if raw_requests else max(1, extraction_success_count)
-        )
+        context[ContextKeys.EXTRACTION_ATTEMPTS] = len(raw_requests)
 
         # Transition to indexing if we have content, otherwise to coverage_review
         if extraction_success_count > 0:
@@ -674,27 +882,6 @@ class ExtractionStage:
                     triggering_event="run.indexing",
                     reason=f"extraction succeeded for {extraction_success_count} sources",
                 )
-                # Emit extraction_attempted events for coverage tracking
-                urls_to_mark = (
-                    successful_urls
-                    if isinstance(successful_urls, list)
-                    else [
-                        f"https://source-{i}.internal"
-                        for i in range(extraction_success_count)
-                    ]
-                )
-                wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
-                for i, url in enumerate(urls_to_mark):
-                    try:
-                        self.coverage_service.apply_event(
-                            run_id,
-                            "extraction_attempted",
-                            item_id=None,
-                            idempotency_key=f"extract:{run_id}:w{wave_count}:{i}:{url}",
-                            payload={"source_url": url, "extraction_status": "success"},
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("coverage event for extraction failed: %s", exc)
             except (RunStateError, StaleRunRevisionError) as exc:
                 return StageResult.failed("extraction", str(exc))
         else:
@@ -715,7 +902,11 @@ class ExtractionStage:
         return StageResult.ok(
             "extraction",
             f"{extraction_success_count} successful extractions",
-            details={ContextKeys.EXTRACTION_SUCCESS_COUNT: extraction_success_count},
+            details={
+                ContextKeys.EXTRACTION_SUCCESS_COUNT: extraction_success_count,
+                ContextKeys.EXTRACTION_ATTEMPTS: len(raw_requests),
+                "extracted_assets": completed_assets,
+            },
         )
 
 
@@ -752,30 +943,142 @@ class IndexingStage:
         index_build_id = str(uuid4())
         index_fingerprint = "default_vector_index"
 
-        # Execute vector indexing batch if corpus_service has index & embedder
-        if (
+        if not (
             self.corpus_service
             and getattr(self.corpus_service, "index", None)
             and getattr(self.corpus_service, "embedder", None)
         ):
-            try:
-                from .indexing import IndexWorker
+            return StageResult.failed(
+                "indexing",
+                "vector index and embedding services are required",
+            )
 
-                worker = IndexWorker(
-                    uow_factory=self.corpus_service.uow_factory,
-                    index=self.corpus_service.index,
-                    embedder=self.corpus_service.embedder,
-                    queue=getattr(self.corpus_service, "queue", None),
+        try:
+            from .indexing import IndexWorker
+
+            worker = IndexWorker(
+                uow_factory=self.corpus_service.uow_factory,
+                index=self.corpus_service.index,
+                embedder=self.corpus_service.embedder,
+                queue=getattr(self.corpus_service, "queue", None),
+            )
+            entity_ids = list(
+                dict.fromkeys(
+                    UUID(str(chunk_id))
+                    for asset in context.get("extracted_assets", [])
+                    for chunk_id in asset.get("chunk_ids", [])
                 )
-                batch_result = worker.run_batch(
-                    limit=self.corpus_service.config.embedding_batch_size
+            )
+            if not entity_ids:
+                return StageResult.failed(
+                    "indexing", "no exact-run chunks are available for indexing"
                 )
-                index_fingerprint = getattr(
-                    self.corpus_service.embedder, "fingerprint", index_fingerprint
+            batch_result = {
+                "claimed": 0,
+                "complete": 0,
+                "failed": 0,
+                "lease_lost": 0,
+                "embedding_batches": 0,
+                "embedding_texts": 0,
+                "embedding_elapsed_seconds": 0.0,
+            }
+            index_deadline = time.monotonic() + 30.0
+            while True:
+                current = worker.run_batch(
+                    limit=self.corpus_service.config.embedding_batch_size,
+                    entity_ids=entity_ids,
                 )
-                logger.info("indexing batch completed: %s", batch_result)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("vector indexing worker batch failed: %s", exc)
+                for name in batch_result:
+                    value = current.get(name, 0)
+                    if name == "embedding_elapsed_seconds":
+                        batch_result[name] += float(value)
+                    else:
+                        batch_result[name] += int(value)
+                if current.get("failed", 0) or current.get("lease_lost", 0):
+                    break
+                if current.get("claimed", 0) == 0:
+                    fingerprint = getattr(
+                        self.corpus_service.embedder,
+                        "fingerprint",
+                        index_fingerprint,
+                    )
+                    with self.corpus_service.uow_factory() as uow:
+                        indexed_count = uow.index_jobs.count_complete_manifests(
+                            entity_ids, fingerprint
+                        )
+                    if indexed_count == len(entity_ids):
+                        break
+                    if time.monotonic() >= index_deadline:
+                        break
+                    time.sleep(0.25)
+            elapsed = float(batch_result["embedding_elapsed_seconds"])
+            if batch_result.get("failed", 0) or batch_result.get("lease_lost", 0):
+                return StageResult.failed(
+                    "indexing",
+                    f"vector indexing did not complete cleanly: {batch_result}",
+                )
+            fingerprint = getattr(
+                self.corpus_service.embedder, "fingerprint", index_fingerprint
+            )
+            with self.corpus_service.uow_factory() as uow:
+                indexed_count = uow.index_jobs.count_complete_manifests(
+                    entity_ids, fingerprint
+                )
+            if indexed_count != len(entity_ids):
+                return StageResult.failed(
+                    "indexing",
+                    "exact-run index manifest count mismatch: "
+                    f"expected={len(entity_ids)} complete={indexed_count}",
+                )
+
+            measured_texts = batch_result["complete"]
+            measured_vectors = batch_result["complete"]
+            if measured_texts == 0:
+                # Reused complete manifests do not execute an embedding call.
+                # Take one exact-run, bounded embedding sample so strict
+                # throughput remains a measured observation rather than a
+                # sentinel zero or host-wide fallback.
+                sample_ids = entity_ids[: self.config.embedding_batch_size]
+                with self.corpus_service.uow_factory() as uow:
+                    records = uow.chunks.chunks_for_index(sample_ids)
+                texts = [record["text"] for record in records]
+                if not texts:
+                    return StageResult.failed(
+                        "indexing", "no exact-run texts available for telemetry"
+                    )
+                sample_started = time.monotonic()
+                vectors = self.corpus_service.embedder.batch(texts)
+                elapsed = time.monotonic() - sample_started
+                if len(vectors) != len(texts):
+                    return StageResult.failed(
+                        "indexing", "embedding telemetry sample was incomplete"
+                    )
+                batch_result["embedding_batches"] = 1
+                measured_texts = len(texts)
+                measured_vectors = len(vectors)
+            from .telemetry_service import PerformanceTelemetryService
+
+            with self.corpus_service.uow_factory() as uow:
+                PerformanceTelemetryService(uow.connection).record_embedding_throughput(
+                    run_id,
+                    "indexing",
+                    batch_count=int(batch_result["embedding_batches"]),
+                    vector_count=measured_vectors,
+                    failed_count=batch_result["failed"],
+                    total_texts=measured_texts,
+                    elapsed_seconds=elapsed,
+                    endpoint_url=self.config.embedding_url,
+                    endpoint_model=self.config.embedding_model,
+                    dimension=self.config.embedding_dimension,
+                )
+            index_fingerprint = getattr(
+                self.corpus_service.embedder, "fingerprint", index_fingerprint
+            )
+            logger.info("indexing batch completed: %s", batch_result)
+        except Exception as exc:  # noqa: BLE001
+            return StageResult.failed(
+                "indexing", f"vector indexing worker failed: {exc}"
+            )
 
         context[ContextKeys.INDEX_BUILD_ID] = index_build_id
         context[ContextKeys.INDEX_FINGERPRINT] = index_fingerprint
@@ -800,6 +1103,91 @@ class IndexingStage:
             details={
                 ContextKeys.INDEX_BUILD_ID: index_build_id,
                 ContextKeys.INDEX_FINGERPRINT: index_fingerprint,
+            },
+        )
+
+
+class EvidencePreparationStage:
+    """Create authoritative claims, bindings, and a validated packet."""
+
+    def __init__(
+        self,
+        run_service: ResearchRunService,
+        coverage_service: CoverageService,
+        config: StoreConfig,
+        corpus_service: Any | None,
+        evidence_service: Any | None = None,
+        host_artifact_supplier: Any = None,
+    ) -> None:
+        self.run_service = run_service
+        self.coverage_service = coverage_service
+        self.config = config
+        self.host_artifact_supplier = host_artifact_supplier
+        self.corpus_service = corpus_service
+        self.evidence_service = evidence_service or getattr(
+            run_service, "evidence_service", None
+        )
+
+    def execute(
+        self,
+        run_id: UUID,
+        run_revision: int,
+        coverage_revision: int | None,
+        run_state: str,
+        context: dict[str, Any],
+    ) -> StageResult:
+        if run_state != "coverage_review":
+            return StageResult.failed(
+                "evidence_preparation",
+                f"evidence preparation requires coverage_review state, got {run_state}",
+            )
+        if self.corpus_service is None:
+            return StageResult.failed(
+                "evidence_preparation", "authoritative corpus service unavailable"
+            )
+        if self.evidence_service is None:
+            return StageResult.failed(
+                "evidence_preparation", "authoritative evidence service unavailable"
+            )
+
+        from .evidence_preparation_service import (
+            EvidencePreparationError,
+            EvidencePreparationService,
+        )
+        from .semantic_service import SemanticCallService
+
+        service = EvidencePreparationService(
+            corpus_service=self.corpus_service,
+            evidence_service=self.evidence_service,
+            coverage_service=self.coverage_service,
+            semantic_service=SemanticCallService(
+                self.run_service.uow_factory,
+                host_artifact_supplier=self.host_artifact_supplier,
+            ),
+            config=self.config,
+        )
+        try:
+            prepared = service.prepare(
+                run_id=run_id,
+                run_revision=run_revision,
+                spec=context["spec"],
+                research_spec_id=UUID(str(context["spec"]["research_spec_id"])),
+                coverage_revision=coverage_revision or 1,
+                extracted_assets=context.get("extracted_assets", []),
+                coverage_items=context.get("coverage_items", []),
+            )
+        except (EvidencePreparationError, KeyError, ValueError) as exc:
+            return StageResult.failed("evidence_preparation", str(exc))
+
+        context["evidence_packet_revision"] = prepared.packet_revision
+        return StageResult.ok(
+            "evidence_preparation",
+            "authoritative EvidencePacket validated",
+            details={
+                "evidence_packet_revision": prepared.packet_revision,
+                "claim_count": prepared.claim_count,
+                "binding_count": prepared.binding_count,
+                "passage_count": prepared.passage_count,
             },
         )
 
@@ -1043,6 +1431,16 @@ class CoverageReviewStage:
                 for item in ledger.items
                 if item.status.value not in ("satisfied", "waived")
             ]
+
+        # Synthesis still requires an explicit target set for provenance. When
+        # coverage is complete, target the satisfied items that the report is
+        # authorized to synthesize rather than submitting an empty proposal.
+        if (
+            not target_items
+            and decision_type == STRATEGY_DECISION_SYNTHESIZE
+            and ledger
+        ):
+            target_items = [str(item.coverage_item_id) for item in ledger.items]
 
         if not target_items and decision_type == STRATEGY_DECISION_SEARCH:
             return None  # No targeted items to propose for search actions
@@ -1353,10 +1751,16 @@ class SynthesisStage:
         run_service: ResearchRunService,
         config: StoreConfig,
         resource_governor: Any = None,
+        evidence_service: Any | None = None,
+        host_artifact_supplier: Any = None,
     ) -> None:
         self.run_service = run_service
         self.config = config
         self._resource_governor = resource_governor
+        self.host_artifact_supplier = host_artifact_supplier
+        self._evidence_service = evidence_service or getattr(
+            run_service, "evidence_service", None
+        )
 
     def execute(
         self,
@@ -1371,6 +1775,10 @@ class SynthesisStage:
                 "synthesis",
                 f"synthesis stage requires synthesizing state, got {run_state}",
             )
+        if self._evidence_service is None:
+            return StageResult.failed(
+                "synthesis", "authoritative evidence service unavailable"
+            )
 
         # Build the ReportService.
         from .report_service import (
@@ -1380,21 +1788,28 @@ class SynthesisStage:
         )
         from .semantic_service import SemanticCallService
 
-        semantic_service = SemanticCallService(self.run_service.uow_factory)
+        semantic_service = SemanticCallService(
+            self.run_service.uow_factory,
+            host_artifact_supplier=self.host_artifact_supplier,
+        )
         report_service = LocalSynthesisService(
             semantic_service=semantic_service,
-            evidence_service=self.run_service.evidence_service,
+            evidence_service=self._evidence_service,
             config=self.config,
             resource_governor=self._resource_governor,
         )
 
         # Run the bounded synthesis pipeline.
-        packet_revision = coverage_revision or 1
+        packet_revision = context.get("evidence_packet_revision")
+        if not isinstance(packet_revision, int) or packet_revision < 1:
+            return StageResult.failed(
+                "synthesis", "validated EvidencePacket revision is unavailable"
+            )
         try:
             summary = report_service.run_synthesis(
                 run_id=run_id,
                 packet_revision=packet_revision,
-                model_name=self.config.embedding_model,
+                model_name=self.config.generative_model,
             )
         except CommercialFallbackError as exc:
             return StageResult.failed("synthesis", str(exc))
@@ -1566,6 +1981,7 @@ class ResearchOrchestrator:
         terminal_service: TerminalDecisionService | None = None,
         orchestrator_config: OrchestratorConfig | None = None,
         extraction_service: Any | None = None,
+        evidence_service: Any | None = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
@@ -1595,6 +2011,14 @@ class ResearchOrchestrator:
         self._indexing = IndexingStage(
             run_service, config, corpus_service=corpus_service
         )
+        self._evidence_preparation = EvidencePreparationStage(
+            run_service,
+            coverage_service,
+            config,
+            corpus_service,
+            evidence_service=evidence_service,
+            host_artifact_supplier=self.orchestrator_config.host_artifact_supplier,
+        )
         self._coverage_review = CoverageReviewStage(
             run_service, coverage_service, strategy_service, config
         )
@@ -1603,6 +2027,8 @@ class ResearchOrchestrator:
             run_service,
             config,
             resource_governor=self.orchestrator_config.resource_governor,
+            evidence_service=evidence_service,
+            host_artifact_supplier=self.orchestrator_config.host_artifact_supplier,
         )
         self._terminal = TerminalStage(run_service)
 
@@ -1613,6 +2039,7 @@ class ResearchOrchestrator:
             "acquisition": self._acquisition,
             "extraction": self._extraction,
             "indexing": self._indexing,
+            "evidence_preparation": self._evidence_preparation,
             "coverage_review": self._coverage_review,
             "next_action": self._next_action,
             "synthesis": self._synthesis,
@@ -1642,6 +2069,7 @@ class ResearchOrchestrator:
         """
         from .container import (
             build_acquisition_service,
+            build_evidence_service,
             build_run_service,
             build_service,
             build_strategy_service,
@@ -1686,6 +2114,7 @@ class ResearchOrchestrator:
 
         # B5: Build terminal-decision persistence service
         terminal_service = TerminalDecisionService(run_service.uow_factory)
+        evidence_service = build_evidence_service(config)
 
         return cls(
             run_service=run_service,
@@ -1699,6 +2128,7 @@ class ResearchOrchestrator:
             terminal_service=terminal_service,
             orchestrator_config=orchestrator_config,
             extraction_service=extraction_service,
+            evidence_service=evidence_service,
         )
 
     # ------------------------------------------------------------------
@@ -1852,7 +2282,6 @@ class ResearchOrchestrator:
                     )
                     if result.error:
                         return self._failed_result(run_id, result.error)
-
                     run_status = self.run_service.status(run_id=run_id)
                     current_revision = run_status.lifecycle_revision
                     current_state = run_status.state
@@ -1869,26 +2298,38 @@ class ResearchOrchestrator:
                     )
                     if result.error:
                         return self._failed_result(run_id, result.error)
+                    indexing_result = result
 
                     # Fix: Update revision dynamically after stage transition
                     run_status = self.run_service.status(run_id=run_id)
                     current_revision = run_status.lifecycle_revision
                     current_state = run_status.state
 
+                    result = self._execute_stage(
+                        "evidence_preparation",
+                        run_id,
+                        current_revision,
+                        coverage_revision_num,
+                        current_state,
+                        ctx,
+                    )
+                    if result.error:
+                        return self._failed_result(run_id, result.error)
+
                     # Track new assets from indexing stage (successful URLs)
-                    if result.details and result.details.get(
+                    if indexing_result.details and indexing_result.details.get(
                         ContextKeys.SUCCESSFUL_URLS
                     ):
-                        ctx["_new_asset_count"] = result.details.get(
+                        ctx["_new_asset_count"] = indexing_result.details.get(
                             ContextKeys.SUCCESSFUL_URLS, 0
                         )
 
                     # Accumulate extraction failure and retrieval counts from indexing
-                    if result.details:
-                        attempts = result.details.get(
+                    if indexing_result.details:
+                        attempts = indexing_result.details.get(
                             ContextKeys.EXTRACTION_ATTEMPTS, 0
                         )
-                        success = result.details.get(
+                        success = indexing_result.details.get(
                             ContextKeys.EXTRACTION_SUCCESS_COUNT, 0
                         )
                         if isinstance(attempts, int) and isinstance(success, int):
@@ -1896,7 +2337,9 @@ class ResearchOrchestrator:
                                 _repeated_extraction_failures,
                                 attempts - success,
                             )
-                        retrieval = result.details.get(ContextKeys.RETRIEVAL_COUNT, 0)
+                        retrieval = indexing_result.details.get(
+                            ContextKeys.RETRIEVAL_COUNT, 0
+                        )
                         if isinstance(retrieval, int):
                             _repeated_retrieval_count = max(
                                 _repeated_retrieval_count, retrieval
@@ -2134,6 +2577,11 @@ class ResearchOrchestrator:
             # Compatibility export
             if self.legacy_adapter:
                 try:
+                    authoritative_status = self.run_service.status(run_id=run_id)
+                    if not authoritative_status.external_id:
+                        raise RuntimeError(
+                            "authoritative run has no external run identifier"
+                        )
                     self.legacy_adapter.route(
                         "fsearch_smart",
                         {
@@ -2147,7 +2595,7 @@ class ResearchOrchestrator:
                                 "wave_count": wave_count,
                             },
                         },
-                        external_run_id=str(run_id),
+                        external_run_id=authoritative_status.external_id,
                         idempotency_key=f"legacy:complete:{run_id}",
                         service_proposal={
                             "coverage_led": True,
@@ -2360,7 +2808,26 @@ class ResearchOrchestrator:
             return None
 
     def _failed_result(self, run_id: UUID, error: str) -> OrchestratorResult:
-        """Create a failed orchestrator result."""
+        """Persist a failed lifecycle state and create the result."""
+        try:
+            status = self.run_service.status(run_id=run_id)
+            if status.state not in {"completed", "partial", "failed", "cancelled"}:
+                self.run_service.fail(
+                    run_id,
+                    expected_revision=status.lifecycle_revision,
+                    idempotency_key=f"orchestrator:failed:{run_id}:{uuid4()}",
+                    actor_type="orchestrator",
+                    actor_identifier="ResearchOrchestrator",
+                    triggering_event="run.failed",
+                    reason=error,
+                    outcome="failed",
+                    error=error,
+                )
+        except Exception:
+            logger.exception(
+                "could not persist failed run state for %s",
+                run_id,
+            )
         return OrchestratorResult(
             run_id=run_id,
             final_state="failed",

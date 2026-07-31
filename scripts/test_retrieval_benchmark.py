@@ -833,7 +833,7 @@ class TestBenchmarkConfig:
         assert config.min_dense_recall == 0.3
         assert config.min_fused_recall == 0.6
         assert config.knee_threshold == 0.1
-        assert config.benchmark_version == "benchmark-v1"
+        assert config.benchmark_version == "benchmark-v2"
         assert config.ground_truth_version == "ground-truth-v1"
 
     def test_custom_config(self):
