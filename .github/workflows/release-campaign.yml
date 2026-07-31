@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate-sha:
-        description: Exact commit SHA to validate
+        description: Exact current main SHA to validate
         required: true
         type: string
 
@@ -19,6 +19,9 @@ jobs:
     environment: release-campaign
     env:
       CANDIDATE_SHA: ${{ inputs.candidate-sha }}
+      DISPATCH_SHA: ${{ github.sha }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      DISPATCH_REF: ${{ github.ref }}
       CAMPAIGN_DIR: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
       SMOKE_DISABLE_AGENT_LED: "1"
 
@@ -29,8 +32,13 @@ jobs:
           ref: ${{ inputs.candidate-sha }}
           fetch-depth: 0
 
-      - name: Verify exact checkout and mode contract
+      - name: Verify exact-head workflow identity
+        shell: bash
         run: |
+          set -euo pipefail
+          test "$DISPATCH_REF" = "refs/heads/main"
+          test "$DISPATCH_SHA" = "$CANDIDATE_SHA"
+          test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$SMOKE_DISABLE_AGENT_LED" = "1"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
@@ -38,6 +46,7 @@ jobs:
       - name: Set up isolated Python
         shell: bash
         run: |
+          set -euo pipefail
           command -v python3.12
           python3.12 --version
           command -v uv
@@ -45,11 +54,15 @@ jobs:
           echo "$RUNNER_TEMP/release-campaign-venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r requirements-research-store.txt
 
       - name: Execute two strict campaigns
+        id: execute
+        continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           BLOB_ROOT: ${{ secrets.BLOB_ROOT }}
@@ -67,396 +80,38 @@ jobs:
           RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
           RERANKER_MODEL: ${{ vars.RERANKER_MODEL }}
           PYTHONPATH: scripts
+        shell: bash
         run: |
-          python -m research_store.strict_benchmark \
+          set -euo pipefail
+          python scripts/run_release_campaign.py \
             --candidate-sha "$CANDIDATE_SHA" \
             --campaign-dir "$CAMPAIGN_DIR"
 
       - name: Verify authoritative campaign evidence
+        id: verify
+        if: always()
+        continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PYTHONPATH: scripts
+        shell: bash
         run: |
-          python - <<'PY'
-          from __future__ import annotations
+          set -euo pipefail
+          python scripts/verify_release_campaign.py \
+            --campaign-dir "$CAMPAIGN_DIR" \
+            --database-url "$DATABASE_URL" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --dispatch-sha "$DISPATCH_SHA" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --dispatch-ref "$DISPATCH_REF" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --execution-conclusion "${{ steps.execute.outcome }}"
 
-          import hashlib
-          import json
-          import os
-          import subprocess
-          import sys
-          from pathlib import Path
-          from types import SimpleNamespace
-          from uuid import UUID
-
-          import psycopg
-
-          from research_store.release_benchmark import (
-              MANDATORY_PERFORMANCE_METRICS,
-              MANDATORY_QUALITY_METRICS,
-              ReleaseBenchmarkConfig,
-          )
-          from smoke_test import RunEvidenceInspector
-
-          root = Path(os.environ["CAMPAIGN_DIR"])
-          candidate = os.environ["CANDIDATE_SHA"]
-          dataset_path = Path("tests/fixtures/benchmark/benchmark-v2.json")
-          expected_modes = ("autonomous_local", "deterministic_debug")
-          allowed_na = {("deterministic_debug", "total_tokens")}
-          errors: list[str] = []
-
-          def load(path: Path) -> dict:
-              value = json.loads(path.read_text(encoding="utf-8"))
-              if not isinstance(value, dict):
-                  raise TypeError(f"expected JSON object: {path}")
-              return value
-
-          def sha256(path: Path) -> str:
-              digest = hashlib.sha256()
-              with path.open("rb") as handle:
-                  for block in iter(lambda: handle.read(1024 * 1024), b""):
-                      digest.update(block)
-              return digest.hexdigest()
-
-          def git(*args: str) -> str:
-              completed = subprocess.run(
-                  ["git", *args],
-                  capture_output=True,
-                  text=True,
-                  timeout=30,
-                  check=True,
-              )
-              return completed.stdout.strip()
-
-          head = git("rev-parse", "HEAD")
-          tree = git("rev-parse", "HEAD^{tree}")
-          dirty = git("status", "--porcelain=v1", "--untracked-files=all")
-          if head != candidate:
-              errors.append(f"HEAD {head} does not equal candidate {candidate}")
-          if dirty:
-              errors.append("candidate checkout is not clean")
-          if os.environ.get("SMOKE_DISABLE_AGENT_LED") != "1":
-              errors.append("agent_led environment block is not active")
-
-          dataset = load(dataset_path)
-          objectives = dataset.get("objectives")
-          objective_ids = [
-              str(item.get("id") or "")
-              for item in objectives
-              if isinstance(objectives, list) and isinstance(item, dict)
-          ]
-          if len(objective_ids) != 5 or len(set(objective_ids)) != 5:
-              errors.append(f"expected five unique objectives, got {objective_ids}")
-          expected_pairs = {
-              (mode, objective_id)
-              for mode in expected_modes
-              for objective_id in objective_ids
-          }
-          expected_checks = set(ReleaseBenchmarkConfig().integrity_checks)
-          dataset_hash = sha256(dataset_path)
-          raw_manifest_path = root / "manifest.json"
-          raw_manifest = load(raw_manifest_path)
-          if raw_manifest.get("candidate_sha") != candidate:
-              errors.append("raw manifest candidate mismatch")
-          if raw_manifest.get("tree_hash") != tree:
-              errors.append("raw manifest tree mismatch")
-          if raw_manifest.get("dataset_hash") != dataset_hash:
-              errors.append("raw manifest dataset mismatch")
-
-          inspector = RunEvidenceInspector(os.environ["DATABASE_URL"])
-          campaigns: dict[str, dict] = {}
-          all_run_ids: list[str] = []
-
-          for key, label in (("campaign_a", "A"), ("campaign_b", "B")):
-              entry = raw_manifest.get(key)
-              if not isinstance(entry, dict):
-                  errors.append(f"raw manifest lacks {key}")
-                  continue
-              result_dir = Path(str(entry.get("result_path") or ""))
-              if not result_dir.is_dir():
-                  candidates = sorted((root / label).glob("*/result.json"))
-                  if not candidates:
-                      errors.append(f"campaign {label} result is missing")
-                      continue
-                  result_dir = candidates[-1].parent
-              result_path = result_dir / "result.json"
-              environment_path = result_dir / "environment.json"
-              result = load(result_path)
-              environment = load(environment_path)
-              recommendation = result.get("recommendation")
-              outcome = (
-                  recommendation.get("outcome")
-                  if isinstance(recommendation, dict)
-                  else None
-              )
-              if outcome != "go" or entry.get("recommendation") != "go":
-                  errors.append(f"campaign {label} recommendation is not exactly go")
-              if entry.get("campaign_id") != result.get("campaign_id"):
-                  errors.append(f"campaign {label} ID mismatch")
-              if entry.get("result_hash") != sha256(result_path):
-                  errors.append(f"campaign {label} result hash mismatch")
-
-              runs = result.get("runs")
-              if not isinstance(runs, list):
-                  runs = []
-                  errors.append(f"campaign {label} runs are missing")
-              if len(runs) != 10:
-                  errors.append(f"campaign {label} expected 10 runs, got {len(runs)}")
-
-              pairs: set[tuple[str, str]] = set()
-              run_ids: list[str] = []
-              inspections: list[dict] = []
-              for run in runs:
-                  if not isinstance(run, dict):
-                      errors.append(f"campaign {label} has a non-object run")
-                      continue
-                  mode = str(run.get("mode") or "")
-                  objective_id = str(run.get("objective_id") or "")
-                  run_id = str(run.get("run_id") or "")
-                  prefix = f"campaign {label} {mode}/{objective_id}"
-                  try:
-                      UUID(run_id)
-                  except (AttributeError, TypeError, ValueError):
-                      errors.append(f"{prefix} has invalid UUID {run_id!r}")
-                  if mode not in expected_modes:
-                      errors.append(f"{prefix} uses unexpected mode")
-                  if run.get("errors") != []:
-                      errors.append(f"{prefix} contains errors: {run.get('errors')!r}")
-                  pairs.add((mode, objective_id))
-                  run_ids.append(run_id)
-
-                  for metric_key, mandatory in (
-                      ("quality_metrics", MANDATORY_QUALITY_METRICS),
-                      ("performance_metrics", MANDATORY_PERFORMANCE_METRICS),
-                  ):
-                      records = run.get(metric_key)
-                      metrics = {
-                          str(item.get("name")): item
-                          for item in records
-                          if isinstance(records, list)
-                          and isinstance(item, dict)
-                          and item.get("name")
-                      }
-                      for name in mandatory:
-                          metric = metrics.get(name)
-                          if metric is None:
-                              errors.append(f"{prefix} lacks metric {name}")
-                              continue
-                          status = str(metric.get("status") or "")
-                          if status == "not_applicable":
-                              if (mode, name) not in allowed_na:
-                                  errors.append(
-                                      f"{prefix} metric {name} is unexpectedly N/A"
-                                  )
-                          elif status != "measured" or metric.get("value") is None:
-                              errors.append(
-                                  f"{prefix} metric {name} is not measured"
-                              )
-                          source = metric.get("source")
-                          if not isinstance(source, dict):
-                              errors.append(f"{prefix} metric {name} lacks provenance")
-                          elif str(source.get("run_id") or "") != run_id:
-                              errors.append(
-                                  f"{prefix} metric {name} source run mismatch"
-                              )
-
-                  checks = run.get("integrity_checks")
-                  observed_checks = {
-                      str(item.get("check") or item.get("name")): item
-                      for item in checks
-                      if isinstance(checks, list)
-                      and isinstance(item, dict)
-                      and (item.get("check") or item.get("name"))
-                  }
-                  if set(observed_checks) != expected_checks:
-                      errors.append(f"{prefix} integrity results are incomplete")
-                  for name, item in observed_checks.items():
-                      if not item.get("passed"):
-                          errors.append(f"{prefix} integrity check failed: {name}")
-
-                  inspection = inspector.inspect(
-                      SimpleNamespace(
-                          run_id=run_id,
-                          mode=mode,
-                          objective_id=objective_id,
-                      )
-                  )
-                  inspections.append(inspection)
-                  errors.extend(
-                      f"{prefix}: {message}"
-                      for message in inspection.get("errors", [])
-                  )
-
-              if pairs != expected_pairs:
-                  errors.append(f"campaign {label} run set mismatch")
-              if len(set(run_ids)) != 10:
-                  errors.append(f"campaign {label} run UUIDs are not unique")
-              if entry.get("runs") != 10 or entry.get("run_ids") != run_ids:
-                  errors.append(f"raw manifest campaign {label} run list mismatch")
-
-              for field in (
-                  "candidate_sha",
-                  "tree_hash",
-                  "dataset_hash",
-                  "dependency_lock_hash",
-                  "firecrawl_version",
-                  "python_version",
-                  "platform",
-                  "machine",
-                  "timestamp",
-                  "GENERATIVE_MODEL",
-                  "GENERATIVE_URL",
-                  "EMBEDDING_MODEL",
-                  "EMBEDDING_URL",
-                  "RERANKER_MODEL",
-                  "RERANKER_URL",
-              ):
-                  if not str(environment.get(field) or "").strip():
-                      errors.append(f"campaign {label} environment lacks {field}")
-              if environment.get("candidate_sha") != candidate:
-                  errors.append(f"campaign {label} environment candidate mismatch")
-              if environment.get("tree_hash") != tree:
-                  errors.append(f"campaign {label} environment tree mismatch")
-              if environment.get("dataset_hash") != dataset_hash:
-                  errors.append(f"campaign {label} environment dataset mismatch")
-              if environment.get("strict") is not True:
-                  errors.append(f"campaign {label} environment is not strict")
-
-              campaigns[key] = {
-                  "campaign_id": result.get("campaign_id"),
-                  "recommendation": outcome,
-                  "run_count": len(run_ids),
-                  "run_ids": run_ids,
-                  "result_sha256": sha256(result_path),
-                  "environment_sha256": sha256(environment_path),
-                  "run_evidence": inspections,
-              }
-              all_run_ids.extend(run_ids)
-
-          if len(all_run_ids) != 20 or len(set(all_run_ids)) != 20:
-              errors.append("campaigns do not contain 20 globally unique run UUIDs")
-
-          database_runs: dict[str, dict] = {}
-          with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
-              with connection.cursor() as cursor:
-                  for run_id in all_run_ids:
-                      cursor.execute(
-                          """SELECT status, state, started_at, completed_at
-                             FROM research_runs WHERE id = %s""",
-                          (run_id,),
-                      )
-                      row = cursor.fetchone()
-                      if row is None:
-                          errors.append(f"research_runs row is missing for {run_id}")
-                          continue
-                      status = str(row[0] or "").lower()
-                      state = str(row[1] or "").lower()
-                      if row[3] is None or "completed" not in {status, state}:
-                          errors.append(
-                              f"run {run_id} is not completed: "
-                              f"status={status!r}, state={state!r}"
-                          )
-                      database_runs[run_id] = {
-                          "status": status,
-                          "state": state,
-                          "started_at": str(row[2]),
-                          "completed_at": str(row[3]),
-                      }
-
-          comparison_paths = sorted(
-              (root / "reproducibility").glob("*/comparison.json")
-          )
-          if comparison_paths:
-              comparison_path = comparison_paths[-1]
-              comparison = load(comparison_path)
-          else:
-              comparison_path = root / "reproducibility" / "missing.json"
-              comparison = {}
-              errors.append("reproducibility comparison artifact is missing")
-          if comparison.get("all_within_tolerance") is not True:
-              errors.append("reproducibility did not pass")
-          if comparison.get("details"):
-              errors.append(
-                  f"reproducibility contains failures: {comparison.get('details')}"
-              )
-          raw_reproducibility = raw_manifest.get("reproducibility")
-          if not isinstance(raw_reproducibility, dict) or (
-              raw_reproducibility.get("all_within_tolerance") is not True
-          ):
-              errors.append("raw manifest reproducibility did not pass")
-
-          evidence = {
-              "schema_version": "authoritative-release-evidence-v1",
-              "candidate_sha": candidate,
-              "tree_hash": tree,
-              "working_tree_clean": not bool(dirty),
-              "dataset_hash": dataset_hash,
-              "dataset_version": dataset.get("version"),
-              "execution_modes": list(expected_modes),
-              "agent_led": {
-                  "effective": False,
-                  "disabled_by_environment": True,
-              },
-              "objective_ids": objective_ids,
-              "expected_runs_per_campaign": 10,
-              "expected_total_runs": 20,
-              "artifact_retention_days": 90,
-              "workflow": {
-                  "repository": os.environ.get("GITHUB_REPOSITORY", ""),
-                  "run_id": os.environ.get("GITHUB_RUN_ID", ""),
-                  "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
-                  "workflow_ref": os.environ.get("GITHUB_WORKFLOW_REF", ""),
-              },
-              **campaigns,
-              "database_runs": database_runs,
-              "reproducibility": {
-                  "pass": comparison.get("all_within_tolerance") is True,
-                  "comparison_sha256": (
-                      sha256(comparison_path)
-                      if comparison_path.is_file()
-                      else None
-                  ),
-                  "policy_version": comparison.get("policy_version"),
-                  "relative_tolerance": comparison.get("relative_tolerance"),
-                  "operational_ratio_limit": comparison.get(
-                      "operational_ratio_limit"
-                  ),
-                  "observations": comparison.get("observations", []),
-              },
-              "raw_manifest_sha256": sha256(raw_manifest_path),
-              "gate": "PASS" if not errors else "FAIL",
-              "errors": errors,
-          }
-          evidence_path = root / "release-evidence-manifest.json"
-          evidence_path.write_text(
-              json.dumps(evidence, indent=2, sort_keys=True, default=str) + "\n",
-              encoding="utf-8",
-          )
-          print(
-              json.dumps(
-                  {
-                      "gate": evidence["gate"],
-                      "candidate_sha": candidate,
-                      "campaign_a": campaigns.get("campaign_a", {}).get(
-                          "campaign_id"
-                      ),
-                      "campaign_b": campaigns.get("campaign_b", {}).get(
-                          "campaign_id"
-                      ),
-                      "total_runs": len(all_run_ids),
-                      "reproducibility": evidence["reproducibility"]["pass"],
-                      "manifest": str(evidence_path),
-                      "manifest_sha256": sha256(evidence_path),
-                  },
-                  indent=2,
-              )
-          )
-          if errors:
-              print("\n".join(f"ERROR: {item}" for item in errors), file=sys.stderr)
-              raise SystemExit(1)
-          PY
-
-      - name: Upload durable campaign artifacts
+      - name: Upload complete campaign directory
+        id: upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -464,3 +119,24 @@ jobs:
           path: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
           if-no-files-found: error
           retention-days: 90
+
+      - name: Record artifact upload identity
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "artifact_id=${{ steps.upload.outputs.artifact-id }}"
+            echo "artifact_url=${{ steps.upload.outputs.artifact-url }}"
+            echo "artifact_digest=${{ steps.upload.outputs.artifact-digest }}"
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "workflow_sha=$WORKFLOW_SHA"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce authoritative gate
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ steps.execute.outcome }}" = "success"
+          test "${{ steps.verify.outcome }}" = "success"
+          test "${{ steps.upload.outcome }}" = "success"
