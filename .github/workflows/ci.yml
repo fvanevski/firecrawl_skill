@@ -108,14 +108,11 @@ jobs:
           python -m compileall -q scripts
           git diff --check
 
-      - name: Commit final source changes and remove scaffolding
+      - name: Commit and push source changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout a8a648055681583da8c39d08c79a7055146b61f3 -- .github/workflows/ci.yml
-          git rm .github/workflows/issue170-followup-fix.yml
           git add \
-            .github/workflows/ci.yml \
             docs/reduced-real-smoke.md \
             scripts/model_gateway.py \
             scripts/research_store/preflight.py \
