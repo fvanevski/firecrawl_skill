@@ -22,7 +22,6 @@ jobs:
       DISPATCH_SHA: ${{ github.sha }}
       WORKFLOW_SHA: ${{ github.workflow_sha }}
       DISPATCH_REF: ${{ github.ref }}
-      CAMPAIGN_DIR: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
       SMOKE_DISABLE_AGENT_LED: "1"
 
     steps:
@@ -42,6 +41,14 @@ jobs:
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$SMOKE_DISABLE_AGENT_LED" = "1"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Initialize campaign directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'CAMPAIGN_DIR=%s\n' \
+            "$RUNNER_TEMP/release-campaign-$CANDIDATE_SHA" \
+            >> "$GITHUB_ENV"
 
       - name: Set up isolated Python
         shell: bash
