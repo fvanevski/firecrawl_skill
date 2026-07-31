@@ -49,21 +49,7 @@ jobs:
               | sha256sum --check --strict
             python scripts/_apply_pr157_thread_fixes.py
             rm scripts/_apply_pr157_thread_fixes.py
-            python - <<'PY'
-            from pathlib import Path
-
-            path = Path('scripts/test_release_invariant_contracts.py')
-            text = path.read_text(encoding='utf-8')
-            old = 'assert recommendation.outcome.value == "no_go"'
-            if text.count(old) != 2:
-                raise SystemExit(
-                    f'expected exactly two outcome assertion fixes, found {text.count(old)}'
-                )
-            path.write_text(
-                text.replace(old, 'assert recommendation.outcome == "no_go"'),
-                encoding='utf-8',
-            )
-            PY
+            python -c 'from pathlib import Path; p=Path("scripts/test_release_invariant_contracts.py"); t=p.read_text(encoding="utf-8"); old="assert recommendation.outcome.value == \"no_go\""; n=t.count(old); assert n == 2, f"expected two outcome assertion fixes, found {n}"; p.write_text(t.replace(old, "assert recommendation.outcome == \"no_go\""), encoding="utf-8")'
             echo 'changed=true' >> "$GITHUB_OUTPUT"
           fi
 
