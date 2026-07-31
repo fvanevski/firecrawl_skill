@@ -9,94 +9,119 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def replace_required(
-    path: Path,
-    old: str,
-    new: str,
-    *,
-    expected: int | None = 1,
-) -> None:
-    text = path.read_text(encoding="utf-8")
+def replace_once(text: str, old: str, new: str, *, label: str) -> str:
     count = text.count(old)
-    if expected is not None and count != expected:
-        raise RuntimeError(
-            f"{path}: expected {expected} occurrences, found {count}: {old[:80]!r}"
-        )
-    path.write_text(text.replace(old, new), encoding="utf-8")
+    if count != 1:
+        raise RuntimeError(f"{label}: expected one match, found {count}: {old[:80]!r}")
+    return text.replace(old, new, 1)
+
+
+def class_section(text: str, name: str, next_name: str) -> tuple[int, int, str]:
+    start = text.index(f"class {name}:")
+    end = text.index(f"class {next_name}:", start)
+    return start, end, text[start:end]
+
+
+def replace_class_section(
+    text: str,
+    name: str,
+    next_name: str,
+    transform,
+) -> str:
+    start, end, section = class_section(text, name, next_name)
+    updated = transform(section)
+    return text[:start] + updated + text[end:]
 
 
 def patch_models() -> None:
-    models = ROOT / "scripts/research_domain/models.py"
-    replace_required(
-        models,
-        """    ``benchmark-source-v2`` adds an explicit ``source_class`` annotation so
+    path = ROOT / "scripts/research_domain/models.py"
+    text = path.read_text(encoding="utf-8")
+
+    def source(section: str) -> str:
+        section = replace_once(
+            section,
+            """    ``benchmark-source-v2`` adds an explicit ``source_class`` annotation so
     release source quality never infers source type from a URL or domain.
     Version 1 remains readable for historical fixtures, but cannot satisfy
     strict v2 source-quality measurement without an annotation.
 """,
-        """    ``source_class`` is mandatory so release source quality never infers
+            """    ``source_class`` is mandatory so release source quality never infers
     source type from a URL or domain.
 """,
-    )
-    replace_required(models, '    source_class: str = ""\n', '    source_class: str\n')
-    replace_required(
-        models,
-        '    SCHEMA_VERSIONS = ("benchmark-source-v1", "benchmark-source-v2")\n',
-        "",
-    )
-    replace_required(
-        models,
-        """        if self.schema_version not in self.SCHEMA_VERSIONS:
+            label="BenchmarkSource docstring",
+        )
+        section = replace_once(
+            section,
+            '    source_class: str = ""\n',
+            '    source_class: str\n',
+            label="BenchmarkSource source_class",
+        )
+        section = replace_once(
+            section,
+            '    SCHEMA_VERSIONS = ("benchmark-source-v1", "benchmark-source-v2")\n',
+            "",
+            label="BenchmarkSource versions",
+        )
+        section = replace_once(
+            section,
+            """        if self.schema_version not in self.SCHEMA_VERSIONS:
             raise ValueError(
                 f"unsupported schema_version: {self.schema_version}. "
                 f"Allowed: {self.SCHEMA_VERSIONS}"
             )
 """,
-        """        if self.schema_version != self.SCHEMA_VERSION:
+            """        if self.schema_version != self.SCHEMA_VERSION:
             raise ValueError(
                 f"unsupported schema_version: {self.schema_version}; "
                 f"expected {self.SCHEMA_VERSION}"
             )
 """,
-    )
-    replace_required(
-        models,
-        """        if self.source_class:
+            label="BenchmarkSource validator",
+        )
+        section = replace_once(
+            section,
+            """        if self.source_class:
             _text(self.source_class, "benchmark_source.source_class")
         if self.schema_version == self.SCHEMA_VERSION and not self.source_class:
             raise ValueError(
                 "benchmark-source-v2 requires a nonempty source_class annotation"
             )
 """,
-        '        _text(self.source_class, "benchmark_source.source_class")\n',
-    )
-    replace_required(
-        models,
-        '        schema_version: ``"benchmark-objective-v2"`` for the executable\n'
-        '            release objective contract. Version 1 remains readable.\n',
-        '        schema_version: ``"benchmark-objective-v2"``.\n',
-    )
-    replace_required(
-        models,
-        '    SCHEMA_VERSIONS = ("benchmark-objective-v1", "benchmark-objective-v2")\n',
-        "",
-    )
-    replace_required(
-        models,
-        """        if self.schema_version not in self.SCHEMA_VERSIONS:
+            '        _text(self.source_class, "benchmark_source.source_class")\n',
+            label="BenchmarkSource class requirement",
+        )
+        return section
+
+    def objective(section: str) -> str:
+        section = replace_once(
+            section,
+            '        schema_version: ``"benchmark-objective-v2"`` for the executable\n'
+            '            release objective contract. Version 1 remains readable.\n',
+            '        schema_version: ``"benchmark-objective-v2"``.\n',
+            label="BenchmarkObjective docstring",
+        )
+        section = replace_once(
+            section,
+            '    SCHEMA_VERSIONS = ("benchmark-objective-v1", "benchmark-objective-v2")\n',
+            "",
+            label="BenchmarkObjective versions",
+        )
+        section = replace_once(
+            section,
+            """        if self.schema_version not in self.SCHEMA_VERSIONS:
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
 """,
-        """        if self.schema_version != self.SCHEMA_VERSION:
+            """        if self.schema_version != self.SCHEMA_VERSION:
             raise ValueError(
                 f"unsupported schema_version: {self.schema_version}; "
                 f"expected {self.SCHEMA_VERSION}"
             )
 """,
-        expected=2,
-    )
-    replace_required(
-        models,
-        """        if self.schema_version == self.SCHEMA_VERSION:
+            label="BenchmarkObjective validator",
+        )
+        section = replace_once(
+            section,
+            """        if self.schema_version == self.SCHEMA_VERSION:
             if not self.search_queries:
                 raise ValueError("benchmark_objective.search_queries must not be empty")
             if not self.search_query_expected_sources:
@@ -112,7 +137,7 @@ def patch_models() -> None:
                     "benchmark_objective.citation_support_labels must not be empty"
                 )
 """,
-        """        if not self.search_queries:
+            """        if not self.search_queries:
             raise ValueError("benchmark_objective.search_queries must not be empty")
         if not self.search_query_expected_sources:
             raise ValueError(
@@ -127,24 +152,50 @@ def patch_models() -> None:
                 "benchmark_objective.citation_support_labels must not be empty"
             )
 """,
-    )
-    replace_required(
-        models,
-        '        schema_version: ``"benchmark-dataset-v2"`` for the executable release\n'
-        '            contract. Version 1 remains readable.\n',
-        '        schema_version: ``"benchmark-dataset-v2"``.\n',
-    )
-    replace_required(
-        models,
-        '    SCHEMA_VERSIONS = ("benchmark-dataset-v1", "benchmark-dataset-v2")\n',
-        "",
-    )
+            label="BenchmarkObjective required data",
+        )
+        return section
+
+    def dataset(section: str) -> str:
+        section = replace_once(
+            section,
+            '        schema_version: ``"benchmark-dataset-v2"`` for the executable release\n'
+            '            contract. Version 1 remains readable.\n',
+            '        schema_version: ``"benchmark-dataset-v2"``.\n',
+            label="BenchmarkDataset docstring",
+        )
+        section = replace_once(
+            section,
+            '    SCHEMA_VERSIONS = ("benchmark-dataset-v1", "benchmark-dataset-v2")\n',
+            "",
+            label="BenchmarkDataset versions",
+        )
+        section = replace_once(
+            section,
+            """        if self.schema_version not in self.SCHEMA_VERSIONS:
+            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+""",
+            """        if self.schema_version != self.SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported schema_version: {self.schema_version}; "
+                f"expected {self.SCHEMA_VERSION}"
+            )
+""",
+            label="BenchmarkDataset validator",
+        )
+        return section
+
+    text = replace_class_section(text, "BenchmarkSource", "BenchmarkObjective", source)
+    text = replace_class_section(text, "BenchmarkObjective", "BenchmarkDataset", objective)
+    text = replace_class_section(text, "BenchmarkDataset", "QualityMeasurement", dataset)
+    path.write_text(text, encoding="utf-8")
 
 
 def patch_loader() -> None:
-    workflow = ROOT / "scripts/research_store/workflow_benchmark.py"
-    replace_required(
-        workflow,
+    path = ROOT / "scripts/research_store/workflow_benchmark.py"
+    text = path.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
         """    def build_source(raw: str | dict[str, Any], *, role: str) -> BenchmarkSource:
         if isinstance(raw, dict):
             file_path = str(raw["file_path"])
@@ -175,9 +226,10 @@ def patch_loader() -> None:
         )
         return BenchmarkSource(
 """,
+        label="benchmark source loader",
     )
-    replace_required(
-        workflow,
+    text = replace_once(
+        text,
         """    if any(
         source.schema_version == BenchmarkSource.SCHEMA_VERSION
         for source in relevant_sources
@@ -204,12 +256,15 @@ def patch_loader() -> None:
             f"expected_source_classes: missing={missing}, undeclared={undeclared}"
         )
 """,
+        label="source class validation",
     )
-    replace_required(
-        workflow,
+    text = replace_once(
+        text,
         '        version=data.get("version", "benchmark-v1"),\n',
         '        version=data.get("version", "benchmark-v2"),\n',
+        label="dataset version default",
     )
+    path.write_text(text, encoding="utf-8")
 
 
 def rename_fixture_and_references() -> None:
@@ -286,8 +341,7 @@ def patch_domain_fixtures() -> None:
 
 def line_offsets(text: str) -> list[int]:
     offsets = [0]
-    for match in re.finditer("\n", text):
-        offsets.append(match.end())
+    offsets.extend(match.end() for match in re.finditer("\n", text))
     return offsets
 
 
@@ -402,14 +456,19 @@ def patch_test_constructors() -> None:
 
 
 def patch_reproducibility_fixture() -> None:
-    strict_test = ROOT / "scripts/test_strict_campaign.py"
-    replace_required(
-        strict_test,
-        """            all_within_tolerance=True,
+    path = ROOT / "scripts/test_strict_campaign.py"
+    text = path.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        """            quality_tolerances=(),
+            performance_tolerances=(),
+            all_within_tolerance=True,
             details=(),
         )
 """,
-        """            all_within_tolerance=True,
+        """            quality_tolerances=(),
+            performance_tolerances=(),
+            all_within_tolerance=True,
             policy_version="reproducibility-policy-v2",
             relative_tolerance=0.15,
             operational_ratio_limit=2.0,
@@ -421,8 +480,9 @@ def patch_reproducibility_fixture() -> None:
             observations=(),
         )
 """,
-        expected=1,
+        label="strict reproducibility fixture",
     )
+    path.write_text(text, encoding="utf-8")
 
 
 def delete_legacy_schemas() -> None:
