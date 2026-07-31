@@ -143,6 +143,10 @@ class ExternalProcessHostArtifactSupplier:
             raise SmokeGateError("external host supplier identity is required")
         if not source_endpoint.strip():
             raise SmokeGateError("external host supplier endpoint is required")
+        if not autonomous_endpoints:
+            raise SmokeGateError(
+                "an explicit autonomous local model endpoint fingerprint is required"
+            )
         canonical_source = _canonical_endpoint(source_endpoint)
         for endpoint in autonomous_endpoints:
             if endpoint and _canonical_endpoint(endpoint) == canonical_source:
@@ -458,6 +462,27 @@ class RunEvidenceInspector:
             return max(candidates, key=len, default="")
         return ""
 
+    @staticmethod
+    def _draft_report_text(
+        synthesis_rows: Sequence[tuple[Any, Any, Any]],
+    ) -> str:
+        """Return only persisted completed draft report-section bodies."""
+        for stage, status, artifact in reversed(synthesis_rows):
+            if stage != "draft" or status != "completed":
+                continue
+            if not isinstance(artifact, Mapping):
+                return ""
+            sections = artifact.get("report_sections")
+            if not isinstance(sections, list):
+                return ""
+            bodies = [
+                str(section.get("body") or "").strip()
+                for section in sections
+                if isinstance(section, Mapping)
+            ]
+            return "\n\n".join(body for body in bodies if body)
+        return ""
+
     def inspect(self, run: Any) -> dict[str, Any]:
         import psycopg
 
@@ -506,21 +531,19 @@ class RunEvidenceInspector:
             for stage, status, _artifact in synthesis_rows
             if status == "completed"
         }
-        for required_stage in ("citation_pass", "validation"):
+        for required_stage in (
+            "outline",
+            "binding",
+            "draft",
+            "citation_pass",
+            "validation",
+        ):
             if required_stage not in completed_stages:
                 errors.append(f"missing completed synthesis stage: {required_stage}")
-        report_text = max(
-            (
-                self._longest_text(artifact)
-                for _stage, status, artifact in synthesis_rows
-                if status == "completed"
-            ),
-            key=len,
-            default="",
-        )
-        if len(report_text.strip()) < 200:
+        report_text = self._draft_report_text(synthesis_rows)
+        if len(report_text) < 200:
             errors.append(
-                "no substantive persisted report text (minimum 200 characters)"
+                "no substantive completed draft report body (minimum 200 characters)"
             )
 
         if run.mode == "agent_led":

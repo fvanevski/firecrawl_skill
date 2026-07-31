@@ -169,3 +169,30 @@ def test_orchestrator_propagates_supplier_to_semantic_stages():
 
     assert orchestrator._evidence_preparation.host_artifact_supplier is supplier
     assert orchestrator._synthesis.host_artifact_supplier is supplier
+
+
+def test_external_supplier_requires_autonomous_endpoint_fingerprint():
+    with pytest.raises(smoke_test.SmokeGateError, match="endpoint fingerprint"):
+        smoke_test.ExternalProcessHostArtifactSupplier(
+            ["external-agent"],
+            supplier_identity="review-agent",
+            source_endpoint="http://review-agent:9000",
+            autonomous_endpoints=[],
+        )
+
+
+def test_draft_report_text_uses_only_completed_draft_sections():
+    rows = [
+        ("outline", "completed", {"long_prompt": "x" * 500}),
+        ("draft", "failed", {"report_sections": [{"body": "y" * 500}]}),
+        (
+            "draft",
+            "completed",
+            {"report_sections": [{"body": "first"}, {"body": "second"}]},
+        ),
+        ("citation_pass", "completed", {"analysis": "z" * 500}),
+    ]
+
+    assert smoke_test.RunEvidenceInspector._draft_report_text(rows) == (
+        "first\n\nsecond"
+    )
