@@ -40,8 +40,10 @@ jobs:
             echo 'Source corrections already applied.'
             echo 'changed=false' >> "$GITHUB_OUTPUT"
           else
+            sha256sum scripts/_pr157_patch_parts/part-*
             cat scripts/_pr157_patch_parts/part-* \
               > scripts/_apply_pr157_thread_fixes.py
+            sha256sum scripts/_apply_pr157_thread_fixes.py
             echo '20a334365f41caa3aa9314a1e50b7c2a9a8ef3b38d3a5247e4a83b4fa94bc3a6  scripts/_apply_pr157_thread_fixes.py' \
               | sha256sum --check --strict
             python scripts/_apply_pr157_thread_fixes.py
