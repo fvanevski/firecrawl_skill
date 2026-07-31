@@ -23,6 +23,7 @@ on:
 permissions:
   actions: read
   contents: read
+  issues: write
 
 jobs:
   campaign:
@@ -62,6 +63,7 @@ jobs:
 
       - name: Retrieve completed exact-head CI evidence
         id: ci_evidence
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -82,6 +84,7 @@ jobs:
           echo "path=$EVIDENCE_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Set up isolated Python
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -92,6 +95,7 @@ jobs:
           echo "$RUNNER_TEMP/release-campaign-venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -100,6 +104,7 @@ jobs:
 
       - name: Execute two strict campaigns
         id: execute
+        if: steps.ci_evidence.outcome == 'success'
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -135,7 +140,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/verify_release_campaign.py \
+          python scripts/verify_release_campaign_ci.py \
             --campaign-dir "$CAMPAIGN_DIR" \
             --database-url "$DATABASE_URL" \
             --candidate-sha "$CANDIDATE_SHA" \
@@ -147,10 +152,54 @@ jobs:
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --workflow-ref "$GITHUB_WORKFLOW_REF" \
             --execution-conclusion "${{ steps.execute.outcome }}" \
-            --ci-evidence "${{ steps.ci_evidence.outputs.path }}" \
+            --ci-evidence "$CAMPAIGN_DIR/exact-head-ci/exact-head-ci-evidence.json" \
             --ci-evidence-sha256 "$CI_EVIDENCE_SHA256" \
             --ci-run-id "$CI_RUN_ID" \
             --ci-evidence-run-id "$CI_EVIDENCE_RUN_ID"
+
+      - name: Ensure a durable failure manifest exists
+        id: manifest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CAMPAIGN_DIR"
+          MANIFEST="$CAMPAIGN_DIR/release-evidence-manifest.json"
+          if [[ ! -f "$MANIFEST" ]]; then
+            python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CAMPAIGN_DIR"])
+          value = {
+              "schema_version": "authoritative-release-evidence-v3",
+              "candidate_sha": os.environ["CANDIDATE_SHA"],
+              "artifact_retention_days": 90,
+              "workflow": {
+                  "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+                  "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+                  "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+                  "workflow_ref": os.environ.get("GITHUB_WORKFLOW_REF", ""),
+                  "workflow_sha": os.environ.get("WORKFLOW_SHA", ""),
+              },
+              "exact_head_ci": {
+                  "ci_run_id": os.environ.get("CI_RUN_ID", ""),
+                  "ci_evidence_run_id": os.environ.get("CI_EVIDENCE_RUN_ID", ""),
+                  "expected_sha256": os.environ.get("CI_EVIDENCE_SHA256", ""),
+              },
+              "gate": "FAIL",
+              "errors": ["campaign verifier did not produce a manifest"],
+          }
+          (root / "release-evidence-manifest.json").write_text(
+              json.dumps(value, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          fi
+          MANIFEST_SHA=$(sha256sum "$MANIFEST" | cut -d' ' -f1)
+          echo "path=$MANIFEST" >> "$GITHUB_OUTPUT"
+          echo "sha256=$MANIFEST_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Upload complete campaign directory
         id: upload
@@ -161,6 +210,27 @@ jobs:
           path: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
           if-no-files-found: error
           retention-days: 90
+
+      - name: Publish durable closure evidence
+        id: publish
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMMENT_FILE="$RUNNER_TEMP/release-evidence-comment.md"
+          python scripts/render_release_evidence_comment.py \
+            --manifest "${{ steps.manifest.outputs.path }}" \
+            --manifest-sha256 "${{ steps.manifest.outputs.sha256 }}" \
+            --artifact-id "${{ steps.upload.outputs.artifact-id }}" \
+            --artifact-url "${{ steps.upload.outputs.artifact-url }}" \
+            --artifact-digest "${{ steps.upload.outputs.artifact-digest }}" \
+            --output "$COMMENT_FILE"
+          for issue in 170 153 146; do
+            gh issue comment "$issue" \
+              --repo "$GITHUB_REPOSITORY" \
+              --body-file "$COMMENT_FILE"
+          done
 
       - name: Record artifact upload identity
         if: always()
@@ -175,6 +245,7 @@ jobs:
             echo "ci_run_id=$CI_RUN_ID"
             echo "ci_evidence_run_id=$CI_EVIDENCE_RUN_ID"
             echo "ci_evidence_sha256=$CI_EVIDENCE_SHA256"
+            echo "manifest_sha256=${{ steps.manifest.outputs.sha256 }}"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce authoritative gate
@@ -182,6 +253,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "${{ steps.ci_evidence.outcome }}" = "success"
           test "${{ steps.execute.outcome }}" = "success"
           test "${{ steps.verify.outcome }}" = "success"
           test "${{ steps.upload.outcome }}" = "success"
+          test "${{ steps.publish.outcome }}" = "success"
