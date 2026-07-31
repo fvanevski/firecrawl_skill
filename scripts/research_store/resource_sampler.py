@@ -34,7 +34,7 @@ import datetime
 import importlib.metadata
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 try:
@@ -171,6 +171,27 @@ class ResourceSampler:
         ).isoformat()
         self.collect_cpu_sample()
         self.collect_gpu_sample()
+
+        # Every persisted sample describes the same exact workload window.
+        # The initial GPU sample is collected before window_end is known, so
+        # backfill the completed boundary before returning immutable records.
+        self._cpu_samples = [
+            replace(
+                sample,
+                window_start=self._window_started_iso,
+                window_end=self._window_ended_iso,
+            )
+            for sample in self._cpu_samples
+        ]
+        self._gpu_samples = [
+            replace(
+                sample,
+                window_start=self._window_started_iso,
+                window_end=self._window_ended_iso,
+            )
+            for sample in self._gpu_samples
+        ]
+
         self._window_started_at = None
         if self._nvml_initialized:
             try:

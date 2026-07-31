@@ -503,24 +503,23 @@ def test_agent_led_uses_host_authority_and_never_local_model():
     assert supplied_context["supplied_response_metadata"]["provenance"] == {"usage": {}}
 
 
-def test_not_invoked_tokens_are_incomplete_and_force_no_go(monkeypatch):
+def test_not_invoked_tokens_are_not_applicable_and_can_satisfy_release(
+    monkeypatch,
+):
     performance, metrics = _extract_performance(
         monkeypatch,
         telemetry=_telemetry(total_tokens=0, token_source="not_invoked"),
     )
     token_metric = next(metric for metric in metrics if metric.name == "total_tokens")
 
-    assert token_metric.status == MetricStatus.INCOMPLETE
+    assert token_metric.status == MetricStatus.NOT_APPLICABLE
     assert "did not execute a model" in token_metric.formula
     recommendation = _recommend(
         mode="deterministic_debug",
         performance=performance,
         performance_metrics=metrics,
     )
-    assert recommendation.outcome == "no_go"
-    assert any(
-        "total_tokens is incomplete" in item for item in recommendation.withdrawn_claims
-    )
+    assert recommendation.outcome == "go"
 
 
 def test_missing_semantic_usage_is_incomplete_and_forces_no_go(monkeypatch):
@@ -898,3 +897,93 @@ def test_local_structured_gateway_disables_thinking_by_default(monkeypatch):
     assert result.attempts[0]["thinking_enabled"] is False
     assert result.attempts[0]["reasoning_excerpt"] == "hidden reasoning"
     assert result.provenance["thinking_enabled"] is False
+
+
+def test_campaign_run_preserves_completed_orchestration_outcome():
+    run = CampaignRun(orchestration_outcome="completed")
+
+    assert run.orchestration_outcome == "completed"
+
+
+def test_reproducibility_accepts_matching_not_applicable_token_metrics():
+    def result(campaign_id: str) -> ReleaseBenchmarkResult:
+        run_id = uuid4()
+        performance = _performance()
+        performance = PerformanceMeasurement(
+            **{
+                **performance.__dict__,
+                "total_tokens": 0,
+            }
+        )
+        base_metrics = _performance_metrics(run_id)
+        performance_metrics = (
+            PerformanceMetric(
+                name="total_latency_ms",
+                value=performance.total_latency_ms,
+                source=MetricSource(
+                    table="research_runs",
+                    column="completed_at - created_at",
+                    run_id=str(run_id),
+                    method="duration",
+                ),
+                formula="regression fixture",
+                status=MetricStatus.MEASURED,
+            ),
+            PerformanceMetric(
+                name="semantic_calls",
+                value=float(performance.semantic_calls),
+                source=MetricSource(
+                    table="semantic_calls",
+                    column="id",
+                    run_id=str(run_id),
+                    method="count",
+                ),
+                formula="regression fixture",
+                status=MetricStatus.MEASURED,
+            ),
+            *(
+                PerformanceMetric(
+                    name=metric.name,
+                    value=0.0 if metric.name == "total_tokens" else metric.value,
+                    source=metric.source,
+                    formula=metric.formula,
+                    status=(
+                        MetricStatus.NOT_APPLICABLE
+                        if metric.name == "total_tokens"
+                        else metric.status
+                    ),
+                )
+                for metric in base_metrics
+            ),
+        )
+        run = CampaignRun(
+            campaign_id=campaign_id,
+            run_id=str(run_id),
+            mode="deterministic_debug",
+            objective_id="obj-001",
+            quality=_quality(),
+            performance=performance,
+            quality_metrics=_quality_metrics(run_id),
+            performance_metrics=performance_metrics,
+            orchestration_outcome="completed",
+        )
+        return ReleaseBenchmarkResult(
+            campaign_id=campaign_id,
+            campaign_timestamp="2026-07-31T00:00:00+00:00",
+            runs=(run,),
+        )
+
+    runner = ReleaseBenchmarkRunner(
+        _dataset(),
+        ReleaseBenchmarkConfig(
+            execution_modes=("autonomous_local", "deterministic_debug"),
+            strict=True,
+        ),
+    )
+    comparison = runner.compare_campaigns(result("campaign-a"), result("campaign-b"))
+
+    assert comparison.all_within_tolerance
+    assert not any(
+        name.endswith(".total_tokens")
+        for name, *_values in comparison.performance_tolerances
+    )

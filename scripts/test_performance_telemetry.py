@@ -1364,3 +1364,41 @@ class TestBenchmarkTelemetryWiring:
         runner._persist_resource_samples(mock_telemetry_svc, run_id, (sample,))
         persisted = mock_telemetry_svc.record_resource_sample.call_args.args[0]
         assert persisted.run_id == str(run_id)
+
+
+def test_resource_sampler_backfills_complete_window_on_initial_gpu_sample(
+    monkeypatch,
+):
+    from research_store import resource_sampler
+
+    fake_handle = object()
+    fake_nvml = SimpleNamespace(
+        __version__="test",
+        nvmlInit=lambda: None,
+        nvmlShutdown=lambda: None,
+        nvmlDeviceGetHandleByIndex=lambda _index: fake_handle,
+        nvmlDeviceGetUUID=lambda _handle: "GPU-test",
+        nvmlDeviceGetMemoryInfo=lambda _handle: SimpleNamespace(
+            used=1024 * 1024 * 2048
+        ),
+    )
+    monkeypatch.setattr(resource_sampler, "_HAS_PYNVML", True)
+    monkeypatch.setattr(resource_sampler, "_HAS_PSUTIL", False)
+    monkeypatch.setattr(resource_sampler, "pynvml", fake_nvml)
+
+    sampler = resource_sampler.ResourceSampler(
+        interval_seconds=0.01,
+        max_samples=2,
+    )
+    sampler.begin_window()
+    _cpu_samples, gpu_samples = sampler.end_window()
+
+    assert len(gpu_samples) == 2
+    assert all(sample.status == "measured" for sample in gpu_samples)
+    assert all(sample.device_uuid == "GPU-test" for sample in gpu_samples)
+    assert all(sample.window_start for sample in gpu_samples)
+    assert all(sample.window_end for sample in gpu_samples)
+    assert {sample.window_start for sample in gpu_samples} == {
+        gpu_samples[0].window_start
+    }
+    assert {sample.window_end for sample in gpu_samples} == {gpu_samples[0].window_end}

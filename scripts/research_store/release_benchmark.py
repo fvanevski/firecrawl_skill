@@ -1100,7 +1100,7 @@ class MetricEngine:
         if token_source == "not_invoked":
             token_formula = (
                 "not_invoked — deterministic fixture did not execute a model; "
-                "release token accounting is INCOMPLETE"
+                "token usage is intentionally NOT_APPLICABLE"
             )
         else:
             token_formula = (
@@ -1282,7 +1282,7 @@ class MetricEngine:
         # ------------------------------------------------------------------
         # Strict mode: metrics with empty sources remain null and UNAVAILABLE.
         _token_status = (
-            MetricStatus.INCOMPLETE
+            MetricStatus.NOT_APPLICABLE
             if token_source == "not_invoked"
             else MetricStatus.UNAVAILABLE
             if _strict_token_unavailable
@@ -1818,6 +1818,7 @@ class CampaignRun:
     quality_metrics: tuple[QualityMetric, ...] = ()
     performance_metrics: tuple[PerformanceMetric, ...] = ()
     integrity_checks: tuple[DeterministicIntegrityCheck, ...] = ()
+    orchestration_outcome: str | None = None
     errors: tuple[str, ...] = ()
     duration_ms: float = 0.0
 
@@ -2105,6 +2106,7 @@ class ReleaseBenchmarkRunner:
         performance_metrics: tuple[PerformanceMetric, ...] = ()
         integrity_checks: tuple[DeterministicIntegrityCheck, ...] = ()
         resource_samples: tuple[object, ...] = ()
+        orchestration_outcome: str | None = None
 
         try:
             from research_store.config import StoreConfig
@@ -2213,6 +2215,7 @@ class ReleaseBenchmarkRunner:
                     spec=spec,
                     search_plan=search_plan,
                 )
+                orchestration_outcome = orchestration_result.outcome
                 if orchestration_result.outcome != "completed":
                     errors.append(
                         "orchestration did not complete: "
@@ -2300,6 +2303,7 @@ class ReleaseBenchmarkRunner:
             quality_metrics=quality_metrics,
             performance_metrics=performance_metrics,
             integrity_checks=integrity_checks,
+            orchestration_outcome=orchestration_outcome,
             errors=tuple(errors),
             duration_ms=duration_ms,
         )
@@ -2882,9 +2886,20 @@ class ReleaseBenchmarkRunner:
                 ]:
                     val_a = getattr(run_a.quality, field_name)
                     val_b = getattr(run_b.quality, field_name)
+                    status_a = quality_status_a.get(
+                        field_name, MetricStatus.UNAVAILABLE
+                    )
+                    status_b = quality_status_b.get(
+                        field_name, MetricStatus.UNAVAILABLE
+                    )
                     if (
-                        quality_status_a.get(field_name) != MetricStatus.MEASURED
-                        or quality_status_b.get(field_name) != MetricStatus.MEASURED
+                        status_a == MetricStatus.NOT_APPLICABLE
+                        and status_b == MetricStatus.NOT_APPLICABLE
+                    ):
+                        continue
+                    if (
+                        status_a != MetricStatus.MEASURED
+                        or status_b != MetricStatus.MEASURED
                         or val_a is None
                         or val_b is None
                     ):
@@ -2921,9 +2936,20 @@ class ReleaseBenchmarkRunner:
                 ]:
                     val_a = getattr(run_a.performance, field_name)
                     val_b = getattr(run_b.performance, field_name)
+                    status_a = performance_status_a.get(
+                        field_name, MetricStatus.UNAVAILABLE
+                    )
+                    status_b = performance_status_b.get(
+                        field_name, MetricStatus.UNAVAILABLE
+                    )
                     if (
-                        performance_status_a.get(field_name) != MetricStatus.MEASURED
-                        or performance_status_b.get(field_name) != MetricStatus.MEASURED
+                        status_a == MetricStatus.NOT_APPLICABLE
+                        and status_b == MetricStatus.NOT_APPLICABLE
+                    ):
+                        continue
+                    if (
+                        status_a != MetricStatus.MEASURED
+                        or status_b != MetricStatus.MEASURED
                         or val_a is None
                         or val_b is None
                     ):

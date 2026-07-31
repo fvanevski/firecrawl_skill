@@ -94,6 +94,8 @@ For every selected exact run, the gate requires:
 - completed `outline`, `binding`, `draft`, `citation_pass`, and `validation` stages;
 - at least 200 characters of report body from completed `draft.report_sections`;
 - all mandatory metric statuses and values required by strict release policy;
+- `deterministic_debug.total_tokens` recorded as `not_applicable`, because that
+  authority intentionally supplies fixtures without invoking a model;
 - passing completeness and integrity checks.
 
 Artifacts are written below `/tmp/firecrawl_smoke_test/<candidate-sha>/` by default. The manifest records the selected mode set, exact SHA and tree identity, service fingerprints, optional supplier provenance, full result serialization, exact-run evidence counts, semantic authorities, draft report hashes, and the production reproducibility comparison.
