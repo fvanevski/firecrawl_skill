@@ -48,9 +48,9 @@ def _json_content(raw):
             "finish_reason": choices[0].get("finish_reason"),
             "stop_reason": choices[0].get("stop_reason"),
             "refusal": message.get("refusal"),
-            "reasoning_excerpt": _redact(message.get("reasoning", ""))[
-                :MAX_RAW_EXCERPT
-            ],
+            "reasoning_excerpt": _redact(
+                message.get("reasoning") or message.get("reasoning_content") or ""
+            )[:MAX_RAW_EXCERPT],
         }
     if raw.get("output_text") is not None:
         return raw.get("output_text"), {"finish_reason": raw.get("status")}
@@ -213,6 +213,7 @@ def call_structured(
     prompt_version="unversioned",
     semantic_persistence=None,
     semantic_context=None,
+    enable_thinking=False,
 ):
     system_prompt = _redact(system_prompt)
     user_prompt = _redact(user_prompt)
@@ -304,6 +305,9 @@ def call_structured(
                 "temperature": 0,
                 "seed": 0,
                 "max_tokens": output_budget,
+                "chat_template_kwargs": {
+                    "enable_thinking": bool(enable_thinking),
+                },
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt + repair},
@@ -325,6 +329,11 @@ def call_structured(
                         "attempt": attempt_number,
                         "api_surface": config["api_surface"],
                         "structured_mode": structured_mode,
+                        "thinking_enabled": (
+                            bool(enable_thinking)
+                            if config["api_surface"] == "chat_completions"
+                            else None
+                        ),
                         "latency_ms": int((time.monotonic() - started) * 1000),
                         "http_status": http_status,
                         "request_id": request_id or raw.get("id"),
@@ -350,6 +359,11 @@ def call_structured(
                 "attempt": attempt_number,
                 "api_surface": config["api_surface"],
                 "structured_mode": structured_mode,
+                "thinking_enabled": (
+                    bool(enable_thinking)
+                    if config["api_surface"] == "chat_completions"
+                    else None
+                ),
                 "latency_ms": int((time.monotonic() - started) * 1000),
                 "http_status": http_status,
                 "request_id": request_id or raw.get("id"),
@@ -379,6 +393,11 @@ def call_structured(
                     "returned_model": raw.get("model"),
                     "api_surface": config["api_surface"],
                     "seed": 0 if config["api_surface"] == "chat_completions" else None,
+                    "thinking_enabled": (
+                        bool(enable_thinking)
+                        if config["api_surface"] == "chat_completions"
+                        else None
+                    ),
                     "prompt_version": prompt_version,
                     "prompt_hash": prompt_hash,
                     "input_token_estimate": estimate_tokens(
@@ -435,6 +454,11 @@ def call_structured(
                     "attempt": attempt_number,
                     "api_surface": config["api_surface"],
                     "structured_mode": structured_mode,
+                    "thinking_enabled": (
+                        bool(enable_thinking)
+                        if config["api_surface"] == "chat_completions"
+                        else None
+                    ),
                     "latency_ms": int((time.monotonic() - started) * 1000),
                     "error": _redact(last_error)[:MAX_RAW_EXCERPT],
                 }
@@ -445,6 +469,11 @@ def call_structured(
         "requested_model": config["model"],
         "api_surface": config["api_surface"],
         "seed": 0 if config["api_surface"] == "chat_completions" else None,
+        "thinking_enabled": (
+            bool(enable_thinking)
+            if config["api_surface"] == "chat_completions"
+            else None
+        ),
         "prompt_version": prompt_version,
         "prompt_hash": prompt_hash,
         "capability_probe": capability,

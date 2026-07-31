@@ -841,3 +841,60 @@ def test_candidate_sha_mismatch_fails_complete_preflight(tmp_path):
 
     assert ok is False
     assert any("does not match candidate SHA" in error for error in errors)
+
+
+def test_local_structured_gateway_disables_thinking_by_default(monkeypatch):
+    import model_gateway
+
+    captured = {}
+
+    monkeypatch.setattr(
+        model_gateway,
+        "probe_local",
+        lambda *_args, **_kwargs: {"status": "available", "models": ["chat"]},
+    )
+
+    def request_json(url, payload, headers, timeout):
+        captured.update(
+            {"url": url, "payload": payload, "headers": headers, "timeout": timeout}
+        )
+        return (
+            {
+                "id": "request-1",
+                "model": "chat",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": '{"status":"ok"}',
+                            "reasoning_content": "hidden reasoning",
+                        },
+                    }
+                ],
+                "usage": {"completion_tokens": 4},
+            },
+            "request-1",
+            200,
+        )
+
+    monkeypatch.setattr(model_gateway, "_request_json", request_json)
+    result = model_gateway.call_structured(
+        provider="local",
+        model="chat",
+        system_prompt="Return JSON.",
+        user_prompt='{"status":"ok"}',
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"status": {"const": "ok"}},
+            "required": ["status"],
+        },
+        max_attempts=1,
+    )
+
+    assert result.error == ""
+    assert result.value == {"status": "ok"}
+    assert captured["payload"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert result.attempts[0]["thinking_enabled"] is False
+    assert result.attempts[0]["reasoning_excerpt"] == "hidden reasoning"
+    assert result.provenance["thinking_enabled"] is False

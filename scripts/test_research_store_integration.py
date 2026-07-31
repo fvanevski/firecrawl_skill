@@ -4133,10 +4133,13 @@ class TestIndexRebuildRecovery:
             assert status_counts.get("complete") == 1
             assert status_counts.get("pending") == 1
 
-        # Re-run index-build — should only requeue the pending manifest
+        # Re-run index-build. The manifest marked complete has no
+        # corresponding physical Qdrant point, so both manifests must be
+        # requeued rather than trusting PostgreSQL completion alone.
         result2 = _index_build(config)
         assert result2["selected_chunks"] == 2
-        assert result2["scheduled"] == 1  # Only the pending one
+        assert result2["scheduled"] == 2
+        assert result2["missing_points"] == 2
 
         # Verify: still only 2 jobs total (no duplicates)
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
@@ -4468,6 +4471,131 @@ class TestIndexRebuildRecovery:
         reconcile_result = _index_reconcile(config, repair=False)
         assert reconcile_result["ok"] is True
         assert len(reconcile_result["discrepancies"]) == 0
+
+    def test_index_reconcile_repair_requeues_missing_points_and_deletes_orphans(
+        self, service
+    ):
+        from research_store.cli import _index_build, _index_reconcile, _qdrant
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://physical-drift.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (
+                    source_id,
+                    "https://physical-drift.example/test",
+                    "1" * 64,
+                ),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "physical drift",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "2" * 64,
+                ),
+            )
+            document_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,
+                    chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
+                (
+                    document_id,
+                    "physical drift chunk",
+                    "3" * 64,
+                    "structural",
+                    "structural-v1",
+                ),
+            )
+            chunk_id = cur.fetchone()[0]
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        build = _index_build(config)
+        definition = build["index_definition"]
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests
+                SET index_status='complete',indexed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition["id"],),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition["id"],),
+            )
+
+        index = _qdrant(
+            config,
+            definition["physical_collection"],
+            definition["dimension"],
+            definition["distance_metric"],
+        )
+        orphan_id = uuid4()
+        index.upsert(
+            [
+                {
+                    "id": str(orphan_id),
+                    "vector": {"dense": [1.0, 0.0, 0.0, 0.0]},
+                    "payload": {
+                        "parser_version": config.parser_version,
+                        "normalization_version": config.normalization_version,
+                        "chunker_version": config.chunker_version,
+                    },
+                }
+            ]
+        )
+
+        before = _index_reconcile(config, repair=False)
+        assert before["ok"] is False
+        collection = before["qdrant"]["collections"][definition["physical_collection"]]
+        assert collection["coverage"] == {"missing": 1, "orphaned": 1}
+
+        repaired = _index_reconcile(config, repair=True)
+        action = repaired["repair_actions"][0]
+        assert action["scheduled"] == 1
+        assert action["missing_points"] == 1
+        assert action["deleted_orphaned"] == 1
+        assert repaired["repaired"] == [str(definition["id"])]
+
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT m.index_status,j.status
+                FROM embedding_manifests m
+                JOIN index_jobs j ON j.manifest_id=m.id
+                WHERE m.index_definition_id=%s AND m.chunk_id=%s""",
+                (definition["id"], chunk_id),
+            )
+            assert cur.fetchone() == ("pending", "pending")
+        remaining = index.point_ids(filters={})
+        assert str(orphan_id) not in {
+            str(item["id"]) for item in remaining.get("points", [])
+        }
 
     def test_index_point_counts_cached(self, service):
         """After index-build, the Qdrant point count is cached in PostgreSQL."""

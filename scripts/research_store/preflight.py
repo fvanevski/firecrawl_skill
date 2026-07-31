@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import model_gateway
@@ -190,6 +191,27 @@ def run_complete_preflight(
     return not errors, errors
 
 
+def _redact_url_credentials(value: str) -> str:
+    """Return a service URL with any password replaced by ``***``."""
+    try:
+        parts = urlsplit(value)
+    except (TypeError, ValueError):
+        return "<redacted-service-url>"
+    if parts.password is None or "@" not in parts.netloc:
+        return value
+    userinfo, hostinfo = parts.netloc.rsplit("@", 1)
+    username = userinfo.split(":", 1)[0]
+    return urlunsplit(
+        (
+            parts.scheme,
+            f"{username}:***@{hostinfo}",
+            parts.path,
+            parts.query,
+            parts.fragment,
+        )
+    )
+
+
 def probe_valkey(valkey_url: str) -> str:
     """Round-trip one exact token on an isolated Valkey key."""
     if not valkey_url:
@@ -215,7 +237,8 @@ def probe_valkey(valkey_url: str) -> str:
             )
     finally:
         queue.clear()
-    return f"Valkey ({valkey_url}): isolated exact-token round-trip OK"
+    safe_url = _redact_url_credentials(valkey_url)
+    return f"Valkey ({safe_url}): isolated exact-token round-trip OK"
 
 
 def probe_firecrawl() -> str:

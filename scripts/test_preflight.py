@@ -55,6 +55,19 @@ def test_production_reranker_adapter_consumes_relevance_score(monkeypatch):
     assert [item["reranker_score"] for item in result] == [0.9, 0.2]
 
 
+def test_redact_url_credentials_masks_password_without_changing_endpoint():
+    assert (
+        preflight._redact_url_credentials(
+            "redis://research_app:p%40ss@127.0.0.1:56379/0"
+        )
+        == "redis://research_app:***@127.0.0.1:56379/0"
+    )
+    assert (
+        preflight._redact_url_credentials("redis://127.0.0.1:56379/0")
+        == "redis://127.0.0.1:56379/0"
+    )
+
+
 def test_probe_qdrant_uses_active_alias_and_named_dense_vector(monkeypatch):
     calls = []
 

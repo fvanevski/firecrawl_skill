@@ -66,6 +66,22 @@ SMOKE_DISABLE_AGENT_LED=1 python scripts/smoke_test.py \
 
 The manifest records whether `agent_led` was requested, disabled by the environment, and effectively selected. When it is not selected, `host_supplier` is `null`.
 
+## Preflight repair and safety behavior
+
+Local schema-constrained calls disable model thinking by default so the
+output budget is reserved for the required JSON artifact. The effective
+thinking setting is recorded in attempt and provenance metadata.
+
+`scripts/research-db index-reconcile --repair` treats physical Qdrant
+coverage as authoritative for the currently configured embedding
+fingerprint. It requeues manifests whose points are missing even when
+PostgreSQL says they are complete, and deletes current-derivation orphan
+points only during the explicit repair operation. Index activation still
+requires exact point-ID equality.
+
+Preflight service messages redact URL passwords before writing terminal
+output or logs.
+
 ## Mandatory run checks
 
 Commit all source changes first. The gate rejects a dirty checkout and any candidate SHA that differs from `HEAD`. The complete real-stack preflight must pass before either campaign starts.
