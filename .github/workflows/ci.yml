@@ -58,7 +58,7 @@ jobs:
             scripts/test_release_campaign_verifier.py
 
   test:
-    name: Test — Python ${{ matrix.python-version }}"
+    name: "Test — Python ${{ matrix.python-version }}"
     needs: release-invariants
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -273,7 +273,7 @@ jobs:
           python -m research_store.release_evidence generate \
             --repo . \
             --output release-evidence-manifest.json
-          SHA=$(python -c 'import json,sys; print(json.load(open("release-evidence-manifest.json"))["candidate_sha"])')
+          SHA=$(python -c 'import json; print(json.load(open("release-evidence-manifest.json"))["candidate_sha"])')
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Upload manifest artifact
@@ -290,3 +290,42 @@ jobs:
           python -m research_store.release_evidence verify \
             --manifest release-evidence-manifest.json \
             --repo .
+
+  dispatch-release-campaign:
+    name: Dispatch exact-head release campaign
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      contains(github.event.head_commit.message, 'Merge pull request #173')
+    needs:
+      - release-invariants
+      - test
+      - strict-campaign-contract
+      - lint
+      - release-evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Verify candidate remains current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .commit.sha)
+          test "$MAIN_SHA" = "$GITHUB_SHA"
+
+      - name: Dispatch exact candidate workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run release-campaign.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f candidate-sha="$GITHUB_SHA"
