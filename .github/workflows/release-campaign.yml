@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate-sha:
-        description: Exact commit SHA to validate
+        description: Exact current main commit SHA to validate
         required: true
         type: string
 
@@ -13,12 +13,13 @@ permissions:
 
 jobs:
   campaign:
-    name: "Real release campaigns (issues #146/#153)"
+    name: "Real release campaigns (issues #146/#153/#170)"
     runs-on: [self-hosted, firecrawl-release]
     timeout-minutes: 180
     environment: release-campaign
     env:
       CANDIDATE_SHA: ${{ inputs.candidate-sha }}
+      CAMPAIGN_DIR: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
 
     steps:
       - name: Check out exact candidate
@@ -27,12 +28,19 @@ jobs:
           ref: ${{ inputs.candidate-sha }}
           fetch-depth: 0
 
-      - name: Verify exact checkout
-        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Verify exact current-main checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse origin/main)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Set up isolated Python
         shell: bash
         run: |
+          set -euo pipefail
           command -v python3.12
           python3.12 --version
           command -v uv
@@ -40,11 +48,13 @@ jobs:
           echo "$RUNNER_TEMP/release-campaign-venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r requirements-research-store.txt
 
-      - name: Execute two strict campaigns
+      - name: Execute two complete strict campaigns
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           BLOB_ROOT: ${{ secrets.BLOB_ROOT }}
@@ -62,15 +72,216 @@ jobs:
           RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
           RERANKER_MODEL: ${{ vars.RERANKER_MODEL }}
           PYTHONPATH: scripts
+        shell: bash
         run: |
-          python -m research_store.strict_benchmark \
-            --campaign-dir "$RUNNER_TEMP/release-campaign-${CANDIDATE_SHA}"
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import sys
+
+          from research_store.release_benchmark import RELEASE_MODES
+          from research_store.strict_benchmark import main
+
+          raise SystemExit(
+              main(
+                  [
+                      "--candidate-sha",
+                      os.environ["CANDIDATE_SHA"],
+                      "--campaign-dir",
+                      os.environ["CAMPAIGN_DIR"],
+                  ],
+                  execution_modes=RELEASE_MODES,
+              )
+          )
+          PY
+
+      - name: Verify authoritative campaign evidence
+        env:
+          PYTHONPATH: scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          from itertools import product
+          from pathlib import Path
+          from uuid import UUID
+
+          from research_store.release_benchmark import (
+              MANDATORY_PERFORMANCE_METRICS,
+              MANDATORY_QUALITY_METRICS,
+              RELEASE_MODES,
+          )
+
+          campaign_dir = Path(os.environ["CAMPAIGN_DIR"])
+          candidate_sha = os.environ["CANDIDATE_SHA"]
+          manifest_path = campaign_dir / "manifest.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+          def sha256(path: Path) -> str:
+              digest = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          def require(condition: bool, message: str) -> None:
+              if not condition:
+                  raise SystemExit(message)
+
+          current_tree = os.popen("git rev-parse HEAD^{tree}").read().strip()
+          require(manifest.get("candidate_sha") == candidate_sha, "manifest candidate SHA mismatch")
+          require(manifest.get("tree_hash") == current_tree, "manifest tree hash mismatch")
+          require(manifest.get("modes") == list(RELEASE_MODES), "manifest mode set mismatch")
+
+          dataset_path = Path(manifest["dataset_path"])
+          dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
+          objective_ids = [item["id"] for item in dataset["objectives"]]
+          expected_pairs = set(product(RELEASE_MODES, objective_ids))
+          expected_runs = len(expected_pairs)
+          require(expected_runs == 15, f"expected 15 mode/objective pairs, found {expected_runs}")
+
+          all_run_ids: list[str] = []
+          result_hashes: dict[str, str] = {}
+          environment_hashes: dict[str, str] = {}
+
+          for key in ("campaign_a", "campaign_b"):
+              entry = manifest[key]
+              require(entry.get("runs") == 15, f"{key} does not contain exactly 15 runs")
+              require(entry.get("recommendation") == "go", f"{key} recommendation is not GO")
+              require(len(entry.get("run_ids", [])) == 15, f"{key} run UUID list is incomplete")
+
+              result_dir = Path(entry["result_path"])
+              result_path = result_dir / "result.json"
+              environment_path = result_dir / "environment.json"
+              require(result_path.is_file(), f"{key} result.json is missing")
+              require(environment_path.is_file(), f"{key} environment.json is missing")
+              require(sha256(result_path) == entry["result_hash"], f"{key} result hash mismatch")
+
+              result = json.loads(result_path.read_text(encoding="utf-8"))
+              require(result.get("campaign_id") == entry["campaign_id"], f"{key} campaign ID mismatch")
+              require((result.get("recommendation") or {}).get("outcome") == "go", f"{key} result recommendation is not GO")
+              runs = result.get("runs", [])
+              require(len(runs) == 15, f"{key} result does not contain exactly 15 runs")
+              require({(run.get("mode"), run.get("objective_id")) for run in runs} == expected_pairs, f"{key} mode/objective coverage is incomplete")
+
+              result_run_ids = [run.get("run_id") for run in runs]
+              require(result_run_ids == entry["run_ids"], f"{key} manifest/result run order differs")
+              for raw_id in result_run_ids:
+                  require(bool(raw_id), f"{key} contains a missing research run UUID")
+                  UUID(str(raw_id))
+              all_run_ids.extend(str(raw_id) for raw_id in result_run_ids)
+
+              for run in runs:
+                  run_id = str(run["run_id"])
+                  require(not run.get("errors"), f"run {run_id} did not complete cleanly: {run.get('errors')}")
+
+                  integrity = run.get("integrity_checks", [])
+                  require(bool(integrity), f"run {run_id} has no integrity results")
+                  require(all(item.get("passed") is True for item in integrity), f"run {run_id} has a failed or incomplete integrity result")
+
+                  quality = {item["name"]: item for item in run.get("quality_metrics", [])}
+                  performance = {item["name"]: item for item in run.get("performance_metrics", [])}
+                  require(MANDATORY_QUALITY_METRICS <= quality.keys(), f"run {run_id} is missing mandatory quality metrics")
+                  require(MANDATORY_PERFORMANCE_METRICS <= performance.keys(), f"run {run_id} is missing mandatory performance metrics")
+
+                  for metric in [
+                      *(quality[name] for name in MANDATORY_QUALITY_METRICS),
+                      *(performance[name] for name in MANDATORY_PERFORMANCE_METRICS),
+                  ]:
+                      name = metric["name"]
+                      require(metric.get("status") == "measured", f"run {run_id} mandatory metric {name} is not MEASURED")
+                      require(metric.get("value") is not None, f"run {run_id} mandatory metric {name} has a null value")
+                      source = metric.get("source") or {}
+                      require(source.get("run_id") == run_id, f"run {run_id} metric {name} has mismatched provenance")
+                      require(bool(source.get("table")), f"run {run_id} metric {name} has no source table")
+                      require(bool(source.get("column")), f"run {run_id} metric {name} has no source column")
+                      require(bool(source.get("method")), f"run {run_id} metric {name} has no aggregation method")
+
+              environment = json.loads(environment_path.read_text(encoding="utf-8"))
+              required_environment = {
+                  "candidate_sha",
+                  "tree_hash",
+                  "dataset_hash",
+                  "dependency_lock_hash",
+                  "firecrawl_version",
+                  "python_version",
+                  "platform",
+                  "machine",
+                  "GENERATIVE_MODEL",
+                  "EMBEDDING_MODEL",
+                  "RERANKER_MODEL",
+              }
+              require(required_environment <= environment.keys(), f"{key} environment manifest is incomplete")
+              require(environment["candidate_sha"] == candidate_sha, f"{key} environment candidate mismatch")
+              require(environment["tree_hash"] == current_tree, f"{key} environment tree mismatch")
+              require(environment.get("strict") is True, f"{key} environment is not strict")
+              require(environment.get("execution_modes") == list(RELEASE_MODES), f"{key} environment mode set mismatch")
+              for field in required_environment:
+                  value = environment.get(field)
+                  require(value not in (None, "", "unknown", "unresolvable"), f"{key} environment field {field} is incomplete")
+
+              result_hashes[key] = sha256(result_path)
+              environment_hashes[key] = sha256(environment_path)
+
+          require(len(all_run_ids) == 30, "campaigns do not contain exactly 30 run UUIDs")
+          require(len(set(all_run_ids)) == 30, "research run UUIDs are not globally unique")
+
+          reproducibility = manifest.get("reproducibility") or {}
+          require(reproducibility.get("all_within_tolerance") is True, "reproducibility did not PASS")
+          require(not reproducibility.get("details"), "reproducibility contains failure details")
+
+          comparison_files = sorted((campaign_dir / "reproducibility").glob("*/comparison.json"))
+          require(len(comparison_files) == 1, "expected exactly one reproducibility comparison artifact")
+          comparison_path = comparison_files[0]
+          comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+          require(comparison.get("all_within_tolerance") is True, "comparison artifact did not PASS")
+          require(not comparison.get("details"), "comparison artifact contains failure details")
+
+          recovery_path = campaign_dir / "recovery-report.txt"
+          require(recovery_path.is_file(), "hash-bound recovery report artifact is missing")
+
+          evidence = {
+              "schema_version": "release-workflow-evidence-v1",
+              "workflow_id": os.environ["GITHUB_RUN_ID"],
+              "workflow_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "candidate_sha": candidate_sha,
+              "tree_hash": current_tree,
+              "manifest_path": str(manifest_path),
+              "manifest_sha256": sha256(manifest_path),
+              "campaign_ids": {
+                  "campaign_a": manifest["campaign_a"]["campaign_id"],
+                  "campaign_b": manifest["campaign_b"]["campaign_id"],
+              },
+              "run_uuids": all_run_ids,
+              "recommendations": {
+                  "campaign_a": manifest["campaign_a"]["recommendation"],
+                  "campaign_b": manifest["campaign_b"]["recommendation"],
+              },
+              "reproducibility": {
+                  "pass": True,
+                  "comparison_sha256": sha256(comparison_path),
+                  "policy_version": reproducibility.get("policy_version"),
+              },
+              "result_hashes": result_hashes,
+              "environment_hashes": environment_hashes,
+              "recovery_report_sha256": sha256(recovery_path),
+              "artifact_retention_days": 90,
+          }
+          evidence_path = campaign_dir / "workflow-evidence.json"
+          evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(evidence, indent=2, sort_keys=True))
+          PY
 
       - name: Upload durable campaign artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: real-release-campaign-${{ inputs.candidate-sha }}
-          path: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
+          path: ${{ env.CAMPAIGN_DIR }}
           if-no-files-found: error
           retention-days: 90
