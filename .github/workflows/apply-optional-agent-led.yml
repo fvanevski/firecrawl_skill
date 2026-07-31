@@ -1,0 +1,136 @@
+name: Apply optional agent-led smoke update
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'agent/issue-170-authoritative-extraction-evidence'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v7
+        with:
+          ref: agent/issue-170-authoritative-extraction-evidence
+          fetch-depth: 0
+
+      - name: Install validation tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-research-store.txt pytest ruff
+
+      - name: Apply optional agent-led behavior
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          smoke_path = Path('scripts/smoke_test.py')
+          smoke = smoke_path.read_text(encoding='utf-8')
+
+          smoke = smoke.replace(
+              '''This gate runs exactly two strict campaigns across all three release modes and
+          one benchmark objective.  It is not closure evidence.  It blocks the full
+          campaign unless both repetitions return ``go`` and the production
+          reproducibility comparator passes.''',
+              '''This gate runs exactly two strict campaigns and one benchmark objective.
+          By default it exercises ``autonomous_local`` and ``deterministic_debug``;
+          ``agent_led`` is opt-in.  It is not closure evidence.  It blocks the full
+          campaign unless both repetitions return ``go`` and the production
+          reproducibility comparator passes.''',
+              1,
+          )
+
+          marker = '''_ALLOWED_METRIC_STATUSES = {MetricStatus.MEASURED, MetricStatus.NOT_APPLICABLE}\n'''
+          replacement = '''_ALLOWED_METRIC_STATUSES = {MetricStatus.MEASURED, MetricStatus.NOT_APPLICABLE}\nDEFAULT_SMOKE_MODES = tuple(mode for mode in RELEASE_MODES if mode != "agent_led")\n_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})\n_FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off", ""})\n'''
+          if marker not in smoke:
+              raise SystemExit('constants anchor not found')
+          smoke = smoke.replace(marker, replacement, 1)
+
+          marker = '''class SmokeGateError(RuntimeError):\n    """The reduced real smoke gate failed a mandatory invariant."""\n\n\n'''
+          replacement = '''class SmokeGateError(RuntimeError):\n    """The reduced real smoke gate failed a mandatory invariant."""\n\n\ndef _env_flag(name: str, environ: Mapping[str, str]) -> bool:\n    raw = environ.get(name)\n    if raw is None:\n        return False\n    normalized = raw.strip().lower()\n    if normalized in _TRUE_ENV_VALUES:\n        return True\n    if normalized in _FALSE_ENV_VALUES:\n        return False\n    raise SmokeGateError(\n        f"{name} must be one of: 1, true, yes, on, 0, false, no, off"\n    )\n\n\ndef resolve_execution_modes(\n    *,\n    include_agent_led: bool,\n    environ: Mapping[str, str] | None = None,\n) -> tuple[tuple[str, ...], bool]:\n    """Resolve selected modes with the disable environment override winning."""\n    environment = os.environ if environ is None else environ\n    disabled_by_env = _env_flag("SMOKE_DISABLE_AGENT_LED", environment)\n    effective_agent_led = include_agent_led and not disabled_by_env\n    modes = RELEASE_MODES if effective_agent_led else DEFAULT_SMOKE_MODES\n    return tuple(modes), disabled_by_env\n\n\n'''
+          if marker not in smoke:
+              raise SystemExit('mode resolver anchor not found')
+          smoke = smoke.replace(marker, replacement, 1)
+
+          smoke = smoke.replace(
+              '''    tolerance: float,\n    supplier: ExternalProcessHostArtifactSupplier,\n    campaign_root: Path,''',
+              '''    tolerance: float,\n    execution_modes: tuple[str, ...],\n    supplier: ExternalProcessHostArtifactSupplier | None,\n    campaign_root: Path,''',
+              1,
+          )
+          smoke = smoke.replace('''        execution_modes=RELEASE_MODES,''', '''        execution_modes=execution_modes,''', 1)
+          smoke = smoke.replace(
+              '''    expected_pairs = {(mode, objective_id) for mode in RELEASE_MODES}\n''',
+              '''    expected_pairs = {(mode, objective_id) for mode in execution_modes}\n''',
+              1,
+          )
+
+          old = '''    _write_json_atomic(\n        artifacts_dir / "environment.json",\n        {\n            **_build_env_manifest(\n                candidate_sha, dataset_path, _compute_file_hash(dataset_path)\n            ),\n            "smoke_label": label,\n            "strict": True,\n            "execution_modes": list(RELEASE_MODES),\n            "objective_ids": [objective_id],\n            "host_supplier_identity": supplier.supplier_identity,\n            "host_supplier_endpoint": supplier.source_endpoint,\n            "host_supplier_command_sha256": supplier.command_sha256,\n        },\n    )\n'''
+          new = '''    environment = {\n        **_build_env_manifest(\n            candidate_sha, dataset_path, _compute_file_hash(dataset_path)\n        ),\n        "smoke_label": label,\n        "strict": True,\n        "execution_modes": list(execution_modes),\n        "objective_ids": [objective_id],\n    }\n    if supplier is not None:\n        environment.update(\n            {\n                "host_supplier_identity": supplier.supplier_identity,\n                "host_supplier_endpoint": supplier.source_endpoint,\n                "host_supplier_command_sha256": supplier.command_sha256,\n            }\n        )\n    _write_json_atomic(artifacts_dir / "environment.json", environment)\n'''
+          if old not in smoke:
+              raise SystemExit('environment serialization anchor not found')
+          smoke = smoke.replace(old, new, 1)
+
+          marker = '''    parser.add_argument("--tolerance", type=float, default=0.15)\n'''
+          replacement = '''    parser.add_argument("--tolerance", type=float, default=0.15)\n    parser.add_argument(\n        "--include-agent-led",\n        action="store_true",\n        help=(\n            "include agent_led mode; requires the external host supplier unless "\n            "SMOKE_DISABLE_AGENT_LED is truthy"\n        ),\n    )\n'''
+          if marker not in smoke:
+              raise SystemExit('parser anchor not found')
+          smoke = smoke.replace(marker, replacement, 1)
+
+          old = '''        command = shlex.split(args.host_supplier_command)\n        autonomous_endpoints = tuple(\n            value\n            for value in (\n                os.environ.get("GENERATIVE_URL", ""),\n                os.environ.get("FIRECRAWL_LLM_LOCAL_BASE_URL", ""),\n                os.environ.get("FIRECRAWL_AUDIT_LOCAL_BASE_URL", ""),\n            )\n            if value\n        )\n        supplier = ExternalProcessHostArtifactSupplier(\n            command,\n            supplier_identity=args.host_supplier_identity,\n            source_endpoint=args.host_supplier_endpoint,\n            timeout_seconds=args.host_supplier_timeout,\n            autonomous_endpoints=autonomous_endpoints,\n        )\n        supplier_probe = supplier.probe()\n'''
+          new = '''        execution_modes, agent_led_disabled_by_env = resolve_execution_modes(\n            include_agent_led=args.include_agent_led\n        )\n        agent_led_effective = "agent_led" in execution_modes\n        supplier: ExternalProcessHostArtifactSupplier | None = None\n        supplier_probe: dict[str, Any] | None = None\n        if agent_led_effective:\n            command = shlex.split(args.host_supplier_command)\n            autonomous_endpoints = tuple(\n                value\n                for value in (\n                    os.environ.get("GENERATIVE_URL", ""),\n                    os.environ.get("FIRECRAWL_LLM_LOCAL_BASE_URL", ""),\n                    os.environ.get("FIRECRAWL_AUDIT_LOCAL_BASE_URL", ""),\n                )\n                if value\n            )\n            supplier = ExternalProcessHostArtifactSupplier(\n                command,\n                supplier_identity=args.host_supplier_identity,\n                source_endpoint=args.host_supplier_endpoint,\n                timeout_seconds=args.host_supplier_timeout,\n                autonomous_endpoints=autonomous_endpoints,\n            )\n            supplier_probe = supplier.probe()\n'''
+          if old not in smoke:
+              raise SystemExit('supplier initialization anchor not found')
+          smoke = smoke.replace(old, new, 1)
+
+          smoke = smoke.replace(
+              '''            tolerance=args.tolerance,\n            supplier=supplier,''',
+              '''            tolerance=args.tolerance,\n            execution_modes=execution_modes,\n            supplier=supplier,''',
+              2,
+          )
+
+          smoke = smoke.replace(
+              '''            "execution_modes": list(RELEASE_MODES),\n            "strict": True,''',
+              '''            "execution_modes": list(execution_modes),\n            "agent_led": {\n                "requested": args.include_agent_led,\n                "disabled_by_env": agent_led_disabled_by_env,\n                "effective": agent_led_effective,\n            },\n            "strict": True,''',
+              1,
+          )
+
+          old = '''            "host_supplier": {\n                "identity": supplier.supplier_identity,\n                "source_endpoint": supplier.source_endpoint,\n                "command_sha256": supplier.command_sha256,\n                "probe": supplier_probe,\n            },\n'''
+          new = '''            "host_supplier": (\n                {\n                    "identity": supplier.supplier_identity,\n                    "source_endpoint": supplier.source_endpoint,\n                    "command_sha256": supplier.command_sha256,\n                    "probe": supplier_probe,\n                }\n                if supplier is not None\n                else None\n            ),\n'''
+          if old not in smoke:
+              raise SystemExit('manifest supplier anchor not found')
+          smoke = smoke.replace(old, new, 1)
+          smoke_path.write_text(smoke, encoding='utf-8')
+
+          tests_path = Path('scripts/test_smoke_test.py')
+          tests = tests_path.read_text(encoding='utf-8')
+          tests += '''\n\n\ndef test_execution_modes_default_to_autonomous_and_deterministic():\n    modes, disabled = smoke_test.resolve_execution_modes(\n        include_agent_led=False, environ={}\n    )\n\n    assert modes == ("autonomous_local", "deterministic_debug")\n    assert disabled is False\n\n\ndef test_include_agent_led_selects_all_modes():\n    modes, disabled = smoke_test.resolve_execution_modes(\n        include_agent_led=True, environ={}\n    )\n\n    assert modes == smoke_test.RELEASE_MODES\n    assert disabled is False\n\n\ndef test_disable_agent_led_environment_override_wins():\n    modes, disabled = smoke_test.resolve_execution_modes(\n        include_agent_led=True, environ={"SMOKE_DISABLE_AGENT_LED": "yes"}\n    )\n\n    assert modes == smoke_test.DEFAULT_SMOKE_MODES\n    assert disabled is True\n\n\ndef test_false_disable_override_allows_include_flag():\n    modes, disabled = smoke_test.resolve_execution_modes(\n        include_agent_led=True, environ={"SMOKE_DISABLE_AGENT_LED": "0"}\n    )\n\n    assert modes == smoke_test.RELEASE_MODES\n    assert disabled is False\n\n\ndef test_invalid_disable_override_fails_closed():\n    with pytest.raises(smoke_test.SmokeGateError, match="SMOKE_DISABLE_AGENT_LED"):\n        smoke_test.resolve_execution_modes(\n            include_agent_led=True,\n            environ={"SMOKE_DISABLE_AGENT_LED": "sometimes"},\n        )\n\n\ndef test_parser_agent_led_is_opt_in():\n    parser = smoke_test.build_parser()\n    defaults = parser.parse_args(["--candidate-sha", "a" * 40])\n    enabled = parser.parse_args(\n        ["--candidate-sha", "a" * 40, "--include-agent-led"]\n    )\n\n    assert defaults.include_agent_led is False\n    assert enabled.include_agent_led is True\n'''
+          tests_path.write_text(tests, encoding='utf-8')
+
+          docs_path = Path('docs/reduced-real-smoke.md')
+          docs = docs_path.read_text(encoding='utf-8')
+          docs = '''# Reduced real smoke gate\n\nThe reduced smoke gate is diagnostic evidence only. It runs exactly two strict campaigns and one benchmark objective. By default, each repetition runs `autonomous_local` and `deterministic_debug`. The `agent_led` mode is optional.\n\nThe gate remains fail-closed: both recommendations must be `go` and the production reproducibility comparison must pass for the selected execution-mode set.\n\n## Default two-mode run\n\nNo host-artifact supplier is required for the default run:\n\n```bash\npython scripts/smoke_test.py \\\n  --candidate-sha "$(git rev-parse HEAD)" \\\n  --objective obj-001 \\\n  --database-url "$DATABASE_URL" \\\n  --qdrant-url "$QDRANT_URL"\n```\n\nThe effective modes are:\n\n- `autonomous_local`\n- `deterministic_debug`\n\n## Optional agent-led run\n\nAdd `--include-agent-led` to run all three modes. Only this form requires an external host-artifact supplier:\n\n```bash\nexport GENERATIVE_URL='http://127.0.0.1:8002/v1'\nexport SMOKE_HOST_SUPPLIER_COMMAND='/path/to/external-agent --stdio'\nexport SMOKE_HOST_SUPPLIER_IDENTITY='external-review-agent'\nexport SMOKE_HOST_SUPPLIER_ENDPOINT='http://external-review-agent:9000'\n\npython scripts/smoke_test.py \\\n  --candidate-sha "$(git rev-parse HEAD)" \\\n  --objective obj-001 \\\n  --database-url "$DATABASE_URL" \\\n  --qdrant-url "$QDRANT_URL" \\\n  --include-agent-led\n```\n\n`agent_led` must use a process distinct from the autonomous local-model endpoint. Both authorities must expose explicit endpoint fingerprints. `SMOKE_HOST_SUPPLIER_ENDPOINT` must not resolve to the configured autonomous endpoint, and the supplier must not proxy that endpoint under another label.\n\nThe external command receives one JSON document on stdin and returns one JSON document on stdout. Its probe and supply protocol remains `firecrawl-host-artifact-stdio-v1`.\n\n## Administrative environment override\n\nA truthy `SMOKE_DISABLE_AGENT_LED` always disables `agent_led`, even when `--include-agent-led` is present:\n\n```bash\nexport SMOKE_DISABLE_AGENT_LED=1\n```\n\nAccepted true values are `1`, `true`, `yes`, and `on`; accepted false values are `0`, `false`, `no`, and `off`, case-insensitively. Any other value fails closed.\n\nFor example, this still runs only the default two modes:\n\n```bash\nSMOKE_DISABLE_AGENT_LED=1 python scripts/smoke_test.py \\\n  --candidate-sha "$(git rev-parse HEAD)" \\\n  --objective obj-001 \\\n  --database-url "$DATABASE_URL" \\\n  --qdrant-url "$QDRANT_URL" \\\n  --include-agent-led\n```\n\nThe manifest records whether `agent_led` was requested, disabled by the environment, and effectively selected. When it is not selected, `host_supplier` is `null`.\n\n## Mandatory run checks\n\nCommit all source changes first. The gate rejects a dirty checkout and any candidate SHA that differs from `HEAD`. The complete real-stack preflight must pass before either campaign starts.\n\nFor every selected exact run, the gate requires:\n\n- the expected persisted semantic authority and no competing authority;\n- substantive source candidates, run assets, snapshots, documents, and chunks;\n- claims, claim-evidence links, evidence packets, and completed semantic calls;\n- completed `outline`, `binding`, `draft`, `citation_pass`, and `validation` stages;\n- at least 200 characters of report body from completed `draft.report_sections`;\n- all mandatory metric statuses and values required by strict release policy;\n- passing completeness and integrity checks.\n\nArtifacts are written below `/tmp/firecrawl_smoke_test/<candidate-sha>/` by default. The manifest records the selected mode set, exact SHA and tree identity, service fingerprints, optional supplier provenance, full result serialization, exact-run evidence counts, semantic authorities, draft report hashes, and the production reproducibility comparison.\n\nDo not start the corresponding full campaign unless the manifest states:\n\n```json\n{"gate":"PASS","full_campaign_authorized":true}\n```\n'''
+          docs_path.write_text(docs, encoding='utf-8')
+          PY
+
+      - name: Format and validate
+        run: |
+          ruff format scripts/smoke_test.py scripts/test_smoke_test.py
+          ruff check scripts/smoke_test.py scripts/test_smoke_test.py
+          ruff format --check --diff scripts/smoke_test.py scripts/test_smoke_test.py
+          python -m py_compile scripts/smoke_test.py scripts/test_smoke_test.py
+          python -m pytest -q -p no:cacheprovider scripts/test_smoke_test.py
+          git diff --check
+
+      - name: Commit validated changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/smoke_test.py scripts/test_smoke_test.py docs/reduced-real-smoke.md
+          git commit -m "test: make agent-led smoke mode optional"
+          git push origin HEAD:agent/issue-170-authoritative-extraction-evidence
