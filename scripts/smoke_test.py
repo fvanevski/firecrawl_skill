@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Reduced real smoke gate for authoritative release execution.
 
-This gate runs exactly two strict campaigns across all three release modes and
-one benchmark objective.  It is not closure evidence.  It blocks the full
+This gate runs exactly two strict campaigns and one benchmark objective.
+By default it exercises ``autonomous_local`` and ``deterministic_debug``;
+``agent_led`` is opt-in.  It is not closure evidence.  It blocks the full
 campaign unless both repetitions return ``go`` and the production
 reproducibility comparator passes.
 """
@@ -51,10 +52,38 @@ from research_store.workflow_benchmark import load_benchmark_dataset
 DEFAULT_DATASET = REPO_ROOT / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _ALLOWED_METRIC_STATUSES = {MetricStatus.MEASURED, MetricStatus.NOT_APPLICABLE}
+DEFAULT_SMOKE_MODES = tuple(mode for mode in RELEASE_MODES if mode != "agent_led")
+_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off", ""})
 
 
 class SmokeGateError(RuntimeError):
     """The reduced real smoke gate failed a mandatory invariant."""
+
+
+def _env_flag(name: str, environ: Mapping[str, str]) -> bool:
+    raw = environ.get(name)
+    if raw is None:
+        return False
+    normalized = raw.strip().lower()
+    if normalized in _TRUE_ENV_VALUES:
+        return True
+    if normalized in _FALSE_ENV_VALUES:
+        return False
+    raise SmokeGateError(f"{name} must be one of: 1, true, yes, on, 0, false, no, off")
+
+
+def resolve_execution_modes(
+    *,
+    include_agent_led: bool,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[tuple[str, ...], bool]:
+    """Resolve selected modes with the disable environment override winning."""
+    environment = os.environ if environ is None else environ
+    disabled_by_env = _env_flag("SMOKE_DISABLE_AGENT_LED", environment)
+    effective_agent_led = include_agent_led and not disabled_by_env
+    modes = RELEASE_MODES if effective_agent_led else DEFAULT_SMOKE_MODES
+    return tuple(modes), disabled_by_env
 
 
 @dataclass(frozen=True)
@@ -602,7 +631,8 @@ def run_campaign(
     qdrant_api_key: str,
     objective_id: str,
     tolerance: float,
-    supplier: ExternalProcessHostArtifactSupplier,
+    execution_modes: tuple[str, ...],
+    supplier: ExternalProcessHostArtifactSupplier | None,
     campaign_root: Path,
     candidate_sha: str,
 ) -> tuple[ReleaseBenchmarkResult, ReleaseBenchmarkRunner, Path, dict[str, Any]]:
@@ -611,7 +641,7 @@ def run_campaign(
         blob_root=blob_root,
         qdrant_url=qdrant_url,
         qdrant_api_key=qdrant_api_key,
-        execution_modes=RELEASE_MODES,
+        execution_modes=execution_modes,
         objective_ids=(objective_id,),
         strict=True,
         reproducibility_tolerance=tolerance,
@@ -619,7 +649,7 @@ def run_campaign(
     )
     runner = ReleaseBenchmarkRunner(loader, config)
     result = runner.run()
-    expected_pairs = {(mode, objective_id) for mode in RELEASE_MODES}
+    expected_pairs = {(mode, objective_id) for mode in execution_modes}
     actual_pairs = {(run.mode, run.objective_id) for run in result.runs}
     if actual_pairs != expected_pairs:
         raise SmokeGateError(
@@ -647,21 +677,24 @@ def run_campaign(
         artifacts_dir / "run-evidence.json",
         {"schema_version": "smoke-run-evidence-v1", "runs": inspections},
     )
-    _write_json_atomic(
-        artifacts_dir / "environment.json",
-        {
-            **_build_env_manifest(
-                candidate_sha, dataset_path, _compute_file_hash(dataset_path)
-            ),
-            "smoke_label": label,
-            "strict": True,
-            "execution_modes": list(RELEASE_MODES),
-            "objective_ids": [objective_id],
-            "host_supplier_identity": supplier.supplier_identity,
-            "host_supplier_endpoint": supplier.source_endpoint,
-            "host_supplier_command_sha256": supplier.command_sha256,
-        },
-    )
+    environment = {
+        **_build_env_manifest(
+            candidate_sha, dataset_path, _compute_file_hash(dataset_path)
+        ),
+        "smoke_label": label,
+        "strict": True,
+        "execution_modes": list(execution_modes),
+        "objective_ids": [objective_id],
+    }
+    if supplier is not None:
+        environment.update(
+            {
+                "host_supplier_identity": supplier.supplier_identity,
+                "host_supplier_endpoint": supplier.source_endpoint,
+                "host_supplier_command_sha256": supplier.command_sha256,
+            }
+        )
+    _write_json_atomic(artifacts_dir / "environment.json", environment)
     (artifacts_dir / "summary.txt").write_text(
         result.summary() + "\n", encoding="utf-8"
     )
@@ -719,6 +752,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--tolerance", type=float, default=0.15)
     parser.add_argument(
+        "--include-agent-led",
+        action="store_true",
+        help=(
+            "include agent_led mode; requires the external host supplier unless "
+            "SMOKE_DISABLE_AGENT_LED is truthy"
+        ),
+    )
+    parser.add_argument(
         "--host-supplier-command",
         default=os.environ.get("SMOKE_HOST_SUPPLIER_COMMAND", ""),
     )
@@ -752,24 +793,31 @@ def main(argv: list[str] | None = None) -> int:
             raise SmokeGateError("QDRANT_URL or --qdrant-url is required")
         if not 0.0 <= args.tolerance <= 1.0:
             raise SmokeGateError("tolerance must be between 0 and 1")
-        command = shlex.split(args.host_supplier_command)
-        autonomous_endpoints = tuple(
-            value
-            for value in (
-                os.environ.get("GENERATIVE_URL", ""),
-                os.environ.get("FIRECRAWL_LLM_LOCAL_BASE_URL", ""),
-                os.environ.get("FIRECRAWL_AUDIT_LOCAL_BASE_URL", ""),
+        execution_modes, agent_led_disabled_by_env = resolve_execution_modes(
+            include_agent_led=args.include_agent_led
+        )
+        agent_led_effective = "agent_led" in execution_modes
+        supplier: ExternalProcessHostArtifactSupplier | None = None
+        supplier_probe: dict[str, Any] | None = None
+        if agent_led_effective:
+            command = shlex.split(args.host_supplier_command)
+            autonomous_endpoints = tuple(
+                value
+                for value in (
+                    os.environ.get("GENERATIVE_URL", ""),
+                    os.environ.get("FIRECRAWL_LLM_LOCAL_BASE_URL", ""),
+                    os.environ.get("FIRECRAWL_AUDIT_LOCAL_BASE_URL", ""),
+                )
+                if value
             )
-            if value
-        )
-        supplier = ExternalProcessHostArtifactSupplier(
-            command,
-            supplier_identity=args.host_supplier_identity,
-            source_endpoint=args.host_supplier_endpoint,
-            timeout_seconds=args.host_supplier_timeout,
-            autonomous_endpoints=autonomous_endpoints,
-        )
-        supplier_probe = supplier.probe()
+            supplier = ExternalProcessHostArtifactSupplier(
+                command,
+                supplier_identity=args.host_supplier_identity,
+                source_endpoint=args.host_supplier_endpoint,
+                timeout_seconds=args.host_supplier_timeout,
+                autonomous_endpoints=autonomous_endpoints,
+            )
+            supplier_probe = supplier.probe()
         args.campaign_dir.mkdir(parents=True, exist_ok=True)
         args.blob_root.mkdir(parents=True, exist_ok=True)
 
@@ -808,6 +856,7 @@ def main(argv: list[str] | None = None) -> int:
             qdrant_api_key=args.qdrant_api_key,
             objective_id=args.objective,
             tolerance=args.tolerance,
+            execution_modes=execution_modes,
             supplier=supplier,
             campaign_root=args.campaign_dir,
             candidate_sha=args.candidate_sha,
@@ -822,6 +871,7 @@ def main(argv: list[str] | None = None) -> int:
             qdrant_api_key=args.qdrant_api_key,
             objective_id=args.objective,
             tolerance=args.tolerance,
+            execution_modes=execution_modes,
             supplier=supplier,
             campaign_root=args.campaign_dir,
             candidate_sha=args.candidate_sha,
@@ -841,15 +891,24 @@ def main(argv: list[str] | None = None) -> int:
             "dataset_path": str(args.dataset),
             "dataset_hash": _compute_file_hash(args.dataset),
             "objective_id": args.objective,
-            "execution_modes": list(RELEASE_MODES),
+            "execution_modes": list(execution_modes),
+            "agent_led": {
+                "requested": args.include_agent_led,
+                "disabled_by_env": agent_led_disabled_by_env,
+                "effective": agent_led_effective,
+            },
             "strict": True,
             "repetitions": 2,
-            "host_supplier": {
-                "identity": supplier.supplier_identity,
-                "source_endpoint": supplier.source_endpoint,
-                "command_sha256": supplier.command_sha256,
-                "probe": supplier_probe,
-            },
+            "host_supplier": (
+                {
+                    "identity": supplier.supplier_identity,
+                    "source_endpoint": supplier.source_endpoint,
+                    "command_sha256": supplier.command_sha256,
+                    "probe": supplier_probe,
+                }
+                if supplier is not None
+                else None
+            ),
             "campaign_a": {
                 "campaign_id": result_a.campaign_id,
                 "recommendation": result_a.recommendation.outcome

@@ -196,3 +196,56 @@ def test_draft_report_text_uses_only_completed_draft_sections():
     assert smoke_test.RunEvidenceInspector._draft_report_text(rows) == (
         "first\n\nsecond"
     )
+
+
+def test_execution_modes_default_to_autonomous_and_deterministic():
+    modes, disabled = smoke_test.resolve_execution_modes(
+        include_agent_led=False, environ={}
+    )
+
+    assert modes == ("autonomous_local", "deterministic_debug")
+    assert disabled is False
+
+
+def test_include_agent_led_selects_all_modes():
+    modes, disabled = smoke_test.resolve_execution_modes(
+        include_agent_led=True, environ={}
+    )
+
+    assert modes == smoke_test.RELEASE_MODES
+    assert disabled is False
+
+
+def test_disable_agent_led_environment_override_wins():
+    modes, disabled = smoke_test.resolve_execution_modes(
+        include_agent_led=True, environ={"SMOKE_DISABLE_AGENT_LED": "yes"}
+    )
+
+    assert modes == smoke_test.DEFAULT_SMOKE_MODES
+    assert disabled is True
+
+
+def test_false_disable_override_allows_include_flag():
+    modes, disabled = smoke_test.resolve_execution_modes(
+        include_agent_led=True, environ={"SMOKE_DISABLE_AGENT_LED": "0"}
+    )
+
+    assert modes == smoke_test.RELEASE_MODES
+    assert disabled is False
+
+
+def test_invalid_disable_override_fails_closed():
+    with pytest.raises(smoke_test.SmokeGateError, match="SMOKE_DISABLE_AGENT_LED"):
+        smoke_test.resolve_execution_modes(
+            include_agent_led=True,
+            environ={"SMOKE_DISABLE_AGENT_LED": "sometimes"},
+        )
+
+
+def test_parser_agent_led_is_opt_in():
+    parser = smoke_test.build_parser()
+    defaults = parser.parse_args(["--candidate-sha", "a" * 40])
+    enabled = parser.parse_args(["--candidate-sha", "a" * 40, "--include-agent-led"])
+
+    assert defaults.include_agent_led is False
+    assert enabled.include_agent_led is True
