@@ -154,6 +154,22 @@ def test_longest_text_finds_nested_report_body():
     assert smoke_test.RunEvidenceInspector._longest_text(artifact) == "z" * 250
 
 
+def test_run_evidence_inspector_uses_current_semantic_calls_schema():
+    queries = (
+        smoke_test.RunEvidenceInspector._COUNT_QUERIES["semantic_calls"],
+        smoke_test.RunEvidenceInspector._AUTHORITY_COUNT_QUERY,
+        smoke_test.RunEvidenceInspector._HOST_METADATA_QUERY,
+    )
+    combined = "\n".join(queries)
+
+    assert all("call_status" in query for query in queries)
+    assert "semantic_authority" in queries[1]
+    assert "semantic_authority" in queries[2]
+    assert "SELECT authority" not in combined
+    assert "AND authority=" not in combined
+    assert " status=" not in combined
+
+
 def test_orchestrator_propagates_supplier_to_semantic_stages():
     supplier = object()
     orchestrator = ResearchOrchestrator(

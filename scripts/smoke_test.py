@@ -448,6 +448,20 @@ def validate_run_contract(run: Any) -> list[str]:
 class RunEvidenceInspector:
     """Inspect exact-run assets, reports, and persisted semantic authority."""
 
+    _SEMANTIC_CALL_COUNT_QUERY: ClassVar[str] = (
+        "SELECT COUNT(*) FROM semantic_calls WHERE run_id=%s AND call_status='complete'"
+    )
+    _AUTHORITY_COUNT_QUERY: ClassVar[str] = """
+        SELECT semantic_authority, COUNT(*) FROM semantic_calls
+        WHERE run_id=%s AND call_status='complete'
+        GROUP BY semantic_authority ORDER BY semantic_authority
+    """
+    _HOST_METADATA_QUERY: ClassVar[str] = """
+        SELECT response_metadata FROM semantic_calls
+        WHERE run_id=%s AND semantic_authority='host-agent'
+          AND call_status='complete'
+    """
+
     _COUNT_QUERIES: ClassVar[dict[str, str]] = {
         "search_candidates": "SELECT COUNT(*) FROM search_candidates WHERE run_id=%s",
         "run_assets": "SELECT COUNT(*) FROM research_run_assets WHERE run_id=%s",
@@ -470,7 +484,7 @@ class RunEvidenceInspector:
         "claims": "SELECT COUNT(*) FROM research_claims WHERE run_id=%s",
         "claim_evidence_links": "SELECT COUNT(*) FROM claim_evidence_links WHERE run_id=%s",
         "evidence_packets": "SELECT COUNT(*) FROM evidence_packets WHERE run_id=%s",
-        "semantic_calls": "SELECT COUNT(*) FROM semantic_calls WHERE run_id=%s AND status='complete'",
+        "semantic_calls": _SEMANTIC_CALL_COUNT_QUERY,
         "synthesis_stages": "SELECT COUNT(*) FROM synthesis_stages WHERE run_id=%s AND stage_status='completed'",
     }
 
@@ -526,19 +540,10 @@ class RunEvidenceInspector:
                 cur.execute(query, (run_id,))
                 counts[name] = int(cur.fetchone()[0] or 0)
 
-            cur.execute(
-                """SELECT authority, COUNT(*) FROM semantic_calls
-                   WHERE run_id=%s AND status='complete'
-                   GROUP BY authority ORDER BY authority""",
-                (run_id,),
-            )
+            cur.execute(self._AUTHORITY_COUNT_QUERY, (run_id,))
             authority_counts = {str(name): int(count) for name, count in cur.fetchall()}
 
-            cur.execute(
-                """SELECT response_metadata FROM semantic_calls
-                   WHERE run_id=%s AND authority='host-agent' AND status='complete'""",
-                (run_id,),
-            )
+            cur.execute(self._HOST_METADATA_QUERY, (run_id,))
             host_metadata = [row[0] for row in cur.fetchall()]
 
             cur.execute(
