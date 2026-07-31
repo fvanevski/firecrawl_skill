@@ -1,5 +1,6 @@
 name: Fix PR 172 integration fixture
 
+# Temporary guarded workflow; removed after the validated fixture commit.
 on:
   pull_request:
     branches:
