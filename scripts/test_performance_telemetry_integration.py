@@ -1471,7 +1471,7 @@ class TestResourceCompleteness:
     """Tests for resource sample completeness (issue #170, item C)."""
 
     def test_resource_complete_with_window_metadata(self, telemetry_connection):
-        """When resource samples have window metadata, status should be MEASURED."""
+        """A complete two-sample CPU window is MEASURED in strict mode."""
         from uuid import uuid4
 
         from research_domain.models import ResourceSample
@@ -1501,23 +1501,27 @@ class TestResourceCompleteness:
         telemetry_connection.commit()
 
         svc = PerformanceTelemetryService(telemetry_connection)
-        sample = ResourceSample(
-            run_id=str(run_id),
-            device_type="cpu",
-            device_index=0,
-            sample_type="cpu_percent",
-            value=45.0,
-            sample_at="2026-07-30T12:00:00+00:00",
-            collector="psutil",
-            sample_number=0,
-            status="measured",
-            window_start="2026-07-30T11:59:00+00:00",
-            window_end="2026-07-30T12:00:00+00:00",
-            sampling_interval_seconds=1.0,
-        )
-        svc.record_resource_sample(sample)
+        for sample_number, value, sample_at in (
+            (0, 40.0, "2026-07-30T11:59:30+00:00"),
+            (1, 50.0, "2026-07-30T12:00:00+00:00"),
+        ):
+            svc.record_resource_sample(
+                ResourceSample(
+                    run_id=str(run_id),
+                    device_type="cpu",
+                    device_index=0,
+                    sample_type="cpu_percent",
+                    value=value,
+                    sample_at=sample_at,
+                    collector="psutil",
+                    sample_number=sample_number,
+                    status="measured",
+                    window_start="2026-07-30T11:59:00+00:00",
+                    window_end="2026-07-30T12:00:00+00:00",
+                    sampling_interval_seconds=1.0,
+                )
+            )
         telemetry_connection.commit()
-
         # Build summary to populate run_performance_telemetry.
         svc.build_summary(run_id)
         telemetry_connection.commit()
