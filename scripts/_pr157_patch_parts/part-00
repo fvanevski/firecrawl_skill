@@ -78,3 +78,4 @@ import time
         self._periodic_thread = threading.Thread(
             target=self._periodic_sample_loop,
             name="research-resource-sampler",
+    
