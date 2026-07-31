@@ -165,38 +165,17 @@ jobs:
           set -euo pipefail
           mkdir -p "$CAMPAIGN_DIR"
           MANIFEST="$CAMPAIGN_DIR/release-evidence-manifest.json"
-          if [[ ! -f "$MANIFEST" ]]; then
-            python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ["CAMPAIGN_DIR"])
-          value = {
-              "schema_version": "authoritative-release-evidence-v3",
-              "candidate_sha": os.environ["CANDIDATE_SHA"],
-              "artifact_retention_days": 90,
-              "workflow": {
-                  "repository": os.environ.get("GITHUB_REPOSITORY", ""),
-                  "run_id": os.environ.get("GITHUB_RUN_ID", ""),
-                  "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
-                  "workflow_ref": os.environ.get("GITHUB_WORKFLOW_REF", ""),
-                  "workflow_sha": os.environ.get("WORKFLOW_SHA", ""),
-              },
-              "exact_head_ci": {
-                  "ci_run_id": os.environ.get("CI_RUN_ID", ""),
-                  "ci_evidence_run_id": os.environ.get("CI_EVIDENCE_RUN_ID", ""),
-                  "expected_sha256": os.environ.get("CI_EVIDENCE_SHA256", ""),
-              },
-              "gate": "FAIL",
-              "errors": ["campaign verifier did not produce a manifest"],
-          }
-          (root / "release-evidence-manifest.json").write_text(
-              json.dumps(value, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          PY
-          fi
+          python scripts/ensure_release_failure_manifest.py \
+            --manifest "$MANIFEST" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --ci-run-id "$CI_RUN_ID" \
+            --ci-evidence-run-id "$CI_EVIDENCE_RUN_ID" \
+            --ci-evidence-sha256 "$CI_EVIDENCE_SHA256"
           MANIFEST_SHA=$(sha256sum "$MANIFEST" | cut -d' ' -f1)
           echo "path=$MANIFEST" >> "$GITHUB_OUTPUT"
           echo "sha256=$MANIFEST_SHA" >> "$GITHUB_OUTPUT"
