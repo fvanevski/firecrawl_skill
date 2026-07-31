@@ -1923,3 +1923,75 @@ def test_v5_commercial_provider_requires_explicit_model(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
     with pytest.raises(ValueError, match="explicit model"):
         gateway.provider_config("openai", None)
+
+
+def test_local_gateway_can_hold_output_budget_after_length_retry(monkeypatch):
+    payloads = []
+    responses = iter(
+        [
+            (
+                {
+                    "id": "attempt-1",
+                    "model": "chat",
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {"content": json.dumps({"wrong": "value"})},
+                        }
+                    ],
+                    "usage": {"total_tokens": 600},
+                },
+                "request-1",
+                200,
+            ),
+            (
+                {
+                    "id": "attempt-2",
+                    "model": "chat",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": json.dumps({"result": "ok"})},
+                        }
+                    ],
+                    "usage": {"total_tokens": 20},
+                },
+                "request-2",
+                200,
+            ),
+        ]
+    )
+
+    def fake_request(_url, payload, _headers, _timeout):
+        payloads.append(payload)
+        return next(responses)
+
+    monkeypatch.setattr(gateway, "_request_json", fake_request)
+    monkeypatch.setattr(
+        gateway,
+        "probe_local",
+        lambda *_args, **_kwargs: {"status": "available"},
+    )
+
+    result = gateway.call_structured(
+        provider="local",
+        model="chat",
+        system_prompt="Return the result.",
+        user_prompt="Produce one result.",
+        schema={
+            "type": "object",
+            "properties": {"result": {"type": "string"}},
+            "required": ["result"],
+            "additionalProperties": False,
+        },
+        max_output_tokens=512,
+        max_attempts=2,
+        expand_output_on_length=False,
+    )
+
+    assert result.error == ""
+    assert result.value == {"result": "ok"}
+    assert [payload["max_tokens"] for payload in payloads] == [512, 512]
+    assert "reached the output limit" in payloads[1]["messages"][1]["content"]
+    assert result.provenance["max_output_tokens"] == 512
+    assert result.provenance["expand_output_on_length"] is False

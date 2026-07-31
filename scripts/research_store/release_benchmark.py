@@ -1362,8 +1362,8 @@ class MetricEngine:
                 name="total_latency_ms",
                 value=performance.total_latency_ms,
                 source=MetricSource(
-                    table="research_runs",
-                    column="completed_at - created_at",
+                    table="benchmark_harness",
+                    column="monotonic_end - monotonic_start",
                     run_id=str(run_id),
                     method="duration",
                 ),

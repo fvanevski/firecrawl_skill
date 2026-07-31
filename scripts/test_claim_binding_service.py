@@ -603,3 +603,58 @@ def test_evaluate_claims_integration(service, mock_packet):
     assert str(binding.passage_ids[0]) == passage_id
     assert binding.relationship == "supports"
     assert persisted.claims[0].semantic_status == "supported"
+
+
+def test_evaluate_claims_scopes_and_bounds_local_generation(
+    service, mock_packet, monkeypatch
+):
+    claim_id = mock_packet["claims"][0]["claim_id"]
+    required_passage_id = mock_packet["passages"][0]["passage_id"]
+    captured = {}
+
+    def mock_prompt(*args, **kwargs):
+        captured.update(kwargs)
+        return HostArtifactResult(
+            value={
+                "evaluations": [
+                    {
+                        "claim_id": claim_id,
+                        "semantic_status": "supported",
+                        "bindings": [
+                            {
+                                "passage_ids": [required_passage_id],
+                                "relationship": "supports",
+                                "confidence": 0.95,
+                                "uncertainty": "none",
+                            }
+                        ],
+                    }
+                ]
+            },
+            provenance={},
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+
+    service.evaluate_claims(
+        run_id=UUID(mock_packet["run_id"]),
+        packet_revision=mock_packet["coverage_revision"],
+        prompt_version="v1",
+        model_name="test-model",
+        required_passage_ids_by_claim={claim_id: [required_passage_id]},
+    )
+
+    prompt = json.loads(captured["user_prompt"])
+    assert [item["passage_id"] for item in prompt["passages"]] == [required_passage_id]
+    assert captured["max_output_tokens"] == 1024
+    assert captured["expand_output_on_length"] is False
+
+    bindings = captured["schema"]["properties"]["evaluations"]["items"]["properties"][
+        "bindings"
+    ]
+    assert bindings["maxItems"] == 1
+    assert bindings["items"]["properties"]["passage_ids"]["maxItems"] == 1
+    assert bindings["items"]["properties"]["uncertainty"]["maxLength"] == 240

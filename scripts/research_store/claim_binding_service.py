@@ -65,16 +65,55 @@ class ClaimBindingService:
             return packet_revision
 
         required_passage_ids_by_claim = required_passage_ids_by_claim or {}
+        valid_claim_ids = [claim["claim_id"] for claim in claims]
+        passage_by_id = {passage["passage_id"]: passage for passage in passages}
+        unknown_required_claims = set(required_passage_ids_by_claim) - set(
+            valid_claim_ids
+        )
+        if unknown_required_claims:
+            raise ValueError(
+                "required passage lineage has unknown claim IDs: "
+                f"{sorted(unknown_required_claims)}"
+            )
+        unknown_required_passages = sorted(
+            {
+                passage_id
+                for passage_ids in required_passage_ids_by_claim.values()
+                for passage_id in passage_ids
+                if passage_id not in passage_by_id
+            }
+        )
+        if unknown_required_passages:
+            raise ValueError(
+                "required passage lineage has unknown passage IDs: "
+                f"{unknown_required_passages}"
+            )
+
+        fully_scoped = all(
+            required_passage_ids_by_claim.get(claim_id) for claim_id in valid_claim_ids
+        )
+        if fully_scoped:
+            scoped_ids = {
+                passage_id
+                for claim_id in valid_claim_ids
+                for passage_id in required_passage_ids_by_claim[claim_id]
+            }
+            prompt_passages = [
+                passage for passage in passages if passage["passage_id"] in scoped_ids
+            ]
+        else:
+            prompt_passages = passages
+        if not prompt_passages:
+            raise ValueError("claim binding has no eligible evidence passages")
+
         system_prompt = (
-            "You are a rigorous evidence evaluator. "
-            "Given a list of research claims and a list of passages, "
-            "determine if the passages support, contradict, qualify, or provide context for each claim. "
-            "Return exactly one evaluation for every claim and at least one "
-            "binding to a supplied passage for every evaluation. "
-            "Respond strictly using the JSON schema provided. "
-            "Do not invent IDs. Only use the provided claim_id and passage_id values. "
-            "When required_passage_ids are supplied for a claim, evaluate those exact "
-            "source-lineage passages and retain them in its binding."
+            "You are a rigorous evidence evaluator. Determine whether the supplied "
+            "passages support, contradict, qualify, or contextualize each claim. "
+            "Return exactly one compact evaluation for every claim. When a claim "
+            "has required_passage_ids, return exactly one binding containing those "
+            "exact IDs and no others. Otherwise use only the minimum passages needed. "
+            "Never repeat identifiers. Keep uncertainty concise. Respond strictly "
+            "using the supplied JSON schema and do not invent IDs."
         )
 
         user_prompt_data = {
@@ -89,7 +128,8 @@ class ClaimBindingService:
                 for c in claims
             ],
             "passages": [
-                {"passage_id": p["passage_id"], "text": p["text"]} for p in passages
+                {"passage_id": p["passage_id"], "text": p["text"]}
+                for p in prompt_passages
             ],
         }
         user_prompt = json.dumps(user_prompt_data, indent=2)
@@ -108,8 +148,7 @@ class ClaimBindingService:
             context["run_revision"] = status["lifecycle_revision"]
 
         schema = deepcopy(self.schema)
-        valid_claim_ids = [c["claim_id"] for c in claims]
-        valid_passage_ids = [p["passage_id"] for p in passages]
+        valid_passage_ids = [p["passage_id"] for p in prompt_passages]
         schema["properties"]["evaluations"]["minItems"] = len(valid_claim_ids)
         schema["properties"]["evaluations"]["maxItems"] = len(valid_claim_ids)
         schema["properties"]["evaluations"]["items"]["properties"]["bindings"][
@@ -118,9 +157,23 @@ class ClaimBindingService:
         schema["properties"]["evaluations"]["items"]["properties"]["claim_id"][
             "enum"
         ] = valid_claim_ids
-        schema["properties"]["evaluations"]["items"]["properties"]["bindings"]["items"][
-            "properties"
-        ]["passage_ids"]["items"]["enum"] = valid_passage_ids
+        bindings_schema = schema["properties"]["evaluations"]["items"]["properties"][
+            "bindings"
+        ]
+        bindings_schema["maxItems"] = (
+            1 if fully_scoped else min(4, len(valid_passage_ids))
+        )
+        passage_ids_schema = bindings_schema["items"]["properties"]["passage_ids"]
+        passage_ids_schema["items"]["enum"] = valid_passage_ids
+        passage_ids_schema["maxItems"] = (
+            max(
+                len(required_passage_ids_by_claim.get(claim_id, ()))
+                for claim_id in valid_claim_ids
+            )
+            if fully_scoped
+            else min(4, len(valid_passage_ids))
+        )
+        bindings_schema["items"]["properties"]["uncertainty"]["maxLength"] = 240
 
         deterministic_fixture = {
             "evaluations": [
@@ -129,9 +182,16 @@ class ClaimBindingService:
                     "semantic_status": "supported",
                     "bindings": [
                         {
-                            "passage_ids": [
-                                passages[index % len(passages)]["passage_id"]
-                            ],
+                            "passage_ids": list(
+                                required_passage_ids_by_claim.get(
+                                    claim["claim_id"],
+                                    [
+                                        prompt_passages[index % len(prompt_passages)][
+                                            "passage_id"
+                                        ]
+                                    ],
+                                )
+                            ),
                             "relationship": "supports",
                             "confidence": 0.8,
                             "uncertainty": "deterministic debug fixture",
@@ -152,6 +212,8 @@ class ClaimBindingService:
             schema=schema,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            max_output_tokens=min(4096, max(1024, len(claims) * 512)),
+            expand_output_on_length=False,
             prompt_version=prompt_version,
         )
 
@@ -248,6 +310,11 @@ class ClaimBindingService:
             bindings = eval_item.get("bindings", [])
             for b in bindings:
                 passage_ids_str = b.get("passage_ids", [])
+                required_passage_ids = required_passage_ids_by_claim.get(
+                    claim_id_str, []
+                )
+                if required_passage_ids:
+                    passage_ids_str = list(dict.fromkeys(required_passage_ids))
 
                 if not passage_ids_str:
                     continue

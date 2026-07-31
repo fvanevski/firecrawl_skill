@@ -1256,3 +1256,16 @@ def test_reproducibility_policy_rejects_excessive_operational_drift():
     comparison = runner.compare_campaigns(campaign_a, campaign_b)
     assert not comparison.all_within_tolerance
     assert any("total_latency_ms" in detail for detail in comparison.details)
+
+
+def test_total_latency_provenance_matches_monotonic_measurement(monkeypatch):
+    _performance, metrics = _extract_performance(
+        monkeypatch,
+        telemetry=_telemetry(),
+    )
+    latency = next(metric for metric in metrics if metric.name == "total_latency_ms")
+
+    assert latency.source.table == "benchmark_harness"
+    assert latency.source.column == "monotonic_end - monotonic_start"
+    assert latency.source.method == "duration"
+    assert latency.formula == "wall_clock_ms(monotonic_start, monotonic_end)"

@@ -28,6 +28,7 @@ except ModuleNotFoundError:  # Loaded as scripts.model_gateway from the reposito
 
 DEFAULT_LOCAL_URL = "http://192.168.4.115:8002/v1"
 MAX_RAW_EXCERPT = 4096
+LENGTH_FINISH_REASONS = frozenset({"length", "max_tokens", "MAX_TOKENS"})
 
 
 def estimate_tokens(value) -> int:
@@ -210,6 +211,7 @@ def call_structured(
     max_output_tokens=16384,
     timeout=120,
     max_attempts=3,
+    expand_output_on_length=True,
     prompt_version="unversioned",
     semantic_persistence=None,
     semantic_context=None,
@@ -308,6 +310,13 @@ def call_structured(
                 if prior_errors:
                     repair += "\nValidation errors: " + json.dumps(
                         list(prior_errors)[:10], sort_keys=True
+                    )
+                if prior.get("finish_reason") in LENGTH_FINISH_REASONS:
+                    repair += (
+                        "\nThe previous response reached the output limit. "
+                        "Return the smallest valid JSON instance: include only "
+                        "required array items, do not repeat identifiers, and "
+                        "omit explanatory prose outside schema fields."
                     )
             payload = {
                 "model": config["model"],
@@ -412,6 +421,8 @@ def call_structured(
                     "input_token_estimate": estimate_tokens(
                         system_prompt + user_prompt
                     ),
+                    "max_output_tokens": max_output_tokens,
+                    "expand_output_on_length": bool(expand_output_on_length),
                     "capability_probe": capability,
                     "attempt_count": attempt_number,
                     "usage": attempt["usage"],
@@ -450,12 +461,17 @@ def call_structured(
                 else "model output failed schema validation: "
                 + "; ".join(validation_errors[:5])
             )
-            if envelope.get("finish_reason") in {
-                "length",
-                "max_tokens",
-                "MAX_TOKENS",
-            } or (not content and envelope.get("reasoning_excerpt")):
-                output_budget = min(output_budget * 2, 32768)
+            hit_output_limit = envelope.get(
+                "finish_reason"
+            ) in LENGTH_FINISH_REASONS or (
+                not content and envelope.get("reasoning_excerpt")
+            )
+            if hit_output_limit:
+                last_error = (
+                    f"model output reached the {output_budget}-token output limit"
+                )
+                if expand_output_on_length:
+                    output_budget = min(output_budget * 2, 32768)
         except (RuntimeError, URLError, TimeoutError, ValueError) as exc:
             last_error = f"{type(exc).__name__}: {exc}"
             attempts.append(
@@ -487,6 +503,8 @@ def call_structured(
         "prompt_hash": prompt_hash,
         "capability_probe": capability,
         "input_token_estimate": estimate_tokens(system_prompt + user_prompt),
+        "max_output_tokens": max_output_tokens,
+        "expand_output_on_length": bool(expand_output_on_length),
         "attempt_count": len(attempts),
         "fallback": {
             "used": bool(context.get("fallback_from_call_id")),
