@@ -7,8 +7,21 @@ on:
         description: Exact current main SHA to validate
         required: true
         type: string
+      ci-run-id:
+        description: Completed exact-head ordinary CI workflow run ID
+        required: true
+        type: string
+      ci-evidence-run-id:
+        description: Workflow run containing the exact-head CI evidence artifact
+        required: true
+        type: string
+      ci-evidence-sha256:
+        description: SHA-256 of exact-head-ci-evidence.json
+        required: true
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -19,11 +32,15 @@ jobs:
     environment: release-campaign
     env:
       CANDIDATE_SHA: ${{ inputs.candidate-sha }}
+      CI_RUN_ID: ${{ inputs.ci-run-id }}
+      CI_EVIDENCE_RUN_ID: ${{ inputs.ci-evidence-run-id }}
+      CI_EVIDENCE_SHA256: ${{ inputs.ci-evidence-sha256 }}
       DISPATCH_SHA: ${{ github.sha }}
       WORKFLOW_SHA: ${{ github.workflow_sha }}
       DISPATCH_REF: ${{ github.ref }}
       CAMPAIGN_DIR: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
       SMOKE_DISABLE_AGENT_LED: "1"
+      GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out exact candidate
@@ -42,6 +59,27 @@ jobs:
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$SMOKE_DISABLE_AGENT_LED" = "1"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Retrieve completed exact-head CI evidence
+        id: ci_evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVIDENCE_DIR="$CAMPAIGN_DIR/exact-head-ci"
+          mkdir -p "$EVIDENCE_DIR"
+          gh run view "$CI_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,conclusion,status,headSha,url,jobs \
+            > "$EVIDENCE_DIR/ci-run-observed.json"
+          gh run download "$CI_EVIDENCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "exact-head-ci-evidence-$CANDIDATE_SHA" \
+            --dir "$EVIDENCE_DIR"
+          EVIDENCE_PATH="$EVIDENCE_DIR/exact-head-ci-evidence.json"
+          test -f "$EVIDENCE_PATH"
+          OBSERVED_SHA=$(sha256sum "$EVIDENCE_PATH" | cut -d' ' -f1)
+          test "$OBSERVED_SHA" = "$CI_EVIDENCE_SHA256"
+          echo "path=$EVIDENCE_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Set up isolated Python
         shell: bash
@@ -108,7 +146,11 @@ jobs:
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --workflow-ref "$GITHUB_WORKFLOW_REF" \
-            --execution-conclusion "${{ steps.execute.outcome }}"
+            --execution-conclusion "${{ steps.execute.outcome }}" \
+            --ci-evidence "${{ steps.ci_evidence.outputs.path }}" \
+            --ci-evidence-sha256 "$CI_EVIDENCE_SHA256" \
+            --ci-run-id "$CI_RUN_ID" \
+            --ci-evidence-run-id "$CI_EVIDENCE_RUN_ID"
 
       - name: Upload complete campaign directory
         id: upload
@@ -130,6 +172,9 @@ jobs:
             echo "artifact_digest=${{ steps.upload.outputs.artifact-digest }}"
             echo "candidate_sha=$CANDIDATE_SHA"
             echo "workflow_sha=$WORKFLOW_SHA"
+            echo "ci_run_id=$CI_RUN_ID"
+            echo "ci_evidence_run_id=$CI_EVIDENCE_RUN_ID"
+            echo "ci_evidence_sha256=$CI_EVIDENCE_SHA256"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce authoritative gate
