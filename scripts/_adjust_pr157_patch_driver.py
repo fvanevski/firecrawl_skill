@@ -174,7 +174,7 @@ if text.count(old) != 1:
     raise SystemExit("quality N/A regression insertion target mismatch")
 text = text.replace(old, new, 1)
 
-expected_output = "5c3c892283dff7c67f34f1daf2a22ed41495afbdf5440ffb5f0a90bff9c3e819"
+expected_output = "c2c885f71aed2c1f5634008b2338f9eeafaeccebc650246e477d2f2fb99fd548"
 actual_output = hashlib.sha256(text.encode()).hexdigest()
 if actual_output != expected_output:
     raise SystemExit(f"adjusted driver SHA mismatch: {actual_output}")
