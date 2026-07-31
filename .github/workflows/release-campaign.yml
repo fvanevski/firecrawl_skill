@@ -13,12 +13,16 @@ permissions:
 
 jobs:
   campaign:
-    name: "Real release campaigns (issues #146/#153)"
+    name: "Real release campaigns (issues #146/#153/#170)"
     runs-on: [self-hosted, firecrawl-release]
     timeout-minutes: 180
     environment: release-campaign
     env:
       CANDIDATE_SHA: ${{ inputs.candidate-sha }}
+      CAMPAIGN_DIR: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
+      # Administrative fail-closed override: the authoritative campaign uses
+      # only autonomous_local and deterministic_debug.
+      SMOKE_DISABLE_AGENT_LED: "1"
 
     steps:
       - name: Check out exact candidate
@@ -27,8 +31,11 @@ jobs:
           ref: ${{ inputs.candidate-sha }}
           fetch-depth: 0
 
-      - name: Verify exact checkout
-        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Verify exact checkout and mode contract
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$SMOKE_DISABLE_AGENT_LED" = "1"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Set up isolated Python
         shell: bash
@@ -64,7 +71,20 @@ jobs:
           PYTHONPATH: scripts
         run: |
           python -m research_store.strict_benchmark \
-            --campaign-dir "$RUNNER_TEMP/release-campaign-${CANDIDATE_SHA}"
+            --candidate-sha "$CANDIDATE_SHA" \
+            --campaign-dir "$CAMPAIGN_DIR"
+
+      - name: Verify authoritative campaign evidence
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONPATH: scripts
+        run: |
+          python scripts/verify_release_campaign.py \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --campaign-dir "$CAMPAIGN_DIR" \
+            --dataset tests/fixtures/benchmark/benchmark-v2.json \
+            --database-url "$DATABASE_URL" \
+            --retention-days 90
 
       - name: Upload durable campaign artifacts
         if: always()
