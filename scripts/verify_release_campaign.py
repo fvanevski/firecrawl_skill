@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Verify and hash-bind an authoritative full release campaign.
 
 This verifier is independent from campaign execution. It derives the required
@@ -18,10 +17,11 @@ import re
 import subprocess
 import sys
 import traceback
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 from uuid import UUID
 
 EXPECTED_MODES = ("autonomous_local", "deterministic_debug")
@@ -236,13 +236,10 @@ def validate_run_shape(
         for objective_id in objective_ids
     }
     actual_pairs = {
-        (str(run.get("mode") or ""), str(run.get("objective_id") or ""))
-        for run in runs
+        (str(run.get("mode") or ""), str(run.get("objective_id") or "")) for run in runs
     }
     if len(runs) != EXPECTED_RUNS_PER_CAMPAIGN:
-        errors.append(
-            f"expected {EXPECTED_RUNS_PER_CAMPAIGN} runs, got {len(runs)}"
-        )
+        errors.append(f"expected {EXPECTED_RUNS_PER_CAMPAIGN} runs, got {len(runs)}")
     if actual_pairs != expected_pairs:
         errors.append(
             f"run set mismatch: expected {sorted(expected_pairs)}, got {sorted(actual_pairs)}"
