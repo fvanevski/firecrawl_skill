@@ -218,6 +218,7 @@ def _recommend(
     mode: str,
     performance: PerformanceMeasurement,
     performance_metrics: tuple[PerformanceMetric, ...],
+    quality_metrics: tuple[QualityMetric, ...] | None = None,
     errors: tuple[str, ...] = (),
 ) -> ReleaseRecommendation:
     run_id = uuid4()
@@ -229,7 +230,7 @@ def _recommend(
         integrity_checks=(),
         run_id=run_id,
         errors=errors,
-        quality_metrics=_quality_metrics(run_id),
+        quality_metrics=quality_metrics or _quality_metrics(run_id),
         performance_metrics=performance_metrics,
     )
     baseline_mode = "autonomous_local" if mode != "autonomous_local" else "agent_led"
@@ -275,9 +276,9 @@ def _telemetry(**overrides):
         "embedding_throughput": 10.0,
         "embedding_total_texts": 10,
         "embedding_elapsed_seconds": 1.0,
-        "cpu_samples": 1,
+        "cpu_samples": 2,
         "cpu_mean_percent": 20.0,
-        "gpu_samples": 1,
+        "gpu_samples": 3,
         "gpu_mean_memory_mb": 256.0,
         "telemetry_tables_exist": True,
     }
@@ -363,12 +364,12 @@ def _extract_performance(
         lambda _run_id: embedding or _embedding_completeness(),
     )
     resources = resources or {
-        "cpu": _resource_completeness(),
-        "gpu": _resource_completeness(),
+        "cpu": _resource_completeness(total_count=2, measured_count=2),
+        "gpu": _resource_completeness(total_count=3, measured_count=3),
     }
     resource_sources = resource_sources or {
-        "cpu": _resource_source("cpu"),
-        "gpu": _resource_source("gpu"),
+        "cpu": _resource_source("cpu", measured_count=2),
+        "gpu": _resource_source("gpu", measured_count=3),
     }
     monkeypatch.setattr(
         engine,
@@ -1269,3 +1270,106 @@ def test_total_latency_provenance_matches_monotonic_measurement(monkeypatch):
     assert latency.source.column == "monotonic_end - monotonic_start"
     assert latency.source.method == "duration"
     assert latency.formula == "wall_clock_ms(monotonic_start, monotonic_end)"
+
+
+def test_strict_resource_metrics_require_periodic_window(monkeypatch):
+    """Endpoint-only observations remain incomplete in strict policy."""
+    performance, metrics = _extract_performance(
+        monkeypatch,
+        telemetry=_telemetry(
+            cpu_samples=1,
+            cpu_mean_percent=20.0,
+            gpu_samples=2,
+            gpu_mean_memory_mb=256.0,
+        ),
+        resources={
+            "cpu": _resource_completeness(total_count=1, measured_count=1),
+            "gpu": _resource_completeness(total_count=2, measured_count=2),
+        },
+        resource_sources={
+            "cpu": _resource_source("cpu", measured_count=1),
+            "gpu": _resource_source("gpu", measured_count=2),
+        },
+    )
+
+    cpu_metric = next(metric for metric in metrics if metric.name == "cpu_percent")
+    gpu_metric = next(metric for metric in metrics if metric.name == "gpu_memory_mb")
+
+    assert cpu_metric.status == MetricStatus.INCOMPLETE
+    assert gpu_metric.status == MetricStatus.INCOMPLETE
+    assert cpu_metric.value is None
+    assert gpu_metric.value is None
+    assert performance.cpu_percent is None
+    assert performance.gpu_memory_mb is None
+    assert "requires at least 2 measured CPU samples" in cpu_metric.formula
+    assert "requires at least 3 measured GPU samples" in gpu_metric.formula
+    assert cpu_metric.source.method == "periodic_run_window_mean"
+    assert gpu_metric.source.method == "periodic_run_window_mean"
+
+
+def test_strict_policy_converts_unavailable_cpu_observation_to_no_go():
+    """Nullable unavailable telemetry completes extraction but cannot authorize release."""
+    run_id = uuid4()
+    metrics = list(_performance_metrics(run_id))
+    cpu_index = next(
+        index for index, metric in enumerate(metrics) if metric.name == "cpu_percent"
+    )
+    metrics[cpu_index] = PerformanceMetric(
+        name="cpu_percent",
+        value=None,
+        source=MetricSource(
+            table="run_resource_samples",
+            column="AVG(value) FILTER (status = 'measured')",
+            run_id=str(run_id),
+            method="periodic_run_window_mean",
+        ),
+        formula="unavailable — no measured process-scoped CPU samples in run window",
+        status=MetricStatus.UNAVAILABLE,
+    )
+    performance = PerformanceMeasurement(
+        **{**_performance().__dict__, "cpu_percent": None}
+    )
+
+    recommendation = _recommend(
+        mode="autonomous_local",
+        performance=performance,
+        performance_metrics=tuple(metrics),
+    )
+
+    assert recommendation.outcome == "no_go"
+    assert any(
+        "performance metric cpu_percent is unavailable" in claim
+        for claim in recommendation.withdrawn_claims
+    )
+
+
+def test_strict_policy_rejects_not_applicable_quality_metric():
+    """Quality evidence cannot satisfy strict policy through N/A status."""
+    run_id = uuid4()
+    quality_metrics = list(_quality_metrics(run_id))
+    target_index = next(
+        index
+        for index, metric in enumerate(quality_metrics)
+        if metric.name == "candidate_recall"
+    )
+    original = quality_metrics[target_index]
+    quality_metrics[target_index] = QualityMetric(
+        name=original.name,
+        value=None,
+        source=original.source,
+        formula="not applicable regression fixture",
+        status=MetricStatus.NOT_APPLICABLE,
+    )
+
+    recommendation = _recommend(
+        mode="autonomous_local",
+        performance=_performance(),
+        performance_metrics=_performance_metrics(uuid4()),
+        quality_metrics=tuple(quality_metrics),
+    )
+
+    assert recommendation.outcome == "no_go"
+    assert any(
+        "quality metric candidate_recall is not_applicable" in claim
+        for claim in recommendation.withdrawn_claims
+    )

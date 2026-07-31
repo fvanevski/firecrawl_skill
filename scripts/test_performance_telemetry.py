@@ -728,8 +728,8 @@ class TestStrictModeRejection:
 
         When telemetry tables exist but individual metrics are missing
         (e.g. cache_lookups=0, cpu_samples=0, embedding_throughput=0),
-        strict mode must produce 0.0 metrics instead of falling back to
-        global semantic_cache, live psutil, or live NVML.  This prevents
+        strict mode must produce null unavailable metrics instead of falling
+        back to global semantic_cache, live psutil, or live NVML. This prevents
         spurious cross-campaign contamination from unrelated prior runs.
         """
         import time
@@ -792,7 +792,8 @@ class TestStrictModeRejection:
 
         Issue #159: strict cache metrics must carry an explicit status
         independent of the numeric value.  When cache_lookups == 0 in strict
-        mode the status must be UNAVAILABLE — not MEASURED with a value of 0.0.
+        mode the status must be UNAVAILABLE with a null value — never a
+        host-global fallback or numeric sentinel.
         """
         import time
         from unittest import mock
@@ -1402,3 +1403,95 @@ def test_resource_sampler_backfills_complete_window_on_initial_gpu_sample(
         gpu_samples[0].window_start
     }
     assert {sample.window_end for sample in gpu_samples} == {gpu_samples[0].window_end}
+
+
+def test_periodic_resource_window_collects_interior_samples():
+    """The release sampler records interior CPU/GPU observations."""
+    import time
+
+    import research_store.resource_sampler as module
+
+    process = mock.Mock()
+    process.cpu_percent.return_value = 200.0
+    fake_psutil = SimpleNamespace(
+        Process=mock.Mock(return_value=process),
+        cpu_count=mock.Mock(return_value=2),
+        __version__="6.1.1",
+    )
+    handle = object()
+    fake_nvml = SimpleNamespace(
+        __version__="13.610.43",
+        nvmlInit=mock.Mock(),
+        nvmlShutdown=mock.Mock(),
+        nvmlDeviceGetHandleByIndex=mock.Mock(return_value=handle),
+        nvmlDeviceGetUUID=mock.Mock(return_value="GPU-periodic"),
+        nvmlDeviceGetMemoryInfo=mock.Mock(
+            return_value=SimpleNamespace(used=512 * 1024 * 1024)
+        ),
+    )
+
+    with (
+        mock.patch.object(module, "_HAS_PSUTIL", True),
+        mock.patch.object(module, "psutil", fake_psutil, create=True),
+        mock.patch.object(module, "_HAS_PYNVML", True),
+        mock.patch.object(module, "pynvml", fake_nvml, create=True),
+    ):
+        sampler = module.ResourceSampler(interval_seconds=0.01)
+        sampler.start_periodic_window()
+        time.sleep(0.06)
+        cpu_samples, gpu_samples = sampler.stop_periodic_window()
+
+    assert len(cpu_samples) >= 2
+    assert len(gpu_samples) >= 3
+    assert [sample.sample_number for sample in cpu_samples] == list(
+        range(len(cpu_samples))
+    )
+    assert [sample.sample_number for sample in gpu_samples] == list(
+        range(len(gpu_samples))
+    )
+    assert all(sample.status == "measured" for sample in cpu_samples + gpu_samples)
+    assert all(sample.window_start for sample in cpu_samples + gpu_samples)
+    assert all(sample.window_end for sample in cpu_samples + gpu_samples)
+    assert len({sample.window_start for sample in cpu_samples + gpu_samples}) == 1
+    assert len({sample.window_end for sample in cpu_samples + gpu_samples}) == 1
+
+
+def test_unavailable_resource_sample_persists_nullable_value():
+    """Unavailable instrumentation is persisted as SQL NULL, never numeric zero."""
+    from research_domain.models import ResourceSample
+    from research_store.telemetry_service import PerformanceTelemetryService
+
+    connection = mock.Mock()
+    service = PerformanceTelemetryService(connection)
+    sample = ResourceSample(
+        run_id=str(uuid4()),
+        device_type="cpu",
+        sample_type="process_cpu_percent_normalized",
+        value=None,
+        sample_at="2026-07-31T12:00:00+00:00",
+        collector="psutil",
+        collector_version="not-installed",
+        sample_number=0,
+        status="unavailable",
+        failure_reason="psutil not installed",
+        window_start="2026-07-31T12:00:00+00:00",
+        window_end="2026-07-31T12:00:01+00:00",
+        sampling_interval_seconds=1.0,
+    )
+
+    service.record_resource_sample(sample)
+
+    params = connection.execute.call_args.args[1]
+    assert params[5] is None
+    assert params[10] == "unavailable"
+    assert params[11] == "psutil not installed"
+
+
+def test_release_runner_uses_uncapped_periodic_resource_window():
+    """The production runner wires periodic sampling around orchestration."""
+    import research_store.release_benchmark as module
+
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    assert "sampler.start_periodic_window()" in source
+    assert "sampler.stop_periodic_window()" in source
+    assert "ResourceSampler(interval_seconds=1.0, max_samples=10)" not in source

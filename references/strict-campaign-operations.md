@@ -26,9 +26,15 @@ reproducibility, and produces a release recommendation.
 **Strict mode is mandatory and cannot be disabled.** There is no `--no-strict`
 or `--simulate` flag. When strict mode is active:
 
-- Missing, partial, estimated, or stale quality or performance metrics produce
-  `0.0` values with `unavailable` status and clear formulas documenting the
-  empty source, rather than falling back to heuristics.
+- Missing, partial, estimated, stale, or invalid quality or performance
+  observations retain JSON `null` values with explicit status and provenance;
+  they never become numeric sentinel zeros or host-global fallbacks.
+- Metric extraction completes for partial run state and the strict
+  recommendation policy returns `NO_GO`; `RuntimeError` is reserved for
+  configuration, forbidden execution modes, and failures that prevent a run
+  artifact from being formed.
+- `not_applicable` is accepted only when the metric is explicitly inapplicable
+  to that mode, such as model token usage for a deterministic fixture.
 - Failed deterministic integrity checks force a `NO_GO` recommendation.
 - A campaign that recommends `NO_GO` causes the CLI to exit with status `1`.
 - Reproducibility differences outside the configured tolerance cause the CLI to
@@ -72,8 +78,8 @@ Alembic migrations):
 - `semantic_calls` — performance metrics (tokens, latency, model)
 - `run_cache_events` — run-scoped cache hit/miss events (authoritative)
 - `endpoint_usage_records` — token counts from endpoint responses
-- `resource_samples` — CPU/GPU multi-sample telemetry
-- `resource_summary` — aggregated CPU/GPU summary per run
+- `run_resource_samples` — nullable, run-scoped CPU/GPU periodic samples
+- `run_performance_telemetry` — aggregated CPU/GPU summary per run
 - `research_claims` — claim support/contradiction state
 - `claim_evidence_links` — citation accuracy
 
@@ -165,9 +171,9 @@ A critical detail (fixed in commit `255be4e`) is that telemetry population
 happens **before** metric extraction:
 
 ```
-ResourceSampler.begin_window()
-  → orchestrator.run()
-  → ResourceSampler.end_window()
+ResourceSampler.start_periodic_window()
+  → orchestrator.run() while 1-second interior samples are collected
+  → ResourceSampler.stop_periodic_window()
   → _populate_endpoint_usage()       # writes endpoint_usage_records
   → _persist_resource_samples()       # writes exact-window samples
   → telemetry_svc.build_summary()     # writes resource_summary
@@ -175,11 +181,16 @@ ResourceSampler.begin_window()
   → metric_engine.extract_performance_metrics()
 ```
 
-If telemetry is populated after extraction, strict mode will produce
-null metrics with clear formulas documenting the empty source — it no
-longer raises `RuntimeError`. This ensures campaigns can complete even
-when the orchestrator produces partial state (coverage events but no
-claims/evidence/telemetry).
+If telemetry is populated after extraction, strict mode produces null metrics
+with explicit status and provenance and the recommendation becomes `NO_GO`; it
+does not convert missing observations to zero and does not raise merely because
+a metric source is empty.
+
+The strict resource contract requires a genuine periodic workload window:
+at least two measured CPU observations and three measured GPU observations
+(start, at least one interior sample, and end), complete shared window
+boundaries, no invalid or partial samples, and an explicit GPU UUID. A shorter
+or incomplete series is persisted but classified `incomplete`.
 
 ---
 
@@ -335,25 +346,24 @@ in both campaigns.
 
 ### Performance metrics compared
 
-| Metric | Type | Tolerance |
-| ----------------------- | ------- | --------- |
-| `total_latency_ms` | absolute | configurable |
-| `total_tokens` | absolute | configurable |
-| `semantic_calls` | absolute | configurable |
-| `cache_hit_rate` | ratio | configurable |
-| `embedding_throughput` | absolute | configurable |
-| `cpu_percent` | absolute | configurable |
-| `gpu_memory_mb` | absolute | configurable |
+| Metric | Policy |
+| ----------------------- | --------- |
+| `total_tokens` | configured relative tolerance after status/scope equality |
+| `semantic_calls` | configured relative tolerance after status/scope equality |
+| `cache_hit_rate` | configured relative tolerance after status/scope equality |
+| `total_latency_ms` | operational ratio envelope |
+| `embedding_throughput` | operational ratio envelope |
+| `cpu_percent` | operational ratio envelope plus a 2 percentage-point absolute floor |
+| `gpu_memory_mb` | operational ratio envelope plus a 256 MiB absolute floor |
 
-### Relative difference formula
+### Reproducibility policy v2
 
-For each metric pair `(val_a, val_b)`:
-
-```
-denom = abs(val_a) if abs(val_a) > 1e-9 else 1.0
-rel_diff = abs(val_b - val_a) / denom
-within = rel_diff <= tolerance
-```
+Comparison first requires matching authoritative status and scope. Missing,
+partial, invalid, stale, or differently scoped observations fail before
+numeric tolerance is evaluated. Deterministic metrics use the configured
+relative tolerance. Operational metrics remain visible in the artifact and
+use the declared ratio envelope and metric-specific absolute floors; accepted
+operational variance is recorded under `observations`, not silently discarded.
 
 ### Mode/objective set mismatch
 
@@ -430,9 +440,10 @@ an explicit `status` field:
 | `invalid` | Source exists but the data is invalid |
 | `not_applicable` | This metric does not apply to this mode/objective pair |
 
-A metric with status `unavailable` or `unevaluated` has JSON value `null`,
-never a sentinel zero. Strict release policy rejects any campaign
-where a mandatory quality or performance metric is not `measured`.
+A metric with any non-measured status has JSON value `null`, never a
+sentinel zero. Strict quality policy requires `measured`. Strict performance
+policy accepts `measured` and an explicitly scoped `not_applicable`; every
+other mandatory status produces `NO_GO`.
 
 **Recovery:** This is expected when infrastructure (Firecrawl, embedding
 endpoint, reranker) is unavailable. The campaign completes with NO_GO
@@ -461,6 +472,10 @@ host-wide ``psutil`` sample whose provenance formula claimed ``0.0``.
 ``telemetry_tables_exist`` is ``False``, preventing the legacy fallback.
 Both CPU and GPU paths produce ``null`` with ``unavailable`` status and a
 formula that documents the empty source when telemetry tables are absent.
+When collectors are available, the runner records uncapped one-second interior
+samples across the exact orchestration window. Strict policy requires at least
+two measured CPU samples and three measured GPU samples; shorter series are
+``incomplete`` rather than falsely ``measured``.
 
 **Verification:** Run the regression test:
 
@@ -554,7 +569,7 @@ strict-campaign:
 
 | Test | Scope | Infrastructure |
 | ------ | ------- | -------------- |
-| `TestStrictModeRejection.test_strict_mode_produces_zero_metrics_when_telemetry_tables_absent` | Unit — pre-migration DB | No |
+| `TestStrictModeRejection.test_strict_mode_produces_null_metrics_when_telemetry_tables_absent` | Unit — pre-migration DB | No |
 | `TestStrictModeRejection.test_strict_mode_blocks_legacy_fallbacks` | Unit — empty telemetry tables | No |
 | `TestStrictModeRejection.test_strict_cpu_rejects_legacy_when_tables_absent` | Unit — CPU strict flag + tables absent | No |
 | `TestStrictModeRejection.test_strict_gpu_rejects_legacy_when_tables_absent` | Unit — GPU strict flag + tables absent | No |
@@ -562,6 +577,10 @@ strict-campaign:
 | `TestStrictModeRejection.test_strict_cache_metric_source_never_points_to_semantic_cache` | Unit — cache provenance | No |
 | `TestStrictModeRejection.test_non_strict_cache_metric_status_is_measured_with_lookups` | Unit — non-strict cache | No |
 | `TestStrictModeRejection.test_read_telemetry_sets_false_when_query_fails` | Unit — `_read_telemetry` | No |
+| `test_periodic_resource_window_collects_interior_samples` | Unit — periodic CPU/GPU window | No |
+| `test_unavailable_resource_sample_persists_nullable_value` | Unit — nullable observation persistence | No |
+| `test_strict_resource_metrics_require_periodic_window` | Unit — strict minimum sample policy | No |
+| `test_strict_policy_converts_unavailable_cpu_observation_to_no_go` | Unit — strict recommendation policy | No |
 
 ### Integration test behavior
 
