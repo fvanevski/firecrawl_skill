@@ -18,8 +18,7 @@ def _inline_verifier(text: str) -> str:
     start = text.index(opening) + len(opening)
     end = text.index(closing, start)
     return "\n".join(
-        line[10:] if line.startswith("          ") else line
-        for line in text[start:end].splitlines()
+        line.removeprefix("          ") for line in text[start:end].splitlines()
     )
 
 
