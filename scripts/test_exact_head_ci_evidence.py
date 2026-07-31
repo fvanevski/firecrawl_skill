@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from build_exact_head_ci_evidence import (
-    REQUIRED_JOB_NAMES,
     ExactHeadCiEvidenceError,
+    REQUIRED_JOB_NAMES,
     build_evidence,
     validate_completed_ci_run,
 )
@@ -129,5 +129,7 @@ def test_release_workflow_consumes_exact_ci_artifact():
     assert "ci-evidence-run-id:" in workflow
     assert "ci-evidence-sha256:" in workflow
     assert "gh run download" in workflow
+    assert "verify_release_campaign_ci.py" in workflow
     assert "--ci-evidence" in workflow
     assert "--ci-evidence-sha256" in workflow
+    assert "render_release_evidence_comment.py" in workflow
