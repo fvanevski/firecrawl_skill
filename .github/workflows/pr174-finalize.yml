@@ -1,3 +1,4 @@
+# One-use branch finalizer; removes itself after successful validation.
 name: PR 174 finalize corrective release path
 
 on:
