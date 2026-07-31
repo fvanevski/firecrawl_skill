@@ -25,32 +25,22 @@ jobs:
           from pathlib import Path
 
           path = Path(".github/workflows/ci.yml")
-          text = path.read_text(encoding="utf-8")
-          invariant_old = (
-              "            scripts/test_release_invariant_contracts.py \\\n"
-              "            scripts/test_smoke_test.py\n"
-          )
-          invariant_new = (
-              "            scripts/test_release_invariant_contracts.py \\\n"
-              "            scripts/test_smoke_test.py \\\n"
-              "            scripts/test_release_campaign_verifier.py\n"
-          )
-          full_old = (
-              "            scripts/test_release_invariant_contracts.py \\\n"
-              "            scripts/test_smoke_test.py \\\n"
-          )
-          full_new = (
-              "            scripts/test_release_invariant_contracts.py \\\n"
-              "            scripts/test_release_campaign_verifier.py \\\n"
-              "            scripts/test_smoke_test.py \\\n"
-          )
-          if invariant_old not in text:
-              raise SystemExit("release-invariant pytest list anchor not found")
-          if full_old not in text:
-              raise SystemExit("full pytest list anchor not found")
-          text = text.replace(invariant_old, invariant_new, 1)
-          text = text.replace(full_old, full_new, 1)
-          path.write_text(text, encoding="utf-8")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          smoke_indexes = [
+              index
+              for index, line in enumerate(lines)
+              if line.strip().startswith("scripts/test_smoke_test.py")
+          ]
+          if len(smoke_indexes) < 2:
+              raise SystemExit("expected release-invariant and full-suite anchors")
+
+          verifier_line = "            scripts/test_release_campaign_verifier.py"
+          first, second = smoke_indexes[:2]
+          lines[first] = lines[first] + " \\"
+          lines.insert(first + 1, verifier_line)
+          second += 1
+          lines.insert(second, verifier_line + " \\")
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
       - name: Commit CI test wiring
