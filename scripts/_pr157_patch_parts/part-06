@@ -1,0 +1,71 @@
+available telemetry completes extraction but cannot authorize release."""
+    run_id = uuid4()
+    metrics = list(_performance_metrics(run_id))
+    cpu_index = next(
+        index for index, metric in enumerate(metrics) if metric.name == "cpu_percent"
+    )
+    metrics[cpu_index] = PerformanceMetric(
+        name="cpu_percent",
+        value=None,
+        source=MetricSource(
+            table="run_resource_samples",
+            column="AVG(value) FILTER (status = 'measured')",
+            run_id=str(run_id),
+            method="periodic_run_window_mean",
+        ),
+        formula="unavailable — no measured process-scoped CPU samples in run window",
+        status=MetricStatus.UNAVAILABLE,
+    )
+    performance = PerformanceMeasurement(
+        **{**_performance().__dict__, "cpu_percent": None}
+    )
+
+    recommendation = _recommend(
+        mode="autonomous_local",
+        performance=performance,
+        performance_metrics=tuple(metrics),
+    )
+
+    assert recommendation.outcome.value == "no_go"
+    assert any(
+        "performance metric cpu_percent is unavailable" in claim
+        for claim in recommendation.withdrawn_claims
+    )
+''',
+    )
+
+    replace_once(
+        "references/strict-campaign-operations.md",
+        '''- Missing, partial, estimated, or stale quality or performance metrics produce
+  `0.0` values with `unavailable` status and clear formulas documenting the
+  empty source, rather than falling back to heuristics.
+''',
+        '''- Missing, partial, estimated, stale, or invalid quality or performance
+  observations retain JSON `null` values with explicit status and provenance;
+  they never become numeric sentinel zeros or host-global fallbacks.
+- Metric extraction completes for partial run state and the strict
+  recommendation policy returns `NO_GO`; `RuntimeError` is reserved for
+  configuration, forbidden execution modes, and failures that prevent a run
+  artifact from being formed.
+- `not_applicable` is accepted only when the metric is explicitly inapplicable
+  to that mode, such as model token usage for a deterministic fixture.
+''',
+    )
+    replace_once(
+        "references/strict-campaign-operations.md",
+        '''- `resource_samples` — CPU/GPU multi-sample telemetry
+- `resource_summary` — aggregated CPU/GPU summary per run
+''',
+        '''- `run_resource_samples` — nullable, run-scoped CPU/GPU periodic samples
+- `run_performance_telemetry` — aggregated CPU/GPU summary per run
+''',
+    )
+    replace_once(
+        "references/strict-campaign-operations.md",
+        '''ResourceSampler.begin_window()
+  → orchestrator.run()
+  → ResourceSampler.end_window()
+''',
+        '''ResourceSampler.start_periodic_window()
+  → orchestrator.run() while 1-second interior samples are collected
+  → ResourceSampler.stop_peri
