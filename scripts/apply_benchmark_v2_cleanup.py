@@ -33,6 +33,18 @@ replacements = (
         '            defaults = {',
         "empty citation labels",
     ),
+    (
+        '    for path in ROOT.rglob("*"):\n'
+        '        if not path.is_file() or ".git" in path.parts:',
+        '    disposable_workflow = (\n'
+        '        ROOT / ".github/workflows/apply-benchmark-v2-cleanup.yml"\n'
+        '    )\n'
+        '    for path in ROOT.rglob("*"):\n'
+        '        if path == disposable_workflow:\n'
+        '            continue\n'
+        '        if not path.is_file() or ".git" in path.parts:',
+        "disposable workflow exclusion",
+    ),
 )
 
 for old, new, label in replacements:
