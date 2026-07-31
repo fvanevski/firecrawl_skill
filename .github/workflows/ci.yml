@@ -46,24 +46,19 @@ jobs:
           path = Path("scripts/model_gateway.py")
           text = path.read_text(encoding="utf-8")
 
-          old = '''            attempt = {
-                      "attempt": attempt_number,
-                      "api_surface": config["api_surface"],
-                      "structured_mode": structured_mode,
+          start = text.index("            attempt = {\n")
+          latency = text.index('                "latency_ms":', start)
+          block = text[start:latency]
+          if '"thinking_enabled"' not in block:
+              marker = '                "structured_mode": structured_mode,\n'
+              marker_at = text.index(marker, start, latency) + len(marker)
+              addition = '''                "thinking_enabled": (
+                      bool(enable_thinking)
+                      if config["api_surface"] == "chat_completions"
+                      else None
+                  ),
           '''
-          new = '''            attempt = {
-                      "attempt": attempt_number,
-                      "api_surface": config["api_surface"],
-                      "structured_mode": structured_mode,
-                      "thinking_enabled": (
-                          bool(enable_thinking)
-                          if config["api_surface"] == "chat_completions"
-                          else None
-                      ),
-          '''
-          if text.count(old) != 1:
-              raise RuntimeError("successful attempt metadata target was not unique")
-          text = text.replace(old, new, 1)
+              text = text[:marker_at] + addition + text[marker_at:]
 
           old = '''        "seed": 0 if config["api_surface"] == "chat_completions" else None,
                   "prompt_version": prompt_version,
