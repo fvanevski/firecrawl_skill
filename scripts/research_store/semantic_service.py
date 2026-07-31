@@ -196,7 +196,7 @@ class SemanticCallService:
         _run_id, status = self._authorize(context, SemanticAuthority.LOCAL_MODEL)
         request = redact_sensitive(
             {
-                "authority": "model",
+                "authority": SemanticAuthority.LOCAL_MODEL.value,
                 "endpoint_alias": endpoint_alias,
                 "prompt_hash": prompt_hash,
                 "schema_name": schema_name,

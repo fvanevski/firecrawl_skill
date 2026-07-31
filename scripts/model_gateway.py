@@ -249,7 +249,7 @@ def call_structured(
     last_error = ""
     for attempt_number in range(1, max_attempts + 1):
         started = time.monotonic()
-        structured_mode = "json_schema" if attempt_number == 1 else "json_object"
+        structured_mode = "json_schema"
         if config["api_surface"] == "responses":
             payload = {
                 "model": config["model"],
@@ -292,14 +292,23 @@ def call_structured(
                 if structured_mode == "json_schema"
                 else {"type": "json_object"}
             )
-            repair = (
-                (
-                    "\nRepair the prior response. Return only one JSON object matching this exact schema:\n"
-                    + json.dumps(schema, sort_keys=True)
+            repair = ""
+            if attempt_number > 1:
+                prior = attempts[-1] if attempts else {}
+                prior_errors = (
+                    prior.get("schema_errors")
+                    or prior.get("validation_errors")
+                    or ([last_error] if last_error else [])
                 )
-                if attempt_number > 1
-                else ""
-            )
+                repair = (
+                    "\nThe previous response was invalid. Return only a JSON instance "
+                    "that satisfies the requested response schema. Do not return, copy, "
+                    "or describe the JSON Schema itself."
+                )
+                if prior_errors:
+                    repair += "\nValidation errors: " + json.dumps(
+                        list(prior_errors)[:10], sort_keys=True
+                    )
             payload = {
                 "model": config["model"],
                 "temperature": 0,

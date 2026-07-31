@@ -162,12 +162,12 @@ def test_run_evidence_inspector_uses_current_semantic_calls_schema():
     )
     combined = "\n".join(queries)
 
-    assert all("call_status" in query for query in queries)
-    assert "semantic_authority" in queries[1]
-    assert "semantic_authority" in queries[2]
-    assert "SELECT authority" not in combined
-    assert "AND authority=" not in combined
-    assert " status=" not in combined
+    assert all("status='complete'" in query for query in queries)
+    assert "request->>'authority'" in queries[1]
+    assert "request->>'authority'" in queries[2]
+    assert "call_status" not in combined
+    assert "SELECT semantic_authority" not in combined
+    assert "AND semantic_authority=" not in combined
 
 
 def test_orchestrator_propagates_supplier_to_semantic_stages():
@@ -265,3 +265,154 @@ def test_parser_agent_led_is_opt_in():
 
     assert defaults.include_agent_led is False
     assert enabled.include_agent_led is True
+
+
+def test_model_gateway_retry_keeps_schema_constraint(monkeypatch):
+    import model_gateway
+
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {"status": {"type": "string", "enum": ["ok"]}},
+        "required": ["status"],
+        "additionalProperties": False,
+    }
+    schema_echo = {
+        "$schema": schema["$schema"],
+        "description": "This is the schema, not an instance.",
+        "properties": schema["properties"],
+        "additionalProperties": False,
+    }
+    responses = iter(
+        [
+            (
+                {
+                    "id": "attempt-1",
+                    "model": "chat",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": json.dumps(schema_echo)},
+                        }
+                    ],
+                    "usage": {},
+                },
+                "request-1",
+                200,
+            ),
+            (
+                {
+                    "id": "attempt-2",
+                    "model": "chat",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": json.dumps({"status": "ok"})},
+                        }
+                    ],
+                    "usage": {},
+                },
+                "request-2",
+                200,
+            ),
+        ]
+    )
+    payloads = []
+
+    def fake_request(_url, payload, _headers, _timeout):
+        payloads.append(payload)
+        return next(responses)
+
+    monkeypatch.setattr(model_gateway, "_request_json", fake_request)
+    monkeypatch.setattr(
+        model_gateway,
+        "probe_local",
+        lambda *_args, **_kwargs: {"status": "available"},
+    )
+
+    result = model_gateway.call_structured(
+        provider="local",
+        model="chat",
+        system_prompt="Return the required status object.",
+        user_prompt="Produce the result.",
+        schema=schema,
+        max_attempts=2,
+    )
+
+    assert result.error == ""
+    assert result.value == {"status": "ok"}
+    assert [item["response_format"]["type"] for item in payloads] == [
+        "json_schema",
+        "json_schema",
+    ]
+    repair_prompt = payloads[1]["messages"][1]["content"]
+    assert "Return only a JSON instance" in repair_prompt
+    assert "matching this exact schema" not in repair_prompt
+    assert '"properties":' not in repair_prompt
+    assert '"additionalProperties": false' not in repair_prompt
+
+
+def test_local_model_call_persists_policy_authority():
+    from uuid import uuid4
+
+    from research_store.execution_policy import SemanticAuthority
+    from research_store.semantic_service import SemanticCallService
+
+    class Runs:
+        request = None
+
+        def get_run_status(self, *, run_id):
+            return {
+                "lifecycle_revision": 1,
+                "execution_mode": "autonomous_local",
+            }
+
+        def record_semantic_call(
+            self,
+            run_id,
+            stage,
+            provider,
+            model,
+            prompt_version,
+            request,
+            idempotency_key,
+            **kwargs,
+        ):
+            self.request = request
+            return uuid4()
+
+    class UnitOfWork:
+        def __init__(self, runs):
+            self.runs = runs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    runs = Runs()
+    service = SemanticCallService(lambda: UnitOfWork(runs))
+    run_id = uuid4()
+
+    service.start_model_call(
+        {
+            "run_id": str(run_id),
+            "run_revision": 1,
+            "stage": "draft",
+            "schema_name": "synthesis-draft-v1",
+            "schema_version": 1,
+            "idempotency_key": "draft-call",
+        },
+        provider="local",
+        requested_model="chat",
+        model_revision="",
+        endpoint_alias="local",
+        prompt_version="v1",
+        prompt_hash="abc",
+        schema={"type": "object"},
+        input_token_estimate=1,
+    )
+
+    assert runs.request is not None
+    assert runs.request["authority"] == SemanticAuthority.LOCAL_MODEL.value

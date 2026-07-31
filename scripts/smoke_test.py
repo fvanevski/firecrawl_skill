@@ -449,17 +449,17 @@ class RunEvidenceInspector:
     """Inspect exact-run assets, reports, and persisted semantic authority."""
 
     _SEMANTIC_CALL_COUNT_QUERY: ClassVar[str] = (
-        "SELECT COUNT(*) FROM semantic_calls WHERE run_id=%s AND call_status='complete'"
+        "SELECT COUNT(*) FROM semantic_calls WHERE run_id=%s AND status='complete'"
     )
     _AUTHORITY_COUNT_QUERY: ClassVar[str] = """
-        SELECT semantic_authority, COUNT(*) FROM semantic_calls
-        WHERE run_id=%s AND call_status='complete'
-        GROUP BY semantic_authority ORDER BY semantic_authority
+        SELECT request->>'authority' AS authority, COUNT(*) FROM semantic_calls
+        WHERE run_id=%s AND status='complete'
+        GROUP BY request->>'authority' ORDER BY authority
     """
     _HOST_METADATA_QUERY: ClassVar[str] = """
         SELECT response_metadata FROM semantic_calls
-        WHERE run_id=%s AND semantic_authority='host-agent'
-          AND call_status='complete'
+        WHERE run_id=%s AND request->>'authority'='host-agent'
+          AND status='complete'
     """
 
     _COUNT_QUERIES: ClassVar[dict[str, str]] = {
