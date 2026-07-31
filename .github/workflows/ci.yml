@@ -53,7 +53,8 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_release_invariant_contracts.py
+            scripts/test_release_invariant_contracts.py \
+            scripts/test_smoke_test.py
 
   test:
     name: Test — Python ${{ matrix.python-version }}
@@ -142,6 +143,7 @@ jobs:
             scripts/test_persist_results.py \
             scripts/test_release_benchmark.py \
             scripts/test_release_invariant_contracts.py \
+            scripts/test_smoke_test.py \
             scripts/test_performance_telemetry.py \
             scripts/test_performance_telemetry_integration.py \
             scripts/test_strict_campaign.py \
