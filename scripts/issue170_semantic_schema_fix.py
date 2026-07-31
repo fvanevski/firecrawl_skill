@@ -15,8 +15,7 @@ replacement = '''class RunEvidenceInspector:
     """Inspect exact-run assets, reports, and persisted semantic authority."""
 
     _SEMANTIC_CALL_COUNT_QUERY: ClassVar[str] = (
-        "SELECT COUNT(*) FROM semantic_calls "
-        "WHERE run_id=%s AND call_status='complete'"
+        "SELECT COUNT(*) FROM semantic_calls WHERE run_id=%s AND call_status='complete'"
     )
     _AUTHORITY_COUNT_QUERY: ClassVar[str] = """
         SELECT semantic_authority, COUNT(*) FROM semantic_calls
