@@ -55,7 +55,8 @@ jobs:
             -p no:cacheprovider \
             scripts/test_release_invariant_contracts.py \
             scripts/test_smoke_test.py \
-            scripts/test_release_campaign_verifier.py
+            scripts/test_release_campaign_verifier.py \
+            scripts/test_exact_head_ci_evidence.py
 
   test:
     name: "Test — Python ${{ matrix.python-version }}"
@@ -98,7 +99,7 @@ jobs:
 
       - name: Start disposable Qdrant
         # Qdrant client-server pair: qdrant-client==1.15.1 (requirements-research-store.txt)
-        # with server v1.18.3.  The client is backward-compatible with newer servers.
+        # with server v1.18.3. The client is backward-compatible with newer servers.
         # READ_ONLY_ACCESS=false disables the read-only mode guard so test writes
         # (index builds, alias switches) succeed without a separate auth token.
         run: |
@@ -145,6 +146,7 @@ jobs:
             scripts/test_release_benchmark.py \
             scripts/test_release_invariant_contracts.py \
             scripts/test_release_campaign_verifier.py \
+            scripts/test_exact_head_ci_evidence.py \
             scripts/test_smoke_test.py \
             scripts/test_performance_telemetry.py \
             scripts/test_performance_telemetry_integration.py \
@@ -239,18 +241,31 @@ jobs:
 
   release-evidence:
     name: "Release evidence (issue #145)"
+    needs:
+      - release-invariants
+      - test
+      - strict-campaign-contract
+      - lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: >-
+      always() &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: read
 
     steps:
-      - name: Check out repository
+      - name: Check out exact candidate
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.candidate-sha || github.sha }}
           fetch-depth: 0
+
+      - name: Verify current main ref is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -265,38 +280,65 @@ jobs:
           python -m pip install \
             -r requirements-research-store.txt
 
-      - name: Generate release-evidence manifest
+      - name: Generate exact-head release-evidence manifest
         id: generate
+        continue-on-error: true
         env:
           PYTHONPATH: scripts
+        shell: bash
         run: |
-          python -m research_store.release_evidence generate \
+          set -euo pipefail
+          python scripts/generate_exact_head_ci_evidence.py \
             --repo . \
-            --output release-evidence-manifest.json
-          SHA=$(python -c 'import json; print(json.load(open("release-evidence-manifest.json"))["candidate_sha"])')
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+            --output release-evidence-manifest.json \
+            --candidate-sha "${{ inputs.candidate-sha || github.sha }}" \
+            --event-sha "$GITHUB_SHA" \
+            --event-ref "$GITHUB_REF" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --release-invariants-result "${{ needs.release-invariants.result }}" \
+            --test-result "${{ needs.test.result }}" \
+            --strict-campaign-contract-result "${{ needs.strict-campaign-contract.result }}" \
+            --lint-result "${{ needs.lint.result }}"
 
-      - name: Upload manifest artifact
+      - name: Upload exact-head manifest artifact
+        id: upload
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-evidence-manifest
+          name: release-evidence-manifest-${{ inputs.candidate-sha || github.sha }}
           path: release-evidence-manifest.json
+          if-no-files-found: error
           retention-days: 90
 
-      - name: Verify manifest against candidate SHA
-        env:
-          PYTHONPATH: scripts
+      - name: Record release-evidence identity
+        if: always()
+        shell: bash
         run: |
-          python -m research_store.release_evidence verify \
-            --manifest release-evidence-manifest.json \
-            --repo .
+          {
+            echo "candidate_sha=${{ inputs.candidate-sha || github.sha }}"
+            echo "workflow_run_id=$GITHUB_RUN_ID"
+            echo "artifact_id=${{ steps.upload.outputs.artifact-id }}"
+            echo "artifact_url=${{ steps.upload.outputs.artifact-url }}"
+            echo "artifact_digest=${{ steps.upload.outputs.artifact-digest }}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce exact-head evidence gate
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ steps.generate.outcome }}" = "success"
+          test "${{ steps.upload.outcome }}" = "success"
 
   dispatch-release-campaign:
     name: Dispatch exact-head release campaign
     if: >-
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
-      contains(github.event.head_commit.message, 'Merge pull request #173')
+      contains(github.event.head_commit.message, '[release-candidate]')
     needs:
       - release-invariants
       - test
