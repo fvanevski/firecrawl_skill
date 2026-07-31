@@ -4035,8 +4035,8 @@ class TestIndexRebuildRecovery:
             assert attempt_count == 0
 
     def test_index_build_resume_interrupted_build(self, service):
-        """When some manifests are complete and some pending, index-build
-        only requeues the pending ones — no duplicate jobs are created."""
+        """Index build requeues every manifest whose physical point is absent,
+        including a manifest incorrectly marked complete, without duplicate jobs."""
 
         from research_store.cli import _index_build
         from research_store.config import StoreConfig
@@ -4150,13 +4150,15 @@ class TestIndexRebuildRecovery:
             )
             assert cur.fetchone()[0] == 2
 
-            # Verify the previously-complete manifest is still complete
+            # Physical absence invalidates the false-complete PostgreSQL state.
             cur.execute(
-                """SELECT index_status FROM embedding_manifests
-                WHERE id=%s""",
+                """SELECT m.index_status,j.status
+                FROM embedding_manifests m
+                JOIN index_jobs j ON j.manifest_id=m.id
+                WHERE m.id=%s""",
                 (complete_manifest_id,),
             )
-            assert cur.fetchone()[0] == "complete"
+            assert cur.fetchone() == ("pending", "pending")
 
     def test_index_build_recreates_missing_jobs(self, service):
         """When a job is deleted but the manifest remains, index-build
