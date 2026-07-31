@@ -1389,7 +1389,7 @@ def test_v5_local_gateway_records_empty_reasoning_retry_and_provenance(monkeypat
     assert result.provenance["capability_probe"]["max_context_tokens"] == 262144
     assert result.attempts[0]["finish_reason"] == "length"
     assert result.attempts[0]["reasoning_excerpt"]
-    assert result.attempts[1]["structured_mode"] == "json_object"
+    assert result.attempts[1]["structured_mode"] == "json_schema"
 
 
 def test_semantic_gateway_persists_success_and_redacts_sensitive_data(monkeypatch):
