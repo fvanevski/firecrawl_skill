@@ -1,0 +1,53 @@
+name: Issue 170 semantic-call schema repair
+
+on:
+  push:
+    branches:
+      - agent/issue-170-authoritative-extraction-evidence
+    paths:
+      - .github/workflows/issue170-semantic-schema-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    name: Repair smoke semantic-call queries
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v7
+        with:
+          ref: agent/issue-170-authoritative-extraction-evidence
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-research-store.txt pytest ruff
+
+      - name: Apply guarded schema correction
+        run: python scripts/issue170_semantic_schema_fix.py
+
+      - name: Validate formatting and focused regression
+        run: |
+          ruff check scripts/smoke_test.py scripts/test_smoke_test.py
+          ruff format --check scripts/smoke_test.py scripts/test_smoke_test.py
+          python -m pytest -q -p no:cacheprovider scripts/test_smoke_test.py
+
+      - name: Commit and push source-only fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/smoke_test.py scripts/test_smoke_test.py
+          git diff --cached --check
+          git commit -m "Fix smoke semantic-call schema queries"
+          git push origin HEAD:agent/issue-170-authoritative-extraction-evidence
