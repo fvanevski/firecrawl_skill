@@ -1,0 +1,108 @@
+name: Exact-head release campaign dispatch
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    name: Validate completed CI and dispatch campaign
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
+      CI_RUN_ID: ${{ github.event.workflow_run.id }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out completed candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Resolve one-use eligibility and exact main identity
+        id: eligibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          SUBJECT=$(git show -s --format=%s "$CANDIDATE_SHA")
+          if [[ "$SUBJECT" != *"Fix exact-head CI evidence and campaign dispatch"* ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "Completed CI is not the corrective release-candidate merge; no dispatch."
+            exit 0
+          fi
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .commit.sha)
+          test "$MAIN_SHA" = "$CANDIDATE_SHA"
+          test "$GITHUB_WORKFLOW_SHA" = "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch completed exact-head CI run
+        if: steps.eligibility.outputs.eligible == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run view "$CI_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,conclusion,status,headSha,url,jobs \
+            > "$RUNNER_TEMP/ci-run.json"
+
+      - name: Build exact-head CI evidence
+        id: evidence
+        if: steps.eligibility.outputs.eligible == 'true'
+        env:
+          PYTHONPATH: scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          TREE_HASH=$(git rev-parse 'HEAD^{tree}')
+          EVIDENCE_DIR="$RUNNER_TEMP/exact-head-ci-evidence-$CANDIDATE_SHA"
+          mkdir -p "$EVIDENCE_DIR"
+          python scripts/build_exact_head_ci_evidence.py \
+            --run-json "$RUNNER_TEMP/ci-run.json" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --tree-hash "$TREE_HASH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --dispatcher-run-id "$GITHUB_RUN_ID" \
+            --dispatcher-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --dispatcher-workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --dispatcher-workflow-sha "$GITHUB_WORKFLOW_SHA" \
+            --output "$EVIDENCE_DIR/exact-head-ci-evidence.json"
+          EVIDENCE_SHA=$(sha256sum "$EVIDENCE_DIR/exact-head-ci-evidence.json" | cut -d' ' -f1)
+          echo "directory=$EVIDENCE_DIR" >> "$GITHUB_OUTPUT"
+          echo "sha256=$EVIDENCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact-head CI evidence
+        if: steps.eligibility.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: exact-head-ci-evidence-${{ env.CANDIDATE_SHA }}
+          path: ${{ steps.evidence.outputs.directory }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Dispatch authoritative campaign
+        if: steps.eligibility.outputs.eligible == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run release-campaign.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f candidate-sha="$CANDIDATE_SHA" \
+            -f ci-run-id="$CI_RUN_ID" \
+            -f ci-evidence-run-id="$GITHUB_RUN_ID" \
+            -f ci-evidence-sha256="${{ steps.evidence.outputs.sha256 }}"
