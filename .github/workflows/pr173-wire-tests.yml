@@ -1,4 +1,4 @@
-name: PR 173 wire verifier tests
+name: PR 173 finalize CI wiring
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  wire-tests:
+  finalize:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out PR branch
@@ -18,40 +18,24 @@ jobs:
           ref: agent/issue-170-authoritative-campaign-dispatch
           fetch-depth: 0
 
-      - name: Add verifier tests to explicit CI suites
+      - name: Correct CI job name and remove helper
         shell: bash
         run: |
+          set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
           path = Path(".github/workflows/ci.yml")
-          lines = path.read_text(encoding="utf-8").splitlines()
-          smoke_indexes = [
-              index
-              for index, line in enumerate(lines)
-              if line.strip().startswith("scripts/test_smoke_test.py")
-          ]
-          if len(smoke_indexes) < 2:
-              raise SystemExit("expected release-invariant and full-suite anchors")
-
-          verifier_line = "            scripts/test_release_campaign_verifier.py"
-          first, second = smoke_indexes[:2]
-          lines[first] = lines[first] + " \\"
-          lines.insert(first + 1, verifier_line)
-          second += 1
-          lines.insert(second, verifier_line + " \\")
-          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          text = path.read_text(encoding="utf-8")
+          old = '    name: Test — Python ${{ matrix.python-version }}"\n'
+          new = '    name: "Test — Python ${{ matrix.python-version }}"\n'
+          if old not in text:
+              raise SystemExit("CI job-name typo anchor not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
-
-      - name: Commit CI test wiring
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo "Verifier tests already wired."
-            exit 0
-          fi
+          git rm .github/workflows/pr173-wire-tests.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .github/workflows/ci.yml
-          git commit -m "Run authoritative verifier tests in CI"
+          git commit -m "Finalize authoritative verifier CI wiring"
           git push origin HEAD:agent/issue-170-authoritative-campaign-dispatch
