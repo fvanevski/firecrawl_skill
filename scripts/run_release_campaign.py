@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Run the authoritative two-mode release campaign and normalize its artifacts.
 
 The underlying strict benchmark supports additional modes for non-release uses.
@@ -14,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from research_store.strict_benchmark import _write_json_atomic, main as strict_main
+from research_store import strict_benchmark
 
 AUTHORITATIVE_MODES = ("autonomous_local", "deterministic_debug")
 
@@ -51,9 +50,9 @@ def normalize_mode_metadata(campaign_dir: Path) -> None:
         if environment_path.is_file():
             environment = _load_object(environment_path)
             environment["execution_modes"] = list(AUTHORITATIVE_MODES)
-            _write_json_atomic(environment_path, environment)
+            strict_benchmark._write_json_atomic(environment_path, environment)
 
-    _write_json_atomic(manifest_path, manifest)
+    strict_benchmark._write_json_atomic(manifest_path, manifest)
 
 
 def _campaign_dir_from_argv(argv: list[str]) -> Path:
@@ -68,7 +67,7 @@ def _campaign_dir_from_argv(argv: list[str]) -> Path:
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     campaign_dir = _campaign_dir_from_argv(arguments)
-    result = strict_main(arguments, execution_modes=AUTHORITATIVE_MODES)
+    result = strict_benchmark.main(arguments, execution_modes=AUTHORITATIVE_MODES)
     normalize_mode_metadata(campaign_dir)
     return result
 
