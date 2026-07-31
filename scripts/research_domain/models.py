@@ -1191,7 +1191,7 @@ class BenchmarkConfig:
     min_degraded_recall_ratio: float = 0.3
 
     # Benchmark metadata
-    benchmark_version: str = "benchmark-v1"
+    benchmark_version: str = "benchmark-v2"
     ground_truth_version: str = "ground-truth-v1"
 
 
