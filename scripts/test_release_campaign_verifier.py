@@ -9,12 +9,12 @@ from uuid import uuid4
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.release_benchmark import (  # noqa: E402
+from research_store.release_benchmark import (
     MANDATORY_PERFORMANCE_METRICS,
     MANDATORY_QUALITY_METRICS,
     ReleaseBenchmarkConfig,
 )
-from verify_release_campaign import (  # noqa: E402
+from verify_release_campaign import (
     EXPECTED_MODES,
     EXPECTED_RUNS_PER_CAMPAIGN,
     EXPECTED_TOTAL_RUNS,
@@ -116,9 +116,9 @@ def test_agent_led_is_not_part_of_authoritative_campaign():
 
 
 def test_release_workflow_binds_candidate_and_blocks_agent_led():
-    workflow = (SCRIPTS.parent / ".github" / "workflows" / "release-campaign.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (
+        SCRIPTS.parent / ".github" / "workflows" / "release-campaign.yml"
+    ).read_text(encoding="utf-8")
     assert '--candidate-sha "$CANDIDATE_SHA"' in workflow
     assert 'SMOKE_DISABLE_AGENT_LED: "1"' in workflow
     assert "verify_release_campaign.py" in workflow
