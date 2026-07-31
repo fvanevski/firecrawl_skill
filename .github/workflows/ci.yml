@@ -75,30 +75,34 @@ jobs:
           )
           samples_start = function.index(samples_start_marker)
           samples_end = function.index(summary_marker, samples_start)
-          replacement = '''        svc = PerformanceTelemetryService(telemetry_connection)
-          for sample_number, value, sample_at in (
-              (0, 40.0, "2026-07-30T11:59:30+00:00"),
-              (1, 50.0, "2026-07-30T12:00:00+00:00"),
-          ):
-              svc.record_resource_sample(
-                  ResourceSample(
-                      run_id=str(run_id),
-                      device_type="cpu",
-                      device_index=0,
-                      sample_type="cpu_percent",
-                      value=value,
-                      sample_at=sample_at,
-                      collector="psutil",
-                      sample_number=sample_number,
-                      status="measured",
-                      window_start="2026-07-30T11:59:00+00:00",
-                      window_end="2026-07-30T12:00:00+00:00",
-                      sampling_interval_seconds=1.0,
-                  )
-              )
-          telemetry_connection.commit()
-
-          '''
+          i = " " * 8
+          replacement = "\n".join(
+              [
+                  f"{i}svc = PerformanceTelemetryService(telemetry_connection)",
+                  f"{i}for sample_number, value, sample_at in (",
+                  f'{i}    (0, 40.0, "2026-07-30T11:59:30+00:00"),',
+                  f'{i}    (1, 50.0, "2026-07-30T12:00:00+00:00"),',
+                  f"{i}):",
+                  f"{i}    svc.record_resource_sample(",
+                  f"{i}        ResourceSample(",
+                  f"{i}            run_id=str(run_id),",
+                  f'{i}            device_type="cpu",',
+                  f"{i}            device_index=0,",
+                  f'{i}            sample_type="cpu_percent",',
+                  f"{i}            value=value,",
+                  f"{i}            sample_at=sample_at,",
+                  f'{i}            collector="psutil",',
+                  f"{i}            sample_number=sample_number,",
+                  f'{i}            status="measured",',
+                  f'{i}            window_start="2026-07-30T11:59:00+00:00",',
+                  f'{i}            window_end="2026-07-30T12:00:00+00:00",',
+                  f"{i}            sampling_interval_seconds=1.0,",
+                  f"{i}        )",
+                  f"{i}    )",
+                  f"{i}telemetry_connection.commit()",
+                  "",
+              ]
+          )
           function = (
               function[:samples_start]
               + replacement
