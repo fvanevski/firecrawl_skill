@@ -123,7 +123,9 @@ def validate_identity(
     """Require current main, event SHA, checkout, and clean tree to agree."""
     errors: list[str] = []
     if not _SHA_RE.fullmatch(candidate_sha):
-        errors.append("candidate SHA must be exactly 40 lowercase hexadecimal characters")
+        errors.append(
+            "candidate SHA must be exactly 40 lowercase hexadecimal characters"
+        )
     head = _git(repo, "rev-parse", "HEAD")
     tree = _git(repo, "rev-parse", "HEAD^{tree}")
     status = _git(repo, "status", "--porcelain=v1", "--untracked-files=all")
@@ -136,7 +138,9 @@ def validate_identity(
         ("origin/main", origin_main),
     ):
         if observed != candidate_sha:
-            errors.append(f"{label} {observed!r} does not equal candidate {candidate_sha}")
+            errors.append(
+                f"{label} {observed!r} does not equal candidate {candidate_sha}"
+            )
     if status:
         errors.append("candidate checkout is not clean")
     return (
@@ -176,7 +180,9 @@ def validate_generated_manifest(
         logical_path = artifact.path.lower()
         if "ci" in name or ".github" in logical_path or "ci.yml" in logical_path:
             artifact_categories.add("ci")
-        elif "release_benchmark" in logical_path or "workflow_benchmark" in logical_path:
+        elif (
+            "release_benchmark" in logical_path or "workflow_benchmark" in logical_path
+        ):
             artifact_categories.add("source")
         elif "benchmark" in name or "benchmark" in logical_path:
             artifact_categories.add("benchmark")
@@ -275,9 +281,7 @@ def generate_evidence(
             "event_ref": event_ref,
         },
         "identity": identity,
-        "generated_at": time.strftime(
-            "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()
-        ),
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
         "gate": "PASS" if not errors else "FAIL",
         "errors": errors,
     }
