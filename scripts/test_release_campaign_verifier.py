@@ -103,7 +103,7 @@ def test_workflow_binds_dispatch_workflow_and_checkout_to_candidate():
 def test_workflow_uses_standalone_runner_and_verifier():
     workflow = _workflow_text()
     assert "python scripts/run_release_campaign.py" in workflow
-    assert "python scripts/verify_release_campaign.py" in workflow
+    assert "python scripts/verify_release_campaign_ci.py" in workflow
     assert "python - <<'PY'" not in workflow
     assert "retention-days: 90" in workflow
     assert "if: always()" in workflow
