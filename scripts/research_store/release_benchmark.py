@@ -121,7 +121,8 @@ MANDATORY_QUALITY_METRICS = frozenset(
     }
 )
 
-# Mandatory performance metrics — strict mode rejects any non-measured status.
+# Mandatory performance metrics. Strict policy accepts MEASURED and an
+# explicitly mode-scoped NOT_APPLICABLE observation; every other state is NO_GO.
 MANDATORY_PERFORMANCE_METRICS = frozenset(
     {
         "total_tokens",
@@ -131,6 +132,12 @@ MANDATORY_PERFORMANCE_METRICS = frozenset(
         "gpu_memory_mb",
     }
 )
+STRICT_ACCEPTABLE_QUALITY_STATUSES = frozenset({MetricStatus.MEASURED})
+STRICT_ACCEPTABLE_PERFORMANCE_STATUSES = frozenset(
+    {MetricStatus.MEASURED, MetricStatus.NOT_APPLICABLE}
+)
+STRICT_MIN_CPU_SAMPLES = 2
+STRICT_MIN_GPU_SAMPLES = 3
 
 # ---------------------------------------------------------------------------
 # Supported execution modes — genuinely distinct
@@ -1208,7 +1215,8 @@ class MetricEngine:
             "telemetry_tables_exist"
         )
         cpu_formula = (
-            "mean(run_resource_samples.value); scope=current benchmark process; "
+            "periodic_mean(run_resource_samples.value); "
+            "scope=current benchmark process; "
             "collector=psutil.Process.cpu_percent(interval=None)/logical_cpu_count; "
             f"samples={telemetry['cpu_samples']}"
             if _cpu_valid_samples
@@ -1237,7 +1245,8 @@ class MetricEngine:
             "telemetry_tables_exist"
         )
         gpu_formula = (
-            "mean(run_resource_samples.value); scope=explicit NVML device identity; "
+            "periodic_mean(run_resource_samples.value); "
+            "scope=explicit NVML device identity; "
             f"samples={telemetry['gpu_samples']}"
             if _gpu_valid_samples
             else (
@@ -1329,10 +1338,32 @@ class MetricEngine:
             _cpu_status = MetricStatus.INVALID
         elif cpu_nonmeasured and cpu_completeness["measured_count"]:
             _cpu_status = MetricStatus.INCOMPLETE
+        elif (
+            strict
+            and _cpu_status == MetricStatus.MEASURED
+            and cpu_completeness["measured_count"] < STRICT_MIN_CPU_SAMPLES
+        ):
+            _cpu_status = MetricStatus.INCOMPLETE
+            cpu_formula += (
+                "; incomplete — strict periodic window requires at least "
+                f"{STRICT_MIN_CPU_SAMPLES} measured CPU samples, observed "
+                f"{cpu_completeness['measured_count']}"
+            )
         if gpu_completeness["invalid_count"]:
             _gpu_status = MetricStatus.INVALID
         elif gpu_nonmeasured and gpu_completeness["measured_count"]:
             _gpu_status = MetricStatus.INCOMPLETE
+        elif (
+            strict
+            and _gpu_status == MetricStatus.MEASURED
+            and gpu_completeness["measured_count"] < STRICT_MIN_GPU_SAMPLES
+        ):
+            _gpu_status = MetricStatus.INCOMPLETE
+            gpu_formula += (
+                "; incomplete — strict periodic window requires at least "
+                f"{STRICT_MIN_GPU_SAMPLES} measured GPU samples, observed "
+                f"{gpu_completeness['measured_count']}"
+            )
         if _gpu_status == MetricStatus.MEASURED and not gpu_source["device_uuid"]:
             _gpu_status = MetricStatus.INCOMPLETE
         # Resource samples missing window metadata are INCOMPLETE.
@@ -1436,7 +1467,7 @@ class MetricEngine:
                     table="run_resource_samples",
                     column="AVG(value) FILTER (status = 'measured')",
                     run_id=str(run_id),
-                    method="run_window_mean",
+                    method="periodic_run_window_mean",
                     event_ids=cpu_source["record_ids"],
                     sample_count=cpu_source["measured_count"],
                     device_type="cpu",
@@ -1455,7 +1486,7 @@ class MetricEngine:
                     table="run_resource_samples",
                     column="AVG(value) FILTER (status = 'measured')",
                     run_id=str(run_id),
-                    method="run_window_mean",
+                    method="periodic_run_window_mean",
                     event_ids=gpu_source["record_ids"],
                     sample_count=gpu_source["measured_count"],
                     device_type="gpu",
@@ -2224,8 +2255,8 @@ class ReleaseBenchmarkRunner:
 
             from research_store.resource_sampler import ResourceSampler
 
-            sampler = ResourceSampler(interval_seconds=1.0, max_samples=10)
-            sampler.begin_window()
+            sampler = ResourceSampler(interval_seconds=1.0)
+            sampler.start_periodic_window()
             try:
                 orchestration_result = orchestrator.run(
                     run_id=run_status.id,
@@ -2240,7 +2271,7 @@ class ReleaseBenchmarkRunner:
                         f"error={orchestration_result.error or 'none'}"
                     )
             finally:
-                cpu_samples, gpu_samples = sampler.end_window()
+                cpu_samples, gpu_samples = sampler.stop_periodic_window()
                 resource_samples = tuple(cpu_samples + gpu_samples)
 
             # ── Wire telemetry collection BEFORE metric extraction ────────
@@ -2679,31 +2710,25 @@ class ReleaseBenchmarkRunner:
                             f"{mode} orchestration did not complete (outcome: {result.orchestration_outcome})"
                         )
 
-                    # Reject if any mandatory quality metric is missing or not MEASURED (excluding NOT_APPLICABLE)
+                    # Quality evidence must be affirmatively measured.
                     observed_quality = {
                         qm.name: qm.status for qm in result.quality_metrics
                     }
                     for metric in MANDATORY_QUALITY_METRICS:
                         status = observed_quality.get(metric, MetricStatus.UNAVAILABLE)
-                        if status not in (
-                            MetricStatus.MEASURED,
-                            MetricStatus.NOT_APPLICABLE,
-                        ):
+                        if status not in STRICT_ACCEPTABLE_QUALITY_STATUSES:
                             withdrawn.append(
                                 f"quality metric {metric} is {status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"
                             )
 
-                    # Reject if any mandatory performance metric is missing or not MEASURED (excluding NOT_APPLICABLE)
+                    # Performance evidence may be explicitly mode-scoped N/A.
                     observed_perf = {
                         pm.name: pm.status for pm in result.performance_metrics
                     }
                     for metric in MANDATORY_PERFORMANCE_METRICS:
                         status = observed_perf.get(metric, MetricStatus.UNAVAILABLE)
-                        if status not in (
-                            MetricStatus.MEASURED,
-                            MetricStatus.NOT_APPLICABLE,
-                        ):
+                        if status not in STRICT_ACCEPTABLE_PERFORMANCE_STATUSES:
                             withdrawn.append(
                                 f"performance metric {metric} is {status.value} "
                                 f"(not measured) — {mode} cannot satisfy release policy"

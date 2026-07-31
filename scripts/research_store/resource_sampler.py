@@ -33,6 +33,7 @@ from __future__ import annotations
 import datetime
 import importlib.metadata
 import logging
+import threading
 import time
 from dataclasses import dataclass, replace
 from typing import Any
@@ -139,6 +140,9 @@ class ResourceSampler:
         self._window_started_iso: str = ""
         self._window_ended_iso: str = ""
         self._cpu_process: Any = psutil.Process() if _HAS_PSUTIL else None
+        self._periodic_stop = threading.Event()
+        self._periodic_thread: threading.Thread | None = None
+        self._periodic_error: Exception | None = None
 
     @property
     def cpu_available(self) -> bool:
@@ -161,6 +165,54 @@ class ResourceSampler:
             # non-blocking result is meaningless and must be discarded.
             self._cpu_process.cpu_percent(interval=None)
         self.collect_gpu_sample()
+
+    def start_periodic_window(self) -> None:
+        """Begin an exact workload window with background periodic sampling."""
+        if self._periodic_thread is not None:
+            raise RuntimeError("periodic resource sampling is already active")
+        self.begin_window()
+        self._periodic_stop.clear()
+        self._periodic_error = None
+        self._periodic_thread = threading.Thread(
+            target=self._periodic_sample_loop,
+            name="research-resource-sampler",
+            daemon=True,
+        )
+        self._periodic_thread.start()
+
+    def _periodic_sample_loop(self) -> None:
+        """Collect interior samples until the workload window is stopped."""
+        try:
+            while not self._periodic_stop.wait(self.interval_seconds):
+                self.collect()
+                if (
+                    self.max_samples
+                    and self._cpu_sample_number >= self.max_samples
+                    and self._gpu_sample_number >= self.max_samples
+                ):
+                    break
+        except Exception as exc:  # noqa: BLE001
+            self._periodic_error = exc
+            self._periodic_stop.set()
+
+    def stop_periodic_window(
+        self,
+    ) -> tuple[list[ResourceSample], list[ResourceSample]]:
+        """Stop periodic sampling and return completed exact-window samples."""
+        thread = self._periodic_thread
+        if thread is None:
+            raise RuntimeError("start_periodic_window() must be called first")
+        self._periodic_stop.set()
+        thread.join(timeout=max(5.0, self.interval_seconds * 2.0))
+        if thread.is_alive():
+            raise RuntimeError("periodic resource sampler did not stop")
+        self._periodic_thread = None
+        periodic_error = self._periodic_error
+        self._periodic_error = None
+        samples = self.end_window()
+        if periodic_error is not None:
+            raise RuntimeError("periodic resource sampling failed") from periodic_error
+        return samples
 
     def end_window(self) -> tuple[list[ResourceSample], list[ResourceSample]]:
         """Collect final samples immediately after the workload."""
