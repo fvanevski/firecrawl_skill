@@ -1,0 +1,80 @@
+"""Temporary guarded patch driver for PR #157 review-thread follow-up."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    target = ROOT / path
+    text = target.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one guarded match, found {count}")
+    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def replace_exact(path: str, old: str, new: str, expected_count: int) -> None:
+    target = ROOT / path
+    text = target.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != expected_count:
+        raise SystemExit(
+            f"{path}: expected {expected_count} guarded matches, found {count}"
+        )
+    target.write_text(text.replace(old, new), encoding="utf-8")
+
+
+def append_once(path: str, marker: str, block: str) -> None:
+    target = ROOT / path
+    text = target.read_text(encoding="utf-8")
+    if marker in text:
+        raise SystemExit(f"{path}: marker already present: {marker}")
+    target.write_text(text.rstrip() + "\n\n" + block.strip() + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    replace_once(
+        "scripts/research_store/resource_sampler.py",
+        """import importlib.metadata
+import logging
+import time
+""",
+        """import importlib.metadata
+import logging
+import threading
+import time
+""",
+    )
+    replace_once(
+        "scripts/research_store/resource_sampler.py",
+        """        self._window_started_iso: str = ""
+        self._window_ended_iso: str = ""
+        self._cpu_process: Any = psutil.Process() if _HAS_PSUTIL else None
+""",
+        """        self._window_started_iso: str = ""
+        self._window_ended_iso: str = ""
+        self._cpu_process: Any = psutil.Process() if _HAS_PSUTIL else None
+        self._periodic_stop = threading.Event()
+        self._periodic_thread: threading.Thread | None = None
+        self._periodic_error: Exception | None = None
+""",
+    )
+    replace_once(
+        "scripts/research_store/resource_sampler.py",
+        '''    def end_window(self) -> tuple[list[ResourceSample], list[ResourceSample]]:
+        """Collect final samples immediately after the workload."""
+''',
+        '''    def start_periodic_window(self) -> None:
+        """Begin an exact workload window with background periodic sampling."""
+        if self._periodic_thread is not None:
+            raise RuntimeError("periodic resource sampling is already active")
+        self.begin_window()
+        self._periodic_stop.clear()
+        self._periodic_error = None
+        self._periodic_thread = threading.Thread(
+            target=self._periodic_sample_loop,
+            name="research-resource-sampler",
