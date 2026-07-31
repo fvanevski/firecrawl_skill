@@ -1,0 +1,79 @@
+. This prevents
+''',
+    )
+
+    replace_once(
+        "scripts/test_release_invariant_contracts.py",
+        '''        "cpu_samples": 1,
+        "cpu_mean_percent": 20.0,
+        "gpu_samples": 1,
+        "gpu_mean_memory_mb": 256.0,
+''',
+        '''        "cpu_samples": 2,
+        "cpu_mean_percent": 20.0,
+        "gpu_samples": 3,
+        "gpu_mean_memory_mb": 256.0,
+''',
+    )
+    replace_once(
+        "scripts/test_release_invariant_contracts.py",
+        '''    resources = resources or {
+        "cpu": _resource_completeness(),
+        "gpu": _resource_completeness(),
+    }
+    resource_sources = resource_sources or {
+        "cpu": _resource_source("cpu"),
+        "gpu": _resource_source("gpu"),
+    }
+''',
+        '''    resources = resources or {
+        "cpu": _resource_completeness(total_count=2, measured_count=2),
+        "gpu": _resource_completeness(total_count=3, measured_count=3),
+    }
+    resource_sources = resource_sources or {
+        "cpu": _resource_source("cpu", measured_count=2),
+        "gpu": _resource_source("gpu", measured_count=3),
+    }
+''',
+    )
+    append_once(
+        "scripts/test_release_invariant_contracts.py",
+        "def test_strict_resource_metrics_require_periodic_window",
+        r'''
+def test_strict_resource_metrics_require_periodic_window(monkeypatch):
+    """Endpoint-only observations remain incomplete in strict policy."""
+    performance, metrics = _extract_performance(
+        monkeypatch,
+        telemetry=_telemetry(
+            cpu_samples=1,
+            cpu_mean_percent=20.0,
+            gpu_samples=2,
+            gpu_mean_memory_mb=256.0,
+        ),
+        resources={
+            "cpu": _resource_completeness(total_count=1, measured_count=1),
+            "gpu": _resource_completeness(total_count=2, measured_count=2),
+        },
+        resource_sources={
+            "cpu": _resource_source("cpu", measured_count=1),
+            "gpu": _resource_source("gpu", measured_count=2),
+        },
+    )
+
+    cpu_metric = next(metric for metric in metrics if metric.name == "cpu_percent")
+    gpu_metric = next(metric for metric in metrics if metric.name == "gpu_memory_mb")
+
+    assert cpu_metric.status == MetricStatus.INCOMPLETE
+    assert gpu_metric.status == MetricStatus.INCOMPLETE
+    assert cpu_metric.value is None
+    assert gpu_metric.value is None
+    assert performance.cpu_percent is None
+    assert performance.gpu_memory_mb is None
+    assert "requires at least 2 measured CPU samples" in cpu_metric.formula
+    assert "requires at least 3 measured GPU samples" in gpu_metric.formula
+    assert cpu_metric.source.method == "periodic_run_window_mean"
+    assert gpu_metric.source.method == "periodic_run_window_mean"
+
+
+def test_strict_policy_converts_unavailable_cpu_observation_to_no_go():
+    """Nullable un
