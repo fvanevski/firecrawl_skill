@@ -48,7 +48,7 @@ from research_store.workflow_benchmark import load_benchmark_dataset
 
 SCRIPTS = Path(__file__).resolve().parent
 BENCHMARK_FIXTURE = (
-    SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+    SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
 )
 
 
@@ -97,7 +97,7 @@ class _MetricConnection:
 
 def _dataset() -> BenchmarkDataset:
     objective = BenchmarkObjective(
-        schema_version="benchmark-objective-v1",
+        schema_version="benchmark-objective-v2",
         id="obj-001",
         title="Release invariant",
         objective="Verify strict release policy.",
@@ -105,18 +105,22 @@ def _dataset() -> BenchmarkDataset:
         expected_source_classes=("official",),
         known_relevant_sources=(
             BenchmarkSource(
-                schema_version="benchmark-source-v1",
+                schema_version="benchmark-source-v2",
                 file_path="scripts/research_store/release_benchmark.py",
                 relevance=True,
                 role="relevant",
+                source_class="docs",
             ),
         ),
         known_distractor_sources=(),
         expected_unresolved_controversies=(),
         citation_support_labels={"q-1": "SUPPORTED"},
+        search_queries=("test query",),
+        search_query_expected_sources={"test query": ("scripts/test.py",)},
+        ground_truth_answers={"q1": "Test answer"},
     )
     return BenchmarkDataset(
-        schema_version="benchmark-dataset-v1",
+        schema_version="benchmark-dataset-v2",
         version="release-invariants-v1",
         description="Strict release invariant regression fixture.",
         evaluation_set=True,
@@ -1036,7 +1040,7 @@ def _source_quality_objective() -> BenchmarkObjective:
         ),
     )
     return BenchmarkObjective(
-        schema_version="benchmark-objective-v1",
+        schema_version="benchmark-objective-v2",
         id="source-quality",
         title="Annotated source quality",
         objective="Measure source quality from benchmark annotations.",
@@ -1046,6 +1050,9 @@ def _source_quality_objective() -> BenchmarkObjective:
         known_distractor_sources=distractors,
         expected_unresolved_controversies=(),
         citation_support_labels={"q-1": "SUPPORTED"},
+        search_queries=("test query",),
+        search_query_expected_sources={"test query": ("scripts/test.py",)},
+        ground_truth_answers={"q1": "Test answer"},
     )
 
 
@@ -1088,13 +1095,14 @@ def test_annotated_source_quality_penalizes_distractors_and_unclassified():
 
 def test_annotated_source_quality_rejects_missing_annotations():
     legacy = BenchmarkSource(
-        schema_version="benchmark-source-v1",
+        schema_version="benchmark-source-v2",
         file_path="scripts/legacy.py",
         relevance=True,
         role="relevant",
+        source_class="docs",
     )
     objective = BenchmarkObjective(
-        schema_version="benchmark-objective-v1",
+        schema_version="benchmark-objective-v2",
         id="legacy-source-quality",
         title="Legacy source quality",
         objective="Reject missing source annotations.",
@@ -1104,6 +1112,9 @@ def test_annotated_source_quality_rejects_missing_annotations():
         known_distractor_sources=(),
         expected_unresolved_controversies=(),
         citation_support_labels={"q-1": "SUPPORTED"},
+        search_queries=("test query",),
+        search_query_expected_sources={"test query": ("scripts/test.py",)},
+        ground_truth_answers={"q1": "Test answer"},
     )
     value, formula, status = _annotated_source_quality(
         [("file://scripts/legacy.py", "")], objective

@@ -94,7 +94,7 @@ strict_benchmark [--campaign-dir DIR] [--dataset PATH] [--database-url URL]
 | Argument            | Default                              | Required | Description                              |
 | ------------------- | ------------------------------------ | -------- | ---------------------------------------- |
 | `--campaign-dir`    | `/tmp/firecrawl_strict_campaign`     | No       | Directory for campaign artifacts         |
-| `--dataset`         | `tests/fixtures/benchmark/benchmark-v1.json` | No | Benchmark dataset JSON file            |
+| `--dataset`         | `tests/fixtures/benchmark/benchmark-v2.json` | No | Benchmark dataset JSON file            |
 | `--database-url`    | `$DATABASE_URL`                      | **Yes**  | PostgreSQL connection string             |
 | `--blob-root`       | `/tmp/benchmark-blobs`               | No       | Content-addressed blob store root        |
 | `--qdrant-url`      | `$QDRANT_URL`                        | No       | Qdrant service URL                       |
@@ -285,9 +285,9 @@ Campaign artifacts are written to `<campaign-dir>/<A|B>/<timestamp>/`:
 ```json
 {
   "schema_version": "campaign-manifest-v1",
-  "dataset_path": "/path/to/benchmark-v1.json",
+  "dataset_path": "/path/to/benchmark-v2.json",
   "dataset_hash": "<sha256 of dataset file>",
-  "dataset_version": "benchmark-v1",
+  "dataset_version": "benchmark-v2",
   "commit": "612bbd4b0887",
   "timestamp": "2026-07-28T23:00:00+00:00",
   "campaign_a": {
@@ -604,7 +604,7 @@ pip install -r requirements-research-store.txt
 Verify the dataset path:
 
 ```bash
-ls tests/fixtures/benchmark/benchmark-v1.json
+ls tests/fixtures/benchmark/benchmark-v2.json
 ```
 
 Or specify a custom dataset:

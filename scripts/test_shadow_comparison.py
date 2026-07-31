@@ -170,6 +170,11 @@ def _make_objective(
         research_archetype=research_archetype,
         expected_complexity=expected_complexity,
         expected_behavior=expected_behavior,
+    
+        search_queries=("test query",),
+        search_query_expected_sources={"test query": ("scripts/test.py",)},
+        ground_truth_answers={"q1": "Test answer"},
+        citation_support_labels={"q1": "SUPPORTED"},
     )
 
 

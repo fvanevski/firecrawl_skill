@@ -66,7 +66,7 @@ from research_store.strict_benchmark import (
 # ---------------------------------------------------------------------------
 
 BENCHMARK_FIXTURE = (
-    SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+    SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
 )
 
 
@@ -137,7 +137,7 @@ def _make_result(
     recommendation = ReleaseRecommendation(
         schema_version="release-recommendation-v1",
         outcome=outcome,
-        dataset_version="benchmark-v1",
+        dataset_version="benchmark-v2",
         comparison=None,
         supported_claims=("quality thresholds met",),
         withdrawn_claims=(),

@@ -1360,7 +1360,7 @@ def main(
         / "tests"
         / "fixtures"
         / "benchmark"
-        / "benchmark-v1.json",
+        / "benchmark-v2.json",
         help="Path to the benchmark dataset JSON file",
     )
     parser.add_argument(

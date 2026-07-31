@@ -57,10 +57,10 @@ def _set_llm_env_vars(monkeypatch):
     monkeypatch.setenv("RERANKER_URL", "http://localhost:8004/v1")
 
 
-# The benchmark fixture is at ../tests/fixtures/benchmark/benchmark-v1.json
+# The benchmark fixture is at ../tests/fixtures/benchmark/benchmark-v2.json
 # when accessed from scripts/test_strict_campaign.py (SCRIPTS = scripts/)
 BENCHMARK_FIXTURE = (
-    SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+    SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
 )
 
 
@@ -121,7 +121,7 @@ def _make_campaign_result(
     recommendation = ReleaseRecommendation(
         schema_version="release-recommendation-v1",
         outcome=outcome,
-        dataset_version="benchmark-v1",
+        dataset_version="benchmark-v2",
         comparison=None,  # type: ignore[arg-type]
         supported_claims=("quality thresholds met",),
         withdrawn_claims=(),
@@ -278,7 +278,15 @@ class TestArtifactDurability:
             quality_tolerances=(),
             performance_tolerances=(),
             all_within_tolerance=True,
+            policy_version="reproducibility-policy-v2",
+            relative_tolerance=0.15,
+            operational_ratio_limit=2.0,
+            operational_absolute_tolerances=(
+                ("cpu_percent", 2.0),
+                ("gpu_memory_mb", 256.0),
+            ),
             details=(),
+            observations=(),
         )
 
         with mock.patch(
@@ -849,7 +857,7 @@ class TestStrictCampaignIntegration:
             blob_root=Path("/tmp"),
             qdrant_url="http://localhost:99999",
             qdrant_api_key="",
-            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v2.json"),
             campaign_dir=Path("/tmp/preflight_test"),
             candidate_sha="a" * 40,
         )
@@ -1244,7 +1252,7 @@ class TestStrictMetricCompleteness:
         # WorkflowComparison requires at least 2 workflow modes.
         comparison = WorkflowComparison(
             schema_version="workflow-comparison-v1",
-            dataset_version="benchmark-v1",
+            dataset_version="benchmark-v2",
             results=[
                 WorkflowRunResult(
                     schema_version="workflow-run-result-v1",
@@ -1440,7 +1448,7 @@ class TestStrictMetricCompleteness:
         runner = mock.Mock(spec=ReleaseBenchmarkRunner)
         runner.config = ReleaseBenchmarkConfig(strict=True)
         runner.loader = mock.Mock()
-        runner.loader.dataset.version = "benchmark-v1"
+        runner.loader.dataset.version = "benchmark-v2"
         runner.loader.quality_thresholds = {
             "min_candidate_recall": 0.5,
             "min_source_quality_score": 0.7,
@@ -1651,7 +1659,7 @@ class TestStrictMetricCompleteness:
         # Build a WorkflowComparison with all MEASURED metrics.
         comparison = WorkflowComparison(
             schema_version="workflow-comparison-v1",
-            dataset_version="benchmark-v1",
+            dataset_version="benchmark-v2",
             results=[
                 WorkflowRunResult(
                     schema_version="workflow-run-result-v1",
@@ -1777,7 +1785,7 @@ class TestStrictMetricCompletenessMissing:
         # Both metric tuples are empty — the default.
         comparison = WorkflowComparison(
             schema_version="workflow-comparison-v1",
-            dataset_version="benchmark-v1",
+            dataset_version="benchmark-v2",
             results=[
                 WorkflowRunResult(
                     schema_version="workflow-run-result-v1",
@@ -1878,7 +1886,7 @@ class TestStrictMetricCompletenessMissing:
 
         comparison = WorkflowComparison(
             schema_version="workflow-comparison-v1",
-            dataset_version="benchmark-v1",
+            dataset_version="benchmark-v2",
             results=[
                 WorkflowRunResult(
                     schema_version="workflow-run-result-v1",
@@ -2250,7 +2258,7 @@ class TestCacheRegressionPR157:
                         / "tests"
                         / "fixtures"
                         / "benchmark"
-                        / "benchmark-v1.json"
+                        / "benchmark-v2.json"
                     ),
                     "--objectives",
                     "obj-001",
@@ -2413,7 +2421,7 @@ class TestStrictCampaignCacheRejection:
                         / "tests"
                         / "fixtures"
                         / "benchmark"
-                        / "benchmark-v1.json"
+                        / "benchmark-v2.json"
                     ),
                     "--objectives",
                     "obj-001",
@@ -2496,7 +2504,7 @@ class TestPreflightCheck:
             blob_root=Path("/tmp"),
             qdrant_url="http://localhost:6333",
             qdrant_api_key="",
-            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v2.json"),
             campaign_dir=Path("/tmp/preflight_test"),
             candidate_sha="a" * 40,
         )
@@ -2512,7 +2520,7 @@ class TestPreflightCheck:
             blob_root=Path("/tmp"),
             qdrant_url="http://localhost:6333",
             qdrant_api_key="",
-            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v2.json"),
             campaign_dir=Path("/tmp/preflight_test"),
             candidate_sha="abc123",
         )
@@ -2528,7 +2536,7 @@ class TestPreflightCheck:
             blob_root=Path("/tmp"),
             qdrant_url="http://localhost:6333",
             qdrant_api_key="",
-            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v2.json"),
             campaign_dir=Path("/tmp/preflight_test"),
             candidate_sha="0" * 40,
         )
@@ -2553,7 +2561,7 @@ class TestNewPreflightChecks:
             blob_root=tmp_path / "blobs",
             qdrant_url="http://localhost:6333",
             qdrant_api_key="",
-            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v2.json"),
             campaign_dir=tmp_path / "campaign",
             candidate_sha="a" * 40,
         )
@@ -2573,7 +2581,7 @@ class TestNewPreflightChecks:
             blob_root=tmp_path / "blobs",
             qdrant_url="http://localhost:6333",
             qdrant_api_key="",
-            dataset_path=Path("tests/fixtures/benchmark/benchmark-v1.json"),
+            dataset_path=Path("tests/fixtures/benchmark/benchmark-v2.json"),
             campaign_dir=tmp_path / "campaign",
             candidate_sha="a" * 40,
         )

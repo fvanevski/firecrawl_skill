@@ -49,7 +49,7 @@ from research_store.strict_benchmark import (
 )
 from research_store.workflow_benchmark import load_benchmark_dataset
 
-DEFAULT_DATASET = REPO_ROOT / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+DEFAULT_DATASET = REPO_ROOT / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _ALLOWED_METRIC_STATUSES = {MetricStatus.MEASURED, MetricStatus.NOT_APPLICABLE}
 DEFAULT_SMOKE_MODES = tuple(mode for mode in RELEASE_MODES if mode != "agent_led")

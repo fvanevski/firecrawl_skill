@@ -1474,26 +1474,23 @@ class RecommendationOutcome(str, Enum):
 class BenchmarkSource:
     """A versioned source annotation referenced by a benchmark objective.
 
-    ``benchmark-source-v2`` adds an explicit ``source_class`` annotation so
-    release source quality never infers source type from a URL or domain.
-    Version 1 remains readable for historical fixtures, but cannot satisfy
-    strict v2 source-quality measurement without an annotation.
+    ``source_class`` is mandatory so release source quality never infers
+    source type from a URL or domain.
     """
 
     schema_version: str
     file_path: str
     relevance: bool
     role: str  # "relevant" | "distractor"
-    source_class: str = ""
+    source_class: str
 
     SCHEMA_VERSION = "benchmark-source-v2"
-    SCHEMA_VERSIONS = ("benchmark-source-v1", "benchmark-source-v2")
 
     def __post_init__(self) -> None:
-        if self.schema_version not in self.SCHEMA_VERSIONS:
+        if self.schema_version != self.SCHEMA_VERSION:
             raise ValueError(
-                f"unsupported schema_version: {self.schema_version}. "
-                f"Allowed: {self.SCHEMA_VERSIONS}"
+                f"unsupported schema_version: {self.schema_version}; "
+                f"expected {self.SCHEMA_VERSION}"
             )
         _text(self.file_path, "benchmark_source.file_path")
         if self.role not in ("relevant", "distractor"):
@@ -1504,12 +1501,7 @@ class BenchmarkSource:
             raise ValueError(
                 "benchmark_source.relevance must agree with benchmark_source.role"
             )
-        if self.source_class:
-            _text(self.source_class, "benchmark_source.source_class")
-        if self.schema_version == self.SCHEMA_VERSION and not self.source_class:
-            raise ValueError(
-                "benchmark-source-v2 requires a nonempty source_class annotation"
-            )
+        _text(self.source_class, "benchmark_source.source_class")
 
 
 @dataclass(frozen=True)
@@ -1517,8 +1509,7 @@ class BenchmarkObjective:
     """A single research objective in the benchmark dataset.
 
     Attributes:
-        schema_version: ``"benchmark-objective-v2"`` for the executable
-            release objective contract. Version 1 remains readable.
+        schema_version: ``"benchmark-objective-v2"``.
         id: Stable objective identifier (e.g., "obj-001").
         title: Human-readable title.
         objective: The research objective statement.
@@ -1551,7 +1542,6 @@ class BenchmarkObjective:
     citation_support_labels: dict[str, str] = field(default_factory=dict)
 
     SCHEMA_VERSION = "benchmark-objective-v2"
-    SCHEMA_VERSIONS = ("benchmark-objective-v1", "benchmark-objective-v2")
     REQUIRED_FIELDS: ClassVar[tuple[str, ...]] = (
         "search_queries",
         "search_query_expected_sources",
@@ -1560,28 +1550,30 @@ class BenchmarkObjective:
     )
 
     def __post_init__(self) -> None:
-        if self.schema_version not in self.SCHEMA_VERSIONS:
-            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported schema_version: {self.schema_version}; "
+                f"expected {self.SCHEMA_VERSION}"
+            )
         _text(self.id, "benchmark_objective.id")
         _text(self.title, "benchmark_objective.title")
         _text(self.objective, "benchmark_objective.objective")
         if not self.questions:
             raise ValueError("benchmark_objective.questions must not be empty")
-        if self.schema_version == self.SCHEMA_VERSION:
-            if not self.search_queries:
-                raise ValueError("benchmark_objective.search_queries must not be empty")
-            if not self.search_query_expected_sources:
-                raise ValueError(
-                    "benchmark_objective.search_query_expected_sources must not be empty"
-                )
-            if not self.ground_truth_answers:
-                raise ValueError(
-                    "benchmark_objective.ground_truth_answers must not be empty"
-                )
-            if not self.citation_support_labels:
-                raise ValueError(
-                    "benchmark_objective.citation_support_labels must not be empty"
-                )
+        if not self.search_queries:
+            raise ValueError("benchmark_objective.search_queries must not be empty")
+        if not self.search_query_expected_sources:
+            raise ValueError(
+                "benchmark_objective.search_query_expected_sources must not be empty"
+            )
+        if not self.ground_truth_answers:
+            raise ValueError(
+                "benchmark_objective.ground_truth_answers must not be empty"
+            )
+        if not self.citation_support_labels:
+            raise ValueError(
+                "benchmark_objective.citation_support_labels must not be empty"
+            )
 
 
 @dataclass(frozen=True)
@@ -1589,8 +1581,7 @@ class BenchmarkDataset:
     """Versioned benchmark dataset for release campaigns.
 
     Attributes:
-        schema_version: ``"benchmark-dataset-v2"`` for the executable release
-            contract. Version 1 remains readable.
+        schema_version: ``"benchmark-dataset-v2"``.
         version: Dataset version string.
         description: Human-readable description.
         evaluation_set: Whether this is the evaluation set (not for tuning).
@@ -1610,11 +1601,13 @@ class BenchmarkDataset:
     deterministic_integrity_checks: tuple[str, ...]
 
     SCHEMA_VERSION = "benchmark-dataset-v2"
-    SCHEMA_VERSIONS = ("benchmark-dataset-v1", "benchmark-dataset-v2")
 
     def __post_init__(self) -> None:
-        if self.schema_version not in self.SCHEMA_VERSIONS:
-            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+        if self.schema_version != self.SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported schema_version: {self.schema_version}; "
+                f"expected {self.SCHEMA_VERSION}"
+            )
         _text(self.version, "benchmark_dataset.version")
         _text(self.description, "benchmark_dataset.description")
         if not self.objectives:

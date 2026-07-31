@@ -20,7 +20,7 @@ Usage
     ...     ReleaseBenchmarkRunner,
     ...     load_benchmark_dataset,
     ... )
-    >>> dataset = load_benchmark_dataset("tests/fixtures/benchmark/benchmark-v1.json")
+    >>> dataset = load_benchmark_dataset("tests/fixtures/benchmark/benchmark-v2.json")
     >>> config = ReleaseBenchmarkConfig(
     ...     database_url="postgresql://...",
     ...     blob_root=Path("/tmp/benchmark-blobs"),

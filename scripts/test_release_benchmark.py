@@ -58,14 +58,14 @@ from research_store.workflow_benchmark import (
 
 
 BENCHMARK_FIXTURE = (
-    SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v1.json"
+    SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
 )
 
 
 def _make_minimal_dataset():
     """Create a minimal valid benchmark dataset."""
     obj = BenchmarkObjective(
-        schema_version="benchmark-objective-v1",
+        schema_version="benchmark-objective-v2",
         id="obj-minimal",
         title="Minimal objective",
         objective="Test objective",
@@ -73,18 +73,22 @@ def _make_minimal_dataset():
         expected_source_classes=("docs",),
         known_relevant_sources=(
             BenchmarkSource(
-                schema_version="benchmark-source-v1",
+                schema_version="benchmark-source-v2",
                 file_path="scripts/research_store/release_benchmark.py",
                 relevance=True,
                 role="relevant",
+                source_class="docs",
             ),
         ),
         known_distractor_sources=(),
         expected_unresolved_controversies=(),
         citation_support_labels={"obj-minimal-q1": "SUPPORTED"},
+        search_queries=("test query",),
+        search_query_expected_sources={"test query": ("scripts/test.py",)},
+        ground_truth_answers={"q1": "Test answer"},
     )
     return BenchmarkDataset(
-        schema_version="benchmark-dataset-v1",
+        schema_version="benchmark-dataset-v2",
         version="benchmark-release-v1",
         description="Test dataset for release benchmark",
         evaluation_set=True,
@@ -872,7 +876,7 @@ class TestAuthoritativeCandidateRecall:
         """When all relevant sources are found, recall = 1.0."""
 
         obj = BenchmarkObjective(
-            schema_version="benchmark-objective-v1",
+            schema_version="benchmark-objective-v2",
             id="obj-recall",
             title="Recall test",
             objective="Test",
@@ -880,25 +884,30 @@ class TestAuthoritativeCandidateRecall:
             expected_source_classes=("docs",),
             known_relevant_sources=(
                 BenchmarkSource(
-                    schema_version="benchmark-source-v1",
+                    schema_version="benchmark-source-v2",
                     file_path="scripts/research_store/release_benchmark.py",
                     relevance=True,
                     role="relevant",
+                    source_class="docs",
                 ),
                 BenchmarkSource(
-                    schema_version="benchmark-source-v1",
+                    schema_version="benchmark-source-v2",
                     file_path="scripts/research_domain/models.py",
                     relevance=True,
                     role="relevant",
+                    source_class="docs",
                 ),
             ),
             known_distractor_sources=(),
             expected_unresolved_controversies=(),
-            citation_support_labels={},
+            citation_support_labels={"q1": "SUPPORTED"},
+            search_queries=("test query",),
+            search_query_expected_sources={"test query": ("scripts/test.py",)},
+            ground_truth_answers={"q1": "Test answer"},
         )
         loader = BenchmarkDatasetLoader(
             BenchmarkDataset(
-                schema_version="benchmark-dataset-v1",
+                schema_version="benchmark-dataset-v2",
                 version="test",
                 description="test",
                 evaluation_set=True,
@@ -924,7 +933,7 @@ class TestAuthoritativeCandidateRecall:
     def test_distractor_heavy_retrieval(self):
         """Distractor-heavy retrieval should not produce artificially high recall."""
         obj = BenchmarkObjective(
-            schema_version="benchmark-objective-v1",
+            schema_version="benchmark-objective-v2",
             id="obj-distractor",
             title="Distractor test",
             objective="Test",
@@ -932,32 +941,38 @@ class TestAuthoritativeCandidateRecall:
             expected_source_classes=("docs",),
             known_relevant_sources=(
                 BenchmarkSource(
-                    schema_version="benchmark-source-v1",
+                    schema_version="benchmark-source-v2",
                     file_path="scripts/research_store/orchestrator.py",
                     relevance=True,
                     role="relevant",
+                    source_class="docs",
                 ),
             ),
             known_distractor_sources=(
                 BenchmarkSource(
-                    schema_version="benchmark-source-v1",
+                    schema_version="benchmark-source-v2",
                     file_path="scripts/cleanup.py",
-                    relevance=True,
+                    relevance=False,
                     role="distractor",
+                    source_class="Distractor source",
                 ),
                 BenchmarkSource(
-                    schema_version="benchmark-source-v1",
+                    schema_version="benchmark-source-v2",
                     file_path="scripts/catalog_v5.py",
-                    relevance=True,
+                    relevance=False,
                     role="distractor",
+                    source_class="Distractor source",
                 ),
             ),
             expected_unresolved_controversies=(),
-            citation_support_labels={},
+            citation_support_labels={"q1": "SUPPORTED"},
+            search_queries=("test query",),
+            search_query_expected_sources={"test query": ("scripts/test.py",)},
+            ground_truth_answers={"q1": "Test answer"},
         )
         loader = BenchmarkDatasetLoader(
             BenchmarkDataset(
-                schema_version="benchmark-dataset-v1",
+                schema_version="benchmark-dataset-v2",
                 version="test",
                 description="test",
                 evaluation_set=True,

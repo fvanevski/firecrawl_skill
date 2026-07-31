@@ -582,86 +582,6 @@
     },
     "created_at": "2026-07-25T12:00:00+00:00"
   },
-  "benchmark-source-v1": {
-    "schema_version": "benchmark-source-v1",
-    "file_path": "scripts/test.py",
-    "relevance": true,
-    "role": "relevant"
-  },
-  "benchmark-objective-v1": {
-    "schema_version": "benchmark-objective-v1",
-    "id": "obj-test",
-    "title": "Test",
-    "objective": "Test objective",
-    "questions": [
-      "What?"
-    ],
-    "expected_source_classes": [
-      "docs"
-    ],
-    "known_relevant_sources": [
-      {
-        "schema_version": "benchmark-source-v1",
-        "file_path": "scripts/test.py",
-        "relevance": true,
-        "role": "relevant"
-      }
-    ],
-    "known_distractor_sources": [],
-    "expected_unresolved_controversies": [],
-    "search_queries": [],
-    "search_query_expected_sources": {},
-    "ground_truth_answers": {},
-    "citation_support_labels": {
-      "q1": "SUPPORTED"
-    }
-  },
-  "benchmark-dataset-v1": {
-    "schema_version": "benchmark-dataset-v1",
-    "version": "benchmark-test-v1",
-    "description": "Test dataset",
-    "evaluation_set": true,
-    "objectives": [
-      {
-        "schema_version": "benchmark-objective-v1",
-        "id": "obj-001",
-        "title": "Test",
-        "objective": "Test",
-        "questions": [
-          "What?"
-        ],
-        "expected_source_classes": [
-          "docs"
-        ],
-        "known_relevant_sources": [
-          {
-            "schema_version": "benchmark-source-v1",
-            "file_path": "scripts/test.py",
-            "relevance": true,
-            "role": "relevant"
-          }
-        ],
-        "known_distractor_sources": [],
-        "expected_unresolved_controversies": [],
-        "search_queries": [],
-        "search_query_expected_sources": {},
-        "ground_truth_answers": {},
-        "citation_support_labels": {
-          "q1": "SUPPORTED"
-        }
-      }
-    ],
-    "quality_thresholds": {
-      "min_candidate_recall": 0.5
-    },
-    "workflow_modes": [
-      "legacy",
-      "agent_led"
-    ],
-    "deterministic_integrity_checks": [
-      "state_machine_transitions"
-    ]
-  },
   "quality-measurement-v1": {
     "schema_version": "quality-measurement-v1",
     "candidate_recall": 0.75,
@@ -994,10 +914,11 @@
     ],
     "known_relevant_sources": [
       {
-        "schema_version": "benchmark-source-v1",
+        "schema_version": "benchmark-source-v2",
         "file_path": "scripts/test.py",
         "relevance": true,
-        "role": "relevant"
+        "role": "relevant",
+        "source_class": "docs"
       }
     ],
     "known_distractor_sources": [],
@@ -1036,10 +957,11 @@
         ],
         "known_relevant_sources": [
           {
-            "schema_version": "benchmark-source-v1",
+            "schema_version": "benchmark-source-v2",
             "file_path": "scripts/test.py",
             "relevance": true,
-            "role": "relevant"
+            "role": "relevant",
+            "source_class": "docs"
           }
         ],
         "known_distractor_sources": [],
@@ -1090,5 +1012,12 @@
     "embedding_throughput": 50.0,
     "gpu_memory_mb": 4096.0,
     "cpu_percent": 60.0
+  },
+  "benchmark-source-v2": {
+    "schema_version": "benchmark-source-v2",
+    "file_path": "scripts/test.py",
+    "relevance": true,
+    "role": "relevant",
+    "source_class": "docs"
   }
 }
