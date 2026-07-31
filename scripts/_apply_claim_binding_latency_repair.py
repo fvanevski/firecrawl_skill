@@ -1,0 +1,496 @@
+"""Temporary guarded patch driver for the issue #170 claim-binding latency repair."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    target = ROOT / path
+    text = target.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one guarded match, found {count}")
+    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def append_once(path: str, marker: str, block: str) -> None:
+    target = ROOT / path
+    text = target.read_text(encoding="utf-8")
+    if marker in text:
+        raise SystemExit(f"{path}: marker already present: {marker}")
+    target.write_text(text.rstrip() + "\n\n" + block.strip() + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    gateway = ROOT / "scripts/model_gateway.py"
+    if "LENGTH_FINISH_REASONS = frozenset" in gateway.read_text(encoding="utf-8"):
+        print("claim-binding latency repair already applied")
+        return
+
+    replace_once(
+        "scripts/model_gateway.py",
+        'MAX_RAW_EXCERPT = 4096\n',
+        'MAX_RAW_EXCERPT = 4096\nLENGTH_FINISH_REASONS = frozenset({"length", "max_tokens", "MAX_TOKENS"})\n',
+    )
+    replace_once(
+        "scripts/model_gateway.py",
+        '''    max_output_tokens=16384,
+    timeout=120,
+    max_attempts=3,
+    prompt_version="unversioned",
+''',
+        '''    max_output_tokens=16384,
+    timeout=120,
+    max_attempts=3,
+    expand_output_on_length=True,
+    prompt_version="unversioned",
+''',
+    )
+    replace_once(
+        "scripts/model_gateway.py",
+        '''                if prior_errors:
+                    repair += "\\nValidation errors: " + json.dumps(
+                        list(prior_errors)[:10], sort_keys=True
+                    )
+''',
+        '''                if prior_errors:
+                    repair += "\\nValidation errors: " + json.dumps(
+                        list(prior_errors)[:10], sort_keys=True
+                    )
+                if prior.get("finish_reason") in LENGTH_FINISH_REASONS:
+                    repair += (
+                        "\\nThe previous response reached the output limit. "
+                        "Return the smallest valid JSON instance: include only "
+                        "required array items, do not repeat identifiers, and "
+                        "omit explanatory prose outside schema fields."
+                    )
+''',
+    )
+    replace_once(
+        "scripts/model_gateway.py",
+        '''            if envelope.get("finish_reason") in {
+                "length",
+                "max_tokens",
+                "MAX_TOKENS",
+            } or (not content and envelope.get("reasoning_excerpt")):
+                output_budget = min(output_budget * 2, 32768)
+''',
+        '''            hit_output_limit = (
+                envelope.get("finish_reason") in LENGTH_FINISH_REASONS
+                or (not content and envelope.get("reasoning_excerpt"))
+            )
+            if hit_output_limit:
+                last_error = (
+                    f"model output reached the {output_budget}-token output limit"
+                )
+                if expand_output_on_length:
+                    output_budget = min(output_budget * 2, 32768)
+''',
+    )
+    replace_once(
+        "scripts/model_gateway.py",
+        '''                    "input_token_estimate": estimate_tokens(
+                        system_prompt + user_prompt
+                    ),
+                    "capability_probe": capability,
+                    "attempt_count": attempt_number,
+''',
+        '''                    "input_token_estimate": estimate_tokens(
+                        system_prompt + user_prompt
+                    ),
+                    "max_output_tokens": max_output_tokens,
+                    "expand_output_on_length": bool(expand_output_on_length),
+                    "capability_probe": capability,
+                    "attempt_count": attempt_number,
+''',
+    )
+    replace_once(
+        "scripts/model_gateway.py",
+        '''        "capability_probe": capability,
+        "input_token_estimate": estimate_tokens(system_prompt + user_prompt),
+        "attempt_count": len(attempts),
+''',
+        '''        "capability_probe": capability,
+        "input_token_estimate": estimate_tokens(system_prompt + user_prompt),
+        "max_output_tokens": max_output_tokens,
+        "expand_output_on_length": bool(expand_output_on_length),
+        "attempt_count": len(attempts),
+''',
+    )
+
+    replace_once(
+        "scripts/research_store/claim_binding_service.py",
+        '''        required_passage_ids_by_claim = required_passage_ids_by_claim or {}
+        system_prompt = (
+            "You are a rigorous evidence evaluator. "
+            "Given a list of research claims and a list of passages, "
+            "determine if the passages support, contradict, qualify, or provide context for each claim. "
+            "Return exactly one evaluation for every claim and at least one "
+            "binding to a supplied passage for every evaluation. "
+            "Respond strictly using the JSON schema provided. "
+            "Do not invent IDs. Only use the provided claim_id and passage_id values. "
+            "When required_passage_ids are supplied for a claim, evaluate those exact "
+            "source-lineage passages and retain them in its binding."
+        )
+
+        user_prompt_data = {
+            "claims": [
+                {
+                    "claim_id": c["claim_id"],
+                    "statement": c["statement"],
+                    "required_passage_ids": required_passage_ids_by_claim.get(
+                        c["claim_id"], []
+                    ),
+                }
+                for c in claims
+            ],
+            "passages": [
+                {"passage_id": p["passage_id"], "text": p["text"]} for p in passages
+            ],
+        }
+''',
+        '''        required_passage_ids_by_claim = required_passage_ids_by_claim or {}
+        valid_claim_ids = [claim["claim_id"] for claim in claims]
+        passage_by_id = {passage["passage_id"]: passage for passage in passages}
+        unknown_required_claims = set(required_passage_ids_by_claim) - set(valid_claim_ids)
+        if unknown_required_claims:
+            raise ValueError(
+                "required passage lineage has unknown claim IDs: "
+                f"{sorted(unknown_required_claims)}"
+            )
+        unknown_required_passages = sorted(
+            {
+                passage_id
+                for passage_ids in required_passage_ids_by_claim.values()
+                for passage_id in passage_ids
+                if passage_id not in passage_by_id
+            }
+        )
+        if unknown_required_passages:
+            raise ValueError(
+                "required passage lineage has unknown passage IDs: "
+                f"{unknown_required_passages}"
+            )
+
+        fully_scoped = all(
+            required_passage_ids_by_claim.get(claim_id) for claim_id in valid_claim_ids
+        )
+        if fully_scoped:
+            scoped_ids = {
+                passage_id
+                for claim_id in valid_claim_ids
+                for passage_id in required_passage_ids_by_claim[claim_id]
+            }
+            prompt_passages = [
+                passage
+                for passage in passages
+                if passage["passage_id"] in scoped_ids
+            ]
+        else:
+            prompt_passages = passages
+        if not prompt_passages:
+            raise ValueError("claim binding has no eligible evidence passages")
+
+        system_prompt = (
+            "You are a rigorous evidence evaluator. Determine whether the supplied "
+            "passages support, contradict, qualify, or contextualize each claim. "
+            "Return exactly one compact evaluation for every claim. When a claim "
+            "has required_passage_ids, return exactly one binding containing those "
+            "exact IDs and no others. Otherwise use only the minimum passages needed. "
+            "Never repeat identifiers. Keep uncertainty concise. Respond strictly "
+            "using the supplied JSON schema and do not invent IDs."
+        )
+
+        user_prompt_data = {
+            "claims": [
+                {
+                    "claim_id": c["claim_id"],
+                    "statement": c["statement"],
+                    "required_passage_ids": required_passage_ids_by_claim.get(
+                        c["claim_id"], []
+                    ),
+                }
+                for c in claims
+            ],
+            "passages": [
+                {"passage_id": p["passage_id"], "text": p["text"]}
+                for p in prompt_passages
+            ],
+        }
+''',
+    )
+    replace_once(
+        "scripts/research_store/claim_binding_service.py",
+        '''        schema = deepcopy(self.schema)
+        valid_claim_ids = [c["claim_id"] for c in claims]
+        valid_passage_ids = [p["passage_id"] for p in passages]
+''',
+        '''        schema = deepcopy(self.schema)
+        valid_passage_ids = [p["passage_id"] for p in prompt_passages]
+''',
+    )
+    replace_once(
+        "scripts/research_store/claim_binding_service.py",
+        '''        schema["properties"]["evaluations"]["items"]["properties"]["bindings"]["items"][
+            "properties"
+        ]["passage_ids"]["items"]["enum"] = valid_passage_ids
+
+        deterministic_fixture = {
+''',
+        '''        bindings_schema = schema["properties"]["evaluations"]["items"][
+            "properties"
+        ]["bindings"]
+        bindings_schema["maxItems"] = (
+            1 if fully_scoped else min(4, len(valid_passage_ids))
+        )
+        passage_ids_schema = bindings_schema["items"]["properties"]["passage_ids"]
+        passage_ids_schema["items"]["enum"] = valid_passage_ids
+        passage_ids_schema["maxItems"] = (
+            max(
+                len(required_passage_ids_by_claim.get(claim_id, ()))
+                for claim_id in valid_claim_ids
+            )
+            if fully_scoped
+            else min(4, len(valid_passage_ids))
+        )
+        bindings_schema["items"]["properties"]["uncertainty"]["maxLength"] = 240
+
+        deterministic_fixture = {
+''',
+    )
+    replace_once(
+        "scripts/research_store/claim_binding_service.py",
+        '''                            "passage_ids": [
+                                passages[index % len(passages)]["passage_id"]
+                            ],
+''',
+        '''                            "passage_ids": list(
+                                required_passage_ids_by_claim.get(
+                                    claim["claim_id"],
+                                    [
+                                        prompt_passages[index % len(prompt_passages)][
+                                            "passage_id"
+                                        ]
+                                    ],
+                                )
+                            ),
+''',
+    )
+    replace_once(
+        "scripts/research_store/claim_binding_service.py",
+        '''            user_prompt=user_prompt,
+            prompt_version=prompt_version,
+        )
+''',
+        '''            user_prompt=user_prompt,
+            max_output_tokens=min(4096, max(1024, len(claims) * 512)),
+            expand_output_on_length=False,
+            prompt_version=prompt_version,
+        )
+''',
+    )
+    replace_once(
+        "scripts/research_store/claim_binding_service.py",
+        '''            for b in bindings:
+                passage_ids_str = b.get("passage_ids", [])
+
+                if not passage_ids_str:
+''',
+        '''            for b in bindings:
+                passage_ids_str = b.get("passage_ids", [])
+                required_passage_ids = required_passage_ids_by_claim.get(
+                    claim_id_str, []
+                )
+                if required_passage_ids:
+                    passage_ids_str = list(dict.fromkeys(required_passage_ids))
+
+                if not passage_ids_str:
+''',
+    )
+
+    replace_once(
+        "scripts/research_store/release_benchmark.py",
+        '''                source=MetricSource(
+                    table="research_runs",
+                    column="completed_at - created_at",
+                    run_id=str(run_id),
+                    method="duration",
+                ),
+                formula="wall_clock_ms(monotonic_start, monotonic_end)",
+''',
+        '''                source=MetricSource(
+                    table="benchmark_harness",
+                    column="monotonic_end - monotonic_start",
+                    run_id=str(run_id),
+                    method="duration",
+                ),
+                formula="wall_clock_ms(monotonic_start, monotonic_end)",
+''',
+    )
+
+    append_once(
+        "scripts/test_claim_binding_service.py",
+        "def test_evaluate_claims_scopes_and_bounds_local_generation",
+        r'''
+def test_evaluate_claims_scopes_and_bounds_local_generation(
+    service, mock_packet, monkeypatch
+):
+    claim_id = mock_packet["claims"][0]["claim_id"]
+    required_passage_id = mock_packet["passages"][0]["passage_id"]
+    captured = {}
+
+    def mock_prompt(*args, **kwargs):
+        captured.update(kwargs)
+        return HostArtifactResult(
+            value={
+                "evaluations": [
+                    {
+                        "claim_id": claim_id,
+                        "semantic_status": "supported",
+                        "bindings": [
+                            {
+                                "passage_ids": [required_passage_id],
+                                "relationship": "supports",
+                                "confidence": 0.95,
+                                "uncertainty": "none",
+                            }
+                        ],
+                    }
+                ]
+            },
+            provenance={},
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "research_store.claim_binding_service.call_structured", mock_prompt
+    )
+
+    service.evaluate_claims(
+        run_id=UUID(mock_packet["run_id"]),
+        packet_revision=mock_packet["coverage_revision"],
+        prompt_version="v1",
+        model_name="test-model",
+        required_passage_ids_by_claim={claim_id: [required_passage_id]},
+    )
+
+    prompt = json.loads(captured["user_prompt"])
+    assert [item["passage_id"] for item in prompt["passages"]] == [
+        required_passage_id
+    ]
+    assert captured["max_output_tokens"] == 1024
+    assert captured["expand_output_on_length"] is False
+
+    bindings = captured["schema"]["properties"]["evaluations"]["items"][
+        "properties"
+    ]["bindings"]
+    assert bindings["maxItems"] == 1
+    assert bindings["items"]["properties"]["passage_ids"]["maxItems"] == 1
+    assert bindings["items"]["properties"]["uncertainty"]["maxLength"] == 240
+''',
+    )
+
+    append_once(
+        "scripts/test_workflow.py",
+        "def test_local_gateway_can_hold_output_budget_after_length_retry",
+        r'''
+def test_local_gateway_can_hold_output_budget_after_length_retry(monkeypatch):
+    payloads = []
+    responses = iter(
+        [
+            (
+                {
+                    "id": "attempt-1",
+                    "model": "chat",
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {"content": json.dumps({"wrong": "value"})},
+                        }
+                    ],
+                    "usage": {"total_tokens": 600},
+                },
+                "request-1",
+                200,
+            ),
+            (
+                {
+                    "id": "attempt-2",
+                    "model": "chat",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": json.dumps({"result": "ok"})},
+                        }
+                    ],
+                    "usage": {"total_tokens": 20},
+                },
+                "request-2",
+                200,
+            ),
+        ]
+    )
+
+    def fake_request(_url, payload, _headers, _timeout):
+        payloads.append(payload)
+        return next(responses)
+
+    monkeypatch.setattr(gateway, "_request_json", fake_request)
+    monkeypatch.setattr(
+        gateway,
+        "probe_local",
+        lambda *_args, **_kwargs: {"status": "available"},
+    )
+
+    result = gateway.call_structured(
+        provider="local",
+        model="chat",
+        system_prompt="Return the result.",
+        user_prompt="Produce one result.",
+        schema={
+            "type": "object",
+            "properties": {"result": {"type": "string"}},
+            "required": ["result"],
+            "additionalProperties": False,
+        },
+        max_output_tokens=512,
+        max_attempts=2,
+        expand_output_on_length=False,
+    )
+
+    assert result.error == ""
+    assert result.value == {"result": "ok"}
+    assert [payload["max_tokens"] for payload in payloads] == [512, 512]
+    assert "reached the output limit" in payloads[1]["messages"][1]["content"]
+    assert result.provenance["max_output_tokens"] == 512
+    assert result.provenance["expand_output_on_length"] is False
+''',
+    )
+
+    append_once(
+        "scripts/test_release_invariant_contracts.py",
+        "def test_total_latency_provenance_matches_monotonic_measurement",
+        r'''
+def test_total_latency_provenance_matches_monotonic_measurement(monkeypatch):
+    _performance, metrics = _extract_performance(
+        monkeypatch,
+        telemetry=_telemetry(),
+    )
+    latency = next(metric for metric in metrics if metric.name == "total_latency_ms")
+
+    assert latency.source.table == "benchmark_harness"
+    assert latency.source.column == "monotonic_end - monotonic_start"
+    assert latency.source.method == "duration"
+    assert latency.formula == "wall_clock_ms(monotonic_start, monotonic_end)"
+''',
+    )
+
+    print("applied guarded claim-binding latency repair")
+
+
+if __name__ == "__main__":
+    main()
