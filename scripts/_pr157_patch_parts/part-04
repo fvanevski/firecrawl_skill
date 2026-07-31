@@ -1,0 +1,69 @@
+t(
+        range(len(cpu_samples))
+    )
+    assert [sample.sample_number for sample in gpu_samples] == list(
+        range(len(gpu_samples))
+    )
+    assert all(sample.status == "measured" for sample in cpu_samples + gpu_samples)
+    assert all(sample.window_start for sample in cpu_samples + gpu_samples)
+    assert all(sample.window_end for sample in cpu_samples + gpu_samples)
+    assert len({sample.window_start for sample in cpu_samples + gpu_samples}) == 1
+    assert len({sample.window_end for sample in cpu_samples + gpu_samples}) == 1
+
+
+def test_unavailable_resource_sample_persists_nullable_value():
+    """Unavailable instrumentation is persisted as SQL NULL, never numeric zero."""
+    from research_domain.models import ResourceSample
+    from research_store.telemetry_service import PerformanceTelemetryService
+
+    connection = mock.Mock()
+    service = PerformanceTelemetryService(connection)
+    sample = ResourceSample(
+        run_id=str(uuid4()),
+        device_type="cpu",
+        sample_type="process_cpu_percent_normalized",
+        value=None,
+        sample_at="2026-07-31T12:00:00+00:00",
+        collector="psutil",
+        collector_version="not-installed",
+        sample_number=0,
+        status="unavailable",
+        failure_reason="psutil not installed",
+        window_start="2026-07-31T12:00:00+00:00",
+        window_end="2026-07-31T12:00:01+00:00",
+        sampling_interval_seconds=1.0,
+    )
+
+    service.record_resource_sample(sample)
+
+    params = connection.execute.call_args.args[1]
+    assert params[5] is None
+    assert params[10] == "unavailable"
+    assert params[11] == "psutil not installed"
+
+
+def test_release_runner_uses_uncapped_periodic_resource_window():
+    """The production runner wires periodic sampling around orchestration."""
+    import research_store.release_benchmark as module
+
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    assert "sampler.start_periodic_window()" in source
+    assert "sampler.stop_periodic_window()" in source
+    assert "ResourceSampler(interval_seconds=1.0, max_samples=10)" not in source
+''',
+    )
+    replace_once(
+        "scripts/test_performance_telemetry.py",
+        '''        mode the status must be UNAVAILABLE — not MEASURED with a value of 0.0.
+''',
+        '''        mode the status must be UNAVAILABLE with a null value — never a
+        host-global fallback or numeric sentinel.
+''',
+    )
+    replace_once(
+        "scripts/test_performance_telemetry.py",
+        '''        strict mode must produce 0.0 metrics instead of falling back to
+        global semantic_cache, live psutil, or live NVML.  This prevents
+''',
+        '''        strict mode must produce null unavailable metrics instead of falling
+        back to global semantic_cache, live psutil, or live NVML
