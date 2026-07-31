@@ -14,6 +14,7 @@ from generate_exact_head_ci_evidence import (
 
 SCRIPTS = Path(__file__).resolve().parent
 CI_WORKFLOW = SCRIPTS.parent / ".github" / "workflows" / "ci.yml"
+RELEASE_WORKFLOW = SCRIPTS.parent / ".github" / "workflows" / "release-campaign.yml"
 
 
 def _successful_results() -> dict[str, str]:
@@ -127,3 +128,10 @@ def test_release_dispatch_requires_explicit_candidate_marker():
     assert "[release-candidate]" in workflow
     assert "gh workflow run release-campaign.yml" in workflow
     assert '-f candidate-sha="$GITHUB_SHA"' in workflow
+
+
+def test_release_campaign_initializes_campaign_dir_at_runner_time():
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "CAMPAIGN_DIR: ${{ runner.temp }}" not in workflow
+    assert '"$RUNNER_TEMP/release-campaign-$CANDIDATE_SHA"' in workflow
+    assert '>> "$GITHUB_ENV"' in workflow
