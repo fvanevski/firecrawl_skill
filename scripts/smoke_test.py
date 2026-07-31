@@ -396,7 +396,14 @@ def comparison_to_dict(comparison: ReproducibilityComparison) -> dict[str, Any]:
         "all_within_tolerance": comparison.all_within_tolerance,
         "quality_tolerances": list(comparison.quality_tolerances),
         "performance_tolerances": list(comparison.performance_tolerances),
+        "policy_version": comparison.policy_version,
+        "relative_tolerance": comparison.relative_tolerance,
+        "operational_ratio_limit": comparison.operational_ratio_limit,
+        "operational_absolute_tolerances": dict(
+            comparison.operational_absolute_tolerances
+        ),
         "details": list(comparison.details),
+        "observations": list(comparison.observations),
     }
 
 
@@ -933,7 +940,14 @@ def main(argv: list[str] | None = None) -> int:
             "reproducibility": {
                 "pass": comparison.all_within_tolerance,
                 "comparison_hash": comparison_hash,
+                "policy_version": comparison.policy_version,
+                "relative_tolerance": comparison.relative_tolerance,
+                "operational_ratio_limit": comparison.operational_ratio_limit,
+                "operational_absolute_tolerances": dict(
+                    comparison.operational_absolute_tolerances
+                ),
                 "details": list(comparison.details),
+                "observations": list(comparison.observations),
             },
             "gate": "PASS" if passed else "FAIL",
             "full_campaign_authorized": passed,

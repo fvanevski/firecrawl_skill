@@ -39,10 +39,12 @@ from research_store.release_benchmark import (
     ReleaseBenchmarkResult,
     ReleaseBenchmarkRunner,
     ReproducibilityComparison,
+    _annotated_source_quality,
     _canonical_match,
 )
 from research_store.semantic_service import HostArtifactResult
 from research_store.strict_benchmark import _preflight_check, main
+from research_store.workflow_benchmark import load_benchmark_dataset
 
 SCRIPTS = Path(__file__).resolve().parent
 BENCHMARK_FIXTURE = (
@@ -987,3 +989,259 @@ def test_reproducibility_accepts_matching_not_applicable_token_metrics():
         name.endswith(".total_tokens")
         for name, *_values in comparison.performance_tolerances
     )
+
+
+def test_benchmark_fixture_uses_complete_source_class_annotations():
+    loader = load_benchmark_dataset(BENCHMARK_FIXTURE)
+    assert loader.dataset.version == "benchmark-v2"
+    for objective in loader.objectives:
+        expected = set(objective.expected_source_classes)
+        relevant = tuple(
+            source
+            for source in objective.known_relevant_sources
+            if source.role == "relevant"
+        )
+        assert relevant
+        assert all(
+            source.schema_version == BenchmarkSource.SCHEMA_VERSION
+            for source in relevant
+        )
+        assert {source.source_class for source in relevant} == expected
+
+
+def _source_quality_objective() -> BenchmarkObjective:
+    classes = ("Implementation", "Models", "Architecture", "Tests")
+    relevant = tuple(
+        BenchmarkSource(
+            schema_version=BenchmarkSource.SCHEMA_VERSION,
+            file_path=path,
+            relevance=True,
+            role="relevant",
+            source_class=source_class,
+        )
+        for path, source_class in (
+            ("scripts/implementation.py", classes[0]),
+            ("scripts/models.py", classes[1]),
+            ("references/architecture.md", classes[2]),
+            ("scripts/test_benchmark.py", classes[3]),
+        )
+    )
+    distractors = (
+        BenchmarkSource(
+            schema_version=BenchmarkSource.SCHEMA_VERSION,
+            file_path="scripts/cleanup.py",
+            relevance=False,
+            role="distractor",
+            source_class="Distractor source",
+        ),
+    )
+    return BenchmarkObjective(
+        schema_version="benchmark-objective-v1",
+        id="source-quality",
+        title="Annotated source quality",
+        objective="Measure source quality from benchmark annotations.",
+        questions=("Are source annotations authoritative?",),
+        expected_source_classes=classes,
+        known_relevant_sources=relevant,
+        known_distractor_sources=distractors,
+        expected_unresolved_controversies=(),
+        citation_support_labels={"q-1": "SUPPORTED"},
+    )
+
+
+def test_annotated_source_quality_uses_class_coverage_not_domain_heuristics():
+    objective = _source_quality_objective()
+    candidates = [
+        (
+            "https://raw.githubusercontent.com/org/repo/main/scripts/implementation.py",
+            "raw.githubusercontent.com",
+        ),
+        (
+            "https://raw.githubusercontent.com/org/repo/main/scripts/models.py",
+            "raw.githubusercontent.com",
+        ),
+        (
+            "https://raw.githubusercontent.com/org/repo/main/references/architecture.md",
+            "raw.githubusercontent.com",
+        ),
+    ]
+    value, formula, status = _annotated_source_quality(candidates, objective)
+    assert status == MetricStatus.MEASURED
+    assert value == pytest.approx(0.857143)
+    assert "required_class_coverage=3/4" in formula
+
+
+def test_annotated_source_quality_penalizes_distractors_and_unclassified():
+    objective = _source_quality_objective()
+    candidates = [
+        ("file://scripts/implementation.py", ""),
+        ("file://scripts/models.py", ""),
+        ("file://scripts/cleanup.py", ""),
+        ("https://example.invalid/unlabeled", "example.invalid"),
+    ]
+    value, formula, status = _annotated_source_quality(candidates, objective)
+    assert status == MetricStatus.MEASURED
+    assert value == pytest.approx(0.5)
+    assert "distractor_candidates=1" in formula
+    assert "unclassified_candidates=1" in formula
+
+
+def test_annotated_source_quality_rejects_missing_annotations():
+    legacy = BenchmarkSource(
+        schema_version="benchmark-source-v1",
+        file_path="scripts/legacy.py",
+        relevance=True,
+        role="relevant",
+    )
+    objective = BenchmarkObjective(
+        schema_version="benchmark-objective-v1",
+        id="legacy-source-quality",
+        title="Legacy source quality",
+        objective="Reject missing source annotations.",
+        questions=("Does strict quality fail closed?",),
+        expected_source_classes=("Implementation",),
+        known_relevant_sources=(legacy,),
+        known_distractor_sources=(),
+        expected_unresolved_controversies=(),
+        citation_support_labels={"q-1": "SUPPORTED"},
+    )
+    value, formula, status = _annotated_source_quality(
+        [("file://scripts/legacy.py", "")], objective
+    )
+    assert value is None
+    assert status == MetricStatus.INVALID
+    assert "missing_annotations" in formula
+
+
+def _comparison_performance_metrics(
+    run_id: UUID,
+    performance: PerformanceMeasurement,
+) -> tuple[PerformanceMetric, ...]:
+    values = {
+        "total_latency_ms": performance.total_latency_ms,
+        "total_tokens": float(performance.total_tokens or 0),
+        "semantic_calls": float(performance.semantic_calls),
+        "cache_hit_rate": performance.cache_hit_rate,
+        "embedding_throughput": performance.embedding_throughput,
+        "cpu_percent": performance.cpu_percent,
+        "gpu_memory_mb": performance.gpu_memory_mb,
+    }
+    return tuple(
+        PerformanceMetric(
+            name=name,
+            value=value,
+            source=MetricSource(
+                table="comparison_fixture",
+                column=name,
+                run_id=str(run_id),
+                method="measured_fixture",
+            ),
+            formula="authoritative comparison fixture",
+            status=MetricStatus.MEASURED,
+        )
+        for name, value in values.items()
+    )
+
+
+def _comparison_result(
+    campaign_id: str,
+    *,
+    latency: float,
+    tokens: int,
+    throughput: float,
+    cpu: float,
+    gpu: float,
+) -> ReleaseBenchmarkResult:
+    run_id = uuid4()
+    performance = PerformanceMeasurement(
+        schema_version="performance-measurement-v2",
+        total_latency_ms=latency,
+        total_tokens=tokens,
+        semantic_calls=5,
+        cache_hit_rate=0.0,
+        embedding_throughput=throughput,
+        gpu_memory_mb=gpu,
+        cpu_percent=cpu,
+    )
+    run = CampaignRun(
+        campaign_id=campaign_id,
+        run_id=str(run_id),
+        mode="autonomous_local",
+        objective_id="obj-001",
+        quality=_quality(),
+        performance=performance,
+        quality_metrics=_quality_metrics(run_id),
+        performance_metrics=_comparison_performance_metrics(run_id, performance),
+        orchestration_outcome="completed",
+    )
+    return ReleaseBenchmarkResult(campaign_id=campaign_id, runs=(run,))
+
+
+def test_reproducibility_policy_uses_operational_ratio_envelope():
+    runner = ReleaseBenchmarkRunner(
+        _dataset(),
+        ReleaseBenchmarkConfig(
+            execution_modes=("autonomous_local", "deterministic_debug"),
+            reproducibility_tolerance=0.15,
+            operational_reproducibility_ratio_limit=2.0,
+            strict=True,
+        ),
+    )
+    campaign_a = _comparison_result(
+        "campaign-a",
+        latency=161729.63,
+        tokens=6823,
+        throughput=38.257,
+        cpu=1.38,
+        gpu=31897.88,
+    )
+    campaign_b = _comparison_result(
+        "campaign-b",
+        latency=81122.85,
+        tokens=6804,
+        throughput=56.483,
+        cpu=2.71,
+        gpu=31897.94,
+    )
+    comparison = runner.compare_campaigns(campaign_a, campaign_b)
+    assert comparison.all_within_tolerance
+    assert comparison.policy_version == "reproducibility-policy-v2"
+    assert not comparison.details
+    assert any(
+        "total_latency_ms" in observation for observation in comparison.observations
+    )
+    assert any(
+        "embedding_throughput" in observation for observation in comparison.observations
+    )
+    assert any("cpu_percent" in observation for observation in comparison.observations)
+
+
+def test_reproducibility_policy_rejects_excessive_operational_drift():
+    runner = ReleaseBenchmarkRunner(
+        _dataset(),
+        ReleaseBenchmarkConfig(
+            execution_modes=("autonomous_local", "deterministic_debug"),
+            reproducibility_tolerance=0.15,
+            operational_reproducibility_ratio_limit=2.0,
+            strict=True,
+        ),
+    )
+    campaign_a = _comparison_result(
+        "campaign-a",
+        latency=100000.0,
+        tokens=6800,
+        throughput=50.0,
+        cpu=2.0,
+        gpu=31800.0,
+    )
+    campaign_b = _comparison_result(
+        "campaign-b",
+        latency=250001.0,
+        tokens=6800,
+        throughput=50.0,
+        cpu=2.0,
+        gpu=31800.0,
+    )
+    comparison = runner.compare_campaigns(campaign_a, campaign_b)
+    assert not comparison.all_within_tolerance
+    assert any("total_latency_ms" in detail for detail in comparison.details)

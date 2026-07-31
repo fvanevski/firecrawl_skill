@@ -82,6 +82,27 @@ requires exact point-ID equality.
 Preflight service messages redact URL passwords before writing terminal
 output or logs.
 
+## Source-quality and reproducibility policy
+
+Release source quality uses `benchmark-source-v2` annotations. Every relevant
+ground-truth source declares one source class, and the set of annotated classes
+must exactly match the objective's `expected_source_classes`. The score is the
+harmonic mean of acquired labeled-source precision and required source-class
+coverage. Distractor and unclassified candidates reduce precision. URL/domain
+heuristics cannot satisfy this metric.
+
+Reproducibility policy `reproducibility-policy-v2` compares every metric.
+Quality, token, semantic-call, and cache observations use the configured
+relative tolerance. Operational latency, embedding throughput, CPU, and GPU
+telemetry additionally use a declared maximum larger/smaller ratio of `2.0`.
+CPU has a 2 percentage-point absolute floor and GPU memory has a 256 MiB
+absolute floor to avoid unstable percentage arithmetic near zero or instrument
+resolution. Missing, partial, differently scoped, or differently classified
+observations still fail before tolerance is evaluated. Operational values
+that exceed the relative tolerance but remain inside the declared ratio or
+absolute envelope are retained as non-blocking observations in comparison and
+manifest artifacts; they are never silently discarded.
+
 ## Mandatory run checks
 
 Commit all source changes first. The gate rejects a dirty checkout and any candidate SHA that differs from `HEAD`. The complete real-stack preflight must pass before either campaign starts.

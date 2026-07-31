@@ -303,7 +303,18 @@ class TestArtifactDurability:
         assert manifest["tree_hash"] != ""
         assert manifest["campaign_a"]["campaign_id"] == "fr_bench_a"
         assert manifest["campaign_b"]["campaign_id"] == "fr_bench_b"
+        assert manifest["dataset_version"] == "benchmark-v2"
         assert manifest["reproducibility"]["all_within_tolerance"] is True
+        assert (
+            manifest["reproducibility"]["policy_version"] == "reproducibility-policy-v2"
+        )
+        assert manifest["reproducibility"]["relative_tolerance"] == 0.15
+        assert manifest["reproducibility"]["operational_ratio_limit"] == 2.0
+        assert manifest["reproducibility"]["operational_absolute_tolerances"] == {
+            "cpu_percent": 2.0,
+            "gpu_memory_mb": 256.0,
+        }
+        assert manifest["reproducibility"]["observations"] == []
         assert manifest["modes"] == [
             "agent_led",
             "autonomous_local",

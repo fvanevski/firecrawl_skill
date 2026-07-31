@@ -1155,6 +1155,13 @@ def _run_campaign(
         "execution_modes": RELEASE_MODES,
         "objective_ids": list(objective_ids) if objective_ids else ["all"],
         "reproducibility_tolerance": reproducibility_tolerance,
+        "reproducibility_policy_version": "reproducibility-policy-v2",
+        "operational_reproducibility_ratio_limit": float(
+            loader.quality_thresholds.get(
+                "max_operational_reproducibility_ratio",
+                config.operational_reproducibility_ratio_limit,
+            )
+        ),
     }
     env_manifest_path = artifacts_dir / "environment.json"
     _write_json_atomic(env_manifest_path, env_manifest)
@@ -1220,7 +1227,14 @@ def _compare_campaigns(
             "all_within_tolerance": comparison.all_within_tolerance,
             "quality_tolerances": list(comparison.quality_tolerances),
             "performance_tolerances": list(comparison.performance_tolerances),
+            "policy_version": comparison.policy_version,
+            "relative_tolerance": comparison.relative_tolerance,
+            "operational_ratio_limit": comparison.operational_ratio_limit,
+            "operational_absolute_tolerances": dict(
+                comparison.operational_absolute_tolerances
+            ),
             "details": comparison.details,
+            "observations": comparison.observations,
         },
     )
 
@@ -1233,6 +1247,8 @@ def _compare_campaigns(
     ]
     for detail in comparison.details:
         lines.append(f"  - {detail}")
+    for observation in comparison.observations:
+        lines.append(f"  - observation: {observation}")
     summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     return comparison
@@ -1268,7 +1284,7 @@ def _build_manifest(
         "tree_hash": tree_hash,
         "dataset_path": str(dataset_path),
         "dataset_hash": _compute_file_hash(dataset_path),
-        "dataset_version": "benchmark-v1",
+        "dataset_version": load_benchmark_dataset(dataset_path).dataset.version,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
         "campaign_a": {
             "campaign_id": result_a.campaign_id,
@@ -1298,7 +1314,14 @@ def _build_manifest(
             "all_within_tolerance": comparison.all_within_tolerance,
             "run_a_id": comparison.run_a_id,
             "run_b_id": comparison.run_b_id,
+            "policy_version": comparison.policy_version,
+            "relative_tolerance": comparison.relative_tolerance,
+            "operational_ratio_limit": comparison.operational_ratio_limit,
+            "operational_absolute_tolerances": dict(
+                comparison.operational_absolute_tolerances
+            ),
             "details": list(comparison.details),
+            "observations": list(comparison.observations),
         },
         "modes": list(RELEASE_MODES),
     }

@@ -154,6 +154,20 @@ RELEASE_CACHE_STAGES = (
     "indexing",
 )
 
+REPRODUCIBILITY_POLICY_VERSION = "reproducibility-policy-v2"
+OPERATIONAL_PERFORMANCE_METRICS = frozenset(
+    {
+        "total_latency_ms",
+        "embedding_throughput",
+        "cpu_percent",
+        "gpu_memory_mb",
+    }
+)
+OPERATIONAL_ABSOLUTE_TOLERANCES = {
+    "cpu_percent": 2.0,
+    "gpu_memory_mb": 256.0,
+}
+
 # Mapping from benchmark mode names to execution modes.
 # "legacy" is no longer a valid benchmark mode because no distinct retained
 # baseline exists.  If a caller requests "legacy", the runner raises an
@@ -233,6 +247,94 @@ def _canonical_match(file_path: str, canonical_url: str) -> bool:
     if parsed.query and fp in parsed.query:
         return True
     return bool(parsed.fragment and fp in parsed.fragment)
+
+
+def _annotated_source_quality(
+    candidates: list[tuple[str, str]],
+    objective: BenchmarkObjective | None,
+) -> tuple[float | None, str, MetricStatus]:
+    """Measure source quality from versioned benchmark annotations."""
+    if not candidates:
+        return None, "unavailable — no acquired candidates", MetricStatus.UNAVAILABLE
+    if objective is None or not objective.expected_source_classes:
+        return (
+            None,
+            "unavailable — no versioned expected source classes",
+            MetricStatus.UNAVAILABLE,
+        )
+
+    expected_classes = set(objective.expected_source_classes)
+    relevant_sources = tuple(
+        source
+        for source in objective.known_relevant_sources
+        if source.role == "relevant"
+    )
+    distractor_sources = tuple(
+        source
+        for source in objective.known_distractor_sources
+        if source.role == "distractor"
+    )
+    missing_annotations = sorted(
+        source.file_path for source in relevant_sources if not source.source_class
+    )
+    annotated_classes = {
+        source.source_class for source in relevant_sources if source.source_class
+    }
+    undeclared_classes = sorted(annotated_classes - expected_classes)
+    unrepresented_classes = sorted(expected_classes - annotated_classes)
+    if missing_annotations or undeclared_classes or unrepresented_classes:
+        return (
+            None,
+            (
+                "invalid source annotation contract — "
+                f"missing_annotations={missing_annotations}, "
+                f"undeclared_classes={undeclared_classes}, "
+                f"unrepresented_classes={unrepresented_classes}"
+            ),
+            MetricStatus.INVALID,
+        )
+
+    relevant_hits = 0
+    distractor_hits = 0
+    unclassified_hits = 0
+    acquired_classes: set[str] = set()
+    for canonical_url, _domain in candidates:
+        relevant = next(
+            (
+                source
+                for source in relevant_sources
+                if _canonical_match(source.file_path, canonical_url)
+            ),
+            None,
+        )
+        if relevant is not None:
+            relevant_hits += 1
+            acquired_classes.add(relevant.source_class)
+            continue
+        if any(
+            _canonical_match(source.file_path, canonical_url)
+            for source in distractor_sources
+        ):
+            distractor_hits += 1
+        else:
+            unclassified_hits += 1
+
+    labeled_precision = relevant_hits / len(candidates)
+    class_coverage = len(acquired_classes) / len(expected_classes)
+    score = (
+        2.0 * labeled_precision * class_coverage / (labeled_precision + class_coverage)
+        if labeled_precision + class_coverage > 0
+        else 0.0
+    )
+    formula = (
+        "source-quality-v2 harmonic_mean("
+        f"labeled_precision={relevant_hits}/{len(candidates)}, "
+        f"required_class_coverage={len(acquired_classes)}/{len(expected_classes)}"
+        "); "
+        f"distractor_candidates={distractor_hits}, "
+        f"unclassified_candidates={unclassified_hits}"
+    )
+    return round(score, 6), formula, MetricStatus.MEASURED
 
 
 # ---------------------------------------------------------------------------
@@ -387,28 +489,22 @@ class MetricEngine:
         # 1. Candidate recall — versioned benchmark ground truth
         # ------------------------------------------------------------------
         relevant_paths: set[str] = set()
-        distractor_paths: set[str] = set()
         if objective is not None:
             relevant_paths = {
                 src.file_path
                 for src in objective.known_relevant_sources
-                if src.relevance
-            }
-            distractor_paths = {
-                src.file_path
-                for src in objective.known_distractor_sources
-                if src.relevance
+                if src.role == "relevant"
             }
 
         with self._connection.cursor() as cur:
             # All distinct candidate URLs for this run
             cur.execute(
-                """SELECT canonical_url, domain
+                """SELECT DISTINCT canonical_url, domain
                    FROM search_candidates
                    WHERE run_id = %s""",
                 (run_id,),
             )
-            candidates = cur.fetchall()  # list of (canonical_url, domain)
+            candidates = cur.fetchall()  # unique (canonical_url, domain)
 
         candidate_count = len(candidates)
 
@@ -419,15 +515,10 @@ class MetricEngine:
         # canonical_url contains the file_path as a path component
         # (for file:// URLs or absolute paths).
         matched_relevant: set[str] = set()
-        matched_distractors: set[str] = set()
         for url, _domain in candidates:
             for path in relevant_paths:
                 if _canonical_match(path, url):
                     matched_relevant.add(path)
-                    break
-            for path in distractor_paths:
-                if _canonical_match(path, url):
-                    matched_distractors.add(path)
                     break
 
         total_relevant = len(relevant_paths)
@@ -456,108 +547,9 @@ class MetricEngine:
         # ------------------------------------------------------------------
         # 2. Source quality — benchmark source-class annotations
         # ------------------------------------------------------------------
-        # Use the benchmark's expected_source_classes to classify candidates.
-        # A candidate "matches" a source class when its registered_domain or
-        # canonical_url indicates that class (e.g., GitHub → "docs", academic
-        # domains → "primary").  The benchmark's expected_source_classes define
-        # which source classes are required for this objective.
-        expected_classes: set[str] = set()
-        if objective is not None:
-            expected_classes = set(objective.expected_source_classes)
-
-        # Classify candidates by source class.
-        # For now, use domain heuristics to assign classes:
-        # - GitHub, GitLab, Bitbucket → "code"
-        # - arxiv, academia, scholar → "academic"
-        # - docs, readthedocs, microsoft, google → "docs"
-        # - news, blog, medium → "news"
-        # - Otherwise → "other"
-        def _classify_source(url: str, domain: str) -> str:
-            url_lower = (url + domain).lower()
-            if any(h in domain for h in ("github", "gitlab", "bitbucket")):
-                return "code"
-            if any(h in domain for h in ("arxiv", "academia", "scholar")):
-                return "academic"
-            if any(
-                h in domain
-                for h in ("docs", "readthedocs", "microsoft.com/docs", "google.com")
-            ):
-                return "docs"
-            if any(h in url_lower for h in ("medium", "blog", "news", "reddit")):
-                return "news"
-            return "other"
-
-        class_hits: dict[str, int] = {}
-        for url, domain in candidates:
-            cls = _classify_source(url, domain)
-            class_hits[cls] = class_hits.get(cls, 0) + 1
-
-        # Source quality = fraction of candidates that match an expected class.
-        # If no expected classes are defined, fall back to the existing
-        # heuristic (relevant/distractor matching).
-        if expected_classes:
-            expected_hit = sum(
-                count for cls, count in class_hits.items() if cls in expected_classes
-            )
-            total_classified = len(candidates)
-            if total_classified > 0:
-                source_quality = expected_hit / total_classified
-            else:
-                source_quality = None
-            source_quality_formula = (
-                f"expected_class_hits({expected_hit}) / total_candidates({total_classified})"
-                if total_classified > 0
-                else "unavailable — no candidates"
-            )
-            _source_quality_status = (
-                MetricStatus.MEASURED
-                if total_classified > 0 and expected_classes
-                else MetricStatus.UNAVAILABLE
-            )
-        else:
-            # Fallback: use existing heuristic when no expected classes.
-            # Match candidate URLs against known_relevant_sources and
-            # known_distractor_sources file_paths.
-            relevant_hits = 0
-            distractor_hits = 0
-            other_hits = 0
-            for url, _domain in candidates:
-                matched_relevant = False
-                matched_distractor = False
-                for path in relevant_paths:
-                    if _canonical_match(path, url):
-                        matched_relevant = True
-                        break
-                if matched_relevant:
-                    relevant_hits += 1
-                    continue
-                for path in distractor_paths:
-                    if _canonical_match(path, url):
-                        matched_distractor = True
-                        break
-                if matched_distractor:
-                    distractor_hits += 1
-                else:
-                    other_hits += 1
-
-            total_classified = relevant_hits + distractor_hits + other_hits
-            if total_classified > 0:
-                distractor_penalty = distractor_hits * 2
-                numerator = max(0, relevant_hits - distractor_penalty)
-                source_quality = min(1.0, numerator / total_classified)
-            else:
-                source_quality = None
-
-            source_quality_formula = (
-                f"max(0, relevant_hits-{distractor_hits}*2) / total_classified"
-                if total_classified > 0
-                else "unavailable — no classified acquired candidates"
-            )
-            _source_quality_status = (
-                MetricStatus.MEASURED
-                if total_classified > 0
-                else MetricStatus.UNAVAILABLE
-            )
+        source_quality, source_quality_formula, _source_quality_status = (
+            _annotated_source_quality(candidates, objective)
+        )
 
         # ------------------------------------------------------------------
         # 3. Coverage completeness — reconstruct projection from ALL revisions
@@ -928,10 +920,10 @@ class MetricEngine:
                 name="source_quality_score",
                 value=quality.source_quality_score,
                 source=MetricSource(
-                    table="search_candidates",
-                    column="domain + benchmark_source_classes",
+                    table="benchmark_ground_truth + search_candidates",
+                    column="known_sources.source_class + canonical_url",
                     run_id=str(run_id),
-                    method="source_class_compliance",
+                    method="annotated_precision_class_coverage_hmean_v2",
                 ),
                 formula=source_quality_formula,
                 status=_source_quality_status,
@@ -1834,7 +1826,12 @@ class ReproducibilityComparison:
     objective_id: str = ""
     quality_tolerances: tuple[tuple[str, float, float, float], ...] = ()
     performance_tolerances: tuple[tuple[str, float, float, float], ...] = ()
+    policy_version: str = REPRODUCIBILITY_POLICY_VERSION
+    relative_tolerance: float = 0.15
+    operational_ratio_limit: float = 2.0
+    operational_absolute_tolerances: tuple[tuple[str, float], ...] = ()
     all_within_tolerance: bool = True
+    observations: tuple[str, ...] = ()
     details: tuple[str, ...] = ()
 
 
@@ -1899,7 +1896,9 @@ class ReleaseBenchmarkConfig:
         integrity_checks: Integrity check names to run.
         known_limitations: Custom known limitations for the recommendation.
         reproducibility_tolerance: Maximum relative tolerance for
-            reproducibility comparison between two campaign runs.
+            deterministic output and workload metrics.
+        operational_reproducibility_ratio_limit: Maximum larger/smaller ratio
+            for operational latency, throughput, and resource telemetry.
         strict: If True, metric extraction fails when required tables are
             absent rather than falling back to simulation.
     """
@@ -1922,8 +1921,15 @@ class ReleaseBenchmarkConfig:
         "idempotent_replay",
     )
     known_limitations: tuple[str, ...] = ()
-    reproducibility_tolerance: float = 0.15  # 15% relative tolerance
+    reproducibility_tolerance: float = 0.15
+    operational_reproducibility_ratio_limit: float = 2.0
     strict: bool = False
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.reproducibility_tolerance <= 1.0:
+            raise ValueError("reproducibility_tolerance must be between 0 and 1")
+        if self.operational_reproducibility_ratio_limit < 1.0:
+            raise ValueError("operational_reproducibility_ratio_limit must be >= 1")
 
 
 # ---------------------------------------------------------------------------
@@ -2030,6 +2036,17 @@ class ReleaseBenchmarkRunner:
             "blob_root_set": bool(self.config.blob_root),
             "dataset_version": self.loader.dataset.version,
             "modes": ",".join(self.config.execution_modes),
+            "reproducibility_policy_version": REPRODUCIBILITY_POLICY_VERSION,
+            "reproducibility_relative_tolerance": (
+                self.config.reproducibility_tolerance
+            ),
+            "operational_reproducibility_ratio_limit": float(
+                self.loader.quality_thresholds.get(
+                    "max_operational_reproducibility_ratio",
+                    self.config.operational_reproducibility_ratio_limit,
+                )
+            ),
+            "operational_absolute_tolerances": dict(OPERATIONAL_ABSOLUTE_TOLERANCES),
         }
 
         runs: list[CampaignRun] = []
@@ -2816,6 +2833,14 @@ class ReleaseBenchmarkRunner:
         """
         if tolerance is None:
             tolerance = self.config.reproducibility_tolerance
+        operational_ratio_limit = float(
+            self.loader.quality_thresholds.get(
+                "max_operational_reproducibility_ratio",
+                self.config.operational_reproducibility_ratio_limit,
+            )
+        )
+        if operational_ratio_limit < 1.0:
+            raise ValueError("max_operational_reproducibility_ratio must be >= 1")
 
         # Index runs by (mode, objective_id)
         def index_runs(
@@ -2832,6 +2857,7 @@ class ReleaseBenchmarkRunner:
         quality_tolerances: list[tuple[str, float, float, float]] = []
         performance_tolerances: list[tuple[str, float, float, float]] = []
         details: list[str] = []
+        operational_observations: list[str] = []
         all_within = True
 
         # Reject when mode/objective sets differ — strict reproducibility
@@ -2961,8 +2987,49 @@ class ReleaseBenchmarkRunner:
                         )
                         continue
                     denom = abs(val_a) if abs(val_a) > 1e-9 else 1.0
-                    rel_diff = abs(val_b - val_a) / denom
-                    within = rel_diff <= tolerance
+                    abs_diff = abs(val_b - val_a)
+                    rel_diff = abs_diff / denom
+                    if field_name in OPERATIONAL_PERFORMANCE_METRICS:
+                        smaller = min(abs(val_a), abs(val_b))
+                        larger = max(abs(val_a), abs(val_b))
+                        observed_ratio = (
+                            1.0
+                            if larger <= 1e-9
+                            else float("inf")
+                            if smaller <= 1e-9
+                            else larger / smaller
+                        )
+                        absolute_tolerance = OPERATIONAL_ABSOLUTE_TOLERANCES.get(
+                            field_name
+                        )
+                        within = (
+                            rel_diff <= tolerance
+                            or observed_ratio <= operational_ratio_limit
+                            or (
+                                absolute_tolerance is not None
+                                and abs_diff <= absolute_tolerance
+                            )
+                        )
+                        failure_limit = (
+                            f"ratio {observed_ratio:.4f} > {operational_ratio_limit}"
+                        )
+                        if absolute_tolerance is not None:
+                            failure_limit += (
+                                f" and abs diff {abs_diff:.4f} > {absolute_tolerance}"
+                            )
+                        if within and rel_diff > tolerance:
+                            operational_observations.append(
+                                f"{mode}.{objective_id}.{field_name}: "
+                                f"operational variance accepted by "
+                                f"{REPRODUCIBILITY_POLICY_VERSION} — "
+                                f"{val_a:.4f} vs {val_b:.4f}; "
+                                f"rel diff={rel_diff:.4f}; "
+                                f"ratio={observed_ratio:.4f}; "
+                                f"ratio_limit={operational_ratio_limit}"
+                            )
+                    else:
+                        within = rel_diff <= tolerance
+                        failure_limit = f"rel diff {rel_diff:.4f} > {tolerance}"
                     if not within:
                         all_within = False
                     performance_tolerances.append(
@@ -2971,7 +3038,7 @@ class ReleaseBenchmarkRunner:
                     if not within:
                         details.append(
                             f"{mode}.{objective_id}.{field_name}: "
-                            f"{val_a:.4f} vs {val_b:.4f} (rel diff {rel_diff:.4f} > {tolerance})"
+                            f"{val_a:.4f} vs {val_b:.4f} ({failure_limit})"
                         )
 
         return ReproducibilityComparison(
@@ -2981,7 +3048,14 @@ class ReleaseBenchmarkRunner:
             objective_id="all",
             quality_tolerances=tuple(quality_tolerances),
             performance_tolerances=tuple(performance_tolerances),
+            policy_version=REPRODUCIBILITY_POLICY_VERSION,
+            relative_tolerance=tolerance,
+            operational_ratio_limit=operational_ratio_limit,
+            operational_absolute_tolerances=tuple(
+                sorted(OPERATIONAL_ABSOLUTE_TOLERANCES.items())
+            ),
             all_within_tolerance=all_within,
+            observations=tuple(operational_observations),
             details=tuple(details),
         )
 
@@ -2998,6 +3072,7 @@ def run_release_benchmark(
     execution_modes: tuple[str, ...] = RELEASE_MODES,
     strict: bool = False,
     reproducibility_tolerance: float = 0.15,
+    operational_reproducibility_ratio_limit: float = 2.0,
     known_limitations: tuple[str, ...] = (),
 ) -> ReleaseBenchmarkResult:
     """Execute a full release benchmark and return results.
@@ -3008,7 +3083,10 @@ def run_release_benchmark(
         blob_root: Path to the content-addressed blob store root.
         execution_modes: Workflow modes to benchmark.
         strict: If True, metric extraction fails when required tables are absent.
-        reproducibility_tolerance: Maximum relative tolerance for reproducibility.
+        reproducibility_tolerance: Maximum relative tolerance for deterministic
+            output and workload metrics.
+        operational_reproducibility_ratio_limit: Maximum ratio for operational
+            latency, throughput, and resource telemetry.
         known_limitations: Custom known limitations for the recommendation.
 
     Returns:
@@ -3026,6 +3104,9 @@ def run_release_benchmark(
         execution_modes=execution_modes,
         strict=strict,
         reproducibility_tolerance=reproducibility_tolerance,
+        operational_reproducibility_ratio_limit=(
+            operational_reproducibility_ratio_limit
+        ),
         known_limitations=known_limitations,
     )
 

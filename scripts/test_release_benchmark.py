@@ -606,7 +606,7 @@ class TestWorkflowBenchmarkBackwardCompat:
             dry_run=True,
         )
         assert result is not None
-        assert result.dataset_version == "benchmark-v1"
+        assert result.dataset_version == "benchmark-v2"
         # Should have results for all three modes
         modes_seen = {r.workflow_mode for r in result.comparison.results}
         assert modes_seen == {"agent_led", "autonomous_local", "deterministic_debug"}

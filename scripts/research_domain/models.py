@@ -1472,28 +1472,43 @@ class RecommendationOutcome(str, Enum):
 
 @dataclass(frozen=True)
 class BenchmarkSource:
-    """A known source referenced in a benchmark objective.
+    """A versioned source annotation referenced by a benchmark objective.
 
-    Attributes:
-        schema_version: Always ``"benchmark-source-v1"``.
-        file_path: Path to the source file (relative to skill root).
-        relevance: Whether this source is expected to be relevant.
-        role: Role of this source in the benchmark ("relevant", "distractor").
+    ``benchmark-source-v2`` adds an explicit ``source_class`` annotation so
+    release source quality never infers source type from a URL or domain.
+    Version 1 remains readable for historical fixtures, but cannot satisfy
+    strict v2 source-quality measurement without an annotation.
     """
 
     schema_version: str
     file_path: str
     relevance: bool
     role: str  # "relevant" | "distractor"
+    source_class: str = ""
 
-    SCHEMA_VERSION = "benchmark-source-v1"
+    SCHEMA_VERSION = "benchmark-source-v2"
+    SCHEMA_VERSIONS = ("benchmark-source-v1", "benchmark-source-v2")
 
     def __post_init__(self) -> None:
-        if self.schema_version != self.SCHEMA_VERSION:
-            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+        if self.schema_version not in self.SCHEMA_VERSIONS:
+            raise ValueError(
+                f"unsupported schema_version: {self.schema_version}. "
+                f"Allowed: {self.SCHEMA_VERSIONS}"
+            )
+        _text(self.file_path, "benchmark_source.file_path")
         if self.role not in ("relevant", "distractor"):
             raise ValueError(
                 f"role must be 'relevant' or 'distractor', got: {self.role}"
+            )
+        if self.relevance is not (self.role == "relevant"):
+            raise ValueError(
+                "benchmark_source.relevance must agree with benchmark_source.role"
+            )
+        if self.source_class:
+            _text(self.source_class, "benchmark_source.source_class")
+        if self.schema_version == self.SCHEMA_VERSION and not self.source_class:
+            raise ValueError(
+                "benchmark-source-v2 requires a nonempty source_class annotation"
             )
 
 
