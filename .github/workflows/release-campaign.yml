@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate-sha:
-        description: Exact commit SHA to validate
+        description: Exact current main SHA to validate
         required: true
         type: string
 
@@ -13,12 +13,17 @@ permissions:
 
 jobs:
   campaign:
-    name: "Real release campaigns (issues #146/#153)"
+    name: "Real release campaigns (issues #146/#153/#170)"
     runs-on: [self-hosted, firecrawl-release]
     timeout-minutes: 180
     environment: release-campaign
     env:
       CANDIDATE_SHA: ${{ inputs.candidate-sha }}
+      DISPATCH_SHA: ${{ github.sha }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      DISPATCH_REF: ${{ github.ref }}
+      CAMPAIGN_DIR: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
+      SMOKE_DISABLE_AGENT_LED: "1"
 
     steps:
       - name: Check out exact candidate
@@ -27,12 +32,21 @@ jobs:
           ref: ${{ inputs.candidate-sha }}
           fetch-depth: 0
 
-      - name: Verify exact checkout
-        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Verify exact-head workflow identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$DISPATCH_REF" = "refs/heads/main"
+          test "$DISPATCH_SHA" = "$CANDIDATE_SHA"
+          test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$SMOKE_DISABLE_AGENT_LED" = "1"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Set up isolated Python
         shell: bash
         run: |
+          set -euo pipefail
           command -v python3.12
           python3.12 --version
           command -v uv
@@ -40,11 +54,15 @@ jobs:
           echo "$RUNNER_TEMP/release-campaign-venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r requirements-research-store.txt
 
       - name: Execute two strict campaigns
+        id: execute
+        continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           BLOB_ROOT: ${{ secrets.BLOB_ROOT }}
@@ -62,11 +80,38 @@ jobs:
           RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
           RERANKER_MODEL: ${{ vars.RERANKER_MODEL }}
           PYTHONPATH: scripts
+        shell: bash
         run: |
-          python -m research_store.strict_benchmark \
-            --campaign-dir "$RUNNER_TEMP/release-campaign-${CANDIDATE_SHA}"
+          set -euo pipefail
+          python scripts/run_release_campaign.py \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --campaign-dir "$CAMPAIGN_DIR"
 
-      - name: Upload durable campaign artifacts
+      - name: Verify authoritative campaign evidence
+        id: verify
+        if: always()
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONPATH: scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/verify_release_campaign.py \
+            --campaign-dir "$CAMPAIGN_DIR" \
+            --database-url "$DATABASE_URL" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --dispatch-sha "$DISPATCH_SHA" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --dispatch-ref "$DISPATCH_REF" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --execution-conclusion "${{ steps.execute.outcome }}"
+
+      - name: Upload complete campaign directory
+        id: upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -74,3 +119,24 @@ jobs:
           path: ${{ runner.temp }}/release-campaign-${{ inputs.candidate-sha }}
           if-no-files-found: error
           retention-days: 90
+
+      - name: Record artifact upload identity
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "artifact_id=${{ steps.upload.outputs.artifact-id }}"
+            echo "artifact_url=${{ steps.upload.outputs.artifact-url }}"
+            echo "artifact_digest=${{ steps.upload.outputs.artifact-digest }}"
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "workflow_sha=$WORKFLOW_SHA"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce authoritative gate
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ steps.execute.outcome }}" = "success"
+          test "${{ steps.verify.outcome }}" = "success"
+          test "${{ steps.upload.outcome }}" = "success"
