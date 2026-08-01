@@ -135,3 +135,12 @@ def test_release_campaign_initializes_campaign_dir_at_runner_time():
     assert "CAMPAIGN_DIR: ${{ runner.temp }}" not in workflow
     assert '"$RUNNER_TEMP/release-campaign-$CANDIDATE_SHA"' in workflow
     assert '>> "$GITHUB_ENV"' in workflow
+
+
+def test_release_campaign_binds_complete_runtime_identity():
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "VALKEY_URL: ${{ secrets.VALKEY_URL }}" in workflow
+    assert "EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL }}" in workflow
+    assert "EMBEDDING_REVISION: ${{ vars.EMBEDDING_REVISION }}" in workflow
+    assert "EMBEDDING_DIMENSION: ${{ vars.EMBEDDING_DIMENSION }}" in workflow
+    assert "QDRANT_ALIAS: ${{ vars.QDRANT_ALIAS }}" in workflow

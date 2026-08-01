@@ -76,10 +76,13 @@ jobs:
           QDRANT_URL: ${{ secrets.QDRANT_URL }}
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
           QDRANT_ALIAS: ${{ vars.QDRANT_ALIAS }}
+          VALKEY_URL: ${{ secrets.VALKEY_URL }}
           FIRECRAWL_API_URL: ${{ secrets.FIRECRAWL_API_URL }}
           EMBEDDING_URL: ${{ secrets.EMBEDDING_URL }}
           EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
           EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL }}
+          EMBEDDING_REVISION: ${{ vars.EMBEDDING_REVISION }}
+          EMBEDDING_DIMENSION: ${{ vars.EMBEDDING_DIMENSION }}
           GENERATIVE_URL: ${{ secrets.GENERATIVE_URL }}
           GENERATIVE_API_KEY: ${{ secrets.GENERATIVE_API_KEY }}
           GENERATIVE_MODEL: ${{ vars.GENERATIVE_MODEL }}
