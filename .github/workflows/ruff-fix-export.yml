@@ -1,4 +1,4 @@
-name: Export Ruff fixes
+name: Apply Ruff fixes
 
 on:
   pull_request:
@@ -6,21 +6,22 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export-ruff-fixes:
-    if: github.head_ref == 'agent/remove-legacy-catalog'
+  apply-ruff-fixes:
+    if: github.head_ref == 'agent/remove-legacy-catalog' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
           ref: agent/remove-legacy-catalog
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Generate exact Ruff patch
+      - name: Apply and verify Ruff fixes
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -47,11 +48,13 @@ jobs:
           ruff format .
           ruff check .
           ruff format --check .
-          git diff --binary > "$RUNNER_TEMP/ruff-fixes.patch"
-          test -s "$RUNNER_TEMP/ruff-fixes.patch"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ruff-fixes-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/ruff-fixes.patch
-          if-no-files-found: error
-          retention-days: 1
+          git diff --check
+          test -n "$(git status --short)"
+      - name: Commit source fixes
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts
+          git commit -m 'Apply Ruff fixes'
+          git push origin HEAD:agent/remove-legacy-catalog
