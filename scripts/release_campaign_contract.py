@@ -249,8 +249,7 @@ def _call_embedding(
         if not isinstance(vector, list) or len(vector) != dimension:
             raise ContractError("calibration embedding dimension mismatch")
         if not all(
-            isinstance(value, (int, float)) and math.isfinite(value)
-            for value in vector
+            isinstance(value, (int, float)) and math.isfinite(value) for value in vector
         ):
             raise ContractError("calibration embedding contains non-finite values")
     if elapsed <= 0:
@@ -645,7 +644,10 @@ def validate_campaign_contract(campaign_dir: Path) -> list[str]:
     for result_path in result_paths:
         result = _load_object(result_path)
         recommendation = result.get("recommendation")
-        if not isinstance(recommendation, dict) or recommendation.get("outcome") != "go":
+        if (
+            not isinstance(recommendation, dict)
+            or recommendation.get("outcome") != "go"
+        ):
             errors.append(f"{result_path}: recommendation is not go")
         for run in _run_index(result).values():
             run_id = str(run.get("run_id") or "")
@@ -663,7 +665,9 @@ def validate_campaign_contract(campaign_dir: Path) -> list[str]:
                     status = metric.get("status")
                     source = metric.get("source")
                     if not isinstance(source, Mapping):
-                        errors.append(f"{run_id}/{metric.get('name')}: source is missing")
+                        errors.append(
+                            f"{run_id}/{metric.get('name')}: source is missing"
+                        )
                         continue
                     records = source.get("record_ids")
                     samples = source.get("sample_count")
@@ -692,17 +696,11 @@ def validate_campaign_contract(campaign_dir: Path) -> list[str]:
             else:
                 source = embedding.get("source") or {}
                 if source.get("stages") != [CALIBRATION_STAGE]:
-                    errors.append(
-                        f"{run_id}: embedding stage is not fixed calibration"
-                    )
+                    errors.append(f"{run_id}: embedding stage is not fixed calibration")
                 if source.get("stage_set_version") != CALIBRATION_VERSION:
-                    errors.append(
-                        f"{run_id}: embedding calibration version mismatch"
-                    )
+                    errors.append(f"{run_id}: embedding calibration version mismatch")
                 if source.get("sample_count") != len(CALIBRATION_TEXTS):
-                    errors.append(
-                        f"{run_id}: embedding calibration workload mismatch"
-                    )
+                    errors.append(f"{run_id}: embedding calibration workload mismatch")
                 for field in (
                     "endpoint_model",
                     "embedding_revision",
@@ -717,9 +715,7 @@ def validate_campaign_contract(campaign_dir: Path) -> list[str]:
     if comparison.get("all_within_tolerance") is not True:
         errors.append("reproducibility did not pass")
     if comparison.get("details"):
-        errors.append(
-            f"reproducibility contains failures: {comparison['details']!r}"
-        )
+        errors.append(f"reproducibility contains failures: {comparison['details']!r}")
     return errors
 
 
@@ -728,9 +724,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     repair = subparsers.add_parser("repair")
     repair.add_argument("--campaign-dir", type=Path, required=True)
-    repair.add_argument(
-        "--database-url", default=os.environ.get("DATABASE_URL", "")
-    )
+    repair.add_argument("--database-url", default=os.environ.get("DATABASE_URL", ""))
     verify = subparsers.add_parser("verify")
     verify.add_argument("--campaign-dir", type=Path, required=True)
     args = parser.parse_args(argv)
