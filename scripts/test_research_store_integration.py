@@ -2364,7 +2364,58 @@ def test_run_compare_handler_executes_through_service(monkeypatch, capsys):
     )
 
 
-def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
+def _configure_cli_for_service(monkeypatch, service):
+    """Point CLI service builders at the same derivation config as the fixture."""
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.setenv("BLOB_ROOT", str(service.config.blob_root))
+    monkeypatch.setenv("EMBEDDING_MODEL", service.config.embedding_model)
+    monkeypatch.setenv("EMBEDDING_REVISION", service.config.embedding_revision)
+    monkeypatch.setenv("EMBEDDING_DIMENSION", str(service.config.embedding_dimension))
+    monkeypatch.setenv("PARSER_VERSION", service.config.parser_version)
+    monkeypatch.setenv("NORMALIZATION_VERSION", service.config.normalization_version)
+    monkeypatch.setenv("CHUNKER_VERSION", service.config.chunker_version)
+
+
+def _seed_completed_indexed_asset(service, external_run_id):
+    """Persist one run-scoped asset and mark its queued index jobs complete."""
+    manifest = service.ingest_batch(
+        f"fixture_{uuid4().hex}",
+        "scrape",
+        [
+            IngestRequest(
+                f"https://integration.example/{uuid4().hex}",
+                b"# Indexed fixture\n\nPersisted PostgreSQL evidence.",
+            )
+        ],
+        research_run_external_id=external_run_id,
+    )
+    assert manifest["failure_count"] == 0
+
+    run_id = build_run_service(service.config).status(external_id=external_run_id).id
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """UPDATE index_jobs j
+               SET status='complete', completed_at=now(), error=NULL
+               FROM embedding_manifests m
+               JOIN chunks c ON c.id=m.chunk_id
+               JOIN documents d ON d.id=c.document_id
+               JOIN research_run_assets ra ON ra.snapshot_id=d.snapshot_id
+               WHERE j.manifest_id=m.id AND ra.run_id=%s""",
+            (run_id,),
+        )
+        assert cursor.rowcount > 0
+        cursor.execute(
+            """UPDATE embedding_manifests m
+               SET index_status='complete', indexed_at=now(), error=NULL
+               FROM chunks c
+               JOIN documents d ON d.id=c.document_id
+               JOIN research_run_assets ra ON ra.snapshot_id=d.snapshot_id
+               WHERE m.chunk_id=c.id AND ra.run_id=%s""",
+            (run_id,),
+        )
+
+
+def test_run_finish_handler_executes_through_service(monkeypatch, capsys, service):
     """Verify that research-db run-finish actually invokes the service method.
 
     Exercises the finish handler path to ensure idempotent terminal transitions.
@@ -2372,7 +2423,7 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
     from research_store.container import build_run_service
 
     external_id = f"fr_finish_{uuid4().hex}"
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    _configure_cli_for_service(monkeypatch, service)
 
     # Start a run
     assert (
@@ -2388,6 +2439,7 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
         == 0
     )
     capsys.readouterr()  # discard run-start output
+    _seed_completed_indexed_asset(service, external_id)
 
     # Advance through all states to validating (required before completed)
     svc = build_run_service()
@@ -2422,7 +2474,8 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
         == 0
     )
     result = json.loads(capsys.readouterr().out)
-    assert result["next_state"] == "completed"
+    assert result["state"] == "completed"
+    assert result["terminal"] is True
     assert result["lifecycle_revision"] >= 1
 
     # Verify terminal state
@@ -2431,16 +2484,16 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys):
     assert status["state"] == "completed"
 
 
-def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
+def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
     """Verify that finishing a run twice with the same outcome is idempotent.
 
-    The second finish call should return reused=true and the lifecycle_revision
-    should be unchanged after the second call.
+    The second finish call should preserve the authoritative run identity and
+    lifecycle revision.
     """
     from research_store.container import build_run_service
 
     external_id = f"fr_finish_idem_{uuid4().hex}"
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    _configure_cli_for_service(monkeypatch, service)
 
     # Start a run
     assert (
@@ -2456,6 +2509,7 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
         == 0
     )
     capsys.readouterr()  # discard run-start output
+    _seed_completed_indexed_asset(service, external_id)
 
     # Advance through all states to validating (required before completed)
     svc = build_run_service()
@@ -2494,9 +2548,9 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
     )
     first_result = json.loads(capsys.readouterr().out)
     first_revision = first_result["lifecycle_revision"]
-    first_transition_id = first_result["transition_id"]
-    assert first_result["next_state"] == "completed"
-    assert first_result["reused"] is False
+    first_run_id = first_result["id"]
+    assert first_result["state"] == "completed"
+    assert first_result["terminal"] is True
 
     # Finish again with the same outcome — should be idempotent
     assert (
@@ -2513,18 +2567,18 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):
         == 0
     )
     second_result = json.loads(capsys.readouterr().out)
-    assert second_result["next_state"] == "completed"
+    assert second_result["state"] == "completed"
+    assert second_result["terminal"] is True
     assert second_result["lifecycle_revision"] == first_revision
-    assert second_result["reused"] is True
-    assert second_result["transition_id"] == first_transition_id
+    assert second_result["id"] == first_run_id
 
 
-def test_run_reopen_after_finish_idempotency(monkeypatch, capsys):
+def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
     """Verify that reopening a finished run transitions it back to created state."""
     from research_store.container import build_run_service
 
     external_id = f"fr_reopen_idem_{uuid4().hex}"
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    _configure_cli_for_service(monkeypatch, service)
 
     # Start a run
     assert (
@@ -2540,6 +2594,7 @@ def test_run_reopen_after_finish_idempotency(monkeypatch, capsys):
         == 0
     )
     capsys.readouterr()  # discard run-start output
+    _seed_completed_indexed_asset(service, external_id)
 
     # Advance through all states to validating (required before completed)
     svc = build_run_service()

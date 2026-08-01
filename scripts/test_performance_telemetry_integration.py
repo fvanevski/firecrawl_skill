@@ -1566,10 +1566,8 @@ class TestOverlappingCampaignCacheIsolation:
                     (
                         str(run_id),
                         "Overlapping cache isolation",
-                        "running",
                         "created",
                         "agent_led",
-                        "Overlapping cache isolation",
                         f"test_overlap_{suffix}_{uuid4().hex[:8]}",
                     ),
                 )

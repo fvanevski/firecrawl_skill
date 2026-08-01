@@ -187,6 +187,15 @@ def _sanitize(value: Any, key: str = "") -> Any:
     if key.lower() in {k.lower() for k in SENSITIVE_KEYS}:
         return "[REDACTED]"
 
+    if isinstance(value, UUID):
+        return str(value)
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+
+    if isinstance(value, tuple):
+        return [_sanitize(item) for item in value]
+
     if isinstance(value, dict):
         return {k: _sanitize(v, k) for k, v in value.items()}
 
