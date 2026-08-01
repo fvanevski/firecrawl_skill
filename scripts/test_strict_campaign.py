@@ -36,6 +36,7 @@ from research_store.release_benchmark import (
     ReproducibilityComparison,
 )
 from research_store.strict_benchmark import (
+    DEFAULT_DATASET,
     _build_env_manifest,
     _build_manifest,
     _write_json_atomic,
@@ -62,6 +63,11 @@ def _set_llm_env_vars(monkeypatch):
 BENCHMARK_FIXTURE = (
     SCRIPTS.parent / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
 )
+
+
+def test_default_dataset_resolves_from_repository_root():
+    assert DEFAULT_DATASET == BENCHMARK_FIXTURE
+    assert DEFAULT_DATASET.is_file()
 
 
 def _make_quality(**overrides):
