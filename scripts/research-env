@@ -5,14 +5,38 @@
 # Priority: explicit env vars > .env file > defaults / container secrets.
 
 research_skill_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+research_env_file="$research_skill_root/.env"
 
-# ── Source .env if present (allows local overrides) ──────────────────────
-if [[ -r "$research_skill_root/firecrawl/.env" ]]; then
-  # shellcheck source=/dev/null
-  set -a
-  # eslint-disable-next-line no-source-requests/disable-source
-  . "$research_skill_root/firecrawl/.env"
-  set +a
+# ── Source root .env if present (allows local overrides) ─────────────────
+# Load in a subshell and import only variables that are not already defined in
+# the caller. This preserves the documented explicit-env precedence and avoids
+# changing the caller's allexport shell option.
+if [[ -r "$research_env_file" ]]; then
+  research_env_dump="$(mktemp "${TMPDIR:-/tmp}/firecrawl-research-env.XXXXXX")" || {
+    echo "ERROR: unable to create temporary file for $research_env_file" >&2
+    return 1 2>/dev/null || exit 1
+  }
+  if ! (
+    set -ae
+    # shellcheck source=/dev/null
+    . "$research_env_file"
+    env -0
+  ) > "$research_env_dump"; then
+    rm -f "$research_env_dump"
+    echo "ERROR: unable to load $research_env_file" >&2
+    return 1 2>/dev/null || exit 1
+  fi
+
+  while IFS= read -r -d '' research_env_entry; do
+    research_env_key="${research_env_entry%%=*}"
+    research_env_value="${research_env_entry#*=}"
+    if [[ "$research_env_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] &&
+      [[ ! -v $research_env_key ]]; then
+      printf -v "$research_env_key" '%s' "$research_env_value"
+      export "$research_env_key"
+    fi
+  done < "$research_env_dump"
+  rm -f "$research_env_dump"
 fi
 
 if [[ -n "${FIRECRAWL_RESEARCH_PYTHON:-}" ]]; then
@@ -71,5 +95,7 @@ export CHUNKER_VERSION="${CHUNKER_VERSION:-hierarchical-v1}"
 export FIRECRAWL_RESEARCH_PERSIST="${FIRECRAWL_RESEARCH_PERSIST:-auto}"
 export FIRECRAWL_RESEARCH_PYTHON="$research_python"
 
-unset research_skill_root research_python research_postgres_dir research_qdrant_dir research_valkey_dir
+unset research_skill_root research_env_file research_env_dump research_env_entry
+unset research_env_key research_env_value research_python
+unset research_postgres_dir research_qdrant_dir research_valkey_dir
 unset -f research_urlencode
