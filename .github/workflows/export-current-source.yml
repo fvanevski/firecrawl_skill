@@ -58,6 +58,8 @@ jobs:
           PY
           python -m pip install ruff==0.16.1
           ruff check scripts/research_store/container.py
+          ruff format scripts/research_store/container.py
+          ruff check scripts/research_store/container.py
           ruff format --check scripts/research_store/container.py
           python -m compileall -q scripts/research_store/container.py
       - name: Commit source correction
