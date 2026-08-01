@@ -3320,6 +3320,7 @@ class TestIndexRebuildRecovery:
             cur.execute("DELETE FROM document_blocks;")
             cur.execute("DELETE FROM ingestion_batch_assets;")
             cur.execute("DELETE FROM documents;")
+            cur.execute("DELETE FROM research_run_assets;")
             cur.execute("DELETE FROM asset_snapshots;")
             cur.execute("DELETE FROM sources;")
             conn.commit()
