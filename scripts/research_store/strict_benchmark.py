@@ -28,6 +28,8 @@ from hashlib import sha256
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve()
+REPO_ROOT = SCRIPTS.parents[2]
+DEFAULT_DATASET = REPO_ROOT / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
 
 
 def _qdrant_compatibility_errors(caught_warnings) -> tuple[str, ...]:
@@ -1356,11 +1358,7 @@ def main(
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=SCRIPTS.parent.parent
-        / "tests"
-        / "fixtures"
-        / "benchmark"
-        / "benchmark-v2.json",
+        default=DEFAULT_DATASET,
         help="Path to the benchmark dataset JSON file",
     )
     parser.add_argument(
