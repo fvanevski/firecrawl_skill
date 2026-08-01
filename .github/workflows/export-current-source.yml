@@ -1,0 +1,25 @@
+name: Export current PR source
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    if: github.head_ref == 'agent/remove-legacy-catalog'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: agent/remove-legacy-catalog
+      - name: Package source
+        run: tar --exclude=.git -C "$GITHUB_WORKSPACE" -czf "$RUNNER_TEMP/source.tgz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: current-source-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/source.tgz
+          retention-days: 1
