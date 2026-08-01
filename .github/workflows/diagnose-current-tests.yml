@@ -24,199 +24,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-research-store.txt pytest ruff==0.16.1
-      - name: Apply source and contract corrections
+      - name: Apply validated corrections
         run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('scripts/research_store/invocation_events.py')
-          lines = path.read_text().splitlines(keepends=True)
-          if not any('if isinstance(value, UUID):' in line for line in lines):
-              start = next(i for i, line in enumerate(lines) if line.startswith('def _sanitize('))
-              insert_at = next(
-                  i for i in range(start + 1, len(lines))
-                  if lines[i] == '    if isinstance(value, dict):\n'
-              )
-              lines[insert_at:insert_at] = [
-                  '    if isinstance(value, UUID):\n',
-                  '        return str(value)\n',
-                  '\n',
-                  '    if isinstance(value, datetime):\n',
-                  '        return value.isoformat()\n',
-                  '\n',
-                  '    if isinstance(value, tuple):\n',
-                  '        return [_sanitize(item) for item in value]\n',
-                  '\n',
-              ]
-          path.write_text(''.join(lines))
-
-          path = Path('scripts/test_performance_telemetry_integration.py')
-          text = path.read_text()
-          start = text.index('    def test_overlapping_events_remain_exactly_run_scoped(')
-          end = text.find('\nclass ', start + 1)
-          if end == -1:
-              end = len(text)
-          segment = text[start:end]
-          old = '''                    (
-                                  str(run_id),
-                                  "Overlapping cache isolation",
-                                  "running",
-                                  "created",
-                                  "agent_led",
-                                  "Overlapping cache isolation",
-                                  f"test_overlap_{suffix}_{uuid4().hex[:8]}",
-                              ),
-          '''.replace('                                  ', '                        ')
-          new = '''                    (
-                                  str(run_id),
-                                  "Overlapping cache isolation",
-                                  "created",
-                                  "agent_led",
-                                  f"test_overlap_{suffix}_{uuid4().hex[:8]}",
-                              ),
-          '''.replace('                                  ', '                        ')
-          if old in segment:
-              segment = segment.replace(old, new, 1)
-          elif new not in segment:
-              raise SystemExit('unexpected overlapping-campaign insert shape')
-          text = text[:start] + segment + text[end:]
-          path.write_text(text)
-
-          path = Path('scripts/test_research_store_integration.py')
-          text = path.read_text()
-          anchor = '\ndef test_run_finish_handler_executes_through_service(monkeypatch, capsys):\n'
-          helper = r'''
-
-          def _configure_cli_for_service(monkeypatch, service):
-              """Point CLI service builders at the same derivation config as the fixture."""
-              monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-              monkeypatch.setenv("BLOB_ROOT", str(service.config.blob_root))
-              monkeypatch.setenv("EMBEDDING_MODEL", service.config.embedding_model)
-              monkeypatch.setenv("EMBEDDING_REVISION", service.config.embedding_revision)
-              monkeypatch.setenv("EMBEDDING_DIMENSION", str(service.config.embedding_dimension))
-              monkeypatch.setenv("PARSER_VERSION", service.config.parser_version)
-              monkeypatch.setenv("NORMALIZATION_VERSION", service.config.normalization_version)
-              monkeypatch.setenv("CHUNKER_VERSION", service.config.chunker_version)
-
-
-          def _seed_completed_indexed_asset(service, external_run_id):
-              """Persist one run-scoped asset and mark its queued index jobs complete."""
-              manifest = service.ingest_batch(
-                  f"fixture_{uuid4().hex}",
-                  "scrape",
-                  [
-                      IngestRequest(
-                          f"https://integration.example/{uuid4().hex}",
-                          b"# Indexed fixture\n\nPersisted PostgreSQL evidence.",
-                      )
-                  ],
-                  research_run_external_id=external_run_id,
-              )
-              assert manifest["failure_count"] == 0
-
-              run_id = build_run_service(service.config).status(
-                  external_id=external_run_id
-              ).id
-              with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-                  cursor.execute(
-                      """UPDATE index_jobs j
-                         SET status='complete', completed_at=now(), error=NULL
-                         FROM embedding_manifests m
-                         JOIN chunks c ON c.id=m.chunk_id
-                         JOIN documents d ON d.id=c.document_id
-                         JOIN research_run_assets ra ON ra.snapshot_id=d.snapshot_id
-                         WHERE j.manifest_id=m.id AND ra.run_id=%s""",
-                      (run_id,),
-                  )
-                  assert cursor.rowcount > 0
-                  cursor.execute(
-                      """UPDATE embedding_manifests m
-                         SET index_status='complete', indexed_at=now(), error=NULL
-                         FROM chunks c
-                         JOIN documents d ON d.id=c.document_id
-                         JOIN research_run_assets ra ON ra.snapshot_id=d.snapshot_id
-                         WHERE m.chunk_id=c.id AND ra.run_id=%s""",
-                      (run_id,),
-                  )
-
-
-          def test_run_finish_handler_executes_through_service(monkeypatch, capsys, service):
-          '''
-          helper = '\n'.join(
-              line[10:] if line.startswith('          ') else line
-              for line in helper.splitlines()
-          ) + '\n'
-          if '_seed_completed_indexed_asset' not in text:
-              if text.count(anchor) != 1:
-                  raise SystemExit('could not locate finish-handler test insertion point')
-              text = text.replace(anchor, helper, 1)
-
-          for old_signature, new_signature in {
-              'def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):':
-                  'def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):',
-              'def test_run_reopen_after_finish_idempotency(monkeypatch, capsys):':
-                  'def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):',
-          }.items():
-              if old_signature in text:
-                  text = text.replace(old_signature, new_signature, 1)
-
-          for name in (
-              'test_run_finish_handler_executes_through_service',
-              'test_run_finish_idempotency_same_outcome',
-              'test_run_reopen_after_finish_idempotency',
-          ):
-              start = text.index(f'def {name}')
-              end = text.find('\ndef ', start + 1)
-              if end == -1:
-                  end = len(text)
-              segment = text[start:end]
-              segment = segment.replace(
-                  'monkeypatch.setenv("DATABASE_URL", TEST_DSN)',
-                  '_configure_cli_for_service(monkeypatch, service)',
-                  1,
-              )
-              marker = '    capsys.readouterr()  # discard run-start output\n'
-              if '_seed_completed_indexed_asset(service, external_id)' not in segment:
-                  if segment.count(marker) != 1:
-                      raise SystemExit(f'could not locate run-start marker in {name}')
-                  segment = segment.replace(
-                      marker,
-                      marker + '    _seed_completed_indexed_asset(service, external_id)\n',
-                      1,
-                  )
-              text = text[:start] + segment + text[end:]
-          path.write_text(text)
-          PY
-
-          ruff format \
-            scripts/research_store/invocation_events.py \
-            scripts/test_performance_telemetry_integration.py \
-            scripts/test_research_store_integration.py
-          ruff check \
-            scripts/research_store/invocation_events.py \
-            scripts/test_performance_telemetry_integration.py \
-            scripts/test_research_store_integration.py
-          ruff format --check \
-            scripts/research_store/invocation_events.py \
-            scripts/test_performance_telemetry_integration.py \
-            scripts/test_research_store_integration.py
-          python -m compileall -q \
-            scripts/research_store/invocation_events.py \
-            scripts/test_performance_telemetry_integration.py \
-            scripts/test_research_store_integration.py
-      - name: Start disposable PostgreSQL
+          echo 'H4sICBlobmoAA2FwcGx5X3ByMTgyLnB5AM1Z2W4byRV951dUaATNxlCtCMhDIIAB5BGd0YxEKqQ0ASILjVJ3USy7t1RVU9IYBvIR+cJ8SU4tvXHTEg9gPRjN7rpL3eXcU+WFyFNSULVM+B3haZELRS7xs9d7R86yVR5RxfOM5KUqSkV+nk8nJMtFShP+m/kS9LQwGRmhgScjwQslDwWTjIpoGUqVC3bIa00hW7FMyaB48vxewjMmIatVBILROFTsUQ38QBYJV+br4DNjBctiOboSJfN7fAH7itDsaeDhmUueSUWziA1WNCnZkFxfn536xx7hGdEKyCIX9sG9kP5xj+APUtjqiGTaIjfL+LBeybIyZYIqNrAyBLb0U2DE5APXm43ZgoSSZlzx39jA832jGA4xoUJaKzdvzRdrResXNLtnA+vDD+QIhlnmTPnNemtT3vBbMhoRz73b3HPMI+Uff8w8I2oVOMnKmeP6CbrITW1jt1IbSCgddhfrP8FUKTLEUNjVfnfZptB2txFfxVP2jBWzOuAyX+jCQ3m8yZgqi+Q5SzdNNrliqW/zhSedMqPndoftW9MGwYPAalvEnhd8ynmTVPTTjBWUC6KWqEq+YgdRnpQpaqHqFVFmEl8e4QtzZbSjvRSTKiyYMBHBJmEyYSlT4inkmWL3wvamaTLtzZYe61UNoH8GPIvZ48DEQ1e10Z+vmEhoUfDs3nVtKFhKOXr4kUYqedIOhzLKCxaj+nvo0krdAvoGiE6UUCmJNyR1pZsONitH5ODItqIV1B2gheEZu09hzim7MbLHWHTbyxO90vPqxLX/mkZb/9N1qn3lsT/cuag/bfZLIhohS6i5xESyv0cMijOI7FsSIe6KxfuW0HvsOEz2L3qbh4t+O53hF1kuUGRfwy9lyeM/A22X7PHm+C+3X3foQMwQ8V7GHr672H+jwH6jCKGydYECK1wFu0lTl7N7QhsWCQU0YfUQM+JhqPuCJXq2Ich6vq3rEJRLRuZPEmA0fuSAlxKzpWARdk9ajXoQ0RQgc585/CBySQvWoIBpqGPTUbdox8q1H+wH9NjxJpLZpgR+zRmMIeIJMXCBH2zFYwb8MUCJpudyidEPQMhIlGdKACYMlsh9ONblCi8HMADfEmZHGoZr0NKlZh0JlzSLEyaAViwq8TFUS5GX97DDxIoj/GmefWZP0Bsth6i6Qj5JO0WXLAG4QrPQae2ZOY/9LPg9kDmMEh5iv9vVuJeOZPT7/UsMAUV+PD+rPpG7kicxE5KAIuhZIGnKgLqCryzXspYIlW5SmHkQQJVR2bIWSKZYthr0T0+uTt6fzMfh9ey8PyRX4/lVeDqf+DsF3p9P34ez6fSqPzQN6lwLrOngLsnvQpHnyt+tYnzxfnx6ejb5W3gxPR1rs2tKWHrH4lgPjzSPWfISTbPxr2fzs+lknzKBmpMI00v0nZ5djCeVws1tNkpjsJDMaN2t9vJkNh/Pwl/Hs+0uFlTgTYhe3O/eZDq7ODk/++fJFdTsVtdh2c9r/fGn68kv+9yLliWkWv65upZoahR3CnYELAldZ4eY20xVARsSdBwTGU1CB+VNeWt1UpEcvBnfDiwdIEYcLD0mKRWfwaEk+VfJShZb6CCf8jtJKqtNbYN9LdDFBiqt98iObus7vdlmyCz6ri06EN2G5z4gBsjXenPTge4zo3fG4JVUm9Nr0V8qVcjjw8M2HIH3aI8Pdxmt/u76+vBkIdI5+jH7mLlY4eVlLtW9YPO/n9cQGqzpaY4Bt82HNlUM65zweLSWn2HrIKBTgUFQxfamv6A8MTiWl5nqm6PFn3p2yhhhRN9AlKV3DuS61eTrc5AqZRO4Pc5YXwL3oI9OGuIyzK5BjVQa7dxLBHrYeg6iUshcDOwS83xcW7W/A4fw3TSiqK4vgYxjW3KhKblP67maj6+I3cvIq+rRG5KmIagaZfnDwEcPCJGL0eT6/HxdyYfZ9IK08M6FWpJ0feXP07MJMa2IzRAcpiPEZZTa7qxitb4+zqNSj2lJYi0Sa5EoqN7ukurUiulHCRqhFQgayAzjbplr4VHc/rWu6h8/jWdj8imo9hQad1EkJ5NTrcimePRHiXB3C9ixvmGL9jU17YrS5U/kD6YYyV9Ria/L7YuirpNsi2BLqmvEe2miq/R9p7lqimkUvT1Rdjp8C0rV5kSOJXt7p45XMWDN82yv84U9V5oqGVji55M/jMhRgwWbFBmrQce1skTfPjHHUA/cLszuHE/WvKvQTM2zNdqiyzVbt2aHxLJDw9l7mveCxYcSlJtqnDd8vvmpt/HFaPS2xRPQnxY5Jnj0FGoaGOalQlR2UFOv2ez/ra2VFXeF0VVpWXxIF4DyLfpf6eAbtHUd/Broaxg58Ot66ES9Wy27ErgvUU06M03Hoc8ijvfaFqii+dLkbKx/JlZYv3aD2brAWZiwf9Fb+OoqecutjF7TvZNxMV27l2nEm7sZY3jn/Uz36/pxtymO1xxi2vdtrz2FtWSP2pxIk1JzwDOXGbbgzNkSSQH6g2yQdyTmMqIitrTWxMreglf3rM8C2Rb6DOrsbT3gO4VVyCzQWTfXgW4r2C020a7x221XY1G7NF6YrSZgwy3vUEAmiG+IROcutZWjJk+vuLXobet421r6H0c4MGjLBBxYX8wbMsAsAe7Xjvdrr7bJ7RTZKYHtphwbhhCXRP8nRm0A2/X1lWa7vZsrtgUX9nIEavD2kwQXTnIay8GWeg3wYENWidlTMgTbem76CThS9BQlrF7Sv23JKUFxDjZHTnMQ6Ap3vjo5t93uwj3h3S0kWCmxwMTpA00ks4eSd+SDAUFC7ykq2Jwf6msTB6Lkv//+DwEr0h1wB/Su4qmqm8vvKMT1IasrtT+gr43lZtV9q2C60duOZ2f47hq8LQE7ejsvjmwjSAaAb13x29+vz5CLSUf8xVW5JrUtnVq6WwV7FLTr2mRi99K1BmvMdD7URf37huvVkdpSdL9jWLsBclcNrQp1wXlRcdq1jhK65yP/mZFypfvGGrE0DUQiSarOcf+laJM/UgiGuQ7Tzba59c4AaVqvxIlD/0dxTAwbtJ1qLWpTQXdU7fen0GdMsWJGCS0VjjIcCeYrQxR0l2eKqyftZMeb2llSORt0B9j2/y74HzK9hBtYIAAA' | base64 -d | gzip -d > /tmp/apply_pr182.py
+          python /tmp/apply_pr182.py
+          ruff format scripts/research_store/invocation_events.py scripts/test_performance_telemetry_integration.py scripts/test_research_store_integration.py
+          ruff check scripts/research_store/invocation_events.py scripts/test_performance_telemetry_integration.py scripts/test_research_store_integration.py
+          ruff format --check scripts/research_store/invocation_events.py scripts/test_performance_telemetry_integration.py scripts/test_research_store_integration.py
+          python -m compileall -q scripts/research_store/invocation_events.py scripts/test_performance_telemetry_integration.py scripts/test_research_store_integration.py
+      - name: Start disposable services
         run: |
           docker run --name pg -d -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16-alpine
           sleep 5
           for i in $(seq 1 10); do
             PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE firecrawl_telemetry_test;" 2>/dev/null && break || sleep 1
           done
-      - name: Start disposable Qdrant
-        run: |
-          docker run --name qdrant -d -p 6333:6333 \
-            -e QDRANT__SERVICE__READ_ONLY_ACCESS=false \
-            qdrant/qdrant:v1.18.3-unprivileged
+          docker run --name qdrant -d -p 6333:6333 -e QDRANT__SERVICE__READ_ONLY_ACCESS=false qdrant/qdrant:v1.18.3-unprivileged
           sleep 3
       - name: Run corrected integration contracts
         env:
@@ -231,13 +54,9 @@ jobs:
             scripts/test_research_store_integration.py::test_run_reopen_after_finish_idempotency
       - name: Commit corrections
         run: |
-          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            scripts/research_store/invocation_events.py \
-            scripts/test_performance_telemetry_integration.py \
-            scripts/test_research_store_integration.py
+          git add scripts/research_store/invocation_events.py scripts/test_performance_telemetry_integration.py scripts/test_research_store_integration.py
           git diff --cached --check
           git commit -m 'Fix authoritative workflow integration contracts'
           git push origin HEAD:agent/remove-legacy-catalog
