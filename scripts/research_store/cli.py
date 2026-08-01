@@ -981,11 +981,12 @@ def _cmd_normalize(config, args) -> int:
     with _db(config) as conn, conn.cursor() as cur:
         if args.all:
             cur.execute(
-                """SELECT d.id, d.title, d.requested_url, d.content_sha256,
+                """SELECT d.id, d.title, snap.requested_url, d.document_sha256,
                    db.id AS block_id, db.ordinal, db.block_type,
                    db.char_start, db.char_end, db.text,
                    db.parser_version
                    FROM documents d
+                   JOIN asset_snapshots snap ON snap.id = d.snapshot_id
                    JOIN document_blocks db ON db.document_id = d.id
                    ORDER BY d.id, db.ordinal"""
             )
@@ -993,11 +994,12 @@ def _cmd_normalize(config, args) -> int:
         elif args.document:
             doc_uuid = _UUID(args.document)
             cur.execute(
-                """SELECT d.id, d.title, d.requested_url, d.content_sha256,
+                """SELECT d.id, d.title, snap.requested_url, d.document_sha256,
                    db.id AS block_id, db.ordinal, db.block_type,
                    db.char_start, db.char_end, db.text,
                    db.parser_version
                    FROM documents d
+                   JOIN asset_snapshots snap ON snap.id = d.snapshot_id
                    JOIN document_blocks db ON db.document_id = d.id
                    WHERE d.id = %s
                    ORDER BY db.ordinal""",
