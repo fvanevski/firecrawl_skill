@@ -119,6 +119,8 @@ jobs:
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --workflow-ref "$GITHUB_WORKFLOW_REF" \
             --execution-conclusion "${{ steps.execute.outcome }}"
+          python scripts/release_campaign_contract.py verify \
+            --campaign-dir "$CAMPAIGN_DIR"
 
       - name: Upload complete campaign directory
         id: upload
