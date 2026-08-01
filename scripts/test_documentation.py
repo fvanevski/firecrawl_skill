@@ -12,7 +12,7 @@ Acceptance criteria for issue #69:
 
 from __future__ import annotations
 
-import subprocess
+import argparse
 from pathlib import Path
 from typing import ClassVar
 
@@ -22,42 +22,26 @@ SCRIPTS = Path(__file__).parent
 SKILL_ROOT = SCRIPTS.parent
 
 
-def _get_research_db_path() -> Path:
-    """Get the path to the research-db script."""
-    path = SCRIPTS / "research-db"
-    if not path.exists():
-        pytest.skip("research-db script not found")
-    return path
+def _documented_commands() -> set[str]:
+    """Return top-level commands from the authoritative CLI parser."""
+    from research_store.cli import parser
+
+    root = parser()
+    for action in root._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return set(action.choices)
+    return set()
 
 
 def _check_command_exists(cmd: str, extra_args: list[str]) -> bool:
-    """Check if a research-db subcommand is recognized.
+    """Check whether a documented top-level command exists.
 
-    Uses `--help` to check recognition without executing the command.
-    A recognized command will show help; an unrecognized one will error.
+    Argument details remain in the documentation fixtures for readability, but
+    command recognition is tested by inspecting the parser directly. This keeps
+    the documentation test deterministic and avoids sourcing operator secrets.
     """
-    try:
-        result = subprocess.run(  # noqa: PLW1510
-            ["bash", str(_get_research_db_path()), cmd, "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        output = result.stderr + result.stdout
-        # A recognized command shows "usage:" in output
-        if "usage:" in output.lower():
-            return True
-        # An unrecognized command shows "unrecognized arguments" or "invalid choice"
-        is_unrecognized = (
-            "unrecognized arguments" in output.lower()
-            or "invalid choice" in output.lower()
-        )
-        if is_unrecognized:  # noqa: SIM103
-            return False
-        # If we got help output, the command exists even if it has errors
-        return True
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return False
+    del extra_args
+    return cmd in _documented_commands()
 
 
 # ------------------------------------------------------------------
@@ -65,15 +49,15 @@ def _check_command_exists(cmd: str, extra_args: list[str]) -> bool:
 # ------------------------------------------------------------------
 
 OPERATIONS_RUNBOOK_COMMANDS = [
-    # Core
+    # Core health and initialization
     ("migrate", []),
     ("status", []),
     ("doctor", []),
     ("ingest-ready", []),
-    # Worker
+    ("verify-blobs", []),
+    # Worker and index lifecycle
     ("worker", []),
     ("index-once", []),
-    # Index lifecycle
     ("index-list", []),
     ("index-build", ["--current-config", "--all"]),
     ("index-activate", ["test-id"]),
@@ -83,33 +67,24 @@ OPERATIONS_RUNBOOK_COMMANDS = [
     ("index-prune", ["--force", "--index-id", "test-id"]),
     ("reindex", ["--all"]),
     ("reconcile-qdrant", []),
-    # Ingest / rederive
+    # Scratch diagnostics and derivations
     ("import-scratch", ["--dry-run", "/tmp/test-scratch"]),
     ("import-scratch", ["/tmp/test-scratch"]),
-    ("verify-blobs", []),
     ("rederive", ["--all"]),
     ("rederive", ["--snapshot", "test-snapshot-id"]),
     ("rederive-v2", ["--all"]),
     ("rederive-v2", ["--snapshot", "test-snapshot-id"]),
     ("rederive-v2", ["--document", "test-doc-id"]),
-    # Export
     ("export-invocation", ["fc_test-id", "--output", "/tmp/out.json"]),
     ("export-run", ["test-run-id", "--output", "/tmp/out.json"]),
-    # Catalog export
-    ("catalog-export", ["run", "test-id", "--target-dir", "/tmp/catalog"]),
-    (
-        "catalog-export",
-        ["invocation", "test-inv-id", "test-run-id", "--target-dir", "/tmp/catalog"],
-    ),
-    ("catalog-export", ["events", "test-id", "--target-dir", "/tmp/catalog"]),
-    ("catalog-export", ["snapshots", "test-id", "--target-dir", "/tmp/catalog"]),
-    ("catalog-export", ["claims", "test-id", "--target-dir", "/tmp/catalog"]),
-    ("catalog-export", ["assessments", "test-id", "--target-dir", "/tmp/catalog"]),
-    ("catalog-export", ["manifest", "test-id", "--target-dir", "/tmp/catalog"]),
-    ("catalog-export", ["regenerate", "test-id", "--target-dir", "/tmp/catalog"]),
-    # Run lifecycle
+    # Run lifecycle and wrapper boundary
     ("run-start", ["test-ext-id", "Test objective"]),
     ("run-status", ["test-run-id"]),
+    (
+        "run-operation-start",
+        ["test-run-id", "fc_test-id", "fscrape", "--input-file", "/tmp/input.json"],
+    ),
+    ("run-operation-finish", ["test-run-id", "fc_test-id", "--status", "succeeded"]),
     (
         "run-mode-change",
         [
@@ -145,7 +120,7 @@ OPERATIONS_RUNBOOK_COMMANDS = [
     ("run-verify", ["test-run-id"]),
     ("run-audit", ["test-run-id"]),
     ("run-compare", ["test-run-id-1", "test-run-id-2"]),
-    # Budget
+    # Budget, resources, benchmark, and derivations
     (
         "budget-record",
         [
@@ -156,28 +131,18 @@ OPERATIONS_RUNBOOK_COMMANDS = [
             "/tmp/budget.json",
         ],
     ),
-    # Legacy comparisons
-    ("legacy-comparisons", ["--research-run-id", "test-run-id"]),
-    ("legacy-comparisons", ["--divergent-only"]),
-    # Resource governance
     ("endpoint-health", []),
     ("resource-status", []),
-    # Benchmark
     ("benchmark", ["run", "--dataset", "/tmp/dataset.json"]),
     ("benchmark", ["results", "--results-path", "/tmp/results.json"]),
     ("benchmark", ["report", "--results-path", "/tmp/results.json"]),
-    # Derivation management
     ("derivation-list", []),
     ("derivation-list", ["--document", "test-doc-id"]),
     ("derivation-activate", ["test-deriv-id"]),
-    ("derivation-activate", ["test-deriv-id", "--document", "test-doc-id"]),
     ("derivation-compare", ["old-id", "new-id"]),
-    # Normalization
     ("normalize", ["--document", "test-doc-id"]),
     ("normalize", ["--all"]),
-    # Parser info
     ("parser-info", []),
-    # Prune cache
     ("prune-cache", []),
 ]
 
@@ -249,13 +214,10 @@ class TestDocumentationFiles:
         "references/research-store-operations.md",
         "references/workflow-state-schema.md",
         "references/budget-policy.md",
-        "references/catalog-v5.md",
         "references/cli-script-disambiguation.md",
-        "references/legacy-adapters.md",
         "references/research-domain-schemas.md",
         "references/phase-1-gate-report.md",
         "references/phase-6-retrieval-transparency.md",
-        "references/legacy-baseline.md",
     ]
 
     @pytest.mark.parametrize("rel_path", REFERENCE_FILES)
@@ -295,7 +257,7 @@ class TestDocumentationFiles:
             "Valkey loss handling",
             "Endpoint restart",
             "Interrupted-run recovery",
-            "Catalog import and export",
+            "PostgreSQL workflow recovery",
             "Benchmarking",
             "Destructive commands",
             "Recovery drill checklist",
@@ -315,7 +277,7 @@ class TestDocumentationFiles:
             "Migration principles",
             "Pre-migration checklist",
             "Running migrations",
-            "Migration catalog",
+            "Migration sequence",
             "Interrupted migration repair",
             "Forward-repair migrations",
             "Migration testing",
@@ -361,8 +323,7 @@ class TestDocumentationFiles:
 
         destructive_commands = [
             "index-prune --force",
-            "migrate --from",
-            "purge --force",
+            "reset-firecrawl-research",
             "verify-blobs",
         ]
 
@@ -385,9 +346,7 @@ class TestDocumentationFiles:
             "EMBEDDING_URL",
             "RERANKER_URL",
             "FIRECRAWL_LLM_LOCAL_BASE_URL",
-            "FIRECRAWL_CATALOG_DISABLED",
             "FIRECRAWL_AUDIT_AUTO_SEMANTIC",
-            "FIRECRAWL_LEGACY_ADAPTER_MODE",
         ]
 
         for var in required_vars:
@@ -396,7 +355,7 @@ class TestDocumentationFiles:
             )
 
     def test_migration_guide_documents_all_migrations(self) -> None:
-        """All migrations must be cataloged."""
+        """Key clean-baseline migrations must be documented."""
         guide = SKILL_ROOT / "references/migration-guide.md"
         content = guide.read_text(encoding="utf-8")
 
@@ -405,16 +364,31 @@ class TestDocumentationFiles:
             "0001",
             "0006",
             "0007",
-            "0008",
             "0031",
             "0032",
             "0033",
+            "0038_postgres_authority",
         ]
 
         for migration in key_migrations:
             assert migration in content, (
-                f"Migration {migration} not cataloged in migration guide"
+                f"Migration {migration} not documented in migration guide"
             )
+
+    def test_removed_filesystem_authority_is_not_documented(self) -> None:
+        """Operational documentation must not advertise removed runtime paths."""
+        forbidden = (
+            "FIRECRAWL_" + "CATALOG",
+            "legacy" + "_adapter",
+            "catalog" + "-export",
+            "catalog" + "_v5",
+        )
+        for rel_path in self.REFERENCE_FILES + ["README.md", "SKILL.md"]:
+            content = (SKILL_ROOT / rel_path).read_text(encoding="utf-8").lower()
+            for token in forbidden:
+                assert token.lower() not in content, (
+                    f"Removed runtime identifier {token!r} found in {rel_path}"
+                )
 
     def test_recovery_drill_checklist_exists(self) -> None:
         """Recovery drill checklist must be present in operations runbook."""

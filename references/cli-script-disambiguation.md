@@ -41,9 +41,7 @@ All three interfaces share the same primary auth:
 |----------|------------|
 | `FIRECRAWL_API_KEY` | Node CLI, Python SDK |
 | `FIRECRAWL_API_URL` | Node CLI, Python SDK (custom base URL) |
-| `FIRECRAWL_CATALOG_DIR` | Skill wrappers (persistent audit-catalog root) |
-| `FIRECRAWL_CATALOG_DISABLED` | Skill wrappers (disable persistent catalog for private or isolated runs) |
-| `FIRECRAWL_RESEARCH_RUN_ID` | Skill wrappers (explicit `fr_<uuid>` run linkage for multi-step research) |
+| `FIRECRAWL_RESEARCH_RUN_ID` | Skill wrappers (explicit PostgreSQL `fr_<uuid>` run linkage) |
 | `FIRECRAWL_SEARCH_RETRIES` | `fsearch` (transient acquisition retry count; default `2`) |
 
-The MCP tools get auth from the MCP server's own config.
+Set `FIRECRAWL_RESEARCH_PERSIST=off` for scratch-only acquisition. The MCP tools get auth from the MCP server's own config.

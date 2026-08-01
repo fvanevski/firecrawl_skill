@@ -1969,23 +1969,21 @@ def sample_candidate():
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO research_runs(
-                id, original_request, query_plan, skill_version,
-                retrieval_policy_version, status, external_run_id,
-                state, lifecycle_revision, execution_mode, objective,
+                id, objective, query_plan, skill_version,
+                retrieval_policy_version, external_run_id,
+                state, lifecycle_revision, execution_mode,
                 current_coverage_revision, metadata
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 str(run_id),
                 "test extraction run",
                 "{}",
                 "v5",
                 "v5",
-                "running",
                 f"fr_test_{run_id.hex}",
                 "created",
                 0,
-                "legacy",
-                "test extraction run",
+                "deterministic_debug",
                 0,
                 "{}",
             ),
@@ -2027,23 +2025,21 @@ def sample_run():
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO research_runs(
-                id, original_request, query_plan, skill_version,
-                retrieval_policy_version, status, external_run_id,
-                state, lifecycle_revision, execution_mode, objective,
+                id, objective, query_plan, skill_version,
+                retrieval_policy_version, external_run_id,
+                state, lifecycle_revision, execution_mode,
                 current_coverage_revision, metadata
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (
                 str(run_id),
                 "test extraction run",
                 "{}",
                 "v5",
                 "v5",
-                "running",
                 f"fr_test_{run_id.hex}",
                 "created",
                 0,
-                "legacy",
-                "test extraction run",
+                "deterministic_debug",
                 0,
                 "{}",
             ),

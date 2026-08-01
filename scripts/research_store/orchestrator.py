@@ -12,7 +12,6 @@ staged orchestrator that:
 7. Permits sufficient runs to stop below page targets.
 8. Prevents insufficient runs from completing because enough pages succeeded.
 9. Resumes after process restart by detecting existing run state.
-10. Retains compatibility-wrapper output through the legacy adapter.
 
 The orchestrator is the single entry point for the coverage-led workflow.
 All state transitions flow through ``ResearchRunService`` — no second state
@@ -34,7 +33,6 @@ from research_domain import load_model
 from .acquisition_service import AcquisitionService
 from .config import StoreConfig
 from .coverage_service import CoverageService
-from .legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from .run_service import (
     ResearchRunService,
     RunStateError,
@@ -109,7 +107,6 @@ class OrchestratorConfig:
         budget_policy_version: Version string for the budget policy.
         max_adaptive_cycles: Maximum number of coverage-review cycles.
         resume_on_conflict: If True, resume an existing run instead of failing.
-        legacy_adapter_mode: Compatibility wrapper mode.
         resource_governor: Optional ResourceGovernor for bounded concurrent
             generative calls.  When provided, synthesis LLM calls are gated
             through the governor.
@@ -119,7 +116,6 @@ class OrchestratorConfig:
     budget_policy_version: str = "budget-policy-v1"
     max_adaptive_cycles: int = 10
     resume_on_conflict: bool = True
-    legacy_adapter_mode: str = "authoritative"
     resource_governor: Any = None
     host_artifact_supplier: Any = None
 
@@ -1975,7 +1971,6 @@ class ResearchOrchestrator:
         strategy_service: StrategyRevisionService,
         acquisition_service: AcquisitionService,
         config: StoreConfig,
-        legacy_adapter: LegacyEntryPointAdapter | None = None,
         corpus_service: Any | None = None,
         terminal_config: TerminalDecisionConfig | None = None,
         terminal_service: TerminalDecisionService | None = None,
@@ -1989,7 +1984,6 @@ class ResearchOrchestrator:
         self.acquisition_service = acquisition_service
         self.config = config
         self.orchestrator_config = orchestrator_config or OrchestratorConfig()
-        self.legacy_adapter = legacy_adapter
         self.corpus_service = corpus_service
         self._terminal_config = terminal_config or TerminalDecisionConfig()
         # B5: Terminal-decision persistence service
@@ -2097,15 +2091,6 @@ class ResearchOrchestrator:
         except Exception as exc:  # noqa: BLE001
             logger.debug("extraction_service auto-build deferred: %s", exc)
 
-        legacy_adapter = None
-        if orchestrator_config.legacy_adapter_mode != "compatibility":
-            from .container import build_legacy_adapter
-
-            legacy_adapter = build_legacy_adapter(
-                AdapterMode(orchestrator_config.legacy_adapter_mode),
-                config,
-            )
-
         # N1: Load terminal config from env vars (or use explicit override)
         if terminal_config is None:
             from .terminal_decision import TerminalDecisionConfig
@@ -2122,7 +2107,6 @@ class ResearchOrchestrator:
             strategy_service=strategy_service,
             acquisition_service=acquisition_service,
             config=config,
-            legacy_adapter=legacy_adapter,
             corpus_service=corpus_service,
             terminal_config=terminal_config,
             terminal_service=terminal_service,
@@ -2573,37 +2557,6 @@ class ResearchOrchestrator:
             final_state = current_state
             if result.outcome == StageOutcome.TERMINAL:
                 final_state = ctx.get("_terminal_outcome", current_state)
-
-            # Compatibility export
-            if self.legacy_adapter:
-                try:
-                    authoritative_status = self.run_service.status(run_id=run_id)
-                    if not authoritative_status.external_id:
-                        raise RuntimeError(
-                            "authoritative run has no external run identifier"
-                        )
-                    self.legacy_adapter.route(
-                        "fsearch_smart",
-                        {
-                            "action": "complete",
-                            "status": final_state,
-                            "input": {
-                                "run_id": str(run_id),
-                                "coverage_revision": ctx.get(
-                                    ContextKeys.OVERALL_STATUS
-                                ),
-                                "wave_count": wave_count,
-                            },
-                        },
-                        external_run_id=authoritative_status.external_id,
-                        idempotency_key=f"legacy:complete:{run_id}",
-                        service_proposal={
-                            "coverage_led": True,
-                            "final_state": final_state,
-                        },
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("legacy adapter export failed: %s", exc)
 
             return OrchestratorResult(
                 run_id=run_id,

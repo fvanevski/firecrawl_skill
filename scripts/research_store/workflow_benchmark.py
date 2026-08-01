@@ -848,7 +848,6 @@ class WorkflowBenchmarkRunner:
             orchestrator_config = OrchestratorConfig(
                 execution_mode=workflow_mode,
                 max_adaptive_cycles=10,
-                legacy_adapter_mode="authoritative",
             )
             orchestrator = build_orchestrator(
                 config, orchestrator_config=orchestrator_config

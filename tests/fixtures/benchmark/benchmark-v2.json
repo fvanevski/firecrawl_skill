@@ -50,7 +50,7 @@
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/catalog_v5.py",
+          "file_path": "scripts/cleanup.py",
           "source_class": "Distractor source"
         },
         {
@@ -254,7 +254,7 @@
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/catalog_import.py",
+          "file_path": "scripts/research_store/normalization.py",
           "source_class": "Distractor source"
         }
       ],
@@ -430,12 +430,12 @@
       "known_distractor_sources": [
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/catalog_export.py",
+          "file_path": "scripts/research_store/resource_governor.py",
           "source_class": "Distractor source"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/compat_export.py",
+          "file_path": "scripts/research_store/semantic_cache.py",
           "source_class": "Distractor source"
         },
         {

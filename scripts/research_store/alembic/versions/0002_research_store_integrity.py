@@ -138,8 +138,6 @@ def upgrade():
           UNIQUE(chunk_id, index_definition_id);
 
         ALTER TABLE research_runs ADD COLUMN external_run_id text UNIQUE;
-        ALTER TABLE research_runs ADD COLUMN outcome text;
-        ALTER TABLE research_runs ADD COLUMN catalog_pointer text;
         ALTER TABLE research_runs ADD COLUMN source_manifest_sha256 text;
         ALTER TABLE research_runs ADD COLUMN answer_sha256 text;
 
@@ -232,8 +230,6 @@ def upgrade():
         CREATE UNIQUE INDEX index_activation_one_open_idx
           ON index_activation_journal((true))
           WHERE status IN ('prepared','switched');
-
-        INSERT INTO schema_migrations(version) VALUES (2) ON CONFLICT DO NOTHING;
         """
     )
 

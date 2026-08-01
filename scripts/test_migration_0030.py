@@ -101,7 +101,7 @@ class TestMigration0030:
         source = migration_path.read_text()
         assert "CREATE TABLE IF NOT EXISTS duplicate_groups" in source
         assert "ADD COLUMN independence_assessment" in source
-        assert "schema_migrations" in source
+        assert "schema_migrations" not in source
 
 
 @INTEGRATION_MARK
@@ -190,16 +190,14 @@ def test_migration_0030_insert_and_query_duplicate_groups():
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         # Create a parent research_runs row so the FK constraint is satisfied
         cur.execute(
-            """INSERT INTO research_runs (id, original_request, status, state, execution_mode, objective, metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """INSERT INTO research_runs (id, objective, state, execution_mode, metadata)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING""",
             (
                 str(run_id),
-                "test request",
-                "running",
+                "test objective",
                 "created",
                 "agent_led",
-                "test objective",
                 "{}",
             ),
         )

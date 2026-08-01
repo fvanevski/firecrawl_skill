@@ -17,11 +17,6 @@ LINES=40
 SKIP=0
 GREP_PATTERN=""
 HISTORY=false
-CATALOG=false
-CATALOG_ID=""
-CATALOG_JSON=false
-CATALOG_VERBOSE=false
-CATALOG_COMPARE=()
 
 # ── Parse args ──────────────────────────────────────────────────────────────
 FILE=""
@@ -31,35 +26,18 @@ while [[ $# -gt 0 ]]; do
     --skip)      SKIP="$2";     shift 2 ;;
     --grep)      GREP_PATTERN="$2"; shift 2 ;;
     -H|--history) HISTORY=true; shift ;;
-    --catalog)
-      CATALOG=true
-      if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then CATALOG_ID="$2"; shift 2; else shift; fi
-      ;;
-    --json) CATALOG_JSON=true; shift ;;
-    --verbose) CATALOG_VERBOSE=true; shift ;;
-    --compare)
-      CATALOG=true
-      shift
-      while [[ -n "${1:-}" && "${1:0:1}" != "-" ]]; do CATALOG_COMPARE+=("$1"); shift; done
-      ;;
     -h|--help)
       echo -e "\033[1;36mfread\033[0m — Read a Firecrawl scratch file with sizing metadata"
       echo ""
       echo -e "\033[1mUsage:\033[0m"
       echo "  fread <scratch_file_path> [options]"
       echo "  fread --history"
-      echo "  fread --catalog [fc_<uuid>|fr_<uuid>] [--json|--verbose]"
-      echo "  fread --compare <fr_id> <fr_id> [...]"
       echo ""
       echo -e "\033[1mOptions:\033[0m"
       echo "  --lines <num>       Number of lines to show (default: 40, set 0 to show entire file)"
       echo "  --skip <num>        Number of lines to skip from the beginning (default: 0)"
       echo "  --grep <pattern>    Search for a pattern across all markdown results in a directory"
       echo "  -H, --history       List previous search and scrape scratch sessions"
-      echo "  --catalog [id]      List records or show an invocation/research-run summary"
-      echo "  --json              Show raw catalog JSON with --catalog <id>"
-      echo "  --verbose           Show complete normalized invocation details"
-      echo "  --compare <ids...>  Compare research-run scorecards"
       echo "  -h, --help          Show this help message"
       exit 0
       ;;
@@ -70,20 +48,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-
-if [[ "$CATALOG" == true ]]; then
-  if (( ${#CATALOG_COMPARE[@]} )); then
-    python3 "$SCRIPT_DIR/invocation_catalog.py" compare "${CATALOG_COMPARE[@]}"
-  elif [[ -n "$CATALOG_ID" ]]; then
-    args=(show "$CATALOG_ID")
-    [[ "$CATALOG_JSON" == true ]] && args+=(--json)
-    [[ "$CATALOG_VERBOSE" == true ]] && args+=(--verbose)
-    python3 "$SCRIPT_DIR/invocation_catalog.py" "${args[@]}"
-  else
-    python3 "$SCRIPT_DIR/invocation_catalog.py" list
-  fi
-  exit $?
-fi
 
 if [[ "$HISTORY" == true ]]; then
   TEMP_ROOT="${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}"

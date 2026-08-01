@@ -1,3 +1,7 @@
+"""Deterministic audit packet identity from authoritative PostgreSQL state."""
+
+from __future__ import annotations
+
 import hashlib
 import json
 from collections.abc import Callable
@@ -5,102 +9,69 @@ from uuid import UUID
 
 
 def compute_audit_packet_hash_from_db(run_id: UUID, uow_factory: Callable) -> str:
-    """Compute the audit packet hash dynamically from the PostgreSQL projection."""
-    from .catalog_export import CatalogExportService
+    """Hash the complete authoritative run projection used for semantic audit.
 
-    export_service = CatalogExportService(uow_factory)
-    projection = export_service._load_projection(run_id)
-    run, invocations, events, _snapshots, _claims, _assessments, _manifest = (
-        export_service._map_records(projection)
-    )
-
-    target = run
-    records = invocations
-
-    candidate_cards = []
-    used_dossiers = []
-    operations = []
-    used_ids = {source.get("candidate_id") for source in target.get("used_sources", [])}
-
-    for record in records:
-        operations.append(
-            {
-                "invocation_id": record["invocation_id"],
-                "operation": record.get("operation"),
-                "input": record.get("input"),
-                "strategy": record.get("strategy"),
-                "planner_provenance": record.get("planner_provenance"),
-                "query_plan": record.get("query_plan", []),
-                "retry_query_plan": record.get("retry_query_plan", []),
-                "execution": record.get("execution"),
-                "metrics": record.get("operational_metrics"),
-                "events": record.get("events", []),
-            }
+    The projection is read directly from PostgreSQL; no filesystem state
+    participates in audit identity.
+    """
+    with uow_factory() as uow, uow.connection.cursor() as cur:
+        cur.execute(
+            "SELECT row_to_json(r) FROM research_runs r WHERE r.id=%s",
+            (run_id,),
         )
-        for result in record.get("results", []):
-            card = {
-                key: result.get(key)
-                for key in (
-                    "candidate_id",
-                    "result_index",
-                    "url",
-                    "title",
-                    "snippet",
-                    "selected",
-                    "targeted",
-                    "branches",
-                    "facets",
-                    "status",
-                    "scrape_status",
-                    "word_count",
-                    "error",
-                    "error_class",
-                    "constraint",
-                    "date_signals",
-                    "source_hints",
-                )
-                if result.get(key) not in (None, "", [], {})
-            }
-            card["invocation_id"] = record["invocation_id"]
-            candidate_cards.append(card)
-            if result.get("candidate_id") in used_ids:
-                used_dossiers.append({**card, "excerpts": result.get("excerpts", [])})
+        row = cur.fetchone()
+        if row is None:
+            raise KeyError(f"research run {run_id} not found")
+        run = row[0]
 
-    def estimate_tokens(obj):
-        return len(json.dumps(obj)) // 4
+        def rows(query: str) -> list[dict]:
+            cur.execute(query, (run_id,))
+            return [item[0] for item in cur.fetchall()]
 
-    filtered_events = [
-        e
-        for e in events
-        if e.get("event") not in {"assessment_finished", "artifact_verification"}
-        and e.get("research_run_id") == target["research_run_id"]
-    ]
+        invocations = rows(
+            """SELECT row_to_json(i) FROM research_invocations i
+                   WHERE i.run_id=%s ORDER BY i.created_at,i.id"""
+        )
+        events = rows(
+            """SELECT row_to_json(e) FROM research_events e
+                   WHERE e.run_id=%s ORDER BY e.sequence_number,e.id"""
+        )
+        claims = rows(
+            """SELECT row_to_json(c) FROM research_claims c
+                   WHERE c.run_id=%s ORDER BY c.created_at,c.id"""
+        )
+        evidence = rows(
+            """SELECT row_to_json(l) FROM claim_evidence_links l
+                   WHERE l.run_id=%s ORDER BY l.created_at,l.id"""
+        )
+        assets = rows(
+            """SELECT row_to_json(a) FROM research_run_assets a
+                   WHERE a.run_id=%s ORDER BY a.snapshot_id,a.role"""
+        )
+        coverage = rows(
+            """SELECT row_to_json(c) FROM coverage_snapshots c
+                   WHERE c.run_id=%s ORDER BY c.coverage_revision,c.id"""
+        )
+        assessments = rows(
+            """SELECT row_to_json(a) FROM audit_assessments a
+                   WHERE a.run_id=%s ORDER BY a.created_at,a.id"""
+        )
 
     packet = {
-        "packet_version": "audit-packet-v1",
-        "target_id": target["research_run_id"],
-        "objective": target.get("objective")
-        or target.get("input", {}).get("topic")
-        or target.get("input", {}).get("query"),
-        "profile": target.get("profile"),
-        "declared_outcome": target.get("declared_outcome"),
-        "annotations": target.get("annotations", []),
-        "operations": operations,
-        "candidate_cards": candidate_cards,
-        "used_source_dossiers": used_dossiers,
-        "claims": target.get("claims", []),
-        "source_manifest": target.get("used_sources", []),
-        "final_answer": target.get("final_answer"),
-        "operational_summary": target.get("operational_summary")
-        or target.get("operational_metrics"),
-        "timeline": filtered_events,
+        "schema_version": "audit-packet-v2",
+        "run": run,
+        "invocations": invocations,
+        "events": events,
+        "claims": claims,
+        "claim_evidence_links": evidence,
+        "run_assets": assets,
+        "coverage_snapshots": coverage,
+        "assessments": assessments,
     }
-    packet["context_manifest"] = {
-        "candidate_count": len(candidate_cards),
-        "used_dossier_count": len(used_dossiers),
-        "operation_count": len(operations),
-        "input_token_estimate": estimate_tokens(packet),
-        "omissions": [],
-    }
-
-    return hashlib.sha256(json.dumps(packet, sort_keys=True).encode()).hexdigest()
+    payload = json.dumps(
+        packet,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()

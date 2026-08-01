@@ -2183,7 +2183,6 @@ class ReleaseBenchmarkRunner:
             orchestrator_config = OrchestratorConfig(
                 execution_mode=mode,
                 max_adaptive_cycles=10,
-                legacy_adapter_mode="authoritative",
                 host_artifact_supplier=self.config.host_artifact_supplier,
             )
             orchestrator = build_orchestrator(

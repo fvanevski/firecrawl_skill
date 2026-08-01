@@ -48,7 +48,7 @@ Research Orchestrator (fsearch_smart)
         |
         +--> Valkey (transient wakeups)
         |
-        +--> Scratch / Catalog v5 (derived artifacts)
+        +--> Scratch diagnostics (disposable artifacts)
 ```
 
 ### 1.2 Key components
@@ -64,7 +64,7 @@ Research Orchestrator (fsearch_smart)
 | `RetrievalService`      | `scripts/research_store/retrieval.py` | Hybrid retrieval (FTS + dense + rerank) |
 | `EvidencePacketService` | `scripts/research_store/evidence.py`  | Evidence packet construction            |
 | `SemanticCallService`   | `scripts/research_store/service.py`   | Model call provenance and artifacts     |
-| `CatalogService`        | `scripts/catalog_v5.py`               | Catalog v5 compatibility exports        |
+| `WorkflowOperationService` | `scripts/research_store/workflow_service.py` | Wrapper lifecycle and invocation boundary |
 
 ### 1.3 Directory structure
 
@@ -77,12 +77,10 @@ scripts/
 ├── frun                    # Research run lifecycle
 ├── research-db             # Database operations CLI
 ├── budget_policy.py        # Budget policy engine
-├── catalog_v5.py           # Catalog v5 audit records
-├── classifier.py           # (Retired — legacy)
+├── classifier.py           # Target classification
 ├── cleanup.py              # Markdown cleanup pass
 ├── model_gateway.py        # Model transport abstraction
-├── research_workflow.py    # Legacy workflow adapter
-├── shadow_comparison.py    # Legacy adapter comparison
+├── research_workflow.py    # Deterministic planning helpers
 ├── live_validate.py        # Live validation harness
 ├── generate_benchmark_fixtures.py  # Benchmark fixture generation
 ├── research_store/         # Core Python module
@@ -99,7 +97,7 @@ scripts/
 │   ├── queue.py            # ValkeyQueue
 │   ├── domain.py           # IngestRequest
 │   ├── alembic/            # Migrations
-│   └── versions/           # Migration files (0001–0033)
+│   └── versions/           # Migration files through `0038_postgres_authority`
 ├── research_domain/        # Domain models and schemas
 ├── test_*.py               # Unit and integration tests
 └── research-env            # Environment setup script
@@ -117,7 +115,7 @@ scripts/
 | **Blob root**         | Immutable payload bytes                                              | Restore with PostgreSQL; verify hashes       |
 | **Qdrant**            | Dense-retrieval projection                                           | Rebuild from PostgreSQL chunks               |
 | **Valkey**            | Transient wakeups                                                    | Loss is safe; worker polls PostgreSQL        |
-| **Scratch / Catalog** | Derived artifacts                                                    | Regenerate from PostgreSQL + blobs           |
+| **Scratch**           | Disposable acquisition diagnostics                                      | Delete and regenerate by rerunning acquisition |
 
 ### 2.2 Deterministic versus semantic authority
 
@@ -221,7 +219,7 @@ The policy inspects:
 - Corroboration and contradiction requirements
 - Required source minima
 
-**Not policy inputs:** Objective word count, topic length, legacy `--complexity` label.
+**Not policy inputs:** Objective word count or topic length.
 
 ### 4.3 Budget snapshots
 
@@ -234,7 +232,7 @@ Every budget authorization creates an immutable snapshot in `research_budget_sna
 ### 4.4 Coding guidance
 
 - Never bypass `BudgetPolicy.authorize()`.
-- User-provided limits (`--max-searches`, etc.) are stricter caps, not policy inputs.
+- Express scope through `ResearchSpec`; `--max-adaptive-cycles` may only tighten the authorized cycle cap.
 - Budget snapshots are append-only — never update or delete.
 - When the budget is exceeded, the orchestrator stops and records the reason.
 
@@ -647,9 +645,7 @@ Key variables for coding agents:
 | `FIRECRAWL_LLM_LOCAL_BASE_URL`  | `http://192.168.4.115:8002/v1`       | Local LLM             |
 | `EMBEDDING_URL`                 | Derived                              | Embedding endpoint    |
 | `RERANKER_URL`                  | Derived                              | Reranker endpoint     |
-| `FIRECRAWL_CATALOG_DISABLED`    | unset                                | Disable catalog       |
 | `FIRECRAWL_AUDIT_AUTO_SEMANTIC` | `1`                                  | Auto LLM audits       |
-| `FIRECRAWL_LEGACY_ADAPTER_MODE` | `compatibility`                      | Legacy adapter mode   |
 
 ---
 
@@ -703,7 +699,7 @@ Schemas, prompts, policy rules, embedding definitions, chunker versions — all 
 Unless explicitly retired by an assigned issue, do not:
 
 - Change authority boundaries.
-- Remove legacy production paths without benchmark approval.
+- Change validated production behavior without benchmark approval.
 - Introduce a second report, cache, lease, or resource authority.
 - Bypass EvidencePacket validation.
 - Invent citations or silently remove unsupported claims.
@@ -762,24 +758,22 @@ pytest -q -p no:cacheprovider "<skill-root>/scripts/test_research_store_integrat
 19. **Backpressure** — queued requests are tracked.
 20. **Resource exhaustion** — resource-limited errors are explicit.
 21. **Benchmark reproducibility** — fixed dataset produces consistent results.
-22. **Compatibility-only legacy paths** — shadow mode does not mutate state.
+22. **PostgreSQL-only wrapper boundary** — no filesystem state is consulted for run or invocation authority.
 23. **Recovery documentation commands** — all CLI commands are documented and runnable.
 
-> **Note:** Items 22–23 are verified by separate test suites, not by the generic
-> unit test suite in Section 15.1: item 22 is covered by
-> `test_workflow.py` (legacy adapter compatibility tests) and item 23 is covered
-> by `test_documentation.py` (documentation command verification).
+> **Note:** Items 22–23 are verified by `test_workflow_service.py`, wrapper tests,
+> and `test_documentation.py`.
 
 ### 15.4 Migration tests
 
 For every migration:
 
 1. **Fresh migration** — new database, all migrations apply.
-2. **Upgrade from current head** — existing database upgrades cleanly.
-3. **Populated database** — corpus data is preserved.
-4. **Constraints and indexes** — all new constraints fire correctly.
-5. **Phase 1–6 data preservation** — no existing data is modified.
-6. **Forward repair** — if needed, a forward-repair migration is tested.
+2. **Clean baseline** — the complete migration chain applies to an empty database.
+3. **Constraints and indexes** — all constraints fire correctly.
+4. **Runtime contract** — service queries match the resulting schema.
+5. **Reset boundary** — operators are told to recreate stores when the baseline changes.
+6. **Forward repair** — post-baseline defects are fixed with tested forward migrations.
 
 ---
 

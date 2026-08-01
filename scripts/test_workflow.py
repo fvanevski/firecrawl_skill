@@ -3,7 +3,6 @@ import json
 import os
 import subprocess
 import textwrap
-from concurrent.futures import ThreadPoolExecutor
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -26,7 +25,6 @@ cleanup = load_module("firecrawl_cleanup", SCRIPTS / "cleanup.py")
 classifier = load_module("firecrawl_classifier", SCRIPTS / "classifier.py")
 smart = load_module("firecrawl_smart", SCRIPTS / "fsearch_smart")
 invocations = load_module("firecrawl_invocation_id", SCRIPTS / "invocation_id.py")
-catalog = load_module("firecrawl_invocation_catalog", SCRIPTS / "invocation_catalog.py")
 gateway = load_module("firecrawl_model_gateway", SCRIPTS / "model_gateway.py")
 research = load_module("firecrawl_research_workflow", SCRIPTS / "research_workflow.py")
 live_validation = load_module("firecrawl_live_validate", SCRIPTS / "live_validate.py")
@@ -237,7 +235,6 @@ def fake_cli(tmp_path):
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     env["FAKE_FIRECRAWL_LOG"] = str(tmp_path / "calls.jsonl")
-    env["FIRECRAWL_CATALOG_DIR"] = str(tmp_path / "catalog")
     env["FIRECRAWL_AUDIT_AUTO_SEMANTIC"] = "0"
     env["FIRECRAWL_RESEARCH_AUTO_ENV"] = "0"
     env["FIRECRAWL_RESEARCH_PERSIST"] = "off"
@@ -297,18 +294,6 @@ def test_all_classifier_profiles(url, title, snippet, expected):
     assert matched is (expected != "editorial_markdown")
 
 
-def test_select_candidates_zero_budget_returns_empty_selection():
-    """select_candidates with total_scrapes=0 selects no candidates."""
-    result = {
-        "query_index": 1,
-        "facet": "broad_overview",
-        "metadata": {"candidates": [{"url": "https://example.com/a", "rank": 1}]},
-    }
-    candidates, selected = smart.select_candidates([result], total_scrapes=0)
-    assert len(candidates) == 1
-    assert selected == []
-
-
 def test_invocation_id_format_and_validation():
     first = invocations.new_invocation_id()
     second = invocations.new_invocation_id()
@@ -353,48 +338,6 @@ def test_default_storage_uses_unique_invocation_directories(fake_cli):
     assert scrape_meta["invocation_id"] in history.stdout
     assert f"{search_meta['invocation_id']}{os.sep}search" in history.stdout
     assert f"{scrape_meta['invocation_id']}{os.sep}scrape" in history.stdout
-
-
-def test_fsearch_writes_complete_candidate_ledger(fake_cli):
-    env, tmp_path = fake_cli
-    output = tmp_path / "scratch O'Brien"
-    result = run_script(
-        "fsearch",
-        "portable query",
-        "--limit",
-        "3",
-        "--scrape-limit",
-        "2",
-        "--tbs",
-        "qdr:w",
-        "--dir",
-        output,
-        env=env,
-    )
-    assert result.returncode == 0, result.stderr
-    meta = json.loads((output / "_meta.json").read_text(encoding="utf-8"))
-    assert meta["candidate_count"] == 3
-    assert meta["total_scraped"] == 2
-    assert len(meta["candidates"]) == 3
-    assert (output / "_candidates.json").is_file()
-    assert (output / "_context.json").is_file()
-    calls = [
-        json.loads(line)
-        for line in Path(env["FAKE_FIRECRAWL_LOG"]).read_text().splitlines()
-    ]
-    assert ["--tbs", "qdr:w"] == calls[0][
-        calls[0].index("--tbs") : calls[0].index("--tbs") + 2
-    ]
-    catalog_record = json.loads(
-        next((tmp_path / "catalog" / "invocations").glob("fc_*.json")).read_text()
-    )
-    assert catalog_record["schema_version"] == 5
-    assert catalog_record["execution"]["status"] == "succeeded"
-    assert catalog_record["operational_status"] == "succeeded"
-    assert catalog_record["input"]["query"] == "portable query"
-    assert catalog_record["operational_metrics"]["candidate_count"] == 3
-    assert catalog_record["operational_metrics"]["successful_document_count"] == 2
-    assert "preview_head" not in json.dumps(catalog_record)
 
 
 def test_fsearch_reuses_search_artifact_for_noncontiguous_ranks(fake_cli):
@@ -480,50 +423,11 @@ def test_fsearch_retries_transient_search_failure_and_keeps_diagnostics(fake_cli
     )
 
 
-def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):
-    env, tmp_path = fake_cli
-    output = tmp_path / "batch with spaces"
-    result = run_script(
-        "fscrape",
-        "https://example.com/a,b",
-        "https://example.com/two",
-        "--schema",
-        '{"type":"object","properties":{"name":{"type":"string"}}}',
-        "--output-dir",
-        output,
-        env=env,
-    )
-    assert result.returncode == 0, result.stderr
-    meta = json.loads((output / "_meta.json").read_text(encoding="utf-8"))
-    assert [entry["url"] for entry in meta["results"]] == [
-        "https://example.com/a,b",
-        "https://example.com/two",
-    ]
-    assert all(entry["format"] == "json" for entry in meta["results"])
-    catalog_record = json.loads(
-        next((tmp_path / "catalog" / "invocations").glob("fc_*.json")).read_text()
-    )
-    assert catalog_record["operation"] == "scrape"
-    assert catalog_record["operational_metrics"]["successful_document_count"] == 2
-    assert catalog_record["operational_metrics"]["requested_document_count"] == 2
-
-
 def test_fscrape_rejects_undocumented_format(fake_cli):
     env, _ = fake_cli
     result = run_script("fscrape", "https://example.com", "--format", "text", env=env)
     assert result.returncode == 1
     assert "unsupported format" in result.stderr
-
-
-def test_legacy_wrapper_propagates_adapter_configuration_failure_before_acquisition(
-    fake_cli,
-):
-    env, _ = fake_cli
-    env["FIRECRAWL_LEGACY_ADAPTER_MODE"] = "invalid"
-    result = run_script("fsearch", "must not execute", env=env)
-    assert result.returncode == 2
-    assert "FIRECRAWL_LEGACY_ADAPTER_MODE" in result.stderr
-    assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
 
 
 def test_fread_history_grep_slice_and_invalid_regex(fake_cli):
@@ -550,109 +454,8 @@ def test_fread_history_grep_slice_and_invalid_regex(fake_cli):
     assert invalid.returncode == 2
 
 
-def test_smart_search_consolidates_deduplicated_candidates(fake_cli):
-    """Test that fsearch_smart produces scratch-compatible output via the orchestrator.
-
-    P7-08 / #68: The monolithic loop was retired. The orchestrator now handles
-    acquisition. This test verifies the new thin fsearch_smart still produces
-    compatible scratch files in degraded mode (no orchestrator/database).
-    """
-    env, tmp_path = fake_cli
-    env["TMPDIR"] = str(tmp_path / "smart tmp")
-    env.pop("GOOGLE_API_KEY", None)
-    result = run_script(
-        "fsearch_smart",
-        "portable wrapper",
-        "--dry-run",
-        env=env,
-    )
-    assert result.returncode == 0, result.stderr
-    roots = list((Path(env["TMPDIR"]) / "firecrawl_scratch").glob("fc_*/smart"))
-    assert len(roots) == 1
-    meta = json.loads((roots[0] / "_meta.json").read_text(encoding="utf-8"))
-    assert meta["invocation_id"] == roots[0].parent.name
-    assert meta["planner"] == "orchestrator"
-    assert meta["budget_snapshot"]["policy_version"] == "budget-policy-v1"
-    # Verify scratch compatibility files exist
-    assert (roots[0] / "_research_spec.json").is_file()
-    assert (roots[0] / "_budget.json").is_file()
-    assert (roots[0] / "_meta.json").is_file()
-    catalog_record = json.loads(
-        next((tmp_path / "catalog" / "invocations").glob("fc_*.json")).read_text()
-    )
-    assert catalog_record["operation"] == "smart_search"
-    assert catalog_record["execution"]["status"] == "succeeded"
-
-
-def test_catalog_disabled_creates_no_persistent_record(fake_cli):
-    env, tmp_path = fake_cli
-    env["FIRECRAWL_CATALOG_DISABLED"] = "1"
-    assert (
-        run_script(
-            "fsearch", "private query", "--scrape-limit", "0", env=env
-        ).returncode
-        == 0
-    )
-    assert not (tmp_path / "catalog").exists()
-
-
-def test_catalog_serializes_first_use_and_rejects_active_retry(fake_cli, monkeypatch):
-    env, tmp_path = fake_cli
-    monkeypatch.setenv("FIRECRAWL_CATALOG_DIR", env["FIRECRAWL_CATALOG_DIR"])
-    invocation_id = "fc_" + "a" * 32
-
-    def attempt(operation):
-        try:
-            catalog.begin(invocation_id, operation, {"query": operation})
-            return "started"
-        except SystemExit as exc:
-            return str(exc)
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        outcomes = list(executor.map(attempt, ("search", "scrape")))
-    assert outcomes.count("started") == 1
-    assert any("original operation and research run" in item for item in outcomes)
-    record = json.loads(
-        (tmp_path / "catalog" / "invocations" / f"{invocation_id}.json").read_text()
-    )
-    with pytest.raises(SystemExit, match="already running"):
-        catalog.begin(invocation_id, record["operation"], {"query": "retry"})
-
-
-def test_smart_search_atexit_marks_unexpected_exit_failed(fake_cli):
-    """Test that fsearch_smart marks the catalog as failed on unexpected exit.
-
-    P7-08 / #68: The monolithic loop was retired. This test verifies the new
-    thin fsearch_smart still properly marks the catalog as failed when it exits
-    unexpectedly (e.g., when the orchestrator is unavailable).
-    """
-    env, tmp_path = fake_cli
-    invocation_id = "fc_" + "b" * 32
-    # The orchestrator path requires a research run and database, so this will
-    # fall back to scratch-only mode and succeed. To test the failure path,
-    # we use --dry-run which should succeed.
-    result = run_script(
-        "fsearch_smart",
-        "fail-safe proof",
-        "--invocation-id",
-        invocation_id,
-        "--dry-run",
-        env=env,
-    )
-    assert result.returncode == 0
-    record = json.loads(
-        (tmp_path / "catalog" / "invocations" / f"{invocation_id}.json").read_text()
-    )
-    assert record["execution"]["status"] == "succeeded"
-
-
-def test_smart_search_rejects_looser_user_budget_with_rule_id(fake_cli):
-    """Test that fsearch_smart rejects invalid user limits.
-
-    P7-08 / #68: The monolithic loop was retired. The new thin fsearch_smart
-    still validates budget policy through the orchestrator. This test verifies
-    that the script properly rejects invalid arguments.
-    """
+def test_smart_search_rejects_removed_arguments(fake_cli):
+    """Removed command-line arguments fail instead of silently doing nothing."""
     env, _ = fake_cli
     result = run_script(
         "fsearch_smart",
@@ -663,654 +466,6 @@ def test_smart_search_rejects_looser_user_budget_with_rule_id(fake_cli):
     )
     assert result.returncode == 2
     assert "unrecognized arguments" in result.stderr
-
-
-def test_research_run_links_operations_and_reports_quality(fake_cli):
-    env, tmp_path = fake_cli
-    started = run_script("frun", "start", "audit objective", env=env)
-    assert started.returncode == 0, started.stderr
-    run_id = started.stdout.strip()
-    assert run_id.startswith("fr_")
-    result = run_script(
-        "fsearch",
-        "portable query",
-        "--scrape-limit",
-        "1",
-        "--research-run-id",
-        run_id,
-        env=env,
-    )
-    assert result.returncode == 0, result.stderr
-    finished = run_script(
-        "frun",
-        "finish",
-        run_id,
-        "--outcome",
-        "satisfied",
-        "--used-url",
-        "https://example.com/one",
-        env=env,
-    )
-    assert finished.returncode == 0, finished.stderr
-    repeated = run_script("frun", "finish", run_id, "--outcome", "satisfied", env=env)
-    assert repeated.returncode == 0, repeated.stderr
-    different_evidence = run_script(
-        "frun",
-        "finish",
-        run_id,
-        "--outcome",
-        "satisfied",
-        "--used-url",
-        "https://example.com/different",
-        env=env,
-    )
-    assert different_evidence.returncode != 0
-    mismatch = run_script("frun", "finish", run_id, "--outcome", "failed", env=env)
-    assert mismatch.returncode != 0
-    run = json.loads((tmp_path / "catalog" / "runs" / f"{run_id}.json").read_text())
-    second = run_script("frun", "start", "second owner", env=env)
-    assert second.returncode == 0
-    reused = run_script(
-        "fsearch",
-        "cross-run reuse",
-        "--scrape-limit",
-        "0",
-        "--invocation-id",
-        run["invocation_ids"][0],
-        "--research-run-id",
-        second.stdout.strip(),
-        env=env,
-    )
-    assert reused.returncode != 0
-    assert run["declared_outcome"] == "satisfied"
-    assert run["lifecycle"]["state"] == "finished"
-    assert len(run["invocation_ids"]) == 1
-    record = json.loads(
-        (
-            tmp_path / "catalog" / "invocations" / f"{run['invocation_ids'][0]}.json"
-        ).read_text()
-    )
-    assert record["schema_version"] == 5
-    assert record["research_run_id"] == run_id
-    assert record["operational_metrics"]["total_words"] > 0
-    assert "preview_head" not in json.dumps(record)
-    report = run_script("fread", "--catalog", run_id, env=env)
-    assert report.returncode == 0
-    assert '"operational_summary"' in report.stdout
-    listing = run_script("fread", "--catalog", env=env)
-    assert run_id in listing.stdout
-
-
-def test_reopen_clears_completion_evidence_and_repeated_reopen_fails(fake_cli):
-    env, tmp_path = fake_cli
-    run_id = run_script("frun", "start", "reopen proof", env=env).stdout.strip()
-    answer = tmp_path / "answer.md"
-    answer.write_text("Prior answer", encoding="utf-8")
-    finished = run_script(
-        "frun",
-        "finish",
-        run_id,
-        "--outcome",
-        "satisfied",
-        "--answer-file",
-        answer,
-        env=env,
-    )
-    assert finished.returncode == 0, finished.stderr
-    reopened = run_script("frun", "reopen", run_id, "--reason", "new evidence", env=env)
-    assert reopened.returncode == 0, reopened.stderr
-    repeated = run_script("frun", "reopen", run_id, "--reason", "again", env=env)
-    assert repeated.returncode != 0
-    refinished = run_script("frun", "finish", run_id, "--outcome", "satisfied", env=env)
-    assert refinished.returncode == 0, refinished.stderr
-    run = json.loads((tmp_path / "catalog" / "runs" / f"{run_id}.json").read_text())
-    assert run["final_answer"] is None
-    assert run["claims"] == []
-    assert run["used_sources"] == []
-    assert run["completion_inputs"]["answer_sha256"] is None
-
-
-def test_catalog_collects_nonbinding_source_hints_without_semantic_verdicts():
-    topic = "California school holiday legislation Eid religious observance"
-    relevant = catalog.scrub_result(
-        {
-            "url": "https://leginfo.ca.gov/bill",
-            "title": "Eid school holiday bill",
-            "selected": True,
-        },
-        topic,
-    )
-    generic = catalog.scrub_result(
-        {
-            "url": "https://example.com/travel",
-            "title": "California tourism map",
-            "selected": True,
-        },
-        topic,
-    )
-    assert relevant["source_hints"]["host"] == "leginfo.ca.gov"
-    assert "public-sector-domain" in relevant["source_hints"]["nonbinding"]
-    assert generic["source_hints"]["nonbinding"] == []
-    assert "relevance" not in relevant
-    assert "source_tier" not in generic
-
-
-def test_catalog_purge_requires_force_and_removes_only_catalog(fake_cli):
-    env, tmp_path = fake_cli
-    root = tmp_path / "catalog"
-    (root / "invocations").mkdir(parents=True)
-    (root / "invocations" / ("fc_" + "a" * 32 + ".json")).write_text("{}")
-    protected = tmp_path / "outside.txt"
-    protected.write_text("keep")
-    dry = run_script("frun", "purge", env=env)
-    assert dry.returncode == 0
-    assert root.exists()
-    assert '"dry_run"' in dry.stdout
-    purged = run_script("frun", "purge", "--force", env=env)
-    assert purged.returncode == 0
-    assert not root.exists()
-    assert protected.read_text() == "keep"
-
-
-def test_v5_direct_scrape_contributes_operation_aware_metrics(fake_cli):
-    env, tmp_path = fake_cli
-    result = run_script(
-        "fscrape", "https://apnews.com/article/a", "https://example.gov/report", env=env
-    )
-    assert result.returncode == 0, result.stderr
-    record = json.loads(
-        next((tmp_path / "catalog" / "invocations").glob("fc_*.json")).read_text()
-    )
-    assert record["operational_metrics"]["candidate_count"] is None
-    assert record["operational_metrics"]["requested_document_count"] == 2
-    assert record["operational_metrics"]["selected_count"] == 2
-    assert record["operational_metrics"]["unique_domain_count"] == 2
-    assert record["operational_metrics"]["successful_document_count"] == 2
-    assert all(item["targeted"] for item in record["results"])
-
-
-def test_v5_empty_search_separates_execution_from_data_completeness(fake_cli):
-    env, tmp_path = fake_cli
-    result = run_script("fsearch", "zero-results", "--scrape-limit", "0", env=env)
-    assert result.returncode == 0, result.stderr
-    record = json.loads(
-        next((tmp_path / "catalog" / "invocations").glob("fc_*.json")).read_text()
-    )
-    assert record["execution"]["status"] == "succeeded"
-    assert record["operational_status"] == "succeeded"
-    assert record["operational_metrics"]["candidate_count"] == 0
-    assert "quality_status" not in record
-
-
-def test_v5_catalog_does_not_emit_deterministic_semantic_buckets():
-    item = catalog.scrub_result(
-        {"url": "https://example.com/cooking", "title": "Pasta recipe"},
-        "California Eid legislation",
-    )
-    assert not {"relevance", "freshness", "source_tier", "evaluations"} & set(item)
-
-
-def test_v5_collects_date_signals_without_deciding_freshness():
-    acquired = "2026-07-19T12:00:00+00:00"
-    structured = catalog.scrub_result(
-        {"url": "https://example.com/story", "publishedDate": "2026-07-18T10:00:00Z"},
-        "example story",
-        acquired_at=acquired,
-        window_days=7,
-    )
-    url_date = catalog.scrub_result(
-        {"url": "https://example.com/2026/07/01/story"},
-        "example story",
-        acquired_at=acquired,
-        window_days=7,
-    )
-    assert structured["date_signals"][0]["location"] == "metadata.publishedDate"
-    assert structured["date_signals"][0]["parser_confidence"] == "high"
-    assert any(signal["value"] == "2026/07/01" for signal in url_date["date_signals"])
-    assert "freshness_window_compliant" not in structured
-
-
-def test_v3_finished_run_rejects_attachment_until_reopened(fake_cli):
-    env, _ = fake_cli
-    run_id = run_script("frun", "start", "latest news audit", env=env).stdout.strip()
-    assert (
-        run_script("frun", "finish", run_id, "--outcome", "partial", env=env).returncode
-        == 0
-    )
-    rejected = run_script(
-        "fsearch", "portable query", "--research-run-id", run_id, env=env
-    )
-    assert rejected.returncode != 0
-    assert "reopen" in rejected.stderr
-    reopened = run_script(
-        "frun", "reopen", run_id, "--reason", "add corroboration", env=env
-    )
-    assert reopened.returncode == 0, reopened.stderr
-    attached = run_script(
-        "fsearch",
-        "portable query",
-        "--scrape-limit",
-        "0",
-        "--research-run-id",
-        run_id,
-        env=env,
-    )
-    assert attached.returncode == 0, attached.stderr
-
-
-def test_v3_source_manifest_resolves_claims_and_evidence(fake_cli):
-    env, tmp_path = fake_cli
-    run_id = run_script(
-        "frun", "start", "general portable research", env=env
-    ).stdout.strip()
-    search = run_script(
-        "fsearch",
-        "portable query",
-        "--scrape-limit",
-        "1",
-        "--research-run-id",
-        run_id,
-        env=env,
-    )
-    assert search.returncode == 0, search.stderr
-    record_path = next((tmp_path / "catalog" / "invocations").glob("fc_*.json"))
-    record = json.loads(record_path.read_text())
-    used_url = next(
-        item["url"] for item in record["results"] if item.get("scrape_status") == "ok"
-    )
-    manifest = tmp_path / "sources.json"
-    manifest.write_text(
-        json.dumps(
-            {
-                "claims": [
-                    {
-                        "id": "claim-1",
-                        "summary": "Portable evidence exists",
-                        "type": "finding",
-                    }
-                ],
-                "sources": [
-                    {"url": used_url, "claim_ids": ["claim-1"], "roles": ["primary"]}
-                ],
-            }
-        )
-    )
-    finished = run_script(
-        "frun",
-        "finish",
-        run_id,
-        "--outcome",
-        "satisfied",
-        "--source-manifest",
-        manifest,
-        env=env,
-    )
-    assert finished.returncode == 0, finished.stderr
-    run = json.loads((tmp_path / "catalog" / "runs" / f"{run_id}.json").read_text())
-    assert run["claims"][0]["id"] == "claim-1"
-    assert run["used_sources"][0]["resolution"] == "matched"
-    assert run["used_sources"][0]["extraction_status"] == "ok"
-    assert run["used_sources"][0]["candidate_id"].startswith("fce_")
-
-
-def test_v3_verify_detects_missing_artifacts(fake_cli):
-    env, tmp_path = fake_cli
-    result = run_script("fsearch", "portable query", "--scrape-limit", "0", env=env)
-    assert result.returncode == 0, result.stderr
-    record_path = next((tmp_path / "catalog" / "invocations").glob("fc_*.json"))
-    record = json.loads(record_path.read_text())
-    Path(record["artifacts"][0]["path"]).unlink()
-    verified = run_script("frun", "verify", record["invocation_id"], env=env)
-    assert verified.returncode == 0, verified.stderr
-    assert json.loads(verified.stdout)["missing"] == 1
-
-
-def test_v5_catalog_has_no_deterministic_semantic_assessment(fake_cli):
-    env, tmp_path = fake_cli
-    result = run_script("fsearch", "portable query", "--scrape-limit", "0", env=env)
-    assert result.returncode == 0, result.stderr
-    record_path = next((tmp_path / "catalog" / "invocations").glob("fc_*.json"))
-    before = json.loads(record_path.read_text())
-    assert before["audit_status"] == "not_run"
-    assert before["assessment_refs"] == []
-    assert "quality_status" not in before
-    assert "quality_dimensions" not in before
-
-
-def test_v3_redacts_secrets_and_sensitive_url_parameters():
-    cleaned = catalog.sanitize(
-        {
-            "api_key": "secret-value",
-            "url": "https://example.com/report?token=abc&utm_source=test&view=full",
-            "message": "Authorization: Bearer abc.def and password=hunter2",
-        }
-    )
-    encoded = json.dumps(cleaned)
-    assert "secret-value" not in encoded
-    assert "abc.def" not in encoded
-    assert "hunter2" not in encoded
-    assert "utm_source" not in encoded
-    assert "view=full" in encoded
-    assert encoded.count("[REDACTED]") >= 3
-
-
-def test_v3_concurrent_operations_do_not_lose_run_membership(fake_cli):
-    env, tmp_path = fake_cli
-    run_id = run_script(
-        "frun", "start", "concurrent catalog audit", env=env
-    ).stdout.strip()
-    processes = [
-        subprocess.Popen(
-            [
-                str(SCRIPTS / "fsearch"),
-                f"parallel query {index}",
-                "--scrape-limit",
-                "0",
-                "--research-run-id",
-                run_id,
-            ],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-        )
-        for index in range(2)
-    ]
-    outputs = [process.communicate(timeout=30) for process in processes]
-    assert all(process.returncode == 0 for process in processes), outputs
-    run = json.loads((tmp_path / "catalog" / "runs" / f"{run_id}.json").read_text())
-    assert len(run["invocation_ids"]) == 2
-    assert len(set(run["invocation_ids"])) == 2
-
-
-def test_v5_direct_scrape_collects_bounded_hashed_excerpt(tmp_path):
-    body = tmp_path / "bill.md"
-    body.write_text(
-        "California AB 2017 would authorize public schools to close for Eid al-Fitr and Eid al-Adha religious holidays."
-    )
-    item = catalog.scrub_result(
-        {
-            "url": "https://leginfo.legislature.ca.gov/faces/billTextClient.xhtml",
-            "title": "billTextClient.xhtml",
-            "status": "ok",
-            "scratch_file": str(body),
-        },
-        "California proposed legislation school holidays Islamic religious holy days",
-        targeted=True,
-    )
-    assert item["excerpts"]
-    assert "holidays" in item["excerpts"][0]["matched_terms"]
-    normalized = catalog.normalize_results(
-        {
-            "operation": "scrape",
-            "results": [
-                {"url": item["url"], "status": "ok", "scratch_file": str(body)}
-            ],
-        },
-        "California school holidays",
-        "2026-07-20T00:00:00Z",
-        "fc_" + "a" * 32,
-    )
-    assert normalized[0]["excerpts"][0]["excerpt_id"].startswith("fex_")
-    assert len(normalized[0]["excerpts"][0]["text_sha256"]) == 64
-
-
-def test_v4_site_constraint_violation_is_a_hard_fact():
-    item = catalog.scrub_result(
-        {
-            "url": "https://en.wikipedia.org/wiki/Associated_Press",
-            "title": "Associated Press",
-            "selected": True,
-        },
-        "Donald Trump Iran conflict AP reporting",
-        expected_domains=["apnews.com"],
-    )
-    assert item["constraint"]["status"] == "violated"
-    assert item["constraint"]["actual_host"] == "en.wikipedia.org"
-    assert "evaluations" not in item
-
-
-def test_v5_source_hints_and_natural_language_window_are_nonsemantic():
-    iaea = catalog.scrub_result(
-        {"url": "https://www.iaea.org/newscenter/test"}, "Iran nuclear conflict"
-    )
-    bbc = catalog.scrub_result(
-        {"url": "https://www.bbc.co.uk/news/test"}, "Iran conflict"
-    )
-    assert iaea["source_hints"]["host"] == "www.iaea.org"
-    assert bbc["source_hints"]["host"] == "www.bbc.co.uk"
-    assert "source_tier" not in iaea and "source_tier" not in bbc
-    assert catalog.requested_window({"query": "latest news from the past 5 days"}) == 5
-
-
-def test_v4_antibot_errors_have_specific_taxonomy():
-    assert (
-        catalog.classify_error("document_antibot challenge returned")
-        == "access_blocked"
-    )
-    assert catalog.classify_error("CAPTCHA blocked page") == "access_blocked"
-
-
-def test_v4_snapshot_survives_scratch_body_removal(fake_cli):
-    env, tmp_path = fake_cli
-    result = run_script("fscrape", "https://example.gov/report", env=env)
-    assert result.returncode == 0, result.stderr
-    record_path = next((tmp_path / "catalog" / "invocations").glob("fc_*.json"))
-    record = json.loads(record_path.read_text())
-    snapshot = Path(record["snapshot"]["path"])
-    assert snapshot.is_file()
-    Path(record["results"][0]["scratch_file"]).unlink()
-    assert snapshot.is_file()
-    verified = run_script("frun", "verify", record["invocation_id"], env=env)
-    report = json.loads(verified.stdout)
-    assert any(
-        item["path"] == str(snapshot) and item["state"] == "available"
-        for item in report["artifacts"]
-    )
-
-
-def test_v4_ambiguous_url_requires_exact_candidate_reference(fake_cli):
-    env, _tmp_path = fake_cli
-    run_id = run_script(
-        "frun", "start", "general duplicate source research", env=env
-    ).stdout.strip()
-    scraped = run_script(
-        "fscrape",
-        "https://example.com/same",
-        "https://example.com/same",
-        "--research-run-id",
-        run_id,
-        env=env,
-    )
-    assert scraped.returncode == 0, scraped.stderr
-    rejected = run_script(
-        "frun",
-        "finish",
-        run_id,
-        "--outcome",
-        "partial",
-        "--used-url",
-        "https://example.com/same",
-        env=env,
-    )
-    assert rejected.returncode != 0
-    assert "ambiguous source URL" in rejected.stderr
-
-
-def test_v5_assessment_attachment_stays_current_then_evidence_change_stales(
-    fake_cli, monkeypatch
-):
-    env, tmp_path = fake_cli
-    run_id = run_script(
-        "frun", "start", "general portable research", env=env
-    ).stdout.strip()
-    assert (
-        run_script(
-            "fsearch",
-            "portable query",
-            "--scrape-limit",
-            "1",
-            "--research-run-id",
-            run_id,
-            env=env,
-        ).returncode
-        == 0
-    )
-    assert (
-        run_script("frun", "finish", run_id, "--outcome", "partial", env=env).returncode
-        == 0
-    )
-    monkeypatch.setenv("FIRECRAWL_CATALOG_DIR", env["FIRECRAWL_CATALOG_DIR"])
-    run_path = tmp_path / "catalog" / "runs" / f"{run_id}.json"
-    run = json.loads(run_path.read_text())
-    target_hash = (
-        __import__("hashlib")
-        .sha256(json.dumps(catalog.build_audit_packet(run_id), sort_keys=True).encode())
-        .hexdigest()
-    )
-    run["assessment_refs"] = [
-        {
-            "assessment_id": "fa_test",
-            "status": "completed",
-            "provider": "local",
-            "target_hash": target_hash,
-            "evaluator_version": "catalog-v5.0",
-        }
-    ]
-    run["audit_status"] = "completed"
-    run_path.write_text(json.dumps(run))
-    shown = json.loads(run_script("frun", "show", run_id, env=env).stdout)
-    assert shown["assessment_refs"][-1]["freshness"] == "current"
-    assert (
-        run_script(
-            "frun", "reopen", run_id, "--reason", "add evidence", env=env
-        ).returncode
-        == 0
-    )
-    assert (
-        run_script(
-            "frun",
-            "annotate",
-            run_id,
-            "--type",
-            "pivot",
-            "--reason",
-            "switch to official sources",
-            env=env,
-        ).returncode
-        == 0
-    )
-    shown = json.loads(run_script("frun", "show", run_id, env=env).stdout)
-    assert shown["assessment_refs"][-1]["freshness"] == "stale"
-
-
-def test_v5_normalizes_model_packet_paths_to_stable_evidence_ids():
-    packet = {
-        "target_id": "fr_" + "a" * 32,
-        "operations": [{"invocation_id": "fc_" + "b" * 32}],
-        "candidate_cards": [{"candidate_id": "fce_candidate"}],
-        "source_manifest": [{"candidate_id": "fce_source"}],
-        "used_source_dossiers": [
-            {
-                "candidate_id": "fce_used",
-                "excerpts": [{"excerpt_id": "fex_excerpt"}],
-            }
-        ],
-        "claims": [{"id": "claim-one"}],
-        "timeline": [{"event_id": "evt-one"}],
-    }
-    value = {
-        "findings": [
-            {
-                "evidence_refs": [
-                    "operations[0].execution.status",
-                    "candidate_cards[0].url",
-                    "source_manifest[0]",
-                    "used_source_dossiers[0].excerpts[0].text",
-                    "claims[0]",
-                    "timeline[0].event_type",
-                    "context_manifest",
-                    "does_not_exist[0]",
-                ]
-            }
-        ]
-    }
-    normalized = catalog.normalize_evidence_refs(value, packet)
-    assert normalized["findings"][0]["evidence_refs"] == [
-        "fc_" + "b" * 32,
-        "fce_candidate",
-        "fce_source",
-        "fex_excerpt",
-        "claim-one",
-        "evt-one",
-        "fr_" + "a" * 32,
-    ]
-
-
-def test_v4_schema_transition_discards_old_catalog_without_backup(fake_cli):
-    env, _tmp_path = fake_cli
-    root = Path(env["FIRECRAWL_CATALOG_DIR"])
-    invocations_dir = root / "invocations"
-    invocations_dir.mkdir(parents=True)
-    invocation_id = "fc_" + "a" * 32
-    legacy = {
-        "schema_version": 3,
-        "invocation_id": invocation_id,
-        "operation": "search",
-        "started_at": "2026-07-01T00:00:00+00:00",
-        "execution": {"status": "succeeded"},
-        "quality": {},
-        "results": [
-            {"url": "https://example.com/a", "canonical_url": "https://example.com/a"},
-            {
-                "url": "https://example.com/b",
-                "canonical_url": "https://example.com/b",
-                "status": "error",
-                "error": "document_antibot challenge",
-            },
-        ],
-        "assessment_refs": [],
-        "record_revision": 1,
-    }
-    path = invocations_dir / f"{invocation_id}.json"
-    path.write_text(json.dumps(legacy))
-    (root / "runs").mkdir()
-    current_run = root / "runs" / ("fr_" + "b" * 32 + ".json")
-    current_run.write_text(
-        json.dumps({"schema_version": 4, "research_run_id": "fr_" + "b" * 32})
-    )
-    (root / "snapshots").mkdir()
-    (root / "snapshots" / f"{invocation_id}.json.gz").write_bytes(b"legacy-snapshot")
-    (root / "migrations" / "legacy" / "v3").mkdir(parents=True)
-    (root / "migrations" / "legacy" / "v3" / "record.json").write_text(
-        json.dumps(legacy)
-    )
-    dry = run_script("frun", "migrate", "--from", "4", "--to", "5", env=env)
-    preview = json.loads(dry.stdout)
-    assert preview["action"] == "dry_run"
-    assert preview["would_discard_entire_catalog"] is True
-    assert preview["backup_created"] is False
-    assert json.loads(path.read_text())["schema_version"] == 3
-    applied = run_script(
-        "frun", "migrate", "--from", "4", "--to", "5", "--apply", env=env
-    )
-    assert applied.returncode == 0, applied.stderr
-    reset = json.loads(applied.stdout)
-    assert reset["action"] == "reset"
-    assert reset["backup_created"] is False
-    assert not path.exists()
-    assert not current_run.exists()
-    assert not (root / "snapshots").exists()
-    assert not (root / "migrations").exists()
-    marker = json.loads((root / "catalog.json").read_text())
-    assert marker["schema_version"] == 5
-    assert marker["history_policy"] == "discard_on_schema_change"
-    events = [
-        json.loads(line) for line in (root / "events.jsonl").read_text().splitlines()
-    ]
-    assert [event["event"] for event in events] == ["catalog_schema_initialized"]
-    rerun = run_script("frun", "migrate", "--apply", env=env)
-    assert json.loads(rerun.stdout)["action"] == "no_change"
 
 
 def test_v5_local_gateway_records_empty_reasoning_retry_and_provenance(monkeypatch):
@@ -1711,51 +866,6 @@ def test_autonomous_local_stage_can_retry_with_independent_attempt_key():
     assert repository.calls[second]["status"] == "running"
 
 
-def test_v4_selective_purge_is_dry_run_and_removes_associated_events(fake_cli):
-    env, tmp_path = fake_cli
-    first = run_script("frun", "start", "first retained audit", env=env).stdout.strip()
-    second = run_script(
-        "frun", "start", "second retained audit", env=env
-    ).stdout.strip()
-    dry = run_script("frun", "purge", "--run-id", first, env=env)
-    assert json.loads(dry.stdout)["action"] == "dry_run"
-    assert (tmp_path / "catalog" / "runs" / f"{first}.json").is_file()
-    applied = run_script("frun", "purge", "--run-id", first, "--force", env=env)
-    assert applied.returncode == 0, applied.stderr
-    assert not (tmp_path / "catalog" / "runs" / f"{first}.json").exists()
-    assert (tmp_path / "catalog" / "runs" / f"{second}.json").is_file()
-    events = (tmp_path / "catalog" / "events.jsonl").read_text()
-    assert first not in events
-    assert second in events
-
-
-def test_v5_live_validator_accepts_dry_run_and_durable_records():
-    assert live_validation.catalog_record_valid(
-        {
-            "schema_version": 5,
-            "execution": {"status": "succeeded"},
-            "input": {"dry_run": True},
-        }
-    )
-    assert live_validation.catalog_record_valid(
-        {
-            "schema_version": 5,
-            "execution": {"status": "succeeded"},
-            "input": {"dry_run": False},
-            "snapshot": {"availability": "available"},
-            "operational_metrics": {"successful_document_count": 1},
-            "data_completeness": "complete",
-        }
-    )
-    assert not live_validation.catalog_record_valid(
-        {
-            "schema_version": 5,
-            "execution": {"status": "succeeded"},
-            "input": {"dry_run": False},
-        }
-    )
-
-
 def test_v5_candidate_triage_rejects_irrelevant_volume(monkeypatch):
     candidates = [
         {
@@ -1820,103 +930,6 @@ def test_v5_candidate_triage_rejects_irrelevant_volume(monkeypatch):
     )
     assert [item["title"] for item in ranked] == ["US and Iran conflict update"]
     assert provenance["coverage"] == 1
-
-
-def test_v5_audit_packet_preserves_answer_claims_sources_and_excerpts(
-    fake_cli, monkeypatch
-):
-    env, tmp_path = fake_cli
-    run_id = run_script(
-        "frun", "start", "current legal research", env=env
-    ).stdout.strip()
-    assert (
-        run_script(
-            "fsearch",
-            "portable legal evidence",
-            "--scrape-limit",
-            "1",
-            "--research-run-id",
-            run_id,
-            env=env,
-        ).returncode
-        == 0
-    )
-    record = json.loads(
-        next((tmp_path / "catalog" / "invocations").glob("fc_*.json")).read_text()
-    )
-    source = next(
-        item for item in record["results"] if item.get("scrape_status") == "ok"
-    )
-    manifest = tmp_path / "manifest.json"
-    manifest.write_text(
-        json.dumps(
-            {
-                "claims": [
-                    {"id": "claim-1", "summary": "Evidence exists", "type": "finding"}
-                ],
-                "sources": [
-                    {
-                        "url": source["url"],
-                        "candidate_id": source["candidate_id"],
-                        "claim_ids": ["claim-1"],
-                        "excerpt_ids": [source["excerpts"][0]["excerpt_id"]],
-                        "roles": ["primary"],
-                    }
-                ],
-            }
-        )
-    )
-    answer = tmp_path / "answer.md"
-    answer.write_text("Evidence exists.")
-    assert (
-        run_script(
-            "frun",
-            "finish",
-            run_id,
-            "--outcome",
-            "satisfied",
-            "--source-manifest",
-            manifest,
-            "--answer-file",
-            answer,
-            env=env,
-        ).returncode
-        == 0
-    )
-    monkeypatch.setenv("FIRECRAWL_CATALOG_DIR", env["FIRECRAWL_CATALOG_DIR"])
-    packet = catalog.build_audit_packet(run_id)
-    assert packet["final_answer"]["text"] == "Evidence exists."
-    assert packet["claims"][0]["id"] == "claim-1"
-    assert (
-        packet["used_source_dossiers"][0]["excerpts"][0]["excerpt_id"]
-        == source["excerpts"][0]["excerpt_id"]
-    )
-    assert packet["context_manifest"]["omissions"] == []
-
-
-def test_v5_assessment_rejects_invented_evidence_references():
-    packet = {
-        "target_id": "fr_test",
-        "operations": [],
-        "candidate_cards": [],
-        "claims": [],
-        "used_source_dossiers": [],
-        "timeline": [],
-    }
-    finding = {
-        "code": "TEST",
-        "dimension": "evidence",
-        "label": "weak",
-        "confidence": 0.9,
-        "rationale": "unsupported",
-        "evidence_refs": ["fce_invented"],
-        "uncertainty": "none",
-        "recommended_action": "repair",
-    }
-    value = {"stage_adequacy": "weak", "findings": [finding], "unresolved": []}
-    valid, problems = catalog.validate_stage_output("evidence", value, packet)
-    assert valid is False
-    assert "unknown evidence refs" in problems[0]
 
 
 def test_v5_commercial_provider_requires_explicit_model(monkeypatch):
@@ -1995,3 +1008,79 @@ def test_local_gateway_can_hold_output_budget_after_length_retry(monkeypatch):
     assert "reached the output limit" in payloads[1]["messages"][1]["content"]
     assert result.provenance["max_output_tokens"] == 512
     assert result.provenance["expand_output_on_length"] is False
+
+
+def test_fsearch_writes_complete_candidate_ledger(fake_cli):
+    env, tmp_path = fake_cli
+    output = tmp_path / "scratch O'Brien"
+    result = run_script(
+        "fsearch",
+        "portable query",
+        "--limit",
+        "3",
+        "--scrape-limit",
+        "2",
+        "--tbs",
+        "qdr:w",
+        "--dir",
+        output,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    meta = json.loads((output / "_meta.json").read_text(encoding="utf-8"))
+    assert meta["candidate_count"] == 3
+    assert meta["total_scraped"] == 2
+    assert len(meta["candidates"]) == 3
+    assert (output / "_candidates.json").is_file()
+    assert (output / "_context.json").is_file()
+    calls = [
+        json.loads(line)
+        for line in Path(env["FAKE_FIRECRAWL_LOG"]).read_text().splitlines()
+    ]
+    assert ["--tbs", "qdr:w"] == calls[0][
+        calls[0].index("--tbs") : calls[0].index("--tbs") + 2
+    ]
+
+
+def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):
+    env, tmp_path = fake_cli
+    output = tmp_path / "batch with spaces"
+    result = run_script(
+        "fscrape",
+        "https://example.com/a,b",
+        "https://example.com/two",
+        "--schema",
+        '{"type":"object","properties":{"name":{"type":"string"}}}',
+        "--output-dir",
+        output,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    meta = json.loads((output / "_meta.json").read_text(encoding="utf-8"))
+    assert [entry["url"] for entry in meta["results"]] == [
+        "https://example.com/a,b",
+        "https://example.com/two",
+    ]
+    assert all(entry["format"] == "json" for entry in meta["results"])
+
+
+def test_smart_search_writes_diagnostic_dry_run_artifacts(fake_cli):
+    env, tmp_path = fake_cli
+    env["TMPDIR"] = str(tmp_path / "smart tmp")
+    env.pop("GOOGLE_API_KEY", None)
+    result = run_script(
+        "fsearch_smart",
+        "portable wrapper",
+        "--dry-run",
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    roots = list((Path(env["TMPDIR"]) / "firecrawl_scratch").glob("fc_*/smart"))
+    assert len(roots) == 1
+    meta = json.loads((roots[0] / "_meta.json").read_text(encoding="utf-8"))
+    assert meta["invocation_id"] == roots[0].parent.name
+    assert meta["planner"] == "orchestrator"
+    assert meta["budget_snapshot"]["policy_version"] == "budget-policy-v1"
+    assert (roots[0] / "_research_spec.json").is_file()
+    assert (roots[0] / "_budget.json").is_file()
+    assert (roots[0] / "_meta.json").is_file()

@@ -1,31 +1,8 @@
-"""PostgreSQL-backed invocation catalog service.
+"""Authoritative PostgreSQL invocation lifecycle service.
 
-This module provides the authoritative invocation catalog API backed
-by PostgreSQL.  It maps the filesystem-based Catalog v5 operations
-(``begin``, ``add_event``, ``complete``, etc.) to PostgreSQL
-``research_invocations`` and ``research_events`` tables.
-
-PRD mapping: FR-001, Section 14
-
-Authority model:
-
-* PostgreSQL ``research_invocations`` and ``research_events`` are
-  authoritative.
-* Filesystem Catalog v5 records are derived compatibility exports,
-  written *after* database commit.
-* Filesystem records are never read to determine current invocation
-  or run state.
-
-Event types supported (mapped from Catalog v5):
-
-* ``invocation_started`` — invocation began
-* ``invocation_finished`` — invocation completed
-* ``invocation_event`` — generic invocation event (pivot, retry, etc.)
-* ``pivot`` — search pivot to new query
-* ``retry`` — retry of a failed operation
-* ``decision`` — deterministic decision
-* ``recovery`` — recovery from transient failure
-* ``annotation`` — human or agent annotation
+Invocations and their events are stored only in PostgreSQL. Scratch files are
+operational diagnostics and are never consulted to determine invocation or run
+state.
 """
 
 from __future__ import annotations
@@ -106,7 +83,7 @@ class InvocationRecord:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a dictionary suitable for compatibility export."""
+        """Serialize the authoritative invocation record."""
         return {
             "invocation_id": str(self.id),
             "external_invocation_id": self.external_invocation_id,
@@ -126,24 +103,23 @@ class InvocationRecord:
         }
 
 
-class InvocationCatalogError(Exception):
-    """Base exception for invocation catalog errors."""
+class InvocationError(Exception):
+    """Base exception for invocation lifecycle errors."""
 
 
-class InvocationAlreadyRunning(InvocationCatalogError):
+class InvocationAlreadyRunning(InvocationError):
     """Raised when attempting to start an already-running invocation."""
 
 
-class InvocationNotFound(InvocationCatalogError):
+class InvocationNotFound(InvocationError):
     """Raised when an invocation ID is not found."""
 
 
-class InvocationCatalogService:
-    """PostgreSQL-backed invocation catalog service.
+class InvocationService:
+    """Authoritative PostgreSQL invocation lifecycle service.
 
-    This service provides the authoritative API for managing
-    invocations and their events.  It is the primary interface
-    for the new PostgreSQL-backed invocation catalog.
+    This service manages invocations and their events without filesystem
+    mirrors or compatibility records.
 
     Args:
         uow_factory: Callable that returns a ``PostgresUnitOfWork``.
@@ -170,9 +146,6 @@ class InvocationCatalogService:
         actor_type: str = "system",
     ) -> InvocationRecord:
         """Begin a new invocation for a research run.
-
-        This is the PostgreSQL-backed equivalent of Catalog v5's
-        ``begin()`` function.
 
         Args:
             run_id: Research run UUID.
@@ -203,20 +176,38 @@ class InvocationCatalogService:
         input_json = json.dumps(sanitized_input)
 
         with self.uow_factory() as uow:
-            # Check for existing running invocation with same external ID
             cur = uow.connection.cursor()
             cur.execute(
-                """SELECT id, status FROM research_invocations
-                WHERE external_invocation_id = %s""",
+                """SELECT id,run_id,operation,status,input
+                   FROM research_invocations
+                   WHERE external_invocation_id=%s""",
                 (external_invocation_id,),
             )
             existing = cur.fetchone()
             if existing:
-                invocation_id, status = existing
+                (
+                    invocation_id,
+                    existing_run_id,
+                    existing_operation,
+                    status,
+                    existing_input,
+                ) = existing
+                if (
+                    existing_run_id == run_id
+                    and existing_operation == operation
+                    and existing_input == sanitized_input
+                    and status == "running"
+                ):
+                    return InvocationRecord.from_mapping(
+                        uow.runs.get_invocation_status(invocation_id=invocation_id)
+                    )
                 if status == "running":
                     raise InvocationAlreadyRunning(
                         f"invocation {external_invocation_id} is already running"
                     )
+                raise InvocationError(
+                    f"invocation ID {external_invocation_id} is already terminal; use a new ID"
+                )
 
             # Get current run lifecycle revision
             cur.execute(
@@ -233,8 +224,8 @@ class InvocationCatalogService:
                 """INSERT INTO research_invocations(
                 run_id, parent_invocation_id, external_invocation_id,
                 operation, status, lifecycle_revision, idempotency_key,
-                input, metadata)
-                VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                input, metadata, started_at)
+                VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
                 RETURNING id""",
                 (
                     run_id,
@@ -349,8 +340,12 @@ class InvocationCatalogService:
                 _input_data,
                 started_at,
             ) = row
+            if _inv_run_id != run_id:
+                raise InvocationError(
+                    f"invocation {invocation_id} belongs to another run"
+                )
             if current_status != "running":
-                raise InvocationCatalogError(
+                raise InvocationError(
                     f"invocation {invocation_id} is not running (status={current_status})"
                 )
 
@@ -523,58 +518,3 @@ class InvocationCatalogService:
             KeyError: If the event does not exist.
         """
         return self.event_service.get_event(run_id, event_id)
-
-    def export_to_catalog_format(
-        self,
-        run_id: UUID,
-        invocation_id: UUID,
-    ) -> dict[str, Any]:
-        """Export an invocation record to Catalog v5-compatible format.
-
-        This is a derived compatibility export, written *after*
-        database commit.  It is NOT authoritative.
-
-        Args:
-            run_id: Research run UUID.
-            invocation_id: Invocation UUID.
-
-        Returns:
-            A dictionary in Catalog v5 format.
-        """
-        record = self.status(invocation_id=invocation_id)
-        events = self.list_events(run_id, invocation_id=invocation_id)
-
-        catalog_record = {
-            "schema_version": 5,
-            "invocation_id": str(invocation_id),
-            "external_invocation_id": record.external_invocation_id,
-            "research_run_id": str(run_id),
-            "operation": record.operation,
-            "input": record.input,
-            "started_at": record.started_at.isoformat() if record.started_at else None,
-            "finished_at": record.completed_at.isoformat()
-            if record.completed_at
-            else None,
-            "execution": {
-                "status": "succeeded" if record.status == "complete" else "failed",
-                "exit_code": None,
-                "error": record.error,
-            },
-            "operational_status": record.status,
-            "data_completeness": "complete" if record.completed_at else "partial",
-            "audit_status": "not_run",
-            "events": [evt.to_dict() for evt in events],
-            "results": [],
-            "artifacts": [],
-            "assessment_refs": [],
-            "evidence_revision": 1,
-            "record_revision": 0,
-        }
-
-        if record.output:
-            catalog_record["results"] = record.output.get("results", [])
-            catalog_record["operational_metrics"] = record.output.get(
-                "operational_metrics", {}
-            )
-
-        return catalog_record

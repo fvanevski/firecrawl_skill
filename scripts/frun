@@ -1,234 +1,142 @@
 #!/usr/bin/env bash
-# frun — explicit Firecrawl research-run lifecycle.
-#
-# All commands are routed through PostgreSQL (authoritative) with
-# derived filesystem compatibility exports.  When PostgreSQL is
-# unavailable the legacy filesystem path is used with a deprecation
-# warning.
+# frun — PostgreSQL-authoritative Firecrawl research-run lifecycle.
 set -euo pipefail
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env" ]]; then
   source "$SCRIPT_DIR/research-env"
 fi
-PERSIST_MODE="${FIRECRAWL_RESEARCH_PERSIST:-auto}"
-case "$PERSIST_MODE" in
-  on) [[ -n "${DATABASE_URL:-}" ]] || { echo "ERROR: persistence is on but DATABASE_URL is unavailable" >&2; exit 1; }; DB_ACTIVE=1 ;;
-  auto) [[ -n "${DATABASE_URL:-}" ]] && DB_ACTIVE=1 || DB_ACTIVE=0 ;;
-  off) DB_ACTIVE=0 ;;
-  *) echo "ERROR: FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off" >&2; exit 2 ;;
-esac
-PYTHON="${FIRECRAWL_RESEARCH_PYTHON:-python3}"
-ADAPTER_MODE="${FIRECRAWL_LEGACY_ADAPTER_MODE:-compatibility}"
-case "$ADAPTER_MODE" in
-  compatibility) ;;
-  shadow|authoritative)
-    [[ -n "${DATABASE_URL:-}" ]] || { echo "ERROR: $ADAPTER_MODE adapter mode requires DATABASE_URL" >&2; exit 1; }
-    DB_ACTIVE=1
+
+case "${FIRECRAWL_RESEARCH_PERSIST:-auto}" in
+  on|auto)
+    [[ -n "${DATABASE_URL:-}" ]] || {
+      echo "ERROR: frun requires the authoritative PostgreSQL store" >&2
+      exit 1
+    }
     ;;
-  *) echo "ERROR: FIRECRAWL_LEGACY_ADAPTER_MODE must be compatibility, shadow, or authoritative" >&2; exit 2 ;;
+  off)
+    echo "ERROR: frun is unavailable when FIRECRAWL_RESEARCH_PERSIST=off" >&2
+    exit 1
+    ;;
+  *)
+    echo "ERROR: FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off" >&2
+    exit 2
+    ;;
 esac
-preflight_database() {
-  if [[ "$DB_ACTIVE" == "1" ]]; then
-    "$SCRIPT_DIR/research-db" ingest-ready >/dev/null
-  fi
+
+"$SCRIPT_DIR/research-db" ingest-ready >/dev/null
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  frun start <objective> [--mode agent_led|autonomous_local|deterministic_debug]
+  frun finish <fr_id> --outcome <satisfied|partial|...> [--status complete|failed]
+       [--source-manifest FILE] [--answer-file FILE] [--auto-audit]
+  frun reopen <fr_id> [--reason TEXT]
+  frun cancel <fr_id> [--reason TEXT]
+  frun annotate <fr_id> --type pivot|retry|decision --reason TEXT
+  frun status <fr_id>
+  frun verify <fr_id>
+  frun audit <fr_id> [audit options]
+  frun audit-status <fr_id>
+  frun compare <fr_id> [fr_id ...]
+EOF
+  exit 2
 }
-# Emit a one-shot deprecation warning when falling back to the legacy
-# filesystem catalog.  We track it in a temp file so the message only
-# appears once per invocation.
-_deprecation_warn() {
-  local marker="${FIRECRAWL_WARN_MARKER:-/tmp/.firecrawl_legacy_warned_${USER:-$UID}}"
-  if [[ ! -f "$marker" ]]; then
-    printf '%s\n' "WARNING: falling back to legacy filesystem catalog; PostgreSQL commands are deprecated and will be removed in a future release" >&2
-    touch "$marker" 2>/dev/null || true
-  fi
-}
-_compat_export_events() {
-  local run_id="$1"
-  if [[ "${FIRECRAWL_CATALOG_DISABLED:-}" != "1" ]]; then
-    if ! "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" export-events-to-fs --run-id "$run_id" >/dev/null 2>&1; then
-      echo "WARNING: filesystem export failed for run $run_id" >&2
-    fi
-  fi
-}
+
 case "${1:-}" in
   start)
     shift
     objective="${1:-}"
-    preflight_database
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      # Generate a proper UUID-style external_id (fr_<32 hex chars>)
-      external_id="fr_$(python -c "import uuid; print(uuid.uuid4().hex)")"
-      _run_start_output="$("$SCRIPT_DIR/research-db" run-start "$external_id" "$objective")"
-      if [[ -z "$_run_start_output" ]]; then
-        printf '%s\n' "ERROR: PostgreSQL run-start failed" >&2
-        exit 1
-      fi
-      # Parse JSON output to extract the run id (external_id field)
-      run_id="$("$PYTHON" -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('external_id',d.get('id','')))" <<< "$_run_start_output")"
-      if [[ -z "$run_id" ]]; then
-        printf '%s\n' "ERROR: PostgreSQL run-start returned empty id" >&2
-        exit 1
-      fi
-      # Derive filesystem catalog record from committed PostgreSQL state
-      _compat_export_events "$run_id"
-    else
-      _deprecation_warn
-      output="$("$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-start "$@")"
-      run_id="$(printf '%s\n' "$output" | tail -n 1)"
-    fi
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      "$PYTHON" "$SCRIPT_DIR/legacy_adapter.py" \
-        --entry-point frun --action start --status complete \
-        --research-run-id "$run_id" \
-        --idempotency-key "legacy-adapter:$run_id:frun:start:{workflow_revision}" >/dev/null
-    fi
-    printf '%s\n' "${run_id:-$output}"
+    [[ -n "$objective" ]] || usage
+    shift
+    mode="autonomous_local"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --mode) mode="$2"; shift 2 ;;
+        *) echo "ERROR: unknown start option: $1" >&2; exit 2 ;;
+      esac
+    done
+    case "$mode" in
+      agent_led|autonomous_local|deterministic_debug) ;;
+      *) echo "ERROR: unsupported execution mode: $mode" >&2; exit 2 ;;
+    esac
+    external_id="fr_$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+    output="$(
+      "$SCRIPT_DIR/research-db" run-start \
+        "$external_id" "$objective" --mode "$mode"
+    )"
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["external_id"])' <<<"$output"
     ;;
+
   finish)
     shift
     run_id="${1:-}"
+    [[ -n "$run_id" ]] || usage
+    shift
     outcome=""
+    status="complete"
     source_manifest=""
     answer_file=""
-    previous=""
     auto_audit=0
-    for argument in "$@"; do
-      if [[ "$argument" == "--auto-audit" ]]; then
-        auto_audit=1
-        continue
-      fi
-      [[ "$previous" == "--outcome" ]] && outcome="$argument"
-      [[ "$previous" == "--source-manifest" ]] && source_manifest="$argument"
-      [[ "$previous" == "--answer-file" ]] && answer_file="$argument"
-      previous="$argument"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --outcome) outcome="$2"; shift 2 ;;
+        --status) status="$2"; shift 2 ;;
+        --source-manifest) source_manifest="$2"; shift 2 ;;
+        --answer-file) answer_file="$2"; shift 2 ;;
+        --auto-audit) auto_audit=1; shift ;;
+        *) echo "ERROR: unknown finish option: $1" >&2; exit 2 ;;
+      esac
     done
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      db_args=(run-finish "$run_id" --outcome "$outcome")
-      if [[ -n "$source_manifest" ]]; then
-        db_args+=(--source-manifest-sha256 "$(sha256sum "$source_manifest" | awk '{print $1}')")
-      fi
-      if [[ -n "$answer_file" ]]; then
-        db_args+=(--answer-sha256 "$(sha256sum "$answer_file" | awk '{print $1}')")
-      fi
-      "$SCRIPT_DIR/research-db" "${db_args[@]}" >/dev/null
-      # Derive filesystem catalog record from committed PostgreSQL state
-      _compat_export_events "$run_id"
-    else
-      _deprecation_warn
-      catalog_args=()
-      for argument in "$@"; do
-        [[ "$argument" != "--auto-audit" ]] && catalog_args+=("$argument")
-      done
-      "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-finish "${catalog_args[@]}" >/dev/null
+    [[ -n "$outcome" ]] || { echo "ERROR: --outcome is required" >&2; exit 2; }
+    args=(run-finish "$run_id" --outcome "$outcome" --status "$status")
+    if [[ -n "$source_manifest" ]]; then
+      [[ -f "$source_manifest" ]] || { echo "ERROR: source manifest not found: $source_manifest" >&2; exit 1; }
+      args+=(--source-manifest-sha256 "$(sha256sum "$source_manifest" | awk '{print $1}')")
     fi
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      "$PYTHON" "$SCRIPT_DIR/legacy_adapter.py" \
-        --entry-point frun --action finish --status complete \
-        --research-run-id "$run_id" \
-        --idempotency-key "legacy-adapter:$run_id:frun:finish:$outcome:{workflow_revision}" >/dev/null
+    if [[ -n "$answer_file" ]]; then
+      [[ -f "$answer_file" ]] || { echo "ERROR: answer file not found: $answer_file" >&2; exit 1; }
+      args+=(--answer-sha256 "$(sha256sum "$answer_file" | awk '{print $1}')")
     fi
-    printf '%s\n' "${run_id:-}"
-    if [[ "$auto_audit" == "1" ]]; then
-      if [[ "$DB_ACTIVE" == "1" ]]; then
-        "$SCRIPT_DIR/research-db" run-audit "$run_id"
-      else
-        _deprecation_warn
-        "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit "$run_id"
-      fi
+    "$SCRIPT_DIR/research-db" "${args[@]}" >/dev/null
+    printf '%s\n' "$run_id"
+    if (( auto_audit )); then
+      "$SCRIPT_DIR/research-db" run-audit "$run_id"
     fi
     ;;
+
   reopen)
     shift
-    run_id="${1:-}"
-    preflight_database
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      "$SCRIPT_DIR/research-db" run-reopen "$@" >/dev/null
-      # Derive filesystem catalog record from committed PostgreSQL state
-      _compat_export_events "$run_id"
-    else
-      _deprecation_warn
-      "$PYTHON" "$SCRIPT_DIR/invocation_catalog.py" run-reopen "$@"
-    fi
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      "$PYTHON" "$SCRIPT_DIR/legacy_adapter.py" \
-        --entry-point frun --action reopen --status complete \
-        --research-run-id "$run_id" \
-        --idempotency-key "legacy-adapter:$run_id:frun:reopen:{workflow_revision}" >/dev/null
-    fi
+    exec "$SCRIPT_DIR/research-db" run-reopen "$@"
+    ;;
+  cancel)
+    shift
+    exec "$SCRIPT_DIR/research-db" run-cancel "$@"
     ;;
   annotate)
     shift
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      "$SCRIPT_DIR/research-db" run-annotate "$@"
-    else
-      _deprecation_warn
-      "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" run-annotate "$@"
-    fi
+    exec "$SCRIPT_DIR/research-db" run-annotate "$@"
     ;;
   status|show)
     shift
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      "$SCRIPT_DIR/research-db" run-status "$@"
-    else
-      _deprecation_warn
-      "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" run-show "$@"
-    fi
+    exec "$SCRIPT_DIR/research-db" run-status "$@"
     ;;
   verify)
     shift
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      "$SCRIPT_DIR/research-db" run-verify "$@"
-    else
-      _deprecation_warn
-      "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" verify "$@"
-    fi
+    exec "$SCRIPT_DIR/research-db" run-verify "$@"
     ;;
   audit)
     shift
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      "$SCRIPT_DIR/research-db" run-audit "$@"
-    else
-      _deprecation_warn
-      "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit "$@"
-    fi
+    exec "$SCRIPT_DIR/research-db" run-audit "$@"
     ;;
   audit-status)
     shift
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      "$SCRIPT_DIR/research-db" audit-status "$@"
-    else
-      _deprecation_warn
-      "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" audit-status "$@"
-    fi
+    exec "$SCRIPT_DIR/research-db" audit-status "$@"
     ;;
   compare)
     shift
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      "$SCRIPT_DIR/research-db" run-compare "$@"
-    else
-      _deprecation_warn
-      "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" compare "$@"
-    fi
+    exec "$SCRIPT_DIR/research-db" run-compare "$@"
     ;;
-  export)
-    shift
-    run_id="${1:-}"
-    if [[ "$DB_ACTIVE" == "1" ]]; then
-      target_dir="${2:-}"
-      if [[ -z "$target_dir" ]]; then
-        echo "ERROR: export requires a target directory" >&2
-        exit 1
-      fi
-      "$SCRIPT_DIR/research-db" catalog-export run "$run_id" --target-dir "$target_dir"
-    else
-      _deprecation_warn
-      echo "ERROR: export requires PostgreSQL (FIRECRAWL_RESEARCH_PERSIST=on)" >&2
-      exit 1
-    fi
-    ;;
-  aggregate) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" aggregate "$@" ;;
-  recompute) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" recompute "$@" ;;
-  migrate) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" migrate "$@" ;;
-  purge) shift; exec "$PYTHON" "$SCRIPT_DIR/catalog_v5.py" purge "$@" ;;
-  *) echo "Usage: frun {start <objective> [--mode MODE]|finish <fr_id> --outcome OUTCOME [--source-manifest FILE] [--answer-file FILE] [--auto-audit]|reopen <fr_id> --reason TEXT|annotate <fr_id> --type TYPE --reason TEXT|status <fr_id>|verify <id>|audit <id> [--llm PROVIDER] [--stages LIST]|audit-status <id>|compare <fr_id>...|export <fr_id> <target-dir>|aggregate|recompute <id>|migrate [--apply]|purge [filters] [--force]}" >&2; exit 2 ;;
+  *) usage ;;
 esac

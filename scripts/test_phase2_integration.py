@@ -20,8 +20,8 @@ Exit criteria verified:
      all stored with the correct status; valid items in a mixed response produce
      candidates while invalid items are silently skipped.
   7. Export failure does not invalidate committed acquisition — a crash/error
-     during scratch-file or compat-export write does not roll back the PostgreSQL
-     search_response or search_candidate rows.
+     during scratch-file write does not roll back the PostgreSQL search_response
+     or search_candidate rows.
   8. No candidate exists only in scratch state — scratch generation is always
      performed after the DB commit; if scratch fails, DB state is authoritative.
 """
@@ -46,7 +46,6 @@ from research_store.blob import ContentAddressedBlobStore
 from research_store.config import StoreConfig
 from research_store.container import (
     build_acquisition_service,
-    build_compatibility_export_service,
     build_run_service,
 )
 from research_store.domain import SearchAdapterResult, utcnow
@@ -1005,89 +1004,6 @@ class TestMalformedAndPartialResponses:
 
 
 @pytest.mark.skipif(not TEST_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
-class TestExportFailureIsolation:
-    """
-    Exit criterion 7:
-      - Export failure does not invalidate committed acquisition.
-    """
-
-    def test_compat_export_failure_leaves_db_intact(self, tmp_path, prepared_database):
-        """A CompatibilityExporter write error (target path is a file) must not
-        remove or corrupt committed search_response or search_candidate rows."""
-        migrate(TEST_DSN)
-        config = replace(
-            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
-        )
-        run_svc = build_run_service(config)
-
-        ext_id = f"run-exp-fail-p2-{uuid4()}"
-        run_svc.create(objective="export failure isolation p2", external_id=ext_id)
-        run_id = run_svc.status(external_id=ext_id).id
-
-        adapter = StubSearchAdapter(
-            _make_success_payload(
-                "https://export-fail.example.com/doc1",
-                "https://export-fail.example.com/doc2",
-            )
-        )
-        acq_svc = build_acquisition_service(config, search_adapter=adapter)
-        acq_res = acq_svc.execute_search(
-            run_id, "export fail query", export_scratch=False
-        )
-        assert acq_res.postgres_committed is True
-
-        exporter = build_compatibility_export_service(config)
-        # Force failure: use a file path where the exporter expects a directory
-        blocker = tmp_path / "export_blocker"
-        blocker.write_text("I block the export directory")
-
-        exp_res = exporter.export_search(run_id, acq_res.search_response_id, blocker)
-        assert exp_res.status == "failed"
-        assert exp_res.error is not None
-
-        # PostgreSQL state must remain intact
-        stored = run_svc.get_search_response(acq_res.search_response_id)
-        assert stored["status"] == "succeeded"
-        cands = run_svc.list_candidates(run_id)
-        assert len(cands) == 2
-
-    def test_compat_export_success_does_not_change_db(
-        self, tmp_path, prepared_database
-    ):
-        """After a successful compat export, the search response and candidates in
-        PostgreSQL must not change (export is purely additive)."""
-        migrate(TEST_DSN)
-        config = replace(
-            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
-        )
-        run_svc = build_run_service(config)
-
-        ext_id = f"run-exp-ok-{uuid4()}"
-        run_svc.create(objective="export success no db change", external_id=ext_id)
-        run_id = run_svc.status(external_id=ext_id).id
-
-        adapter = StubSearchAdapter(
-            _make_success_payload("https://export-ok.example.com")
-        )
-        acq_svc = build_acquisition_service(config, search_adapter=adapter)
-        acq_res = acq_svc.execute_search(
-            run_id, "export ok query", export_scratch=False
-        )
-
-        cands_before = run_svc.list_candidates(run_id)
-
-        exporter = build_compatibility_export_service(config)
-        exp_res = exporter.export_search(
-            run_id, acq_res.search_response_id, tmp_path / "exp_ok_out"
-        )
-        assert exp_res.status == "complete"
-
-        cands_after = run_svc.list_candidates(run_id)
-        assert len(cands_before) == len(cands_after)
-        assert {c["id"] for c in cands_before} == {c["id"] for c in cands_after}
-
-
-@pytest.mark.skipif(not TEST_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
 class TestPhase2EndToEnd:
     """
     End-to-end phase 2 scenario tying all exit criteria together.
@@ -1099,9 +1015,7 @@ class TestPhase2EndToEnd:
         b) Same URL across two branches → recurrence_count == 2.
         c) Delete scratch → candidates still in DB.
         d) Build triage input → IDs match.
-        e) Export search compat → both files and DB record created.
-        f) Export failure variant → DB unaffected.
-        g) Reconcile after crash simulation → missing candidates recovered.
+        e) Reconcile after crash simulation → missing candidates recovered.
         """
         migrate(TEST_DSN)
         config = replace(
@@ -1117,7 +1031,6 @@ class TestPhase2EndToEnd:
                 )
             ),
         )
-        exporter = build_compatibility_export_service(config)
 
         # --- (a) First search execution ---
         ext_id = f"run-e2e-p2-{uuid4()}"
@@ -1163,22 +1076,7 @@ class TestPhase2EndToEnd:
         replay_ids = {c["id"] for c in replay["candidate_cards"]}
         assert replay_ids == triage_ids
 
-        # --- (e) Compat export succeeds ---
-        exp_res = exporter.export_search(
-            run_id, res1.search_response_id, tmp_path / "e2e_exp"
-        )
-        assert exp_res.status == "complete"
-        assert (tmp_path / "e2e_exp" / "_search.json").is_file()
-        assert (tmp_path / "e2e_exp" / "_candidates.json").is_file()
-
-        # --- (f) Export failure does not affect DB ---
-        blocker = tmp_path / "e2e_exp_block"
-        blocker.write_text("blocker")
-        fail_res = exporter.export_search(run_id, res1.search_response_id, blocker)
-        assert fail_res.status == "failed"
-        assert len(run_svc.list_candidates(run_id)) == 3  # unchanged
-
-        # --- (g) Crash simulation and reconciliation ---
+        # --- (e) Crash simulation and reconciliation ---
         crash_ext_id = f"run-crash-e2e-{uuid4()}"
         run_svc.create(objective="crash reconcile e2e", external_id=crash_ext_id)
         crash_run_id = run_svc.status(external_id=crash_ext_id).id

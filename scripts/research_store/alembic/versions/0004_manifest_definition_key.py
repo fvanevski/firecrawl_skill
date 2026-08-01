@@ -1,8 +1,8 @@
-"""Remove the stale v1 embedding-manifest uniqueness constraint."""
+"""Use the index-definition identity for embedding-manifest uniqueness."""
 
 from alembic import op
 
-revision = "0004_drop_legacy_manifest_key"
+revision = "0004_manifest_definition_key"
 down_revision = "0003_job_manifest_integrity"
 branch_labels = None
 depends_on = None
@@ -30,7 +30,6 @@ def upgrade():
             );
           END LOOP;
         END $$;
-        INSERT INTO schema_migrations(version) VALUES (4) ON CONFLICT DO NOTHING;
         """
     )
 

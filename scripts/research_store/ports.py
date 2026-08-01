@@ -180,7 +180,7 @@ class CandidateRepository(Protocol):
 class ResearchRunRepository(
     SemanticCallRepository, SearchResponseRepository, CandidateRepository, Protocol
 ):
-    def start_run(self, original_request: str, metadata: dict[str, Any]) -> UUID: ...
+    def start_run(self, objective: str, metadata: dict[str, Any]) -> UUID: ...
     def get_run_status(
         self, *, run_id: UUID | None = None, external_id: str | None = None
     ) -> dict[str, Any]: ...
@@ -265,32 +265,6 @@ class ResearchRunRepository(
         self, query_id: UUID, run_id: UUID | None = None
     ) -> dict[str, Any]: ...
     def list_plan_queries(self, plan_id: UUID) -> list[dict[str, Any]]: ...
-    def record_compatibility_export(
-        self,
-        run_id: UUID,
-        export_type: str,
-        export_schema_version: int,
-        source_state_sha256: str,
-        status: str,
-        idempotency_key: str,
-        **metadata: Any,
-    ) -> UUID: ...
-    def record_legacy_adapter_comparison(
-        self,
-        entry_point: str,
-        adapter_mode: str,
-        legacy_decision: dict[str, Any],
-        service_proposal: dict[str, Any],
-        legacy_sha256: str,
-        proposal_sha256: str,
-        divergent: bool,
-        divergence_reasons: list[str],
-        idempotency_key: str,
-        **metadata: Any,
-    ) -> UUID: ...
-    def list_legacy_adapter_comparisons(
-        self, **filters: Any
-    ) -> list[dict[str, Any]]: ...
     def link_run_asset(
         self, external_run_id: str, snapshot_id: UUID, role: str = "acquired"
     ) -> None: ...
@@ -309,7 +283,7 @@ class IndexJobRepository(Protocol):
         self,
         limit: int,
         lease_seconds: int = 300,
-        worker_id: str = "compat",
+        worker_id: str = "worker",
         max_attempts: int = 5,
         fingerprint: str | None = None,
     ) -> list[dict[str, Any]]: ...

@@ -128,7 +128,7 @@ class InvocationEvent:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a dictionary suitable for compatibility export."""
+        """Serialize the authoritative event record."""
         return {
             "event_id": str(self.id),
             "event_type": self.event_type,
@@ -186,6 +186,15 @@ def _sanitize(value: Any, key: str = "") -> Any:
     """
     if key.lower() in {k.lower() for k in SENSITIVE_KEYS}:
         return "[REDACTED]"
+
+    if isinstance(value, UUID):
+        return str(value)
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+
+    if isinstance(value, tuple):
+        return [_sanitize(item) for item in value]
 
     if isinstance(value, dict):
         return {k: _sanitize(v, k) for k, v in value.items()}
@@ -403,8 +412,7 @@ class EventService:
     def get_next_sequence(self, run_id: UUID) -> int:
         """Return the next available sequence number for a run.
 
-        This is used by callers who need to compute the sequence
-        number themselves (e.g. for compatibility exports).
+        This is used by callers that need to reserve or inspect event order.
         """
         with self.uow_factory() as uow:
             return uow.runs.next_event_sequence(run_id)

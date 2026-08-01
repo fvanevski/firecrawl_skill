@@ -76,9 +76,9 @@ def test_uow_assign_duplicate_group_creates_group():
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         # Create a test run
         cur.execute(
-            """INSERT INTO research_runs (id, original_request, query_plan, skill_version,
-            llm_model, status, state, execution_mode, objective)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """INSERT INTO research_runs (id, objective, query_plan, skill_version,
+            llm_model, state, execution_mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING""",
             (
                 str(run_id),
@@ -86,10 +86,8 @@ def test_uow_assign_duplicate_group_creates_group():
                 "{}",
                 "1.0",
                 "test",
-                "running",
                 "created",
                 "agent_led",
-                "test request",
             ),
         )
 
@@ -182,9 +180,9 @@ def test_uow_persist_duplicate_group_upserts():
     # Create a test run so the FK constraint is satisfied
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            """INSERT INTO research_runs (id, original_request, query_plan, skill_version,
-            llm_model, status, state, execution_mode, objective)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """INSERT INTO research_runs (id, objective, query_plan, skill_version,
+            llm_model, state, execution_mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING""",
             (
                 str(run_id),
@@ -192,10 +190,8 @@ def test_uow_persist_duplicate_group_upserts():
                 "{}",
                 "1.0",
                 "test",
-                "running",
                 "created",
                 "agent_led",
-                "test request",
             ),
         )
         conn.commit()
@@ -238,9 +234,9 @@ def test_uow_update_candidate_independence():
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         # Create a test run
         cur.execute(
-            """INSERT INTO research_runs (id, original_request, query_plan, skill_version,
-            llm_model, status, state, execution_mode, objective)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """INSERT INTO research_runs (id, objective, query_plan, skill_version,
+            llm_model, state, execution_mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING""",
             (
                 str(run_id),
@@ -248,10 +244,8 @@ def test_uow_update_candidate_independence():
                 "{}",
                 "1.0",
                 "test",
-                "running",
                 "created",
                 "agent_led",
-                "test request",
             ),
         )
 

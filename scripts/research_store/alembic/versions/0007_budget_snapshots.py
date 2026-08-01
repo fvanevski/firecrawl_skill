@@ -41,8 +41,6 @@ def upgrade():
         ALTER TABLE research_runs ADD CONSTRAINT research_runs_budget_snapshot_fk
           FOREIGN KEY(budget_snapshot_id,id)
           REFERENCES research_budget_snapshots(id,run_id);
-
-        INSERT INTO schema_migrations(version) VALUES (7) ON CONFLICT DO NOTHING;
         """
     )
 

@@ -7,20 +7,18 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from functools import partial
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 from .blob import ContentAddressedBlobStore
-from .catalog_export import EXPORT_SCHEMA_VERSION
 from .config import StoreConfig
 from .container import (
     build_audit_service,
-    build_catalog_export_service,
     build_resource_governor,
     build_run_service,
     build_service,
+    build_workflow_operation_service,
 )
 from .domain import IngestRequest
 from .indexing import IndexWorker, OpenAICompatibleEmbedder
@@ -253,9 +251,9 @@ def parser():
     selection.add_argument("--all", action="store_true")
     selection.add_argument("--document")
     reindex = sub.add_parser("reindex")
-    legacy_selection = reindex.add_mutually_exclusive_group(required=True)
-    legacy_selection.add_argument("--all", action="store_true")
-    legacy_selection.add_argument("--document")
+    selection = reindex.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--all", action="store_true")
+    selection.add_argument("--document")
     activate = sub.add_parser("index-activate")
     activate.add_argument("id")
     rollback = sub.add_parser("index-rollback")
@@ -376,49 +374,9 @@ def parser():
     export_run.add_argument("id")
     export_run.add_argument("--output", required=True)
 
-    # ------------------------------------------------------------------
-    # Catalog v5 compatibility export (issue #35)
-    # ------------------------------------------------------------------
-    catalog_export = sub.add_parser("catalog-export")
-    catalog_sub = catalog_export.add_subparsers(dest="catalog_command", required=True)
-
-    catalog_run = catalog_sub.add_parser("run")
-    catalog_run.add_argument("external_id")
-    catalog_run.add_argument("--target-dir", required=True)
-
-    catalog_invocation = catalog_sub.add_parser("invocation")
-    catalog_invocation.add_argument("invocation_id")
-    catalog_invocation.add_argument("run_id")
-    catalog_invocation.add_argument("--target-dir", required=True)
-
-    catalog_events = catalog_sub.add_parser("events")
-    catalog_events.add_argument("external_id")
-    catalog_events.add_argument("--target-dir", required=True)
-
-    catalog_snapshots = catalog_sub.add_parser("snapshots")
-    catalog_snapshots.add_argument("external_id")
-    catalog_snapshots.add_argument("--target-dir", required=True)
-
-    catalog_claims = catalog_sub.add_parser("claims")
-    catalog_claims.add_argument("external_id")
-    catalog_claims.add_argument("--target-dir", required=True)
-
-    catalog_assessments = catalog_sub.add_parser("assessments")
-    catalog_assessments.add_argument("external_id")
-    catalog_assessments.add_argument("--target-dir", required=True)
-
-    catalog_manifest = catalog_sub.add_parser("manifest")
-    catalog_manifest.add_argument("external_id")
-    catalog_manifest.add_argument("--target-dir", required=True)
-
-    catalog_regenerate = catalog_sub.add_parser("regenerate")
-    catalog_regenerate.add_argument("external_id")
-    catalog_regenerate.add_argument("--target-dir", required=True)
-
     run_start = sub.add_parser("run-start")
     run_start.add_argument("external_id")
     run_start.add_argument("objective")
-    run_start.add_argument("--catalog-pointer")
     run_start.add_argument(
         "--mode",
         choices=("agent_led", "autonomous_local", "deterministic_debug"),
@@ -428,6 +386,19 @@ def parser():
     run_start.add_argument("--actor", default="cli")
     run_status = sub.add_parser("run-status")
     run_status.add_argument("external_id")
+    run_operation_start = sub.add_parser("run-operation-start")
+    run_operation_start.add_argument("external_id")
+    run_operation_start.add_argument("invocation_id")
+    run_operation_start.add_argument("operation", choices=("fsearch", "fscrape"))
+    run_operation_start.add_argument("--input-file", required=True)
+    run_operation_finish = sub.add_parser("run-operation-finish")
+    run_operation_finish.add_argument("external_id")
+    run_operation_finish.add_argument("invocation_id")
+    run_operation_finish.add_argument(
+        "--status", choices=("succeeded", "failed"), required=True
+    )
+    run_operation_finish.add_argument("--output-file")
+    run_operation_finish.add_argument("--error")
     run_mode = sub.add_parser("run-mode-change")
     run_mode.add_argument("external_id")
     run_mode.add_argument(
@@ -455,15 +426,12 @@ def parser():
     run_finish.add_argument(
         "--status", choices=("complete", "failed"), default="complete"
     )
-    run_finish.add_argument("--catalog-pointer")
     run_finish.add_argument("--source-manifest-sha256")
     run_finish.add_argument("--answer-sha256")
-    run_finish.add_argument("--expected-revision", type=int)
     run_finish.add_argument("--idempotency-key")
-    run_finish.add_argument("--actor", default="cli")
     run_reopen = sub.add_parser("run-reopen")
     run_reopen.add_argument("external_id")
-    run_reopen.add_argument("--reason", default="legacy compatibility reopen")
+    run_reopen.add_argument("--reason", default="operator requested reopen")
     run_reopen.add_argument("--expected-revision", type=int)
     run_reopen.add_argument("--idempotency-key")
     run_reopen.add_argument("--actor", default="cli")
@@ -474,7 +442,7 @@ def parser():
     run_cancel.add_argument("--idempotency-key")
     run_cancel.add_argument("--actor", default="cli")
     # ------------------------------------------------------------------
-    # Compatibility commands routed through PostgreSQL (issue #36)
+    # Run annotations, verification, audits, and comparisons
     # ------------------------------------------------------------------
     run_annotate = sub.add_parser("run-annotate")
     run_annotate.add_argument("external_id")
@@ -509,15 +477,6 @@ def parser():
     budget_record.add_argument("external_id")
     budget_record.add_argument("--research-spec", required=True)
     budget_record.add_argument("--budget-snapshot", required=True)
-    comparisons = sub.add_parser("legacy-comparisons")
-    comparisons.add_argument("--research-run-id")
-    comparisons.add_argument("--invocation-id")
-    comparisons.add_argument(
-        "--entry-point", choices=("frun", "fsearch_smart", "fsearch", "fscrape")
-    )
-    comparisons.add_argument("--divergent-only", action="store_true")
-    comparisons.add_argument("--limit", type=int, default=100)
-
     search_plan_rec = sub.add_parser("search-plan-record")
     search_plan_rec.add_argument("external_id")
     search_plan_rec.add_argument("--research-spec-id", required=True)
@@ -623,16 +582,6 @@ def parser():
     cand_replay.add_argument("--min-recurrence", type=int)
     cand_replay.add_argument("--limit", type=int, default=100)
     cand_replay.add_argument("--offset", type=int, default=0)
-
-    exp_search_compat = sub.add_parser("export-search-compat")
-    exp_search_compat.add_argument("external_id")
-    exp_search_compat.add_argument("search_response_id")
-    exp_search_compat.add_argument("--target-dir", required=True)
-    exp_search_compat.add_argument("--idempotency-key")
-
-    regen_search_exp = sub.add_parser("regenerate-search-exports")
-    regen_search_exp.add_argument("external_id")
-    regen_search_exp.add_argument("--target-dir", required=True)
 
     sub.add_parser("corpus-overview")
     search = sub.add_parser("search-assets")
@@ -761,7 +710,7 @@ def parser():
     audit = sub.add_parser("audit")
     audit.add_argument("external_id")
     audit.add_argument("--target-hash", required=True)
-    audit.add_argument("--evaluator-version", default="catalog-v5.0")
+    audit.add_argument("--evaluator-version", default="research-audit-v1")
     audit.add_argument("--prompt-template-version", default="staged-research-audit-v1")
     audit.add_argument("--policy-version", default="audit-policy-v1")
     audit.add_argument("--stages", default="rubric,acquisition,evidence,synthesis")
@@ -822,36 +771,6 @@ def parser():
         choices=("openai", "gemini"),
         default=None,
         help="Allow commercial LLM fallback (not recommended for production).",
-    )
-
-    # ------------------------------------------------------------------
-    # Catalog import commands (issue #37)
-    # ------------------------------------------------------------------
-    catalog_import = sub.add_parser("catalog-import")
-    catalog_import.add_argument(
-        "catalog_root",
-        help="Path to the Catalog v5 root directory to import",
-    )
-    catalog_import.add_argument(
-        "--apply",
-        action="store_true",
-        default=False,
-        help=(
-            "Apply the import (write to PostgreSQL). "
-            "Default is dry-run (no writes). "
-            "Exit codes: 0 = success, 1 = conflicts/omissions detected, "
-            "2 = errors (e.g. all records malformed)."
-        ),
-    )
-    catalog_import.add_argument(
-        "--report",
-        help="Path to write the import report as JSON",
-    )
-
-    catalog_reconcile = sub.add_parser("catalog-reconcile")
-    catalog_reconcile.add_argument(
-        "--report",
-        help="Path to write the reconciliation report as JSON",
     )
 
     return root
@@ -1062,11 +981,12 @@ def _cmd_normalize(config, args) -> int:
     with _db(config) as conn, conn.cursor() as cur:
         if args.all:
             cur.execute(
-                """SELECT d.id, d.title, d.requested_url, d.content_sha256,
+                """SELECT d.id, d.title, snap.requested_url, d.document_sha256,
                    db.id AS block_id, db.ordinal, db.block_type,
                    db.char_start, db.char_end, db.text,
                    db.parser_version
                    FROM documents d
+                   JOIN asset_snapshots snap ON snap.id = d.snapshot_id
                    JOIN document_blocks db ON db.document_id = d.id
                    ORDER BY d.id, db.ordinal"""
             )
@@ -1074,11 +994,12 @@ def _cmd_normalize(config, args) -> int:
         elif args.document:
             doc_uuid = _UUID(args.document)
             cur.execute(
-                """SELECT d.id, d.title, d.requested_url, d.content_sha256,
+                """SELECT d.id, d.title, snap.requested_url, d.document_sha256,
                    db.id AS block_id, db.ordinal, db.block_type,
                    db.char_start, db.char_end, db.text,
                    db.parser_version
                    FROM documents d
+                   JOIN asset_snapshots snap ON snap.id = d.snapshot_id
                    JOIN document_blocks db ON db.document_id = d.id
                    WHERE d.id = %s
                    ORDER BY db.ordinal""",
@@ -1290,23 +1211,23 @@ def _resolve_run_id(config, external_id):
         return None
     with _db(config) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id,status FROM research_runs WHERE external_run_id=%s",
+            "SELECT id,state FROM research_runs WHERE external_run_id=%s",
             (external_id,),
         )
         row = cur.fetchone()
     if not row:
         raise SystemExit(f"research run not found: {external_id}")
-    if row[1] != "running":
+    if row[1] in {"completed", "partial", "failed", "cancelled"}:
         raise SystemExit(f"research run is finished; reopen it first: {external_id}")
     return row[0]
 
 
 def _resolve_any_run_id(config, external_id):
-    """Resolve a run UUID from its external_run_id, accepting any lifecycle status.
+    """Resolve a run UUID from its external_run_id, accepting any lifecycle state.
 
     Used by read-only claim-manifest subcommands (export, list) where the run
     may already be finished.  Use :func:`_resolve_run_id` for write operations
-    that require the run to be in ``running`` status.
+    that require the run to be in a nonterminal state.
     """
     if not external_id:
         return None
@@ -2705,178 +2626,6 @@ def main(argv=None):
         _export_json(Path(args.output), {"run": run[0], "retrieval_events": events})
         return 0
 
-    # ------------------------------------------------------------------
-    # Catalog v5 compatibility export (issue #35)
-    # ------------------------------------------------------------------
-    if args.command == "catalog-export":
-        from .catalog_export import ExportTargetNotFound
-
-        exporter = build_catalog_export_service(config)
-
-        try:
-            if args.catalog_command == "run":
-                run_id = _resolve_any_run_id(config, args.external_id)
-                result = exporter.export_run(
-                    run_id,
-                    args.target_dir,
-                )
-                print(
-                    dumps(
-                        {
-                            "status": result.status,
-                            "export_id": "ce_"
-                            + sha256(
-                                f"{result.source_state_sha256}:{EXPORT_SCHEMA_VERSION}".encode()
-                            ).hexdigest()[:40],
-                            "source_state_sha256": result.source_state_sha256,
-                            "export_schema_version": result.export_schema_version,
-                            "target_dir": str(result.target_dir),
-                            "files_created": [str(f) for f in result.files_created],
-                            "invocation_count": len(result.invocations),
-                            "event_count": len(result.events),
-                            "claim_count": len(result.claims),
-                            "assessment_count": len(result.assessments),
-                            "error": result.error,
-                        }
-                    )
-                )
-                return 0 if result.status == "complete" else 1
-
-            elif args.catalog_command == "invocation":
-                invocation_id = UUID(args.invocation_id)
-                run_id = _resolve_any_run_id(config, args.run_id)
-                result = exporter.export_invocation(
-                    invocation_id,
-                    run_id,
-                    args.target_dir,
-                )
-                print(
-                    dumps(
-                        {
-                            "status": result.status,
-                            "export_id": result.export_id,
-                            "source_state_sha256": result.source_state_sha256,
-                            "export_schema_version": result.export_schema_version,
-                            "target_dir": str(result.target_dir),
-                            "files_created": [str(f) for f in result.files_created],
-                            "error": result.error,
-                        }
-                    )
-                )
-                return 0 if result.status == "complete" else 1
-
-            elif args.catalog_command == "events":
-                run_id = _resolve_any_run_id(config, args.external_id)
-                result = exporter.export_events(run_id, args.target_dir)
-                print(
-                    dumps(
-                        {
-                            "status": result.status,
-                            "export_id": result.export_id,
-                            "source_state_sha256": result.source_state_sha256,
-                            "export_schema_version": result.export_schema_version,
-                            "target_dir": str(result.target_dir),
-                            "files_created": [str(f) for f in result.files_created],
-                            "error": result.error,
-                        }
-                    )
-                )
-                return 0 if result.status == "complete" else 1
-
-            elif args.catalog_command == "snapshots":
-                run_id = _resolve_any_run_id(config, args.external_id)
-                result = exporter.export_snapshots(run_id, args.target_dir)
-                print(
-                    dumps(
-                        {
-                            "status": result.status,
-                            "export_id": result.export_id,
-                            "source_state_sha256": result.source_state_sha256,
-                            "export_schema_version": result.export_schema_version,
-                            "target_dir": str(result.target_dir),
-                            "files_created": [str(f) for f in result.files_created],
-                            "error": result.error,
-                        }
-                    )
-                )
-                return 0 if result.status == "complete" else 1
-
-            elif args.catalog_command == "claims":
-                run_id = _resolve_any_run_id(config, args.external_id)
-                result = exporter.export_claims(run_id, args.target_dir)
-                print(
-                    dumps(
-                        {
-                            "status": result.status,
-                            "export_id": result.export_id,
-                            "source_state_sha256": result.source_state_sha256,
-                            "export_schema_version": result.export_schema_version,
-                            "target_dir": str(result.target_dir),
-                            "files_created": [str(f) for f in result.files_created],
-                            "error": result.error,
-                        }
-                    )
-                )
-                return 0 if result.status == "complete" else 1
-
-            elif args.catalog_command == "assessments":
-                run_id = _resolve_any_run_id(config, args.external_id)
-                result = exporter.export_assessments(run_id, args.target_dir)
-                print(
-                    dumps(
-                        {
-                            "status": result.status,
-                            "export_id": result.export_id,
-                            "source_state_sha256": result.source_state_sha256,
-                            "export_schema_version": result.export_schema_version,
-                            "target_dir": str(result.target_dir),
-                            "files_created": [str(f) for f in result.files_created],
-                            "error": result.error,
-                        }
-                    )
-                )
-                return 0 if result.status == "complete" else 1
-
-            elif args.catalog_command == "manifest":
-                run_id = _resolve_any_run_id(config, args.external_id)
-                result = exporter.export_manifest(run_id, args.target_dir)
-                print(
-                    dumps(
-                        {
-                            "status": result.status,
-                            "export_id": result.export_id,
-                            "source_state_sha256": result.source_state_sha256,
-                            "export_schema_version": result.export_schema_version,
-                            "target_dir": str(result.target_dir),
-                            "files_created": [str(f) for f in result.files_created],
-                            "error": result.error,
-                        }
-                    )
-                )
-                return 0 if result.status == "complete" else 1
-
-            elif args.catalog_command == "regenerate":
-                run_id = _resolve_any_run_id(config, args.external_id)
-                result = exporter.regenerate_run_export(run_id, args.target_dir)
-                print(
-                    dumps(
-                        {
-                            "status": result.status,
-                            "source_state_sha256": result.source_state_sha256,
-                            "export_schema_version": result.export_schema_version,
-                            "target_dir": str(result.target_dir),
-                            "files_created": [str(f) for f in result.files_created],
-                            "error": result.error,
-                        }
-                    )
-                )
-                return 0 if result.status == "complete" else 1
-
-        except ExportTargetNotFound as exc:
-            raise SystemExit(str(exc)) from exc
-        except Exception as exc:
-            raise SystemExit(f"catalog export failed: {exc}") from exc
-
     if args.command == "run-start":
         status = build_run_service(config).create(
             args.objective,
@@ -2884,16 +2633,43 @@ def main(argv=None):
             execution_mode=args.mode,
             idempotency_key=args.idempotency_key,
             actor_type=args.actor,
-            catalog_pointer=args.catalog_pointer,
-            skill_version="research-store-v3",
+            skill_version="research-store-v4",
         )
         print(dumps(status.to_dict()))
+        return 0
+    if args.command == "run-operation-start":
+        try:
+            input_data = json.loads(Path(args.input_file).read_text(encoding="utf-8"))
+            result = build_workflow_operation_service(config).begin_operation(
+                args.external_id,
+                args.invocation_id,
+                args.operation,
+                input_data,
+            )
+        except Exception as exc:
+            raise SystemExit(f"workflow operation start failed: {exc}") from exc
+        print(dumps(result.to_dict()))
+        return 0
+    if args.command == "run-operation-finish":
+        output = None
+        if args.output_file:
+            output = json.loads(Path(args.output_file).read_text(encoding="utf-8"))
+        try:
+            result = build_workflow_operation_service(config).complete_operation(
+                args.external_id,
+                args.invocation_id,
+                succeeded=args.status == "succeeded",
+                output=output,
+                error=args.error,
+            )
+        except Exception as exc:
+            raise SystemExit(f"workflow operation finish failed: {exc}") from exc
+        print(dumps(result.to_dict()))
         return 0
     if args.command in {
         "run-status",
         "run-mode-change",
         "run-transition",
-        "run-finish",
         "run-reopen",
         "run-cancel",
     }:
@@ -2937,31 +2713,17 @@ def main(argv=None):
         print(dumps(result.to_dict()))
         return 0
     if args.command == "run-finish":
-        next_state = (
-            "failed"
-            if args.status == "failed"
-            else "partial"
-            if args.outcome == "partial"
-            else "completed"
-        )
-        idempotency_key = args.idempotency_key or (
-            f"run:finish:{args.status}:{args.outcome}:"
-            f"{args.source_manifest_sha256 or ''}:{args.answer_sha256 or ''}"
-        )
-        result = run_service.transition(
-            status.id,
-            next_state,
-            expected_revision=expected_revision,
-            idempotency_key=idempotency_key,
-            actor_type=args.actor,
-            outcome=args.outcome,
-            error=args.outcome if next_state == "failed" else None,
-            completion={
-                "catalog_pointer": args.catalog_pointer,
-                "source_manifest_sha256": args.source_manifest_sha256,
-                "answer_sha256": args.answer_sha256,
-            },
-        )
+        try:
+            result = build_workflow_operation_service(config).finish_run(
+                args.external_id,
+                outcome=args.outcome,
+                status_name=args.status,
+                source_manifest_sha256=args.source_manifest_sha256,
+                answer_sha256=args.answer_sha256,
+                idempotency_key=args.idempotency_key,
+            )
+        except Exception as exc:
+            raise SystemExit(f"run finish failed: {exc}") from exc
         print(dumps(result.to_dict()))
         return 0
     if args.command == "run-reopen":
@@ -2987,7 +2749,7 @@ def main(argv=None):
         print(dumps(result.to_dict()))
         return 0
     # ------------------------------------------------------------------
-    # Compatibility commands routed through PostgreSQL (issue #36)
+    # Run annotations, verification, audits, and comparisons
     # ------------------------------------------------------------------
     if args.command == "run-annotate":
         run_service = build_run_service(config)
@@ -3112,17 +2874,6 @@ def main(argv=None):
                 f"{spec.research_spec_id}",
             )
         print(dumps({"id": budget_id, "external_run_id": args.external_id}))
-        return 0
-    if args.command == "legacy-comparisons":
-        with _uow_factory(config)() as uow:
-            rows = uow.runs.list_legacy_adapter_comparisons(
-                external_run_id=args.research_run_id,
-                external_invocation_id=args.invocation_id,
-                entry_point=args.entry_point,
-                divergent_only=args.divergent_only,
-                limit=args.limit,
-            )
-        print(dumps({"comparisons": rows, "count": len(rows)}))
         return 0
     if args.command == "search-plan-record":
         run_svc = build_run_service(config)
@@ -3341,59 +3092,6 @@ def main(argv=None):
         )
         print(dumps(replayed))
         return 0
-    if args.command == "export-search-compat":
-        from .container import build_compatibility_export_service
-
-        run_svc = build_run_service(config)
-        status = run_svc.status(external_id=args.external_id)
-        exporter = build_compatibility_export_service(config)
-        res = exporter.export_search(
-            status.id,
-            UUID(args.search_response_id),
-            args.target_dir,
-            idempotency_key=args.idempotency_key,
-        )
-        print(
-            dumps(
-                {
-                    "export_id": str(res.export_id) if res.export_id else None,
-                    "run_id": str(res.run_id),
-                    "search_response_id": str(res.search_response_id),
-                    "target_dir": str(res.target_dir),
-                    "source_state_sha256": res.source_state_sha256,
-                    "status": res.status,
-                    "files_created": [str(f) for f in res.files_created],
-                    "error": res.error,
-                }
-            )
-        )
-        return 0
-    if args.command == "regenerate-search-exports":
-        from .container import build_compatibility_export_service
-
-        run_svc = build_run_service(config)
-        status = run_svc.status(external_id=args.external_id)
-        exporter = build_compatibility_export_service(config)
-        results = exporter.regenerate_search_exports(status.id, args.target_dir)
-        print(
-            dumps(
-                [
-                    {
-                        "export_id": str(res.export_id) if res.export_id else None,
-                        "run_id": str(res.run_id),
-                        "search_response_id": str(res.search_response_id),
-                        "target_dir": str(res.target_dir),
-                        "source_state_sha256": res.source_state_sha256,
-                        "status": res.status,
-                        "files_created": [str(f) for f in res.files_created],
-                        "error": res.error,
-                    }
-                    for res in results
-                ]
-            )
-        )
-        return 0
-
     service = build_service(config)
     if args.command == "corpus-overview":
         result = service.corpus_overview()
@@ -3995,87 +3693,6 @@ def main(argv=None):
             )
         except ReportServiceError as exc:
             raise SystemExit(f"synthesis resume failed: {exc}")
-
-    # ------------------------------------------------------------------
-    # Catalog import commands (issue #37)
-    # ------------------------------------------------------------------
-    elif args.command == "catalog-import":
-        config.require_database()
-        from .container import build_catalog_import_service
-
-        catalog_root = Path(args.catalog_root)
-        if not catalog_root.is_dir():
-            raise SystemExit(f"Catalog root not found: {args.catalog_root}")
-
-        import_svc = build_catalog_import_service(config)
-
-        if args.apply:
-            report_path = Path(args.report) if args.report else None
-            report = import_svc.apply(
-                catalog_root,
-                report_file=report_path,
-            )
-        else:
-            # Dry-run is the default
-            report = import_svc.dry_run(catalog_root)
-
-        report_dict = report.to_dict()
-        if args.report:
-            report_path = Path(args.report)
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=str(report_path.parent), suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w") as f:
-                    json.dump(report_dict, f, indent=2, default=str)
-                os.replace(tmp_path, str(report_path))
-                print(f"Report written to {report_path}")
-            except BaseException:
-                os.unlink(tmp_path)
-                raise
-        else:
-            print(dumps(report_dict))
-
-        # Exit code: 0 = success, 1 = conflicts/omissions, 2 = errors
-        # Check conflicts/omissions (including pending records) before
-        # general errors so that a warning about pending records does not
-        # escalate to exit code 2.
-        if report.records_conflicting > 0 or report.records_omitted > 0:
-            raise SystemExit(1)
-        elif (
-            report.errors
-            or report.records_malformed > 0
-            and report.records_inserted == 0
-        ):
-            raise SystemExit(2)
-        return 0
-
-    elif args.command == "catalog-reconcile":
-        config.require_database()
-        from .container import build_catalog_import_service
-
-        import_svc = build_catalog_import_service(config)
-        report = import_svc.reconcile()
-        report_dict = {
-            "total_imports": report.total_imports,
-            "imports": report.imports,
-            "conflict_summary": report.conflict_summary,
-            "omission_summary": report.omission_summary,
-        }
-        if args.report:
-            report_path = Path(args.report)
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=str(report_path.parent), suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w") as f:
-                    json.dump(report_dict, f, indent=2, default=str)
-                os.replace(tmp_path, str(report_path))
-                print(f"Report written to {report_path}")
-            except BaseException:
-                os.unlink(tmp_path)
-                raise
-        else:
-            print(dumps(report_dict))
-        return 0
 
     elif args.command == "benchmark":
         if args.benchmark_subcommand == "run":

@@ -4,8 +4,8 @@
 
 `scripts/budget_policy.py` implements `budget-policy-v1`, whose checked-in
 configuration is `budget-policy-v1.json`. A validated `ResearchSpec` maps to a
-focused, standard, or intensive resource profile. Objective word count, topic
-length, and the legacy complexity label are not policy inputs.
+focused, standard, or intensive resource profile. Objective word count and topic
+length are not policy inputs.
 
 ## Policy inputs and outputs
 
@@ -40,23 +40,15 @@ identical content. A changed snapshot requires either a new policy version or
 an explicit current run revision. Conflicting idempotency-key reuse, stale run
 revisions, mismatched spec revisions, and cross-run specs fail closed.
 
-For a persisted explicit research run, `fsearch_smart` writes
-`_research_spec.json` and `_budget.json`, then calls `research-db budget-record`
-before acquisition. If authoritative persistence is enabled and that write
-fails, acquisition does not start. Filesystem-only and private runs retain the
-same local artifacts without creating PostgreSQL state.
+For an explicit research run, `fsearch_smart` writes diagnostic
+`_research_spec.json` and `_budget.json` files and records the same immutable
+specification and budget boundary in PostgreSQL before acquisition. If that
+authoritative write fails, acquisition does not start. `--max-adaptive-cycles`
+may tighten the runtime cycle ceiling but cannot exceed the policy cap.
 
-## Compatibility and repair
+## Repair
 
-`--complexity` was accepted as diagnostic metadata for migration but no
-longer selects resource limits and has been fully retired as a CLI flag
-in `fsearch_smart` (P7-08 / #68). Existing numeric flags are stricter user
-caps; they cannot increase policy allowances. This is an intentional
-compatibility change required by FR-004.
-
-Revision 0007 is additive and does not rewrite corpus, snapshot, derivation,
-index, job, lease, or provenance rows. Before production, capture the normal
-PostgreSQL/blob/Qdrant recovery boundary. An interrupted PostgreSQL migration
-rolls back transactionally and may be retried. If the schema claims v7 but its
-objects are absent, restore the pre-v7 PostgreSQL backup and reapply, or add a
-reviewed forward-repair migration; do not hand-create partial state.
+The current schema is a clean PostgreSQL-authoritative baseline. Existing
+pre-baseline databases are intentionally unsupported and must be reset with
+`scripts/reset-firecrawl-research`. Interrupted migrations roll back
+transactionally and may be retried. Do not hand-create partial state.

@@ -1,132 +1,92 @@
 # Workflow State Schema
 
-Alembic revision `0006_workflow_state` adds the Phase 1 PostgreSQL workflow
-foundation. PostgreSQL is authoritative for these records; filesystem Catalog
-and scratch records remain compatibility and diagnostic exports.
+Alembic revision `0006_workflow_state` establishes the PostgreSQL workflow foundation. PostgreSQL is the sole authority for run, invocation, event, semantic, evidence, and audit state. Scratch files are disposable diagnostics and are never read to resolve current state.
 
-## Authority and compatibility
+## Authority and invariants
 
-- `research_runs.state` is the authoritative lifecycle state and
-  `lifecycle_revision` is its monotonic compare-and-swap revision.
-- Existing `status`, `original_request`, and `outcome` columns remain as legacy
-  compatibility projections. Existing rows are retained and backfilled without
-  changing corpus, snapshot, derivation, index, job, or provenance records.
-- Existing rows are marked with `execution_mode=legacy` because their original
-  semantic authority cannot be inferred safely. New repository-created rows
-  default to `agent_led` unless the caller supplies another supported mode.
-- `ExecutionModePolicy` maps each new run to exactly one semantic authority:
-  host-agent input for `agent_led`, the configured local model for
-  `autonomous_local`, or supplied fixtures for `deterministic_debug`.
-- `research_run_transitions` and `research_events` reject `UPDATE` and `DELETE`
-  at the database layer. Corrections are new ledger rows, never rewrites.
-- Idempotency keys are scoped to their owning run or semantic call. Reuse with
-  the same immutable mutation returns the original identity; conflicting reuse
-  is rejected.
+- `research_runs.state` is the authoritative lifecycle state.
+- `research_runs.lifecycle_revision` is a monotonic compare-and-swap revision.
+- `research_run_transitions` and `research_events` are append-only at the database layer.
+- Every persistent wrapper operation has an authoritative `research_invocations` row.
+- Idempotency keys are scoped to their run or invocation and reject conflicting reuse.
+- Qdrant, Valkey, blobs, and scratch output cannot advance or overwrite workflow state.
+- Terminal runs reject new operations until explicitly reopened.
 
 ## Data dictionary
 
-| Table | Purpose | Identity and invariants |
-| --- | --- | --- |
-| `research_runs` | One authoritative current state per research run | `state`; monotonic `lifecycle_revision`; current immutable spec pointer; non-negative coverage revision |
-| `research_run_transitions` | Immutable state-transition ledger | Unique `(run_id, lifecycle_revision)` and `(run_id, idempotency_key)`; prior and next states differ |
-| `research_invocations` | Top-level and child search, scrape, retrieval, synthesis, or audit operations | Same-run parent FK; unique run idempotency key; lifecycle revision captured at creation |
-| `research_events` | Immutable operational event stream | Same-run invocation FK; unique run idempotency key; stable `(created_at, id)` cursor order |
-| `research_specs` | Immutable, versioned structured research specifications | Unique run spec revision and idempotency key; canonical payload SHA-256; validation result |
-| `semantic_calls` | Model/transport provenance for one semantic decision call | Same-run invocation FK; prompt/model/input hash; mechanical call status; unique run idempotency key |
-| `semantic_artifacts` | Validated structured output of one semantic call | Same-run call FK; schema name/version; canonical payload SHA-256; unique call idempotency key |
-| `compatibility_exports` | Regenerable Catalog or scratch-compatible export record | Run and optional same-run invocation/event cursor; source-state hash; database revision or event cursor; export failure separate from workflow state |
+| Table | Purpose | Primary invariants |
+|---|---|---|
+| `research_runs` | Authoritative current state for one research run | State matrix; monotonic revision; immutable execution-mode provenance; current spec/budget/coverage pointers |
+| `research_run_transitions` | Immutable state-transition ledger | Unique run revision and idempotency key; prior and next states differ |
+| `research_invocations` | Search, scrape, retrieval, synthesis, audit, and child operations | Same-run parent; unique external ID; start revision; terminal status and output |
+| `research_events` | Immutable ordered operational event stream | Same-run invocation FK; stable sequence/cursor order; unique run idempotency key |
+| `research_specs` | Immutable versioned ResearchSpec records | Unique spec revision; canonical payload hash; validation result |
+| `semantic_calls` | Model or host-agent decision provenance | Same-run invocation; prompt/model/input identity; explicit mechanical status |
+| `semantic_artifacts` | Validated structured semantic outputs | Same-run call; schema identity; canonical content hash; validation status |
+| `budget_snapshots` | Immutable resource authorization | Run/spec revision binding; policy/config hashes; effective hard caps |
+| `research_run_assets` | Run-to-snapshot provenance | Explicit role; no inferred filesystem membership |
+| `coverage_snapshots` | Versioned coverage state | Monotonic coverage revision; deterministic ledger |
+| `audit_assessments` / `audit_stage_outputs` | Staged audit evidence and results | Immutable identity, explicit model/policy provenance, partial-stage retention |
 
-JSON payload hashes use UTF-8 JSON serialized with sorted keys and compact
-separators. Hashes identify exact persisted structured content; they do not
-replace schema validation.
+## State machine
+
+Permitted transitions are defined in `research_store.run_service.PERMITTED_TRANSITIONS`:
+
+```text
+created → planning
+planning → corpus_review | failed
+corpus_review → acquiring | retrieving | failed
+acquiring → extracting | coverage_review | partial | failed
+extracting → indexing | coverage_review | failed
+indexing → coverage_review | partial | failed
+coverage_review → acquiring | extracting | retrieving | synthesizing | partial | failed
+retrieving → coverage_review | synthesizing | failed
+synthesizing → validating | failed
+validating → completed | partial | failed
+```
+
+`cancelled` is available through the explicit cancellation command from any nonterminal state. `completed`, `partial`, `failed`, and `cancelled` are terminal.
+
+## Wrapper workflow boundary
+
+`fsearch` and `fscrape` call the PostgreSQL-only `WorkflowOperationService` through internal CLI commands:
+
+```text
+run-operation-start
+run-operation-finish
+```
+
+The start boundary:
+
+1. resolves the `fr_<uuid>` run;
+2. rejects terminal or incompatible state;
+3. advances only permitted acquisition stages;
+4. records a running `research_invocations` row and event before network work.
+
+The finish boundary:
+
+1. resolves and validates the invocation/run binding;
+2. records the terminal invocation exactly once;
+3. advances to `indexing` only when `_corpus.json` reports committed assets;
+4. remains retry-safe when the invocation commit succeeded but a later transition was interrupted.
+
+`frun finish` verifies run-scoped indexing and advances the permitted terminal path. It does not jump directly from `created` to `completed`.
 
 ## Repository operations
 
-`PostgresUnitOfWork` exposes bounded, idempotent record methods for every v6
-table. Concurrent retries with one idempotency key converge on one stored
-record, while conflicting reuse is rejected. `append_run_transition` remains a
-low-level migration/repair primitive and deliberately does not mutate
-`research_runs`. Normal callers use `ResearchRunService`, which supplies the
-Section 10 transition policy to `apply_run_transition`.
+`PostgresUnitOfWork` provides bounded record methods. `ResearchRunService` applies lifecycle policy and compare-and-swap revisions. `InvocationService` manages authoritative invocation state. `WorkflowOperationService` coordinates wrapper boundaries without adding a second source of truth.
 
-`apply_run_transition` locks the current run row, checks command replay before
-revision validation, rejects stale revisions and semantic proposals, inserts
-one event and one transition, and updates the authoritative run in the same
-transaction. Concurrent commands against one revision therefore cannot both
-commit. Terminal states reject ordinary transitions. Explicit cancellation is
-allowed from nonterminal states; explicit reopen moves a terminal run to
-`created`, increments the revision, records `reopened_from_revision`, and marks
-prior valid semantic artifacts invalid without deleting their provenance.
-Semantic proposals used for a transition must be valid, belong to the same
-run, and carry a `run_revision` equal to the command's expected revision.
+Execution-mode changes record requester, approver, reason, prior mode, next mode, and policy version, then invalidate affected semantic artifacts without deleting provenance.
 
-`SemanticCallService` creates a `running` call before model transport, then
-finalizes it with prompt/schema/model provenance, sanitized attempt telemetry,
-usage, latency, validation failures, and explicit fallback lineage. Parsed
-outputs are stored as separate `semantic_artifacts` rows, including invalid
-schema outputs; invalid JSON and timeouts remain queryable on the failed call
-without fabricating an artifact. Persistence is fail-closed when a semantic
-context is supplied: a model result is not returned as accepted until its call
-and artifact transaction commits.
+## Repair
 
-Host-agent proposals use `ingest_host_artifact`, which applies the same
-deterministic schema validator and artifact persistence path. Their call rows
-identify `provider=host-agent` but deliberately omit endpoint, model, prompt,
-usage, and transport-attempt claims that did not occur. Credential-bearing
-keys, bearer values, and sensitive URL parameters are redacted before request,
-response, error, or artifact values are hashed and persisted.
+After an uncertain command:
 
-`SemanticCallService.decide` is the mode-aware decision boundary. It requires
-the caller's run revision, rejects stale decisions, and never falls through to
-a different authority. A valid host-agent artifact in `agent_led` is persisted
-without invoking an inner model. Autonomous-local model calls are stage- and
-idempotency-key scoped so a failed stage can be retried independently with a
-new attempt key. Deterministic fixtures use the same validation and provenance
-path, make no transport claims, and record semantic coverage as `unassessed`.
+1. read `research-db run-status <fr_id>`;
+2. read the invocation/event ledger;
+3. retry the same command with the same idempotency key;
+4. use a new key only for a genuinely new command against the reported revision.
 
-Execution-mode changes use `ResearchRunService.change_execution_mode` and the
-`run-mode-change` CLI command. They compare-and-swap the run revision, record
-the requester, approver, reason, prior mode, next mode, and policy version in
-one append-only `run.execution_mode_changed` event, then invalidate prior valid
-semantic artifacts without deleting provenance. Terminal runs must be reopened
-before changing mode. The host-facing service defaults to `agent_led`; the
-standalone `run-start` CLI defaults to `autonomous_local`.
+Never edit append-only ledgers. Reopen is the supported path for intentional work after terminal state.
 
-Legacy wrappers pass completed decisions through the Phase 1 adapter described
-in `legacy-adapters.md`. Shadow mode appends an idempotent
-`legacy_adapter_comparisons` row but does not create a workflow invocation,
-append an event, transition a run, or increment its revision. Authoritative
-mode records search and scrape wrapper invocations through the existing
-repository boundary. Comparison rows are append-only and queryable with
-`research-db legacy-comparisons`; they are operational evidence, not a second
-source of run state.
-
-The CLI exposes `run-status`, `run-mode-change`, `run-transition`, `run-finish`,
-`run-cancel`, and `run-reopen` as machine-readable service adapters. Callers
-proposing semantic or concurrent work should always supply
-`--expected-revision` and a stable `--idempotency-key`. This phase does not
-integrate later planning, acquisition, coverage, report, or audit services.
-
-## Migration and repair
-
-The migration is forward-only and additive. Before production, capture the
-normal PostgreSQL/blob/Qdrant recovery boundary described in
-`research-store-operations.md`. PostgreSQL applies the revision in one
-transaction. If the process is interrupted, PostgreSQL rolls back the partial
-DDL and leaves Alembic at `0005_run_lifecycle`; rerun `research-db migrate`.
-If Alembic reports v6 but required objects are absent, do not hand-create them:
-restore the pre-migration PostgreSQL backup and rerun the forward migration.
-
-No migration is added by the run or semantic-call service. To repair an interrupted command,
-read `run-status` and the event/transition ledgers first. Retry an uncertain
-commit with the same idempotency key; use a new key only for a new command
-against the reported current revision. Reopen is the supported recovery path
-for intentional work after a terminal state. A semantic call left `running`
-after process loss may be finalized as failed by forward repair or retried with
-the same call idempotency key; never delete its attempt or artifact provenance.
-Never edit append-only ledgers.
-
-Rollback is restore-based because later workflow records may depend on the new
-tables. Restoring PostgreSQL does not require changing blobs, Qdrant, or Valkey
-when their corpus boundary was unchanged, but always verify the captured
-boundary before resuming ingestion.
+The clean schema head is `0038_postgres_authority`. Databases created by the removed deprecated migration path must be reset with `scripts/reset-firecrawl-research` before use.

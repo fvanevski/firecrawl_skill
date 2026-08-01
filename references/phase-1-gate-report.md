@@ -15,7 +15,7 @@ found during the gate review.
 | A run can be created in `agent_led` or `autonomous_local` mode. | `test_phase1_gate_run_spec_and_transactional_rejection`, `test_standalone_cli_defaults_to_autonomous_local_mode`, and execution-mode policy tests | Pass |
 | A ResearchSpec can be proposed, validated, persisted, and versioned. | The gate integration test submits a host-agent proposal through `SemanticCallService`, validates it through the domain registry, persists revisions 1 and 2, and verifies the run points to revision 2. Domain fixture, schema, round-trip, reference, and stale-revision tests cover rejection behavior. | Pass |
 | Invalid lifecycle transitions are rejected transactionally. | The gate integration test attempts `created -> completed` and verifies no state, revision, transition, or non-creation event mutation. Transition-matrix, concurrent transition, stale-revision, terminal-state, idempotency, and append-only-ledger tests provide the broader coverage. | Pass |
-| Legacy entry points can invoke the new services through adapters. | Compatibility, shadow, authoritative-routing, divergence-query, failure-propagation, and wrapper configuration tests in `test_research_store.py`, `test_research_store_integration.py`, and `test_workflow.py` | Pass |
+| Shell entry points invoke the authoritative PostgreSQL services. | Wrapper boundary, failure-propagation, invocation, lifecycle, and integration tests | Pass |
 
 ## Test evidence
 
@@ -25,7 +25,6 @@ The deterministic Phase 1 suite was run without network access:
 PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
   scripts/test_classifier.py \
   scripts/test_workflow.py \
-  scripts/test_golden_fixtures.py \
   scripts/test_research_domain.py \
   scripts/test_budget_policy.py \
   scripts/test_research_store.py \
@@ -33,7 +32,7 @@ PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
 ```
 
 Result: 176 passed, 1 strict expected failure. The expected failure is the
-documented legacy Qdrant-outage degradation-reporting defect assigned to later
+documented Qdrant-outage degradation-reporting defect assigned to later
 FR-013 work; it is not normalized as correct behavior and is not a Phase 1 P0
 waiver.
 
@@ -51,7 +50,7 @@ PYTHONDONTWRITEBYTECODE=1 \
 
 Result after adding the gate test: 26 passed. This includes fresh and populated
 Alembic migration paths, interrupted-migration forward repair, constraints,
-concurrent writes, semantic-call failure provenance, adapter behavior,
+concurrent writes, semantic-call failure provenance, PostgreSQL wrapper routing,
 snapshot versioning, exact manifest binding, and lease-token rejection.
 
 Shell entry points also pass `bash -n` for `fsearch`, `fscrape`,
@@ -60,26 +59,25 @@ Shell entry points also pass `bash -n` for `fsearch`, `fscrape`,
 ## Manual architecture-invariant review
 
 The review covered `research-store-architecture.md`,
-`workflow-state-schema.md`, `legacy-adapters.md`, Alembic revisions `0001`
-through `0008`, the PostgreSQL unit of work, run and semantic services, adapter
-boundary, and relevant tests. The following invariants remain intact:
+`workflow-state-schema.md`, the clean PostgreSQL migration chain, the
+PostgreSQL unit of work, run and semantic services, wrapper workflow boundary,
+and relevant tests. The following invariants remain intact:
 
 - PostgreSQL is authoritative for corpus and workflow state. Qdrant is a
-  rebuildable projection, Valkey is best-effort, and scratch/catalog artifacts
-  are compatibility or diagnostic exports.
+  rebuildable projection, Valkey is best-effort, and scratch artifacts are disposable diagnostics.
 - Source bytes are immutable content-addressed snapshots. Parser,
   normalization, and chunker changes create versioned derivations rather than
   false snapshots.
 - Run state uses a locked compare-and-swap lifecycle revision. Successful
   transitions write exactly one transition and event in the same transaction;
-  transition, event, and comparison ledgers remain append-only.
+  transition and event ledgers remain append-only.
 - Embedding jobs remain bound to the exact manifest and index definition.
   Workers must hold the current lease token to renew or finish a job.
-- Semantic artifacts, failed attempts, retrieval choices, batches, and
-  compatibility exports retain explicit provenance. Reopen and mode changes
+- Semantic artifacts, failed attempts, retrieval choices, and batches retain
+  explicit PostgreSQL provenance. Reopen and mode changes
   invalidate stale artifacts without deleting their history.
-- Legacy compatibility remains the default. Shadow proposals do not mutate
-  authoritative workflow state, and adapter failures do not silently fall back.
+- Wrappers write directly through the PostgreSQL workflow boundary and fail
+  closed rather than falling back to a filesystem authority.
 
 No Phase 2 planning, acquisition, coverage, extraction, evidence, synthesis,
 or audit service was introduced by this gate.

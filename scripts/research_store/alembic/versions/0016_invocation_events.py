@@ -285,13 +285,6 @@ def upgrade():
         """
     )
 
-    # ----------------------------------------------------------------
-    # 11. Record migration
-    # ----------------------------------------------------------------
-    op.execute(
-        "INSERT INTO schema_migrations(version) VALUES (16) ON CONFLICT DO NOTHING"
-    )
-
 
 def downgrade():
     raise RuntimeError(

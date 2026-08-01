@@ -48,8 +48,8 @@ def ensure_run_exists(dsn, run_id):
 
     with connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
-            """INSERT INTO research_runs (id, original_request, query_plan, skill_version, llm_model, status, state, execution_mode, objective)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """INSERT INTO research_runs (id, objective, query_plan, skill_version, llm_model, state, execution_mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING""",
             (
                 str(run_id),
@@ -57,10 +57,8 @@ def ensure_run_exists(dsn, run_id):
                 "{}",
                 "1.0",
                 "test",
-                "running",
                 "created",
                 "agent_led",
-                "test request",
             ),
         )
 

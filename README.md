@@ -2,80 +2,109 @@
 
 # Firecrawl Research Skill
 
-This Codex skill combines Firecrawl web acquisition with a persistent, auditable research corpus. PostgreSQL is authoritative, content-addressed blobs retain immutable payloads, Qdrant supplies a rebuildable dense-retrieval projection, and Valkey provides optional worker wakeups. Scratch directories and Catalog v5 remain available for compatibility, debugging, and acquisition audits.
+This Codex skill combines Firecrawl web acquisition with a persistent, auditable research corpus. PostgreSQL is the sole authority for workflow state, invocation state, provenance, claims, evidence, audits, and corpus identities. Content-addressed blobs retain immutable payloads, Qdrant supplies a rebuildable dense-retrieval projection, Valkey provides optional worker wakeups, and scratch directories remain local operational diagnostics.
 
-`README.md` is intentionally retained as the GitHub-facing repository overview. Agent instructions remain canonical in `SKILL.md`; architecture and operator procedures remain canonical in `references/`.
+`README.md` is the GitHub-facing overview. Agent instructions are canonical in `SKILL.md`; architecture and operator procedures are canonical in `references/`.
 
 ## Capabilities
 
 - Query retained research through compact manifests, bounded passages, relationship expansion, and structured evidence packets.
 - Combine PostgreSQL lexical candidates, the active Qdrant dense index, reciprocal-rank fusion, and local reranking.
-- Acquire new evidence with `fsearch_smart`, `fsearch`, and `fscrape` while preserving raw responses and provenance (utilizing parallelized branch scraping, fast-failing 15s fallback timeouts, direct `curl` HTML fallback for anti-bot blocked pages, aggressive markdown navigation stripping, nested metadata date signal extraction, early termination on low candidate yield, and dynamic `site:` filter stripping for zero-result recovery).
-- Pre-classify web targets using expanded semantic profiles (`breaking_news`, `legislative_legal`, `ecommerce`, `forum`, `news_article`, `media_release`, `academic_debate`) to trigger structured schema extraction and bypass raw anti-bot markdown limitations.
-- Persist source, immutable snapshot, versioned derivation, chunk, run, batch, and retrieval-event identities.
+- Acquire new evidence with `fsearch_smart`, `fsearch`, and `fscrape` while preserving raw responses and PostgreSQL provenance.
+- Persist source, immutable snapshot, versioned derivation, chunk, run, invocation, batch, and retrieval-event identities.
+- Drive wrapper operations through the PostgreSQL run-state machine with idempotent compare-and-swap transitions.
 - Rebuild, activate, roll back, or prune fingerprinted Qdrant vector indexes without modifying authoritative corpus data.
-- Reset the container-backed PostgreSQL, Qdrant, Valkey, and blob stores to a guarded, migrated, empty state for clean installation and live-test workflows.
-- Manage multi-step research runs (`fr_<uuid>`) with explicit lifecycle states, automatic semantic audits (`--auto-audit`), pivots, and Catalog v5 provenance.
-- Map validated ResearchSpec semantics to versioned hard resource caps, rule-coded proposal rejections, stricter user limits, and immutable per-run PostgreSQL budget snapshots.
-- Construct complete evidence packets with claim-to-passage bindings, corroboration/contradiction/qualification groups, near-duplicate detection, source-independence assessment, and token-budget enforcement.
-- Validate evidence packets for referential integrity, claim coverage, group completeness, freshness, unresolved requirements, token budget, retrieval provenance, and semantic stage completeness.
-- Diff evidence packet revisions to identify substantive evidence and coverage changes.
-- Run a deterministic, self-contained retrieval and evidence benchmark suite (no network, Qdrant, or LLM required) measuring lexical/dense/fused recall, reranker contribution, candidate limits, degraded modes, and IR metrics.
+- Reset PostgreSQL, Qdrant, Valkey, and blob storage to a guarded, migrated, empty state for clean installation and live testing.
+- Map validated ResearchSpec semantics to versioned hard resource caps, stricter user limits, and immutable per-run budget snapshots.
+- Construct and validate evidence packets with claim-to-passage bindings, corroboration, contradiction, qualification, duplicate detection, source-independence assessment, and token-budget enforcement.
+- Run deterministic retrieval, evidence, workflow, and release benchmark suites.
+
+## Authority model
+
+The persistence stack has one authority boundary:
+
+- **PostgreSQL:** authoritative runs, invocations, events, corpus identities, claims, evidence, audits, budgets, and job state.
+- **Blob store:** immutable payload bytes referenced by PostgreSQL.
+- **Qdrant:** rebuildable vector projection selected through `research_chunks_active`.
+- **Valkey:** optional wakeups and transient coordination; never authoritative.
+- **Scratch files:** disposable local diagnostics and readable acquisition output; never read to determine workflow state.
+
+No filesystem workflow database or adapter mode exists. Wrappers read and write workflow state only through PostgreSQL services.
 
 ## First use
 
 Resolve `<skill-root>` to the directory containing `SKILL.md`.
 
 ```bash
-# Inspect and retrieve retained assets first.
-"<skill-root>/scripts/research-db" corpus-overview
-"<skill-root>/scripts/research-db" search-assets "<query>" --limit 20
-"<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --max-tokens 2000
-"<skill-root>/scripts/research-db" expand-relationships "<candidate-id>" --max-hops 1
-"<skill-root>/scripts/research-db" build-evidence-packet "<candidate-id-1>" "<candidate-id-2>"
+cd "<skill-root>"
+export FIRECRAWL_RESEARCH_PERSIST=on
+source scripts/research-env
 
-# Acquire new evidence only when the retained corpus is insufficient.
-"<skill-root>/scripts/fsearch_smart" "<research objective>"
-"<skill-root>/scripts/fscrape" "https://example.com/article"
+scripts/research-db status
+scripts/research-db ingest-ready
+scripts/research-db doctor
 ```
 
-Wrappers write `firecrawl_scratch/fc_<uuid>/...` artifacts. When persistence is enabled they also commit an invocation batch and produce `_corpus.json` with stable source, snapshot, document, and chunk IDs.
+Inspect retained evidence before acquiring new material:
 
-`fsearch_smart` uses `budget-policy-v1`; objective length and the legacy `--complexity` label do not select resources. Pass `--research-spec spec.json` for a canonical spec or let the wrapper create a narrow deterministic fallback. Numeric overrides can only tighten policy caps. Every smart-search artifact includes `_budget.json` and `_research_spec.json`; explicit persisted runs record the same immutable snapshot in PostgreSQL before acquisition. See `references/budget-policy.md`.
+```bash
+scripts/research-db corpus-overview
+scripts/research-db search-assets "<query>" --limit 20
+scripts/research-db fetch-passages "<candidate-id>" --max-tokens 2000
+scripts/research-db expand-relationships "<candidate-id>" --max-hops 1
+```
+
+Start a run and attach acquisition to it:
+
+```bash
+RUN_ID="$(scripts/frun start '<research objective>')"
+
+scripts/fscrape \
+  'https://example.com/article' \
+  --research-run-id "$RUN_ID"
+
+# Or execute the coverage-led workflow. It creates a run automatically when
+# --research-run-id is omitted.
+scripts/fsearch_smart '<research objective>' --research-run-id "$RUN_ID"
+```
+
+Wrappers write `firecrawl_scratch/fc_<uuid>/...` diagnostics. With persistence enabled, they also create PostgreSQL invocation records, commit an ingestion batch, write `_corpus.json` with stable identities, and advance the run only through permitted lifecycle transitions.
 
 ## Persistence modes
 
 Set `FIRECRAWL_RESEARCH_PERSIST=auto|on|off`:
 
-- `auto` persists when a database resolves and otherwise keeps the filesystem workflow.
-- `on` requires a healthy persistence configuration (`ingest-ready`) before acquisition.
-- `off` disables database and raw-blob persistence.
+- `auto` persists when `DATABASE_URL` resolves; otherwise lower-level wrappers remain scratch-only.
+- `on` requires a healthy authoritative store and fails before acquisition when the store or run binding is invalid.
+- `off` disables PostgreSQL and raw-blob persistence for `fsearch` and `fscrape`.
 
-Enabled persistence is fail-closed. If any successful Firecrawl result cannot be retained, the wrapper preserves diagnostics and the partial corpus manifest but returns nonzero; it does not silently downgrade to scratch-only success.
+`frun` and normal `fsearch_smart` execution require PostgreSQL. `fsearch_smart --dry-run` may generate a deterministic plan without persistence.
 
-Use both switches for private acquisition:
+Private scratch-only acquisition:
 
 ```bash
-FIRECRAWL_CATALOG_DISABLED=1 FIRECRAWL_RESEARCH_PERSIST=off \
-  "<skill-root>/scripts/fscrape" "https://example.com/private"
+FIRECRAWL_RESEARCH_PERSIST=off \
+  scripts/fscrape 'https://example.com/private'
 ```
 
-Explicit `DATABASE_URL`, Qdrant/Valkey endpoints and keys, blob root, and `FIRECRAWL_RESEARCH_PYTHON` take precedence over `scripts/research-env`. See `references/research-store-operations.md` for the full configuration surface.
+Enabled persistence is fail-closed. A successful Firecrawl response is not reported as a successful persistent operation unless PostgreSQL, blob, and ingestion writes commit.
+
+Explicit `DATABASE_URL`, Qdrant/Valkey endpoints and keys, blob root, and `FIRECRAWL_RESEARCH_PYTHON` take precedence over values loaded by `scripts/research-env`.
 
 ## Clean datastore initialization
 
-Use `scripts/reset-firecrawl-research` when no existing research assets need to be retained and the container-backed persistence stack should be initialized from a clean state.
+The PostgreSQL-only schema baseline intentionally requires a clean database. Reset the research stack after installing this version.
 
-The reset is destructive. It removes:
+Use `scripts/reset-firecrawl-research` only when existing research assets do not need to be retained. It removes:
 
-- the PostgreSQL authoritative database volume;
+- the PostgreSQL authoritative data volume;
 - the Valkey persistence volume;
-- Qdrant collections and snapshots;
+- Qdrant data and snapshots;
 - the content-addressed research blob corpus.
 
 It preserves repository files, Compose configuration, source secret files, and published Git tags/releases.
 
-The default paths and Docker volumes are:
+Default locations:
 
 ```text
 PostgreSQL Compose: /opt/containers/research-postgres
@@ -88,197 +117,151 @@ Valkey volume:      research_valkey_data
 Qdrant runtime:     research_qdrant_runtime_secrets
 ```
 
-Run interactively from a clean `main` checkout:
+Interactive reset:
 
 ```bash
 cd "<skill-root>"
 scripts/reset-firecrawl-research
 ```
 
-The script displays the resolved destructive targets and requires typing `RESET`.
-
-Fast-forward `main` before resetting:
+Fast-forward `main` first:
 
 ```bash
 scripts/reset-firecrawl-research --pull
 ```
 
-Run noninteractively only after reviewing the configured paths and volume names:
+Noninteractive execution after reviewing every target:
 
 ```bash
 scripts/reset-firecrawl-research --pull --yes
 ```
 
-Leave the persistent index worker stopped after initialization:
-
-```bash
-scripts/reset-firecrawl-research --no-start-worker
-```
-
-The script fails closed unless:
-
-- the checkout is clean and on `main`;
-- local `main` matches `origin/main`, unless `--pull` is supplied;
-- the research virtual environment exists;
-- the configured Compose projects and `agent-search` network are available;
-- the resolved blob root matches the expected guarded path;
-- all research worker processes have stopped.
-
-A successful reset then:
+A successful reset:
 
 1. stops the persistent worker and all three datastores;
 2. removes PostgreSQL and Valkey state;
-3. clears Qdrant data, Qdrant snapshots, and research blobs;
+3. clears Qdrant data, snapshots, and research blobs;
 4. starts clean PostgreSQL, Qdrant, and Valkey services;
-5. verifies PostgreSQL connectivity and an empty Valkey database;
-6. migrates PostgreSQL to the current Alembic head;
-7. creates and activates an empty Qdrant collection for the current embedding fingerprint;
-8. starts the persistent index worker unless disabled;
-9. runs `research-db doctor`;
-10. verifies that the authoritative corpus tables contain zero rows.
+5. migrates PostgreSQL to `0038_postgres_authority`;
+6. creates and activates an empty current-fingerprint Qdrant collection;
+7. starts the persistent worker unless `--no-start-worker` is supplied;
+8. enforces a healthy `research-db doctor` result;
+9. verifies that authoritative corpus tables contain zero rows.
 
-Expected clean-state diagnostics include:
+Expected clean-state properties include `schema.at_head=true`, zero corpus rows, one empty active index definition, zero Qdrant coverage discrepancies, healthy Valkey, and healthy embedding/reranking endpoints.
+
+## PostgreSQL-backed run workflow
+
+A low-level acquisition wrapper may advance a run through only the stages its operation actually reaches:
 
 ```text
-schema.at_head:                         true
-index_jobs:                             empty
-ingestion_batches.partial_or_failed:    0
-blobs.referenced:                       0
-blobs.unreferenced:                     empty
-qdrant.coverage.missing:                0
-qdrant.coverage.orphaned:               0
-index_reconcile.total_active_chunks:    0
-index_reconcile.definitions:            1
-valkey.ok:                              true
-embedding.ok:                           true
-reranker.ok:                            true
+created → planning → corpus_review → acquiring
+                                      ↓
+                                  extracting → indexing
 ```
 
-The initialized Qdrant alias is `research_chunks_active`; the physical collection name is derived from the current embedding fingerprint. With the default released embedding identity, it is normally `research_chunks_b80052e273d5`.
+After all run-scoped index jobs complete, `frun finish` advances the terminal path:
 
-After reset, confirm the store directly:
+```text
+indexing → coverage_review → synthesizing → validating → completed
+```
+
+Example smoke test:
 
 ```bash
-"<skill-root>/scripts/research-db" status
-"<skill-root>/scripts/research-db" ingest-ready
-"<skill-root>/scripts/research-db" doctor
+RUN_ID="$(scripts/frun start 'Live persistence smoke test')"
+
+scripts/fscrape \
+  'https://example.com' \
+  --research-run-id "$RUN_ID"
+
+# Wait until doctor reports no pending/running/dead run-scoped index work.
+scripts/research-db doctor
+
+scripts/frun finish "$RUN_ID" --outcome satisfied
+scripts/frun status "$RUN_ID"
 ```
 
-A clean reset intentionally removes all prior research state. Do not use this procedure for upgrade, recovery, migration, or index-only repair when retained assets have value. Use the backup, restore, Qdrant rebuild, and Valkey-loss procedures in `references/operations-runbook.md` instead.
+`run-operation-start` and `run-operation-finish` are internal wrapper boundaries. They validate the PostgreSQL run, record the invocation, and perform idempotent lifecycle transitions. Operators normally use `frun`, `fsearch`, `fscrape`, or `fsearch_smart` rather than invoking those commands directly.
 
 ## Corpus and index lifecycle
 
 ```bash
-"<skill-root>/scripts/research-db" migrate
-"<skill-root>/scripts/research-db" status
-"<skill-root>/scripts/research-db" ingest-ready
-"<skill-root>/scripts/research-db" doctor
+scripts/research-db migrate
+scripts/research-db status
+scripts/research-db ingest-ready
+scripts/research-db doctor
 
-# Run persistently through firecrawl-research-indexer.service.
-"<skill-root>/scripts/research-db" worker --batch-size 32 --poll-seconds 5 --lease-seconds 300 --max-attempts 5
+# Persistent worker
+scripts/research-db worker \
+  --batch-size 32 \
+  --poll-seconds 5 \
+  --lease-seconds 300 \
+  --max-attempts 5
 
-# Build a fingerprinted physical collection, verify it, and switch the stable alias.
-"<skill-root>/scripts/research-db" index-list
-"<skill-root>/scripts/research-db" index-build --current-config --all
-"<skill-root>/scripts/research-db" reconcile-qdrant
-"<skill-root>/scripts/research-db" index-activate "<index-id>"
-"<skill-root>/scripts/research-db" index-rollback "<prior-index-id>"
-"<skill-root>/scripts/research-db" index-prune --dry-run
+# Fingerprinted Qdrant lifecycle
+scripts/research-db index-list
+scripts/research-db index-build --current-config --all
+scripts/research-db reconcile-qdrant
+scripts/research-db index-activate '<index-id>'
+scripts/research-db index-rollback '<prior-index-id>'
+scripts/research-db index-prune --dry-run
 
-# Rebuild parser/chunker derivations or reconstruct an interrupted compatibility export.
-"<skill-root>/scripts/research-db" rederive --snapshot "<snapshot-id>"
-"<skill-root>/scripts/research-db" export-invocation "fc_<uuid>" --output _corpus.json
-"<skill-root>/scripts/research-db" import-scratch "<scratch-dir>" --dry-run
+# Rebuild parser/chunker derivations or import diagnostic scratch assets
+scripts/research-db rederive --snapshot '<snapshot-id>'
+scripts/research-db import-scratch '<scratch-dir>' --dry-run
 ```
 
-Physical Qdrant collections use `research_chunks_<12-character-fingerprint>`; retrieval uses the stable `research_chunks_active` alias. Dense retrieval runs only when that alias matches the configured fingerprint, otherwise queries remain lexical and `doctor` reports the mismatch. PostgreSQL jobs carry leases and exact embedding-manifest identities, so crashed workers can be reclaimed without losing or misattributing work. Default `doctor` is read-only.
+Physical Qdrant collections use `research_chunks_<12-character-fingerprint>`. Retrieval uses `research_chunks_active`. Dense retrieval is enabled only when the alias and schema match the configured embedding fingerprint; otherwise retrieval remains lexical and `doctor` reports the mismatch.
 
-## Research-run provenance
+## Run provenance and lifecycle commands
 
 ```bash
-RUN_ID="$("<skill-root>/scripts/frun" start "<research objective>" --profile auto)"
-"<skill-root>/scripts/fsearch_smart" "<topic>" --research-run-id "$RUN_ID"
-"<skill-root>/scripts/research-db" search-assets "<query>" --research-run-id "$RUN_ID" --limit 20
-"<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --research-run-id "$RUN_ID" --max-tokens 2000
-"<skill-root>/scripts/frun" finish "$RUN_ID" --outcome satisfied --source-manifest sources.json --answer-file final.md --auto-audit
+RUN_ID="$(scripts/frun start '<research objective>' --mode autonomous_local)"
 
-# Manage run lifecycle, pivots, and audits
-"<skill-root>/scripts/frun" reopen "$RUN_ID" --reason "acquire official whitepaper"
-"<skill-root>/scripts/frun" annotate "$RUN_ID" --type pivot --reason "switched focus to primary spec"
-"<skill-root>/scripts/frun" audit "$RUN_ID" --llm local
-"<skill-root>/scripts/frun" compare "$RUN_ID" "$OTHER_RUN_ID"
-"<skill-root>/scripts/frun" purge --keep-last 10
+scripts/fsearch '<query>' --research-run-id "$RUN_ID"
+scripts/fscrape '<url>' --research-run-id "$RUN_ID"
+scripts/research-db search-assets '<query>' --research-run-id "$RUN_ID" --limit 20
+scripts/research-db fetch-passages '<candidate-id>' --research-run-id "$RUN_ID" --max-tokens 2000
 
-# Inspect and mutate the authoritative PostgreSQL state machine
-"<skill-root>/scripts/research-db" run-status "$RUN_ID"
-"<skill-root>/scripts/research-db" run-mode-change "$RUN_ID" autonomous_local \
-  --expected-revision 0 --idempotency-key 'mode-change-command-id' \
-  --requested-by 'operator' --approved-by 'reviewer' \
-  --reason 'continue with the configured local model'
-"<skill-root>/scripts/research-db" run-transition "$RUN_ID" planning \
-  --expected-revision 1 --idempotency-key 'planning-command-id'
-"<skill-root>/scripts/research-db" run-cancel "$RUN_ID" \
-  --expected-revision 2 --idempotency-key 'cancel-command-id' \
-  --reason 'operator request'
+scripts/frun annotate "$RUN_ID" \
+  --type pivot \
+  --reason 'switched focus to primary specification'
+
+scripts/frun finish "$RUN_ID" \
+  --outcome satisfied \
+  --source-manifest sources.json \
+  --answer-file final.md \
+  --auto-audit
+
+scripts/frun status "$RUN_ID"
+scripts/frun reopen "$RUN_ID" --reason 'acquire additional corroboration'
+scripts/frun cancel "$RUN_ID" --reason 'operator request'
 ```
 
-The shared `fr_<uuid>` links catalog chronology, acquisition batches, retained assets, retrieval events, selected evidence, the source manifest, and the delivered-answer hash. Explicit research runs enforce lifecycle terminal invariants (`running`, `finished`, `cancelled`).
-PostgreSQL transitions use the PRD Section 10 matrix and compare-and-swap
-revisions. Retry the same command with the same idempotency key; after a stale
-revision, inspect status before issuing a genuinely new command.
-Execution mode is authoritative run state: host integrations default to
-`agent_led`, standalone `run-start` defaults to `autonomous_local`, and any
-change requires a revision match plus recorded requester, approver, and reason.
-
-Legacy entry points default to compatibility mode. Set
-`FIRECRAWL_LEGACY_ADAPTER_MODE=shadow` to retain legacy decisions while
-recording non-mutating service proposals, or `authoritative` to record routed
-wrapper invocations against an existing research run. Inspect the comparison
-ledger with `research-db legacy-comparisons --divergent-only`. See
-`references/legacy-adapters.md` for the deprecation map and repair procedure.
+PostgreSQL transitions use a strict state matrix, monotonic lifecycle revisions, and idempotency keys. Retry an uncertain command with the same key. After a stale-revision rejection, inspect `run-status` before issuing a new command.
 
 ## Evidence packet management
 
 ```bash
-# Build an evidence packet from candidate IDs
-"<skill-root>/scripts/research-db" build-evidence-packet "<id-1>" "<id-2>" --max-tokens 3000
-
-# Validate an evidence packet for completeness and referential integrity
-"<skill-root>/scripts/research-db" packet-validate "$RUN_ID" [--revision N] [--include-warnings]
-
-# Inspect an evidence packet (with optional bounded/citation-ready output)
-"<skill-root>/scripts/research-db" packet-inspect "$RUN_ID" --bounded --max-passages 20 --max-claims 10
-
-# Diff two evidence packet revisions
-"<skill-root>/scripts/research-db" packet-diff "$RUN_ID" --old-revision N --new-revision N
-
-# Export an evidence packet as JSON
-"<skill-root>/scripts/research-db" packet-export "$RUN_ID" --output packet.json [--bounded]
+scripts/research-db build-evidence-packet '<id-1>' '<id-2>' --max-tokens 3000
+scripts/research-db packet-validate "$RUN_ID" --include-warnings
+scripts/research-db packet-inspect "$RUN_ID" --bounded --max-passages 20 --max-claims 10
+scripts/research-db packet-diff "$RUN_ID" --old-revision N --new-revision N
+scripts/research-db packet-export "$RUN_ID" --output packet.json --bounded
 ```
 
-Evidence packets contain claims, evidence passages, claim-to-passage bindings, corroborating/contradicting/qualifying groups, near-duplicate groups, source-independence assessments, and retrieval provenance. The validator checks referential integrity, claim coverage, group completeness, freshness, unresolved requirements, token budget, retrieval provenance, and semantic stage completeness.
-
-## Retrieval and evidence benchmark
-
-```bash
-# Run the deterministic benchmark suite (no network, Qdrant, or LLM required)
-env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
-  "<skill-root>/scripts/test_retrieval_benchmark.py"
-```
-
-The benchmark measures lexical, dense, and fused recall; reranker contribution; candidate limits; and behavior across 7 degraded modes (lexical-only, dense-only, fused-only, reranker unavailable, Qdrant unavailable, lexical unavailable, all unavailable). All 111 tests are deterministic and require no external dependencies.
+Evidence packets contain claims, passages, bindings, relationship groups, duplicate groups, independence assessments, and retrieval provenance. Validation checks referential integrity, claim coverage, group completeness, freshness, unresolved requirements, token budget, retrieval provenance, and semantic-stage completeness.
 
 ## Validation
 
-Run the full deterministic and integration test suite:
+Run the deterministic and integration tests:
 
 ```bash
-env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
-  "<skill-root>/scripts/"
+env PYTHONDONTWRITEBYTECODE=1 \
+  pytest -q -p no:cacheprovider scripts/
 ```
 
-Integration tests automatically connect to the disposable `firecrawl_test` PostgreSQL database (port 55432) and the local vLLM endpoint (port 8002) using defaults injected by `scripts/conftest.py`. The guarded session setup drops the public schema and covers populated migrations, database concurrency, derivations, retry ledgers, leases, runs, budget snapshots, and manifest binding. Use a separate recorded disposable-service campaign for wrapper preflight/fail-closed behavior, Valkey loss, damaged Qdrant rebuild, alias activation, and rollback proofs required before production.
+CI runs Python 3.11 and 3.12 against disposable PostgreSQL and Qdrant services, plus Ruff lint/format checks and strict campaign contract tests.
 
-For the design invariants, read `references/research-store-architecture.md`. For deployment, migration, clean-state reset, backup/restore, worker, indexing, and recovery procedures, read `references/operations-runbook.md`. For Catalog v5 manifests and semantic audits, read `references/catalog-v5.md`.
-The Phase 5 exit decision and its acceptance evidence are recorded in
-GitHub Issue #49 and `gate-report-phase5.md`.
+For design invariants, read `references/research-store-architecture.md`. For deployment, clean reset, backup/restore, worker, indexing, and recovery procedures, read `references/operations-runbook.md`. For schema and command changes, read `references/migration-guide.md` and `references/workflow-state-schema.md`.

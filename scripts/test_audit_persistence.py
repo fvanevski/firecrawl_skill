@@ -156,7 +156,7 @@ def test_audit_assessment_from_mapping():
         "target_type": "run",
         "target_id": "33333333-3333-3333-3333-333333333333",
         "target_hash": "abc123",
-        "evaluator_version": "catalog-v5.0",
+        "evaluator_version": "research-audit-v1",
         "prompt_template_version": "staged-research-audit-v1",
         "policy_version": "audit-policy-v1",
         "stage_set": ["rubric", "acquisition", "evidence", "synthesis"],
@@ -281,7 +281,7 @@ def test_create_assessment_returns_uuid():
         target_type="run",
         target_id=run_id,
         target_hash="abc123",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
@@ -313,7 +313,7 @@ def test_add_stage_output_succeeds_for_known_assessment():
         target_type="run",
         target_id=run_id,
         target_hash="abc123",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
@@ -341,7 +341,7 @@ def test_add_stage_output_rejects_invalid_evidence_references():
         target_type="run",
         target_id=run_id,
         target_hash="abc123",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["evidence"],
@@ -378,7 +378,7 @@ def test_audit_sanitizes_secrets():
         target_type="run",
         target_id=run_id,
         target_hash="abc123",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
@@ -416,7 +416,7 @@ def test_partial_audit_preserves_successful_stages():
         target_type="run",
         target_id=run_id,
         target_hash="abc123",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric", "acquisition"],
@@ -481,7 +481,7 @@ def test_export_assessment_includes_stages():
         target_type="run",
         target_id=run_id,
         target_hash="abc123",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
@@ -516,7 +516,7 @@ def test_assess_run_convenience_method():
         run_id=run_id,
         external_run_id="fr_test123",
         target_hash="abc123",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
@@ -610,8 +610,8 @@ def _ensure_run_exists(config, run_id):
 
     with connect(config.database_url) as conn, conn.cursor() as cur:
         cur.execute(
-            """INSERT INTO research_runs (id, original_request, query_plan, skill_version, llm_model, status, state, execution_mode, objective)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """INSERT INTO research_runs (id, objective, query_plan, skill_version, llm_model, state, execution_mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING""",
             (
                 str(run_id),
@@ -619,10 +619,8 @@ def _ensure_run_exists(config, run_id):
                 "{}",
                 "1.0",
                 "test",
-                "running",
                 "created",
                 "agent_led",
-                "test request",
             ),
         )
 
@@ -651,7 +649,7 @@ def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
         target_type="run",
         target_id=run_id,
         target_hash=target_hash,
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric", "acquisition", "evidence", "synthesis"],
@@ -732,7 +730,7 @@ def test_stale_assessment_retained_on_new_assessment(
         target_type="run",
         target_id=run_id,
         target_hash="hash1",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
@@ -746,7 +744,7 @@ def test_stale_assessment_retained_on_new_assessment(
         target_type="run",
         target_id=run_id,
         target_hash="hash2",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
@@ -793,7 +791,7 @@ def test_audit_status_filter(tmp_path, prepared_database_for_audit):
         target_type="run",
         target_id=run_id,
         target_hash="hash1",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
@@ -805,7 +803,7 @@ def test_audit_status_filter(tmp_path, prepared_database_for_audit):
         target_type="run",
         target_id=run_id,
         target_hash="hash2",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
@@ -841,7 +839,7 @@ def test_audit_stage_filter_by_status(tmp_path, prepared_database_for_audit):
         target_type="run",
         target_id=run_id,
         target_hash="hash1",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric", "acquisition"],
@@ -891,7 +889,7 @@ def test_audit_stage_filter_by_stage_name(tmp_path, prepared_database_for_audit)
         target_type="run",
         target_id=run_id,
         target_hash="hash1",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric", "acquisition"],
@@ -938,7 +936,7 @@ def test_audit_export_round_trip(tmp_path, prepared_database_for_audit):
         target_type="run",
         target_id=run_id,
         target_hash="hash1",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
         policy_version="audit-policy-v1",
         stage_set=["rubric"],
@@ -978,16 +976,14 @@ if TEST_DSN:
 
     @pytest.fixture(scope="session", autouse=True)
     def prepared_database_for_audit():
-        """Exercise both fresh-head and populated-0018 upgrade migrations."""
+        """Create the current PostgreSQL-only schema from an empty database."""
         require_disposable_database_reset(
             TEST_DSN, os.environ.get("RESEARCH_STORE_TEST_ALLOW_RESET", "")
         )
-
-        # Fresh migration proof.
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute("DROP SCHEMA public CASCADE")
             cur.execute("CREATE SCHEMA public")
-        fresh_version = migrate(TEST_DSN)
+        version = migrate(TEST_DSN)
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT EXISTS (
@@ -1000,74 +996,11 @@ if TEST_DSN:
                       AND indexname = 'uk_audit_assessments_completed_identity'
                 )"""
             )
-            fresh_column, fresh_index = cur.fetchone()
-
-        # Populated 0018 upgrade proof. Leave this database at head for the
-        # remainder of the integration suite.
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
-            cur.execute("DROP SCHEMA public CASCADE")
-            cur.execute("CREATE SCHEMA public")
-        assert migrate(TEST_DSN, "0018_audit_assessments") == 18
-        legacy_run_id = uuid4()
-        legacy_assessment_id = uuid4()
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO research_runs (
-                    id, original_request, query_plan, skill_version, llm_model,
-                    status, state, execution_mode, objective
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                (
-                    str(legacy_run_id),
-                    "legacy",
-                    "{}",
-                    "1.0",
-                    "legacy",
-                    "running",
-                    "created",
-                    "agent_led",
-                    "legacy",
-                ),
-            )
-            cur.execute(
-                """INSERT INTO audit_assessments (
-                    id, run_id, target_type, target_id, target_hash,
-                    evaluator_version, prompt_template_version, policy_version,
-                    stage_set, status, provider, model
-                ) VALUES (
-                    %s, %s, 'run', %s, %s, %s, %s, %s, %s, 'completed', %s, %s
-                )""",
-                (
-                    str(legacy_assessment_id),
-                    str(legacy_run_id),
-                    str(legacy_run_id),
-                    "legacy-target-hash",
-                    "catalog-v5.0",
-                    "staged-research-audit-v1",
-                    "audit-policy-v1",
-                    ["rubric", "evidence"],
-                    "local",
-                    "legacy-model-r1",
-                ),
-            )
-        upgraded_version = migrate(TEST_DSN)
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
-            cur.execute(
-                """SELECT target_hash, evaluator_version,
-                          prompt_template_version, policy_version, stage_set,
-                          model_fingerprint, audit_identity_hash
-                   FROM audit_assessments WHERE id = %s""",
-                (str(legacy_assessment_id),),
-            )
-            legacy_row = cur.fetchone()
-
+            column_exists, index_exists = cur.fetchone()
         return {
-            "fresh_version": fresh_version,
-            "fresh_column": fresh_column,
-            "fresh_index": fresh_index,
-            "upgraded_version": upgraded_version,
-            "legacy_run_id": legacy_run_id,
-            "legacy_assessment_id": legacy_assessment_id,
-            "legacy_row": legacy_row,
+            "version": version,
+            "column_exists": column_exists,
+            "index_exists": index_exists,
         }
 
     def test_migration_0018_creates_audit_tables():
@@ -1203,7 +1136,7 @@ if TEST_DSN:
             target_type="run",
             target_id=run_id,
             target_hash="hash1",
-            evaluator_version="catalog-v5.0",
+            evaluator_version="research-audit-v1",
             prompt_template_version="staged-research-audit-v1",
             policy_version="audit-policy-v1",
             stage_set=["rubric"],
@@ -1217,7 +1150,7 @@ if TEST_DSN:
             target_type="run",
             target_id=run_id,
             target_hash="hash2",
-            evaluator_version="catalog-v5.0",
+            evaluator_version="research-audit-v1",
             prompt_template_version="staged-research-audit-v1",
             policy_version="audit-policy-v1",
             stage_set=["rubric"],
@@ -1276,7 +1209,7 @@ if TEST_DSN:
             "target_type": "run",
             "target_id": run_id,
             "target_hash": "same-hash",
-            "evaluator_version": "catalog-v5.0",
+            "evaluator_version": "research-audit-v1",
             "prompt_template_version": "staged-research-audit-v1",
             "policy_version": "audit-policy-v1",
             "stage_set": ["rubric"],
@@ -1290,7 +1223,7 @@ if TEST_DSN:
             **{**common, "model_fingerprint": "fp-test-r2"}
         )
         changed_evaluator = svc.create_assessment(
-            **{**common, "evaluator_version": "catalog-v5.1"}
+            **{**common, "evaluator_version": "research-audit-v2"}
         )
 
         assert duplicate == first
@@ -1308,7 +1241,7 @@ def test_audit_identity_hash_is_canonical_and_stage_order_independent():
 
     common = {
         "target_hash": "target-hash",
-        "evaluator_version": "catalog-v5.0",
+        "evaluator_version": "research-audit-v1",
         "prompt_template_version": "staged-research-audit-v1",
         "policy_version": "audit-policy-v1",
         "model_fingerprint": "model-fingerprint-r1",
@@ -1330,7 +1263,7 @@ def test_model_fingerprint_is_required_or_derived_from_fixed_model():
         model_fingerprint=" provider-issued-r1 ",
         provider=None,
         model=None,
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
     )
     assert explicit == "provider-issued-r1"
@@ -1339,7 +1272,7 @@ def test_model_fingerprint_is_required_or_derived_from_fixed_model():
         model_fingerprint=None,
         provider="local",
         model="qwen-r1",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
     )
     assert len(derived) == 64
@@ -1347,7 +1280,7 @@ def test_model_fingerprint_is_required_or_derived_from_fixed_model():
         model_fingerprint=None,
         provider="local",
         model="qwen-r2",
-        evaluator_version="catalog-v5.0",
+        evaluator_version="research-audit-v1",
         prompt_template_version="staged-research-audit-v1",
     )
 
@@ -1356,7 +1289,7 @@ def test_model_fingerprint_is_required_or_derived_from_fixed_model():
             model_fingerprint=None,
             provider="local",
             model=None,
-            evaluator_version="catalog-v5.0",
+            evaluator_version="research-audit-v1",
             prompt_template_version="staged-research-audit-v1",
         )
 
@@ -1383,7 +1316,7 @@ class TestIdempotentScheduling:
             "target_type": "run",
             "target_id": run_id,
             "target_hash": "target-hash",
-            "evaluator_version": "catalog-v5.0",
+            "evaluator_version": "research-audit-v1",
             "prompt_template_version": "staged-research-audit-v1",
             "policy_version": "audit-policy-v1",
             "stage_set": ["rubric", "evidence", "synthesis"],
@@ -1395,33 +1328,11 @@ class TestIdempotentScheduling:
         values.update(overrides)
         return values
 
-    def test_fresh_and_populated_upgrade_paths(self, prepared_database_for_audit):
-        from research_store.service import compute_audit_identity_hash
-
+    def test_fresh_authoritative_schema(self, prepared_database_for_audit):
         evidence = prepared_database_for_audit
-        assert evidence["fresh_version"] >= 19
-        assert evidence["fresh_column"] is True
-        assert evidence["fresh_index"] is True
-        assert evidence["upgraded_version"] >= 19
-
-        (
-            target_hash,
-            evaluator_version,
-            prompt_template_version,
-            policy_version,
-            stage_set,
-            model_fingerprint,
-            audit_identity_hash,
-        ) = evidence["legacy_row"]
-        assert model_fingerprint
-        assert audit_identity_hash == compute_audit_identity_hash(
-            target_hash=target_hash,
-            evaluator_version=evaluator_version,
-            prompt_template_version=prompt_template_version,
-            policy_version=policy_version,
-            stage_set=list(stage_set),
-            model_fingerprint=model_fingerprint,
-        )
+        assert evidence["version"] >= 19
+        assert evidence["column_exists"] is True
+        assert evidence["index_exists"] is True
 
     def test_completed_reuse_and_configuration_invalidation(
         self, tmp_path, prepared_database_for_audit
@@ -1547,7 +1458,7 @@ class TestIdempotentScheduling:
         assert exported["target_type"] == "run"
         assert exported["target_id"] == str(run_id)
         assert exported["target_hash"] == "target-hash"
-        assert exported["evaluator_version"] == "catalog-v5.0"
+        assert exported["evaluator_version"] == "research-audit-v1"
         assert exported["prompt_template_version"] == "staged-research-audit-v1"
         assert exported["policy_version"] == "audit-policy-v1"
         assert tuple(exported["stage_set"]) == ("rubric", "evidence", "synthesis")

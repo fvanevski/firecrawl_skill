@@ -73,12 +73,12 @@ Run these drills quarterly or after any infrastructure change.
 
 | Step | Action | Command / Procedure | Status |
 |------|--------|---------------------|--------|
-| 1 | Start a test run | `RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start 'Test recovery' --profile auto)"` | [ ] |
-| 2 | Transition to a non-terminal state | `rtk proxy "<skill-root>/scripts/research-db" run-transition "$RUN_ID" acquiring --expected-revision 1 --idempotency-key "drill-transition"` | [ ] |
-| 3 | Simulate interruption | Kill the process that was executing the transition | [ ] |
-| 4 | Check interrupted state | `rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"` | [ ] |
-| 5 | Reopen the run | `rtk proxy "<skill-root>/scripts/research-db" run-reopen "$RUN_ID" --reason "drill recovery"` | [ ] |
-| 6 | Resume work and complete | Finish the run normally | [ ] |
+| 1 | Start a test run | `RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start 'Test recovery')"` | [ ] |
+| 2 | Start an authoritative operation | `INVOCATION_ID="fc_$(python -c 'import uuid; print(uuid.uuid4().hex)')"; printf '{"query":"recovery drill"}\n' > /tmp/recovery-input.json; rtk proxy "<skill-root>/scripts/research-db" run-operation-start "$RUN_ID" "$INVOCATION_ID" fsearch --input-file /tmp/recovery-input.json` | [ ] |
+| 3 | Simulate interruption | Stop the wrapper after the operation-start commit but before operation-finish | [ ] |
+| 4 | Check interrupted state | `rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"` and verify the run remains nonterminal | [ ] |
+| 5 | Close the abandoned invocation | `rtk proxy "<skill-root>/scripts/research-db" run-operation-finish "$RUN_ID" "$INVOCATION_ID" --status failed --error "recovery drill interruption"` | [ ] |
+| 6 | Resume with a new invocation | Run `fsearch` or `fscrape` normally with `--research-run-id "$RUN_ID"`, then finish after indexing completes | [ ] |
 
 ---
 
@@ -91,7 +91,7 @@ Run these drills quarterly or after any infrastructure change.
 | Step | Action | Command / Procedure | Status |
 |------|--------|---------------------|--------|
 | 1 | Stop the local LLM endpoint | Kill the vLLM or LiteLLM process | [ ] |
-| 2 | Start an autonomous_local run | `RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start 'Endpoint failure test' --profile auto)"` then `fsearch_smart "test"` | [ ] |
+| 2 | Start an autonomous_local run | `RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start 'Endpoint failure test')"` then `fsearch_smart "test" --research-run-id "$RUN_ID"` | [ ] |
 | 3 | Verify failure is recorded | Check `doctor` and run-status for recorded failures | [ ] |
 | 4 | Restart the endpoint | Start the vLLM or LiteLLM process | [ ] |
 | 5 | Verify worker retries | `rtk proxy "<skill-root>/scripts/research-db" worker --once --batch-size 32` | [ ] |

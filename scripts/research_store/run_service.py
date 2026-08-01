@@ -69,7 +69,6 @@ class RunStatus:
     execution_mode: str
     objective: str
     declared_outcome: str | None
-    legacy_status: str
     completed_at: datetime | None
     error: str | None
 
@@ -84,7 +83,6 @@ class RunStatus:
             execution_mode=value["execution_mode"],
             objective=value["objective"],
             declared_outcome=value.get("declared_outcome"),
-            legacy_status=value["legacy_status"],
             completed_at=value.get("completed_at"),
             error=value.get("error"),
         )
@@ -99,7 +97,6 @@ class RunStatus:
             "execution_mode": self.execution_mode,
             "objective": self.objective,
             "declared_outcome": self.declared_outcome,
-            "legacy_status": self.legacy_status,
             "completed_at": self.completed_at,
             "error": self.error,
             "terminal": self.state in TERMINAL_STATES,
@@ -195,7 +192,7 @@ class ResearchRunService:
         actor_type: str = "system",
         actor_identifier: str | None = None,
         metadata: dict[str, Any] | None = None,
-        **legacy_metadata: Any,
+        **run_metadata_fields: Any,
     ) -> RunStatus:
         if not objective.strip():
             raise ValueError("research objective is required")
@@ -203,7 +200,7 @@ class ResearchRunService:
             raise ValueError("external run ID is required")
         self.execution_policy.validate_mode(execution_mode)
         command_key = idempotency_key or f"run:create:{external_id}"
-        run_metadata = dict(legacy_metadata)
+        run_metadata = dict(run_metadata_fields)
         run_metadata.update(
             {
                 "external_run_id": external_id,
@@ -1161,7 +1158,7 @@ class ResearchRunService:
             target_type="run",
             target_id=run_id,
             target_hash=target_hash,
-            evaluator_version="catalog-v5.0",
+            evaluator_version="research-audit-v1",
             prompt_template_version="staged-research-audit-v1",
             policy_version="audit-policy-v1",
             stage_set=stage_set,

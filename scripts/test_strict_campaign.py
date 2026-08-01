@@ -2377,16 +2377,13 @@ class TestStrictCampaignCacheRejection:
             # Insert both run rows.
             for run_id in (run_with_events, run_without_events):
                 cur.execute(
-                    """INSERT INTO research_runs (id, original_request, status,
-                       state, execution_mode, objective, external_run_id)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                       VALUES (%s, %s, %s, %s, %s)""",
                     (
                         str(run_id),
                         "Test objective",
-                        "running",
                         "created",
                         "agent_led",
-                        "Test objective",
                         f"test_{gen_uuid().hex[:8]}",
                     ),
                 )

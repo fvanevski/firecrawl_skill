@@ -122,6 +122,7 @@ jobs:
             scripts/test_orchestrator.py \
             scripts/test_classifier.py \
             scripts/test_workflow.py \
+            scripts/test_workflow_service.py \
             scripts/test_budget_policy.py \
             scripts/test_index_runtime.py \
             scripts/test_evidence_packet.py \

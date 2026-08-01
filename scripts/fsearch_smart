@@ -4,12 +4,8 @@
 # Usage:
 #   fsearch_smart "<topic>" [--research-spec spec.json] [--research-run-id fr_<uuid>]
 #
-# DEPRECATION NOTE (P7-08 / #68):
-#   The monolithic legacy loop has been retired. The coverage-led
-#   ResearchOrchestrator is now the default and only execution path.
-#   Legacy flags (--planner, --llm, --complexity, --research-profile,
-#   --commercial-fallback, --fallback-model, --no-llm-triage, --orchestrator)
-#   are accepted for CLI compatibility but have no effect.
+# The coverage-led ResearchOrchestrator is the only execution path.
+# PostgreSQL is the sole workflow authority; scratch files are diagnostics.
 #
 
 from __future__ import annotations
@@ -21,13 +17,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 SCRIPT_DIR = os.environ.get("FIRECRAWL_SKILL_SCRIPT_DIR") or os.path.dirname(
     os.path.realpath(__file__)
 )
 sys.path.insert(0, SCRIPT_DIR)
-import invocation_catalog as catalog
 import research_workflow as workflow
 from budget_policy import DEFAULT_POLICY, conservative_research_spec
 from invocation_id import resolve_invocation_id
@@ -69,166 +63,6 @@ RESET = "\033[0m"
 
 
 # ---------------------------------------------------------------------------
-# Legacy compatibility helpers (retained for tests and orchestrator compat)
-# ---------------------------------------------------------------------------
-
-
-def extract_keywords(topic: str) -> list[str]:
-    """Extract search-relevant keywords from a topic string."""
-    words = []
-    for w in topic.lower().split():
-        clean_w = "".join(c for c in w if c.isalnum() or c in "-_")
-        if clean_w and clean_w not in {
-            "the",
-            "a",
-            "an",
-            "is",
-            "of",
-            "on",
-            "for",
-            "with",
-            "in",
-            "to",
-            "how",
-            "what",
-            "why",
-            "run",
-            "setup",
-            "get",
-            "using",
-            "by",
-            "from",
-            "and",
-            "or",
-            "about",
-            "at",
-            "but",
-            "if",
-            "not",
-            "out",
-            "up",
-            "some",
-            "any",
-            "now",
-            "focus",
-            "vs",
-            "versus",
-            "difference",
-            "between",
-            "compare",
-            "comparing",
-            "pipeline",
-            "related",
-            "ongoing",
-            "current",
-            "package",
-            "command",
-            "aspect",
-            "use",
-            "where",
-            "which",
-            "who",
-            "whom",
-            "this",
-            "that",
-            "these",
-            "those",
-        }:
-            words.append(clean_w)
-    return words
-
-
-def canonical_url(url: str) -> str:
-    """Normalize a URL for deduplication."""
-    try:
-        parts = urlsplit(url)
-        return urlunsplit(
-            (
-                parts.scheme.lower(),
-                parts.netloc.lower(),
-                parts.path.rstrip("/"),
-                parts.query,
-                "",
-            )
-        )
-    except Exception:  # noqa: BLE001
-        return url
-
-
-def select_candidates(
-    master_results: list[dict],
-    total_scrapes: int,
-    per_domain_cap: int | None = None,
-) -> tuple[list[dict], list[dict]]:
-    """Select a diverse global scrape set from already-acquired branch ledgers.
-
-    Retained for test compatibility and orchestrator fallback paths.
-
-    Deprecated: This function is a legacy compatibility helper. New code should
-    not import it; it may be removed in a future release.
-    """
-    by_url: dict[str, dict] = {}
-    for result in master_results:
-        facet = result.get("facet", "focused_detail")
-        for candidate in result["metadata"].get("candidates", []):
-            key = canonical_url(candidate.get("url", ""))
-            if not key:
-                continue
-            record = by_url.setdefault(
-                key, dict(candidate, branches=[], facets=[], occurrences=[])
-            )
-            branch = result["query_index"]
-            rank = candidate.get("rank", 999)
-            if branch not in record["branches"]:
-                record["branches"].append(branch)
-            if facet not in record["facets"]:
-                record["facets"].append(facet)
-            record["occurrences"].append({"branch": branch, "rank": rank})
-
-    candidates = list(by_url.values())
-    for record in candidates:
-        ranks = [item["rank"] for item in record["occurrences"]]
-        record["selection_score"] = round(
-            sum(1.0 / (20 + rank) for rank in ranks)
-            + 0.025 * (len(record["branches"]) - 1)
-            + 0.01 * (len(record["facets"]) - 1),
-            6,
-        )
-        record["best_rank"] = min(ranks)
-
-    candidates.sort(
-        key=lambda item: (
-            -item["selection_score"],
-            item["best_rank"],
-            item.get("url", ""),
-        )
-    )
-    if total_scrapes == 0:
-        return candidates, []
-    domain_cap = per_domain_cap or max(2, (total_scrapes + 5) // 6)
-    domain_counts: dict[str, int] = {}
-    selected: list[dict] = []
-    deferred: list[dict] = []
-    for record in candidates:
-        domain = urlsplit(record.get("url", "")).netloc.lower()
-        if domain and domain_counts.get(domain, 0) >= domain_cap:
-            deferred.append(record)
-            continue
-        selected.append(record)
-        domain_counts[domain] = domain_counts.get(domain, 0) + 1
-        if len(selected) >= total_scrapes:
-            break
-    if len(selected) < total_scrapes:
-        selected_urls = {canonical_url(item.get("url", "")) for item in selected}
-        for record in deferred:
-            if canonical_url(record.get("url", "")) not in selected_urls:
-                selected.append(record)
-            if len(selected) >= total_scrapes:
-                break
-    return candidates, selected
-
-
-# ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
@@ -237,78 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "fsearch_smart — coverage-led research acquisition via "
-            "the ResearchOrchestrator. Legacy flags are accepted for "
-            "CLI compatibility but have no effect."
+            "the PostgreSQL-authoritative ResearchOrchestrator."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("topic", help="The search topic or research objective")
-
-    # Legacy / compatibility flags (no-op, retained for backward compatibility)
-    parser.add_argument(
-        "-c",
-        "--complexity",
-        choices=["simple", "moderate", "complex", "auto"],
-        default="auto",
-        help=argparse.SUPPRESS,  # Hidden; no longer selects resources.
-    )
-    parser.add_argument(
-        "--planner",
-        choices=["auto", "gemini", "heuristic"],
-        default="auto",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--llm",
-        choices=["local", "openai", "gemini"],
-        default="local",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument("--model", help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--commercial-fallback",
-        choices=["openai", "gemini"],
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument("--fallback-model", help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--research-profile",
-        choices=[
-            "auto",
-            "general",
-            "breaking_news",
-            "legislative_legal",
-            "technical_docs",
-        ],
-        default="auto",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument("--no-llm-triage", action="store_true", help=argparse.SUPPRESS)
-
-    # Orchestrator flag (no-op; orchestrator is now the only path)
-    parser.add_argument(
-        "--orchestrator",
-        action="store_true",
-        default=False,
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--orchestrator-max-cycles",
-        type=int,
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-
-    # User-limit flags (no-op; budget policy evaluation is handled by the orchestrator)
-    parser.add_argument("--max-searches", type=int, help=argparse.SUPPRESS)
-    parser.add_argument("--max-scrapes", type=int, help=argparse.SUPPRESS)
-    parser.add_argument("--max-iterations", type=int, help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--max-successful-extractions", type=int, help=argparse.SUPPRESS
-    )
-    parser.add_argument("--results-per-query", type=int, help=argparse.SUPPRESS)
-    parser.add_argument("--total-scrapes", type=int, help=argparse.SUPPRESS)
-    parser.add_argument("--per-domain-cap", type=int, help=argparse.SUPPRESS)
 
     # Active flags
     parser.add_argument(
@@ -330,20 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate and print the search plan without running acquisition",
     )
     parser.add_argument(
-        "--tbs",
-        default="",
-        help=argparse.SUPPRESS,  # Retained for CLI compatibility; handled by fsearch subcommand.
-    )
-    parser.add_argument(
-        "--profile",
-        choices=[
-            "ecommerce",
-            "forum",
-            "news_article",
-            "media_release",
-            "academic_debate",
-        ],
-        help=argparse.SUPPRESS,
+        "--max-adaptive-cycles",
+        type=int,
+        default=None,
+        help=(
+            "Tighten the policy-authorized adaptive-cycle cap for this run; "
+            "values above the policy cap are rejected"
+        ),
     )
     return parser
 
@@ -354,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_spec(
-    args: argparse.Namespace, topic: str, research_env: dict[str, str]
+    args: argparse.Namespace, topic: str
 ) -> tuple[ResearchSpec, str]:
     """Load a ResearchSpec from --research-spec or generate a conservative fallback."""
     if args.research_spec:
@@ -366,8 +126,7 @@ def load_spec(
         return spec, "explicit"
 
     # Generate a conservative spec from the objective.
-    # The profile is determined by the orchestrator via ResearchSpec;
-    # legacy first-match profile detection is retired (P7-08).
+    # The orchestrator derives acquisition strategy from the ResearchSpec.
     spec = conservative_research_spec(topic, "general")
     return spec, "deterministic conservative fallback"
 
@@ -379,10 +138,6 @@ def load_spec(
 
 def generate_search_plan(
     topic: str,
-    llm_provider: str = "local",
-    llm_model: str | None = None,
-    commercial_fallback: str | None = None,
-    fallback_model: str | None = None,
     max_queries: int = 3,
 ) -> tuple[list[dict[str, str]], dict[str, str], dict[str, str]]:
     """Generate a structured search plan via LLM planning.
@@ -390,9 +145,8 @@ def generate_search_plan(
     Returns (search_plan, planner_provenance, brief_provenance).
     Falls back to a single conservative query when LLM planning is unavailable.
 
-    Note: This is a scratch-compatibility helper. Budget enforcement is the
-    orchestrator's responsibility; max_queries here only affects the scratch
-    output and --dry-run plan preview.
+    Budget enforcement is the orchestrator's responsibility; ``max_queries``
+    bounds the diagnostic plan and dry-run preview.
     """
     research_brief = workflow.conservative_brief(topic, "general")
     brief_provenance = {"status": "not_run", "provider": "deterministic"}
@@ -401,10 +155,10 @@ def generate_search_plan(
         topic,
         research_brief,
         max_queries,
-        llm_provider,
-        llm_model,
-        commercial_fallback,
-        fallback_model,
+        "local",
+        None,
+        None,
+        None,
     )
 
     if search_plan:
@@ -431,6 +185,29 @@ def generate_search_plan(
     return search_plan, planner_provenance, brief_provenance
 
 
+
+
+def resolve_max_adaptive_cycles(
+    requested: int | None,
+    budget_snapshot: dict,
+    parser: argparse.ArgumentParser,
+) -> int:
+    """Resolve a caller-supplied cycle ceiling against the policy cap."""
+    policy_cap = int(
+        budget_snapshot.get("effective_caps", {}).get("max_adaptive_cycles", 10)
+    )
+    if requested is None:
+        return policy_cap
+    if requested < 1:
+        parser.error("--max-adaptive-cycles must be at least 1")
+    if requested > policy_cap:
+        parser.error(
+            "--max-adaptive-cycles cannot exceed the policy-authorized cap "
+            f"({policy_cap})"
+        )
+    return requested
+
+
 # ---------------------------------------------------------------------------
 # Research-run creation (when --research-run-id is not provided)
 # ---------------------------------------------------------------------------
@@ -450,7 +227,7 @@ def ensure_research_run(
 
     # Create a research run via frun start.
     result = subprocess.run(
-        [os.path.join(SCRIPT_DIR, "frun"), "start", topic, "--profile", "auto"],
+        [os.path.join(SCRIPT_DIR, "frun"), "start", topic],
         env=research_env,
         check=False,
         capture_output=True,
@@ -465,11 +242,11 @@ def ensure_research_run(
 
 
 # ---------------------------------------------------------------------------
-# Scratch-file compatibility output
+# Scratch diagnostic output
 # ---------------------------------------------------------------------------
 
 
-def write_scratch_compat(
+def write_scratch_diagnostics(
     invocation_id: str,
     base_dir: str,
     spec: ResearchSpec,
@@ -478,7 +255,7 @@ def write_scratch_compat(
     planner_provenance: dict,
     brief_provenance: dict,
 ) -> str:
-    """Write legacy-compatible scratch files for backward compatibility.
+    """Write non-authoritative scratch diagnostics.
 
     Returns the master metadata path.
     """
@@ -496,7 +273,6 @@ def write_scratch_compat(
         "invocation_id": invocation_id,
         "operation": "smart_search",
         "topic": None,  # Filled by caller
-        "complexity": "auto",  # Legacy diagnostic; no longer used.
         "research_spec": serialize_model(spec),
         "budget_snapshot": budget_snapshot,
         "planner": "orchestrator",
@@ -532,16 +308,12 @@ def main(argv=None) -> int:
     if persistence_mode not in {"auto", "on", "off"}:
         parser.error("FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off")
 
-    # Validate adapter mode.
-    adapter_mode = research_env.get("FIRECRAWL_LEGACY_ADAPTER_MODE", "compatibility")
-    if adapter_mode not in {"compatibility", "shadow", "authoritative"}:
-        parser.error(
-            "FIRECRAWL_LEGACY_ADAPTER_MODE must be compatibility, shadow, "
-            "or authoritative"
-        )
-    if adapter_mode != "compatibility":
-        if not research_env.get("DATABASE_URL"):
-            parser.error(f"{adapter_mode} adapter mode requires DATABASE_URL")
+    if not args.dry_run:
+        if persistence_mode == "off" or not research_env.get("DATABASE_URL"):
+            parser.error(
+                "fsearch_smart requires the authoritative PostgreSQL store; "
+                "set FIRECRAWL_RESEARCH_PERSIST=on and DATABASE_URL"
+            )
         ready = subprocess.run(
             [os.path.join(SCRIPT_DIR, "research-db"), "ingest-ready"],
             env=research_env,
@@ -551,7 +323,7 @@ def main(argv=None) -> int:
         )
         if ready.returncode:
             parser.error(
-                "legacy adapter database is not ready: "
+                "authoritative database is not ready: "
                 + (ready.stderr.strip() or ready.stdout.strip())
             )
 
@@ -563,7 +335,7 @@ def main(argv=None) -> int:
 
     # Load spec.
     try:
-        spec, spec_provenance = load_spec(args, topic, research_env)
+        spec, spec_provenance = load_spec(args, topic)
     except SystemExit:
         raise
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -610,10 +382,14 @@ def main(argv=None) -> int:
                 },
             }
 
+        max_adaptive_cycles = resolve_max_adaptive_cycles(
+            args.max_adaptive_cycles, budget_dict, parser
+        )
+
         tmp_base = os.environ.get("TMPDIR") or tempfile.gettempdir()
         invocation_dir = os.path.join(tmp_base, "firecrawl_scratch", invocation_id)
         base_dir = os.path.join(invocation_dir, "smart")
-        master_meta_path = write_scratch_compat(
+        master_meta_path = write_scratch_diagnostics(
             invocation_id,
             base_dir,
             spec,
@@ -642,39 +418,21 @@ def main(argv=None) -> int:
                     "brief_provenance": brief_provenance,
                     "strategy": {
                         "acquisition_mode": "coverage_led_orchestrator",
+                        "max_adaptive_cycles": max_adaptive_cycles,
                     },
                     "queries": search_plan,
                 },
                 indent=2,
             )
         )
-        catalog.begin(
-            invocation_id,
-            "smart_search",
-            {
-                "topic": topic,
-                "planner": "orchestrator",
-                "budget_policy_version": budget_dict.get("policy_version", ""),
-                "budget_snapshot": budget_dict,
-                "orchestrator": True,
-            },
-            None,
-        )
-        catalog.complete(invocation_id, "completed", master_meta_path)
         return 0
 
     # ---------------------------------------------------------------------------
     # Normal execution path (LLM calls and subprocess invocations follow).
     # ---------------------------------------------------------------------------
 
-    # Generate search plan via LLM planning.
-    search_plan, planner_provenance, brief_provenance = generate_search_plan(
-        topic,
-        max_queries=budget_dict.get("effective_caps", {}).get("max_search_branches", 3),
-    )
-
-    # Budget evaluation is handled by the orchestrator internally.
-    # We still evaluate it here for scratch-file compatibility output.
+    # Evaluate the policy before planning so the search-plan size is bounded by
+    # the same caps the orchestrator will persist and enforce.
     try:
         budget_snapshot = DEFAULT_POLICY.evaluate(
             spec,
@@ -684,7 +442,6 @@ def main(argv=None) -> int:
         )
         budget_dict = budget_snapshot.to_dict()
     except Exception:  # noqa: BLE001
-        # Budget evaluation may fail in non-persistence mode; use a minimal dict.
         budget_dict = {
             "policy_version": DEFAULT_POLICY.version,
             "selected_tier": "standard",
@@ -697,33 +454,19 @@ def main(argv=None) -> int:
             },
         }
 
-    # Ensure research run exists.
-    run_id = args.research_run_id or ""
-    try:
-        run_id = ensure_research_run(run_id, topic, research_env)
-    except SystemExit:
-        raise
-    except Exception:  # noqa: BLE001
-        # If frun start fails (no database), fall back to scratch-only mode.
-        print(
-            f"{YELLOW}WARNING: failed to create research run; falling back to scratch-only mode.{RESET}",
-            file=sys.stderr,
-        )
-        run_id = ""
-
-    # Catalog begin.
-    catalog.begin(
-        invocation_id,
-        "smart_search",
-        {
-            "topic": topic,
-            "planner": "orchestrator",
-            "budget_policy_version": budget_dict.get("policy_version", ""),
-            "budget_snapshot": budget_dict,
-            "orchestrator": True,
-        },
-        run_id or None,
+    max_adaptive_cycles = resolve_max_adaptive_cycles(
+        args.max_adaptive_cycles, budget_dict, parser
     )
+
+    search_plan, planner_provenance, brief_provenance = generate_search_plan(
+        topic,
+        max_queries=budget_dict.get("effective_caps", {}).get(
+            "max_search_branches", 3
+        ),
+    )
+
+    # Ensure the PostgreSQL-authoritative research run exists.
+    run_id = ensure_research_run(args.research_run_id or "", topic, research_env)
 
     # Print header.
     print(f"{CYAN}=== Smart Search Orchestrator ==={RESET}")
@@ -746,35 +489,6 @@ def main(argv=None) -> int:
     print()
 
     # --- Orchestrator execution (default and only path) ----------------
-    if not run_id:
-        # No research run available; fall back to scratch-only output.
-        tmp_base = os.environ.get("TMPDIR") or tempfile.gettempdir()
-        invocation_dir = os.path.join(tmp_base, "firecrawl_scratch", invocation_id)
-        base_dir = os.path.join(invocation_dir, "smart")
-        master_meta_path = write_scratch_compat(
-            invocation_id,
-            base_dir,
-            spec,
-            budget_dict,
-            search_plan,
-            planner_provenance,
-            brief_provenance,
-        )
-        with open(master_meta_path) as fh:
-            meta = json.load(fh)
-        meta["topic"] = topic
-        meta["research_brief"] = brief_provenance.get("brief", {})
-        with open(master_meta_path, "w") as fh:
-            json.dump(meta, fh, indent=2)
-
-        print(
-            f"{YELLOW}WARNING: orchestrator unavailable (no research run); scratch-only output.{RESET}"
-        )
-        print(f"✔ Scratch-compatible metadata generated at: {GREEN}{base_dir}{RESET}")
-        print(f"✔ Unified JSON meta generated at: {GREEN}{master_meta_path}{RESET}")
-        catalog.complete(invocation_id, "completed", master_meta_path)
-        return 0
-
     try:
         from research_store.config import StoreConfig
         from research_store.orchestrator import (
@@ -787,14 +501,7 @@ def main(argv=None) -> int:
             budget_policy_version=budget_dict.get(
                 "policy_version", DEFAULT_POLICY.version
             ),
-            max_adaptive_cycles=(
-                args.orchestrator_max_cycles
-                if args.orchestrator_max_cycles is not None
-                else budget_dict.get("effective_caps", {}).get(
-                    "max_adaptive_cycles", 10
-                )
-            ),
-            legacy_adapter_mode=adapter_mode,
+            max_adaptive_cycles=max_adaptive_cycles,
         )
         orchestrator = ResearchOrchestrator.build(
             StoreConfig.from_env(),
@@ -818,15 +525,12 @@ def main(argv=None) -> int:
         print(f"Successful URLs: {result.successful_urls}")
         if result.error:
             print(f"{RED}Error: {result.error}{RESET}")
-            catalog.complete(invocation_id, "failed", error=result.error)
             return 1
 
-        catalog.complete(invocation_id, result.outcome)
         return 0
 
     except Exception as exc:
         print(f"{RED}Orchestrator failed: {exc}{RESET}")
-        catalog.complete(invocation_id, "failed", error=str(exc))
         raise
 
 

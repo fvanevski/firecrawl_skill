@@ -21,7 +21,6 @@ def upgrade():
           FOREIGN KEY(manifest_id,index_definition_id)
           REFERENCES embedding_manifests(id,index_definition_id)
           ON DELETE CASCADE;
-        INSERT INTO schema_migrations(version) VALUES (3) ON CONFLICT DO NOTHING;
         """
     )
 
