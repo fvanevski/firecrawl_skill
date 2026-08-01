@@ -177,7 +177,7 @@ wait_for_workflows_to_stop() {
   for attempt in {1..15}; do
     processes="$(
       pgrep -af \
-        '(^|/)(research-db|python[^ ]*) .*worker|research_store.*worker' ||
+        '(^|[[:space:]])([^[:space:]]*/)?research-db[[:space:]]+worker([[:space:]]|$)|(^|[[:space:]])[^[:space:]]*python[^[:space:]]*[[:space:]]+-m[[:space:]]+research_store\.cli[[:space:]]+worker([[:space:]]|$)' ||
         true
     )"
     [[ -z "$processes" ]] && return
@@ -366,9 +366,10 @@ status_json="$("$SKILL_ROOT/scripts/research-db" status)"
 printf '%s\n' "$status_json" | jq .
 
 jq -e '
-  .at_head == true
-  and (.current | type == "string")
-  and .current == .head
+  (.schema // .) as $schema
+  | ($schema.at_head == true)
+    and (($schema.current | type) == "string")
+    and ($schema.current == $schema.head)
 ' <<<"$status_json" >/dev/null ||
   die "PostgreSQL schema is not at Alembic head"
 
@@ -392,10 +393,12 @@ if [[ "$scheduled" =~ ^[0-9]+$ ]] && (( scheduled > 0 )); then
   "$SKILL_ROOT/scripts/research-db" worker --once --batch-size 64
 fi
 
-"$SKILL_ROOT/scripts/research-db" reconcile-qdrant |
-  jq -e '.ok == true' >/dev/null
+# Activation creates or switches the stable Qdrant alias. Reconciliation
+# requires that alias to exist, so activation must run first.
 "$SKILL_ROOT/scripts/research-db" index-activate "$index_id" |
   jq .
+"$SKILL_ROOT/scripts/research-db" index-reconcile |
+  jq -e '.ok == true' >/dev/null
 "$SKILL_ROOT/scripts/research-db" index-list |
   jq .
 
@@ -479,7 +482,7 @@ Repository:
   main commit: $(git rev-parse HEAD)
 
 PostgreSQL:
-  schema head: $(jq -r '.head' <<<"$status_json")
+  schema head: $(jq -r '.schema.head // .head' <<<"$status_json")
   corpus rows: 0
 
 Qdrant:
