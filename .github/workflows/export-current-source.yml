@@ -29,30 +29,9 @@ jobs:
 
           path = Path('scripts/research_store/container.py')
           text = path.read_text()
-          old = '''def build_audit_service(config: StoreConfig | None = None):
-              """Build an AuditService wired to the PostgreSQL database."""
-              # config may be a uow_factory partial from run_service; ignore it and
-              # always read a fresh StoreConfig so monkeypatch-ed env vars are picked
-              # up by tests.
-              config = StoreConfig.from_env()
-              config.require_database()
-              from .service import AuditService
-
-              return AuditService(
-                  partial(
-                      PostgresUnitOfWork,
-                      config.database_url,
-                      config.physical_collection,
-                      config.embedding_model,
-                      config.embedding_revision,
-                      config.embedding_dimension,
-                      config.parser_version,
-                      config.normalization_version,
-                      config.chunker_version,
-                  )
-              )
-          '''
-          new = '''def build_audit_service(config: StoreConfig | Any | None = None):
+          start = text.index('def build_audit_service(')
+          end = text.index('\ndef build_evidence_service(', start)
+          replacement = '''def build_audit_service(config: StoreConfig | Any | None = None):
               """Build an AuditService from a store config or existing UoW factory."""
               from .service import AuditService
 
@@ -75,9 +54,7 @@ jobs:
                   )
               )
           '''
-          if old not in text:
-              raise SystemExit('audit builder block not found')
-          path.write_text(text.replace(old, new))
+          path.write_text(text[:start] + replacement + text[end:])
           PY
           python -m pip install ruff==0.16.1
           ruff check scripts/research_store/container.py
