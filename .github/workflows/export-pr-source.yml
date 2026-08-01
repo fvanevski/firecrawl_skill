@@ -17,10 +17,10 @@ jobs:
       - name: Package source tree
         run: |
           set -euo pipefail
-          tar --exclude=.git -czf firecrawl-skill-source.tgz .
+          tar --exclude=.git -C "$GITHUB_WORKSPACE" -czf "$RUNNER_TEMP/firecrawl-skill-source.tgz" .
       - uses: actions/upload-artifact@v4
         with:
           name: firecrawl-skill-source-${{ github.event.pull_request.head.sha }}
-          path: firecrawl-skill-source.tgz
+          path: ${{ runner.temp }}/firecrawl-skill-source.tgz
           if-no-files-found: error
           retention-days: 1
