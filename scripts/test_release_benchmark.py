@@ -166,7 +166,7 @@ class TestMetricEngine:
         except RuntimeError as exc:
             assert psycopg is None
             assert "psycopg is required" in str(exc)
-        except Exception as exc:  # psycopg is optional in local unit environments
+        except psycopg.OperationalError as exc:
             assert psycopg is not None
             assert isinstance(exc, psycopg.OperationalError)
         finally:

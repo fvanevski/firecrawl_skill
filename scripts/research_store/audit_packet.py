@@ -14,49 +14,48 @@ def compute_audit_packet_hash_from_db(run_id: UUID, uow_factory: Callable) -> st
     The projection is read directly from PostgreSQL; no filesystem state
     participates in audit identity.
     """
-    with uow_factory() as uow:
-        with uow.connection.cursor() as cur:
-            cur.execute(
-                "SELECT row_to_json(r) FROM research_runs r WHERE r.id=%s",
-                (run_id,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                raise KeyError(f"research run {run_id} not found")
-            run = row[0]
+    with uow_factory() as uow, uow.connection.cursor() as cur:
+        cur.execute(
+            "SELECT row_to_json(r) FROM research_runs r WHERE r.id=%s",
+            (run_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise KeyError(f"research run {run_id} not found")
+        run = row[0]
 
-            def rows(query: str) -> list[dict]:
-                cur.execute(query, (run_id,))
-                return [item[0] for item in cur.fetchall()]
+        def rows(query: str) -> list[dict]:
+            cur.execute(query, (run_id,))
+            return [item[0] for item in cur.fetchall()]
 
-            invocations = rows(
-                """SELECT row_to_json(i) FROM research_invocations i
+        invocations = rows(
+            """SELECT row_to_json(i) FROM research_invocations i
                    WHERE i.run_id=%s ORDER BY i.created_at,i.id"""
-            )
-            events = rows(
-                """SELECT row_to_json(e) FROM research_events e
+        )
+        events = rows(
+            """SELECT row_to_json(e) FROM research_events e
                    WHERE e.run_id=%s ORDER BY e.sequence_number,e.id"""
-            )
-            claims = rows(
-                """SELECT row_to_json(c) FROM research_claims c
+        )
+        claims = rows(
+            """SELECT row_to_json(c) FROM research_claims c
                    WHERE c.run_id=%s ORDER BY c.created_at,c.id"""
-            )
-            evidence = rows(
-                """SELECT row_to_json(l) FROM claim_evidence_links l
+        )
+        evidence = rows(
+            """SELECT row_to_json(l) FROM claim_evidence_links l
                    WHERE l.run_id=%s ORDER BY l.created_at,l.id"""
-            )
-            assets = rows(
-                """SELECT row_to_json(a) FROM research_run_assets a
+        )
+        assets = rows(
+            """SELECT row_to_json(a) FROM research_run_assets a
                    WHERE a.run_id=%s ORDER BY a.snapshot_id,a.role"""
-            )
-            coverage = rows(
-                """SELECT row_to_json(c) FROM coverage_snapshots c
+        )
+        coverage = rows(
+            """SELECT row_to_json(c) FROM coverage_snapshots c
                    WHERE c.run_id=%s ORDER BY c.coverage_revision,c.id"""
-            )
-            assessments = rows(
-                """SELECT row_to_json(a) FROM audit_assessments a
+        )
+        assessments = rows(
+            """SELECT row_to_json(a) FROM audit_assessments a
                    WHERE a.run_id=%s ORDER BY a.created_at,a.id"""
-            )
+        )
 
     packet = {
         "schema_version": "audit-packet-v2",

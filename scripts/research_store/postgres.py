@@ -3287,7 +3287,9 @@ class PostgresUnitOfWork:
                 if run is None:
                     raise KeyError(research_run_external_id)
                 if run[1] in {"completed", "partial", "failed", "cancelled"}:
-                    raise ValueError("ingestion batches require a nonterminal research run")
+                    raise ValueError(
+                        "ingestion batches require a nonterminal research run"
+                    )
                 research_run_id = run[0]
             cur.execute(
                 """SELECT b.id,b.operation,r.external_run_id,b.status

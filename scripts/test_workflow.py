@@ -3,7 +3,6 @@ import json
 import os
 import subprocess
 import textwrap
-from concurrent.futures import ThreadPoolExecutor
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -166,8 +165,6 @@ def semantic_fixture(execution_mode="autonomous_local"):
 
 
 @pytest.fixture
-
-
 def fake_cli(tmp_path):
     bin_dir = tmp_path / "fake bin"
     bin_dir.mkdir()

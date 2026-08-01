@@ -26,12 +26,6 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 import pytest
-from research_store.invocation_service import (
-    InvocationAlreadyRunning,
-    InvocationError,
-    InvocationService,
-    InvocationRecord,
-)
 from research_store.invocation_events import (
     DuplicateEventKey,
     EventAppendResult,
@@ -40,6 +34,12 @@ from research_store.invocation_events import (
     InvocationEvent,
     _sanitize,
     _validate_event_type,
+)
+from research_store.invocation_service import (
+    InvocationAlreadyRunning,
+    InvocationError,
+    InvocationRecord,
+    InvocationService,
 )
 from research_store.postgres import PostgresUnitOfWork
 

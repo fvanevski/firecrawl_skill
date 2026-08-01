@@ -7,7 +7,6 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from functools import partial
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -18,8 +17,8 @@ from .container import (
     build_audit_service,
     build_resource_governor,
     build_run_service,
-    build_workflow_operation_service,
     build_service,
+    build_workflow_operation_service,
 )
 from .domain import IngestRequest
 from .indexing import IndexWorker, OpenAICompatibleEmbedder

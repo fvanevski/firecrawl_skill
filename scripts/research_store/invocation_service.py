@@ -185,7 +185,13 @@ class InvocationService:
             )
             existing = cur.fetchone()
             if existing:
-                invocation_id, existing_run_id, existing_operation, status, existing_input = existing
+                (
+                    invocation_id,
+                    existing_run_id,
+                    existing_operation,
+                    status,
+                    existing_input,
+                ) = existing
                 if (
                     existing_run_id == run_id
                     and existing_operation == operation

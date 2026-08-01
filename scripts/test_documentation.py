@@ -80,10 +80,39 @@ OPERATIONS_RUNBOOK_COMMANDS = [
     # Run lifecycle and wrapper boundary
     ("run-start", ["test-ext-id", "Test objective"]),
     ("run-status", ["test-run-id"]),
-    ("run-operation-start", ["test-run-id", "fc_test-id", "fscrape", "--input-file", "/tmp/input.json"]),
+    (
+        "run-operation-start",
+        ["test-run-id", "fc_test-id", "fscrape", "--input-file", "/tmp/input.json"],
+    ),
     ("run-operation-finish", ["test-run-id", "fc_test-id", "--status", "succeeded"]),
-    ("run-mode-change", ["test-run-id", "agent_led", "--expected-revision", "1", "--idempotency-key", "test-key", "--requested-by", "operator", "--approved-by", "operator", "--reason", "test"]),
-    ("run-transition", ["test-run-id", "planning", "--expected-revision", "1", "--idempotency-key", "test-key"]),
+    (
+        "run-mode-change",
+        [
+            "test-run-id",
+            "agent_led",
+            "--expected-revision",
+            "1",
+            "--idempotency-key",
+            "test-key",
+            "--requested-by",
+            "operator",
+            "--approved-by",
+            "operator",
+            "--reason",
+            "test",
+        ],
+    ),
+    (
+        "run-transition",
+        [
+            "test-run-id",
+            "planning",
+            "--expected-revision",
+            "1",
+            "--idempotency-key",
+            "test-key",
+        ],
+    ),
     ("run-finish", ["test-run-id", "--outcome", "satisfied"]),
     ("run-reopen", ["test-run-id"]),
     ("run-cancel", ["test-run-id"]),
@@ -92,7 +121,16 @@ OPERATIONS_RUNBOOK_COMMANDS = [
     ("run-audit", ["test-run-id"]),
     ("run-compare", ["test-run-id-1", "test-run-id-2"]),
     # Budget, resources, benchmark, and derivations
-    ("budget-record", ["test-run-id", "--research-spec", "/tmp/spec.json", "--budget-snapshot", "/tmp/budget.json"]),
+    (
+        "budget-record",
+        [
+            "test-run-id",
+            "--research-spec",
+            "/tmp/spec.json",
+            "--budget-snapshot",
+            "/tmp/budget.json",
+        ],
+    ),
     ("endpoint-health", []),
     ("resource-status", []),
     ("benchmark", ["run", "--dataset", "/tmp/dataset.json"]),
@@ -336,7 +374,6 @@ class TestDocumentationFiles:
             assert migration in content, (
                 f"Migration {migration} not documented in migration guide"
             )
-
 
     def test_removed_filesystem_authority_is_not_documented(self) -> None:
         """Operational documentation must not advertise removed runtime paths."""

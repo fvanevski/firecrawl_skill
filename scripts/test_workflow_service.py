@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-
 from research_store.invocation_service import InvocationRecord
 from research_store.run_service import PERMITTED_TRANSITIONS, RunStatus
 from research_store.workflow_service import (
@@ -124,7 +123,9 @@ class FakeInvocationService:
 
     def complete(self, run_id, invocation_id, status, *, output, error, **_metadata):
         self.complete_calls += 1
-        current = next(item for item in self.records.values() if item.id == invocation_id)
+        current = next(
+            item for item in self.records.values() if item.id == invocation_id
+        )
         completed = InvocationRecord(
             **{
                 **current.__dict__,
@@ -143,7 +144,9 @@ class WorkflowServiceHarness(WorkflowOperationService):
         self.fake_run_service = FakeRunService(state)
         self.fake_invocation_service = FakeInvocationService(self.fake_run_service)
         super().__init__(self.fake_run_service, self.fake_invocation_service)
-        self.progress = progress or RunIndexProgress(assets=1, chunks=1, pending=0, running=0, failed=0, dead=0, complete=1)
+        self.progress = progress or RunIndexProgress(
+            assets=1, chunks=1, pending=0, running=0, failed=0, dead=0, complete=1
+        )
 
     def index_progress(self, run_id):
         assert run_id == self.fake_run_service.run_id
@@ -226,7 +229,10 @@ def test_new_acquisition_after_indexing_requires_complete_index_then_resumes():
 
 def test_new_acquisition_rejects_incomplete_indexing():
     service = WorkflowServiceHarness(
-        state="indexing", progress=RunIndexProgress(assets=1, chunks=2, pending=1, running=0, failed=0, dead=0, complete=1)
+        state="indexing",
+        progress=RunIndexProgress(
+            assets=1, chunks=2, pending=1, running=0, failed=0, dead=0, complete=1
+        ),
     )
     with pytest.raises(WorkflowBoundaryError, match="indexing is incomplete"):
         service.begin_operation(
@@ -239,7 +245,10 @@ def test_new_acquisition_rejects_incomplete_indexing():
 
 def test_finish_requires_persisted_indexed_assets():
     service = WorkflowServiceHarness(
-        state="indexing", progress=RunIndexProgress(assets=1, chunks=2, pending=1, running=0, failed=0, dead=0, complete=1)
+        state="indexing",
+        progress=RunIndexProgress(
+            assets=1, chunks=2, pending=1, running=0, failed=0, dead=0, complete=1
+        ),
     )
     with pytest.raises(WorkflowBoundaryError, match="indexing is not complete"):
         service.finish_run(service.fake_run_service.external_id, outcome="satisfied")
@@ -254,6 +263,7 @@ def test_finish_rejects_missing_index_job():
     )
     with pytest.raises(WorkflowBoundaryError, match="indexing is not complete"):
         service.finish_run(service.fake_run_service.external_id, outcome="satisfied")
+
 
 def test_finish_advances_valid_terminal_path():
     service = WorkflowServiceHarness(state="indexing")

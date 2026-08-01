@@ -9,11 +9,11 @@ Filesystem records are not read or written by this service.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 from .invocation_service import InvocationError, InvocationRecord, InvocationService
-from .run_service import ResearchRunService, RunStatus, TERMINAL_STATES
+from .run_service import TERMINAL_STATES, ResearchRunService, RunStatus
 
 
 class WorkflowBoundaryError(RuntimeError):
@@ -32,7 +32,9 @@ class RunIndexProgress:
 
     @property
     def missing(self) -> int:
-        accounted = self.pending + self.running + self.failed + self.dead + self.complete
+        accounted = (
+            self.pending + self.running + self.failed + self.dead + self.complete
+        )
         return max(0, self.chunks - accounted)
 
     @property
@@ -55,7 +57,7 @@ class RunIndexProgress:
 class WorkflowOperationService:
     """Coordinate wrapper invocations with the PostgreSQL run state machine."""
 
-    _BEGIN_PATHS = {
+    _BEGIN_PATHS: ClassVar[dict[str, dict[str, tuple[str, ...]]]] = {
         "fsearch": {
             "created": ("planning", "corpus_review", "acquiring"),
             "planning": ("corpus_review", "acquiring"),
@@ -193,7 +195,9 @@ class WorkflowOperationService:
     @staticmethod
     def _persisted_count(output: Any) -> int:
         if isinstance(output, list):
-            return sum(bool(item.get("persisted")) for item in output if isinstance(item, dict))
+            return sum(
+                bool(item.get("persisted")) for item in output if isinstance(item, dict)
+            )
         if isinstance(output, dict):
             if isinstance(output.get("records"), list):
                 return WorkflowOperationService._persisted_count(output["records"])
@@ -278,17 +282,16 @@ class WorkflowOperationService:
         return completed
 
     def index_progress(self, run_id: UUID) -> RunIndexProgress:
-        with self.uow_factory() as uow:
-            with uow.connection.cursor() as cur:
-                cur.execute(
-                    """SELECT count(DISTINCT ra.snapshot_id)
+        with self.uow_factory() as uow, uow.connection.cursor() as cur:
+            cur.execute(
+                """SELECT count(DISTINCT ra.snapshot_id)
                        FROM research_run_assets ra
                        WHERE ra.run_id=%s""",
-                    (run_id,),
-                )
-                assets = int(cur.fetchone()[0])
-                cur.execute(
-                    """SELECT count(DISTINCT c.id)
+                (run_id,),
+            )
+            assets = int(cur.fetchone()[0])
+            cur.execute(
+                """SELECT count(DISTINCT c.id)
                        FROM research_run_assets ra
                        JOIN documents d ON d.snapshot_id=ra.snapshot_id
                        JOIN chunks c ON c.document_id=d.id
@@ -296,16 +299,16 @@ class WorkflowOperationService:
                          AND d.parser_version=%s
                          AND d.normalization_version=%s
                          AND c.chunker_version=%s""",
-                    (
-                        run_id,
-                        uow.parser_version,
-                        uow.normalization_version,
-                        uow.chunker_version,
-                    ),
-                )
-                chunks = int(cur.fetchone()[0])
-                cur.execute(
-                    """SELECT
+                (
+                    run_id,
+                    uow.parser_version,
+                    uow.normalization_version,
+                    uow.chunker_version,
+                ),
+            )
+            chunks = int(cur.fetchone()[0])
+            cur.execute(
+                """SELECT
                          count(*) FILTER (WHERE j.status='pending'),
                          count(*) FILTER (WHERE j.status='running'),
                          count(*) FILTER (WHERE j.status='failed'),
@@ -322,15 +325,15 @@ class WorkflowOperationService:
                          AND d.normalization_version=%s
                          AND c.chunker_version=%s
                          AND idef.physical_collection=%s""",
-                    (
-                        run_id,
-                        uow.parser_version,
-                        uow.normalization_version,
-                        uow.chunker_version,
-                        uow.index_name,
-                    ),
-                )
-                pending, running, failed, dead, complete = cur.fetchone()
+                (
+                    run_id,
+                    uow.parser_version,
+                    uow.normalization_version,
+                    uow.chunker_version,
+                    uow.index_name,
+                ),
+            )
+            pending, running, failed, dead, complete = cur.fetchone()
         return RunIndexProgress(
             assets=assets,
             chunks=chunks,
