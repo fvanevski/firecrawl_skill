@@ -1,3 +1,4 @@
+# Second push intentionally triggers this one-use workflow.
 name: Apply PostgreSQL authority refactor
 
 on:
