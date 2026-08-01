@@ -23,6 +23,25 @@ jobs:
       - name: Generate exact Ruff patch
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/research_store/workflow_service.py')
+          text = path.read_text()
+          text = text.replace('from typing import Any\n', 'from typing import Any, ClassVar\n')
+          text = text.replace(
+              '    _BEGIN_PATHS = {\n',
+              '    _BEGIN_PATHS: ClassVar[dict[str, dict[str, tuple[str, ...]]]] = {\n',
+          )
+          path.write_text(text)
+
+          path = Path('scripts/test_release_benchmark.py')
+          text = path.read_text().replace(
+              '        except Exception as exc:  # psycopg is optional in local unit environments\n',
+              '        except psycopg.OperationalError as exc:\n',
+          )
+          path.write_text(text)
+          PY
           python -m pip install ruff==0.16.1
           ruff check --fix .
           ruff format .
