@@ -1,0 +1,38 @@
+name: Export Ruff fixes
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export-ruff-fixes:
+    if: github.head_ref == 'agent/remove-legacy-catalog'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: agent/remove-legacy-catalog
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Generate exact Ruff patch
+        run: |
+          set -euo pipefail
+          python -m pip install ruff==0.16.1
+          ruff check --fix .
+          ruff format .
+          ruff check .
+          ruff format --check .
+          git diff --binary > "$RUNNER_TEMP/ruff-fixes.patch"
+          test -s "$RUNNER_TEMP/ruff-fixes.patch"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruff-fixes-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/ruff-fixes.patch
+          if-no-files-found: error
+          retention-days: 1
