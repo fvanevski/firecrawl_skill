@@ -33,8 +33,12 @@ jobs:
           xz --decompress --stdout "$RUNNER_TEMP/refactor.patch.xz" > "$RUNNER_TEMP/refactor.patch"
           echo '038db4d526bc9d0dae5620c9e656dfcf9b4c2ea29a824d903de6b2ae52782952  '"$RUNNER_TEMP/refactor.patch" | sha256sum -c -
 
-          git apply --check "$RUNNER_TEMP/refactor.patch"
-          git apply "$RUNNER_TEMP/refactor.patch"
+          git apply --check \
+            --exclude=.github/workflows/export-pr-source.yml \
+            "$RUNNER_TEMP/refactor.patch"
+          git apply \
+            --exclude=.github/workflows/export-pr-source.yml \
+            "$RUNNER_TEMP/refactor.patch"
 
           rm -f \
             .refactor/fullpatch.* \
