@@ -132,7 +132,7 @@ def _query_ids(connection, query: str, run_id: str) -> tuple[str, ...]:
             cursor.execute(query, (run_id,))
             rows = cursor.fetchall()
         return tuple(str(row[0]) for row in rows if row and row[0] is not None)
-    except Exception:
+    except Exception:  # noqa: BLE001
         connection.rollback()
         return ()
 
@@ -210,7 +210,7 @@ def _embedding_endpoint() -> tuple[str, str, int, str, str]:
     except ValueError as exc:
         raise ContractError("EMBEDDING_DIMENSION must be an integer") from exc
     fingerprint = hashlib.sha256(
-        f"{model}\0{revision}\0{dimension}".encode("utf-8")
+        f"{model}\0{revision}\0{dimension}".encode()
     ).hexdigest()
     return endpoint, model, dimension, revision, fingerprint
 
