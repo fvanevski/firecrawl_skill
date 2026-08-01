@@ -907,8 +907,8 @@ def test_migration_fresh_database():
 
 
 @_integration()
-def test_migration_upgrade_from_main():
-    """Test that migration 0021 upgrades from current main (0020)."""
+def test_migration_creates_current_clean_baseline():
+    """A fresh disposable database migrates directly to the current head."""
     require_disposable_database_reset(
         TEST_DSN, os.environ.get("RESEARCH_STORE_TEST_ALLOW_RESET", "")
     )
@@ -917,7 +917,7 @@ def test_migration_upgrade_from_main():
         cur.execute("CREATE SCHEMA public")
 
     version = migrate(TEST_DSN, "head")
-    assert version == 26
+    assert version == 38
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT to_regclass('extraction_attempts')")
@@ -925,8 +925,8 @@ def test_migration_upgrade_from_main():
 
 
 @_integration()
-def test_migration_preserves_existing_data():
-    """Test that migration 0021 does not affect existing Phase 1-4 data."""
+def test_current_head_migration_is_idempotent():
+    """Reapplying the current head preserves data created at that head."""
     require_disposable_database_reset(
         TEST_DSN, os.environ.get("RESEARCH_STORE_TEST_ALLOW_RESET", "")
     )
@@ -935,7 +935,7 @@ def test_migration_preserves_existing_data():
         cur.execute("CREATE SCHEMA public")
 
     version = migrate(TEST_DSN, "head")
-    assert version == 26
+    assert version == 38
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(
@@ -945,15 +945,12 @@ def test_migration_preserves_existing_data():
         cur.execute("SELECT COUNT(*) FROM sources")
         before = cur.fetchone()[0]
 
-    # Re-migrating to head is a no-op; verify data is preserved
     version = migrate(TEST_DSN, "head")
-    assert version == 26
+    assert version == 38
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM sources")
-        after = cur.fetchone()[0]
-        assert after == before
-
+        assert cur.fetchone()[0] == before
         cur.execute("SELECT to_regclass('extraction_attempts')")
         assert cur.fetchone()[0] == "extraction_attempts"
 
