@@ -1,4 +1,4 @@
-name: Apply authoritative normalization query fix
+name: Apply final PR 182 integration fixes
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ jobs:
   apply-fix:
     if: github.head_ref == 'agent/remove-legacy-catalog' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
@@ -21,37 +21,244 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Align normalization queries with authoritative schema
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-research-store.txt pytest ruff==0.16.1
+      - name: Apply demonstrated integration fixes
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('scripts/research_store/cli.py')
+          # Invocation outputs contain UUID and datetime values in authoritative
+          # ingestion manifests. Convert those known structured types before
+          # JSON persistence while preserving recursive secret redaction.
+          path = Path('scripts/research_store/invocation_events.py')
           text = path.read_text()
-          text = text.replace(
-              'SELECT d.id, d.title, d.requested_url, d.content_sha256,',
-              'SELECT d.id, d.title, snap.requested_url, d.document_sha256,',
+          marker = '''    if key.lower() in {k.lower() for k in SENSITIVE_KEYS}:
+              return "[REDACTED]"
+
+              if isinstance(value, dict):
+          '''.replace('              if', '    if')
+          replacement = '''    if key.lower() in {k.lower() for k in SENSITIVE_KEYS}:
+              return "[REDACTED]"
+
+              if isinstance(value, UUID):
+                  return str(value)
+
+              if isinstance(value, datetime):
+                  return value.isoformat()
+
+              if isinstance(value, tuple):
+                  return [_sanitize(item) for item in value]
+
+              if isinstance(value, dict):
+          '''.replace('              if', '    if').replace('                  return', '        return')
+          if 'if isinstance(value, UUID):' not in text:
+              if text.count(marker) != 1:
+                  raise SystemExit('could not locate sanitization insertion point')
+              text = text.replace(marker, replacement)
+          path.write_text(text)
+
+          # The overlapping-campaign test retained seven values after the
+          # research_runs insert was reduced to five authoritative columns.
+          path = Path('scripts/test_performance_telemetry_integration.py')
+          text = path.read_text()
+          old = '''                    (
+                                  str(run_id),
+                                  "Overlapping cache isolation",
+                                  "running",
+                                  "created",
+                                  "agent_led",
+                                  "Overlapping cache isolation",
+                                  f"test_overlap_{suffix}_{uuid4().hex[:8]}",
+                              ),
+          '''.replace('                                  ', '                        ')
+          new = '''                    (
+                                  str(run_id),
+                                  "Overlapping cache isolation",
+                                  "created",
+                                  "agent_led",
+                                  f"test_overlap_{suffix}_{uuid4().hex[:8]}",
+                              ),
+          '''.replace('                                  ', '                        ')
+          if old in text:
+              text = text.replace(old, new)
+          elif '"running",\n                        "created",\n                        "agent_led",\n                        "Overlapping cache isolation",' in text:
+              raise SystemExit('unexpected overlapping-campaign insert shape')
+          path.write_text(text)
+
+          # Finish/reopen tests now seed one real run-scoped asset and mark the
+          # corresponding current-derivation index jobs complete. This retains
+          # the production boundary instead of weakening finish_run policy.
+          path = Path('scripts/test_research_store_integration.py')
+          text = path.read_text()
+          anchor = '\ndef test_run_finish_handler_executes_through_service(monkeypatch, capsys):\n'
+          helper = '''
+          def _configure_cli_for_service(monkeypatch, service):
+              """Point CLI service builders at the same derivation config as the fixture."""
+              monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+              monkeypatch.setenv("BLOB_ROOT", str(service.config.blob_root))
+              monkeypatch.setenv("EMBEDDING_MODEL", service.config.embedding_model)
+              monkeypatch.setenv("EMBEDDING_REVISION", service.config.embedding_revision)
+              monkeypatch.setenv("EMBEDDING_DIMENSION", str(service.config.embedding_dimension))
+              monkeypatch.setenv("PARSER_VERSION", service.config.parser_version)
+              monkeypatch.setenv("NORMALIZATION_VERSION", service.config.normalization_version)
+              monkeypatch.setenv("CHUNKER_VERSION", service.config.chunker_version)
+
+
+          def _seed_completed_indexed_asset(service, external_run_id):
+              """Persist one run-scoped asset and mark its queued index jobs complete."""
+              manifest = service.ingest_batch(
+                  f"fixture_{uuid4().hex}",
+                  "scrape",
+                  [
+                      IngestRequest(
+                          f"https://integration.example/{uuid4().hex}",
+                          b"# Indexed fixture\\n\\nPersisted PostgreSQL evidence.",
+                      )
+                  ],
+                  research_run_external_id=external_run_id,
+              )
+              assert manifest["failure_count"] == 0
+
+              run_id = build_run_service(service.config).status(
+                  external_id=external_run_id
+              ).id
+              with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+                  cursor.execute(
+                      """UPDATE index_jobs j
+                         SET status='complete', completed_at=now(), error=NULL
+                         FROM embedding_manifests m
+                         JOIN chunks c ON c.id=m.chunk_id
+                         JOIN documents d ON d.id=c.document_id
+                         JOIN research_run_assets ra ON ra.snapshot_id=d.snapshot_id
+                         WHERE j.manifest_id=m.id AND ra.run_id=%s""",
+                      (run_id,),
+                  )
+                  assert cursor.rowcount > 0
+                  cursor.execute(
+                      """UPDATE embedding_manifests m
+                         SET index_status='complete', indexed_at=now(), error=NULL
+                         FROM chunks c
+                         JOIN documents d ON d.id=c.document_id
+                         JOIN research_run_assets ra ON ra.snapshot_id=d.snapshot_id
+                         WHERE m.chunk_id=c.id AND ra.run_id=%s""",
+                      (run_id,),
+                  )
+
+
+          def test_run_finish_handler_executes_through_service(monkeypatch, capsys, service):
+          '''
+          helper = '\n'.join(line[10:] if line.startswith('          ') else line for line in helper.splitlines())
+          if '_seed_completed_indexed_asset' not in text:
+              if text.count(anchor) != 1:
+                  raise SystemExit('could not locate finish-handler test insertion point')
+              text = text.replace(anchor, '\n' + helper)
+
+          signatures = {
+              'def test_run_finish_idempotency_same_outcome(monkeypatch, capsys):':
+                  'def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):',
+              'def test_run_reopen_after_finish_idempotency(monkeypatch, capsys):':
+                  'def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):',
+          }
+          for old, new in signatures.items():
+              if old in text:
+                  text = text.replace(old, new, 1)
+
+          target_functions = (
+              'test_run_finish_handler_executes_through_service',
+              'test_run_finish_idempotency_same_outcome',
+              'test_run_reopen_after_finish_idempotency',
           )
-          text = text.replace(
-              'FROM documents d\n                   JOIN document_blocks db ON db.document_id = d.id',
-              'FROM documents d\n                   JOIN asset_snapshots snap ON snap.id = d.snapshot_id\n                   JOIN document_blocks db ON db.document_id = d.id',
-          )
-          if text.count('snap.requested_url, d.document_sha256') != 2:
-              raise SystemExit('expected two authoritative normalization queries')
+          for name in target_functions:
+              start = text.index(f'def {name}')
+              end = text.find('\ndef ', start + 1)
+              if end == -1:
+                  end = len(text)
+              segment = text[start:end]
+              if 'monkeypatch.setenv("DATABASE_URL", TEST_DSN)' in segment:
+                  segment = segment.replace(
+                      'monkeypatch.setenv("DATABASE_URL", TEST_DSN)',
+                      '_configure_cli_for_service(monkeypatch, service)',
+                      1,
+                  )
+              marker = '    capsys.readouterr()  # discard run-start output\n'
+              if '_seed_completed_indexed_asset(service, external_id)' not in segment:
+                  if segment.count(marker) != 1:
+                      raise SystemExit(f'could not locate run-start output marker in {name}')
+                  segment = segment.replace(
+                      marker,
+                      marker + '    _seed_completed_indexed_asset(service, external_id)\n',
+                      1,
+                  )
+              text = text[:start] + segment + text[end:]
+
+          for name in target_functions:
+              start = text.index(f'def {name}')
+              end = text.find('\ndef ', start + 1)
+              if end == -1:
+                  end = len(text)
+              segment = text[start:end]
+              if 'service' not in segment.splitlines()[0]:
+                  raise SystemExit(f'{name} does not request the service fixture')
+              if '_seed_completed_indexed_asset(service, external_id)' not in segment:
+                  raise SystemExit(f'{name} does not seed indexed evidence')
           path.write_text(text)
           PY
-          python -m pip install ruff==0.16.1
-          ruff check scripts/research_store/cli.py
-          ruff format scripts/research_store/cli.py
-          ruff check scripts/research_store/cli.py
-          ruff format --check scripts/research_store/cli.py
-          python -m compileall -q scripts/research_store/cli.py
-      - name: Commit source correction
+
+          ruff format \
+            scripts/research_store/invocation_events.py \
+            scripts/test_performance_telemetry_integration.py \
+            scripts/test_research_store_integration.py
+          ruff check \
+            scripts/research_store/invocation_events.py \
+            scripts/test_performance_telemetry_integration.py \
+            scripts/test_research_store_integration.py
+          ruff format --check \
+            scripts/research_store/invocation_events.py \
+            scripts/test_performance_telemetry_integration.py \
+            scripts/test_research_store_integration.py
+          python -m compileall -q \
+            scripts/research_store/invocation_events.py \
+            scripts/test_performance_telemetry_integration.py \
+            scripts/test_research_store_integration.py
+      - name: Start disposable PostgreSQL
+        run: |
+          docker run --name pg -d -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16-alpine
+          sleep 5
+          for i in $(seq 1 10); do
+            PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE firecrawl_telemetry_test;" 2>/dev/null && break || sleep 1
+          done
+      - name: Start disposable Qdrant
+        run: |
+          docker run --name qdrant -d -p 6333:6333 \
+            -e QDRANT__SERVICE__READ_ONLY_ACCESS=false \
+            qdrant/qdrant:v1.18.3-unprivileged
+          sleep 3
+      - name: Run corrected integration contracts
+        env:
+          RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_telemetry_test
+          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_telemetry_test
+        run: |
+          python -m pytest -q -p no:cacheprovider \
+            scripts/test_performance_telemetry_integration.py::TestOverlappingCampaignCacheIsolation::test_overlapping_events_remain_exactly_run_scoped \
+            scripts/test_research_store_integration.py::test_wrapper_workflow_runs_entirely_from_postgresql \
+            scripts/test_research_store_integration.py::test_run_finish_handler_executes_through_service \
+            scripts/test_research_store_integration.py::test_run_finish_idempotency_same_outcome \
+            scripts/test_research_store_integration.py::test_run_reopen_after_finish_idempotency
+      - name: Commit source and test corrections
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add scripts/research_store/cli.py
-          git commit -m 'Use authoritative normalization source metadata'
+          git add \
+            scripts/research_store/invocation_events.py \
+            scripts/test_performance_telemetry_integration.py \
+            scripts/test_research_store_integration.py
+          git diff --cached --check
+          git commit -m 'Fix authoritative workflow integration contracts'
           git push origin HEAD:agent/remove-legacy-catalog
