@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+import pathlib
 import shutil
 import subprocess
 
 
-SOURCE_ADAPTER = Path(__file__).with_name("research-env")
+SOURCE_ADAPTER = pathlib.Path(__file__).with_name("research-env")
 
 
-def _sandbox(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
+def _sandbox(
+    tmp_path: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path, dict[str, str]]:
     root = tmp_path / "skill"
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
@@ -30,8 +32,8 @@ def _sandbox(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
 
 
 def _source_values(
-    root: Path,
-    adapter: Path,
+    root: pathlib.Path,
+    adapter: pathlib.Path,
     environment: dict[str, str],
 ) -> list[str]:
     result = subprocess.run(
@@ -60,7 +62,9 @@ printf '%s\n' \
     return result.stdout.splitlines()
 
 
-def test_loads_root_env_and_ignores_legacy_nested_path(tmp_path: Path) -> None:
+def test_loads_root_env_and_ignores_legacy_nested_path(
+    tmp_path: pathlib.Path,
+) -> None:
     root, adapter, environment = _sandbox(tmp_path)
     (root / ".env").write_text(
         'EMBEDDING_MODEL="root-model"\n'
@@ -83,7 +87,7 @@ def test_loads_root_env_and_ignores_legacy_nested_path(tmp_path: Path) -> None:
     ]
 
 
-def test_explicit_environment_wins_over_root_env(tmp_path: Path) -> None:
+def test_explicit_environment_wins_over_root_env(tmp_path: pathlib.Path) -> None:
     root, adapter, environment = _sandbox(tmp_path)
     (root / ".env").write_text(
         'EMBEDDING_MODEL="file-model"\n'
@@ -97,7 +101,7 @@ def test_explicit_environment_wins_over_root_env(tmp_path: Path) -> None:
     assert values == ["explicit-model", "file-revision", ""]
 
 
-def test_defaults_apply_when_root_env_is_absent(tmp_path: Path) -> None:
+def test_defaults_apply_when_root_env_is_absent(tmp_path: pathlib.Path) -> None:
     root, adapter, environment = _sandbox(tmp_path)
 
     values = _source_values(root, adapter, environment)
@@ -109,7 +113,9 @@ def test_defaults_apply_when_root_env_is_absent(tmp_path: Path) -> None:
     ]
 
 
-def test_loading_env_preserves_caller_allexport_option(tmp_path: Path) -> None:
+def test_loading_env_preserves_caller_allexport_option(
+    tmp_path: pathlib.Path,
+) -> None:
     root, adapter, environment = _sandbox(tmp_path)
     (root / ".env").write_text('EMBEDDING_MODEL="file-model"\n', encoding="utf-8")
 
@@ -141,7 +147,7 @@ esac
     assert result.stdout == "enabled\n"
 
 
-def test_malformed_root_env_fails_closed(tmp_path: Path) -> None:
+def test_malformed_root_env_fails_closed(tmp_path: pathlib.Path) -> None:
     root, adapter, environment = _sandbox(tmp_path)
     (root / ".env").write_text(
         'EMBEDDING_MODEL="partial-value"\nfalse\n',
