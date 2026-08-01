@@ -8,20 +8,16 @@ research_skill_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 research_env_file="$research_skill_root/.env"
 
 # ── Source root .env if present (allows local overrides) ─────────────────
-# Load in a subshell and import only variables that are not already defined in
-# the caller. This preserves the documented explicit-env precedence and avoids
-# changing the caller's allexport shell option.
+# Load in a separate Bash process and import only variables that are not already
+# defined in the caller. This preserves explicit-env precedence, keeps malformed
+# files fail-closed, and avoids changing the caller's shell options.
 if [[ -r "$research_env_file" ]]; then
   research_env_dump="$(mktemp "${TMPDIR:-/tmp}/firecrawl-research-env.XXXXXX")" || {
     echo "ERROR: unable to create temporary file for $research_env_file" >&2
     return 1 2>/dev/null || exit 1
   }
-  if ! (
-    set -ae
-    # shellcheck source=/dev/null
-    . "$research_env_file"
-    env -0
-  ) > "$research_env_dump"; then
+  if ! "$BASH" --noprofile --norc -ae -c \
+    '. "$1"; env -0' bash "$research_env_file" > "$research_env_dump"; then
     rm -f "$research_env_dump"
     echo "ERROR: unable to load $research_env_file" >&2
     return 1 2>/dev/null || exit 1
