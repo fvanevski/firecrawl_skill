@@ -1,1 +1,1 @@
-trigger diagnostic after clean-baseline tests
+trigger authoritative normalization query fix
