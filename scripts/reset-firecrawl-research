@@ -54,13 +54,9 @@ VALKEY_CLI_SERVICE="${VALKEY_CLI_SERVICE:-valkey-cli}"
 
 POSTGRES_VOLUME="${POSTGRES_VOLUME:-research_postgres_data}"
 VALKEY_VOLUME="${VALKEY_VOLUME:-research_valkey_data}"
-QDRANT_RUNTIME_SECRETS_VOLUME="${
-  QDRANT_RUNTIME_SECRETS_VOLUME:-research_qdrant_runtime_secrets
-}"
+QDRANT_RUNTIME_SECRETS_VOLUME="${QDRANT_RUNTIME_SECRETS_VOLUME:-research_qdrant_runtime_secrets}"
 
-EXPECTED_BLOB_ROOT="${
-  EXPECTED_BLOB_ROOT:-/opt/containers/research-assets/blobs
-}"
+EXPECTED_BLOB_ROOT="${EXPECTED_BLOB_ROOT:-/opt/containers/research-assets/blobs}"
 WORKER_SERVICE="${WORKER_SERVICE:-firecrawl-research-indexer.service}"
 COMPOSE_WAIT_TIMEOUT="${COMPOSE_WAIT_TIMEOUT:-180}"
 
