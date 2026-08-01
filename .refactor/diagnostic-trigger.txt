@@ -1,1 +1,1 @@
-trigger clean-baseline migration test fix
+trigger diagnostic after clean-baseline tests
