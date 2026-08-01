@@ -317,26 +317,26 @@ def build_resource_governor(
     return governor
 
 
-def build_audit_service(config: StoreConfig | None = None):
-    """Build an AuditService wired to the PostgreSQL database."""
-    # config may be a uow_factory partial from run_service; ignore it and
-    # always read a fresh StoreConfig so monkeypatch-ed env vars are picked
-    # up by tests.
-    config = StoreConfig.from_env()
-    config.require_database()
+def build_audit_service(config: StoreConfig | Any | None = None):
+    """Build an AuditService from a store config or existing UoW factory."""
     from .service import AuditService
 
+    if config is not None and not isinstance(config, StoreConfig):
+        return AuditService(config)
+
+    resolved = config or StoreConfig.from_env()
+    resolved.require_database()
     return AuditService(
         partial(
             PostgresUnitOfWork,
-            config.database_url,
-            config.physical_collection,
-            config.embedding_model,
-            config.embedding_revision,
-            config.embedding_dimension,
-            config.parser_version,
-            config.normalization_version,
-            config.chunker_version,
+            resolved.database_url,
+            resolved.physical_collection,
+            resolved.embedding_model,
+            resolved.embedding_revision,
+            resolved.embedding_dimension,
+            resolved.parser_version,
+            resolved.normalization_version,
+            resolved.chunker_version,
         )
     )
 
