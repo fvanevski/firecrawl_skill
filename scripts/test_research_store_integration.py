@@ -25,9 +25,12 @@ sys.path.insert(0, str(SCRIPTS))
 from research_domain import load_model, schema_registry, serialize_model
 from research_store import cli as store_cli
 from research_store.config import StoreConfig
-from research_store.container import build_run_service, build_service
+from research_store.container import (
+    build_run_service,
+    build_service,
+    build_workflow_operation_service,
+)
 from research_store.domain import IngestRequest
-from research_store.legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 from research_store.run_service import (
     ResearchRunService,
@@ -66,13 +69,14 @@ def service(tmp_path, prepared_database):
 
 @pytest.fixture(scope="session")
 def prepared_database():
-    """Prove fresh and populated prior-head migrations without data loss."""
+    """Create the current PostgreSQL-only schema from an empty database."""
     require_disposable_database_reset(
         TEST_DSN, os.environ.get("RESEARCH_STORE_TEST_ALLOW_RESET", "")
     )
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
+
     assert migrate(TEST_DSN) >= 15
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -80,142 +84,89 @@ def prepared_database():
             to_regclass('research_events'),to_regclass('semantic_artifacts'),
             to_regclass('research_budget_snapshots'),to_regclass('search_plans'),
             to_regclass('search_plan_queries'),to_regclass('search_responses'),
-            to_regclass('search_candidates'),to_regclass('candidate_occurrences')"""
+            to_regclass('search_candidates'),to_regclass('candidate_occurrences'),
+            to_regclass('research_invocations')"""
         )
         assert all(cursor.fetchone())
+        cursor.execute("SELECT version_num FROM alembic_version")
+        assert cursor.fetchone()[0] == "0038_postgres_authority"
 
-    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute("DROP SCHEMA public CASCADE")
-        cursor.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN, "0001_research_store") == 1
 
-    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
-            ("https://integration.example/legacy-multi-index",),
-        )
-        source_id = cursor.fetchone()[0]
-        cursor.execute(
-            """INSERT INTO asset_snapshots(
-                source_id,requested_url,retrieved_at,content_sha256
-            ) VALUES (%s,%s,now(),%s) RETURNING id""",
-            (source_id, "https://integration.example/legacy-multi-index", "a" * 64),
-        )
-        snapshot_id = cursor.fetchone()[0]
-        cursor.execute(
-            """INSERT INTO documents(
-                snapshot_id,normalized_text,parser_name,parser_version,
-                normalization_version,document_sha256
-            ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
-            (snapshot_id, "legacy evidence", "legacy", "1", "1", "b" * 64),
-        )
-        document_id = cursor.fetchone()[0]
-        cursor.execute(
-            """INSERT INTO chunks(
-                document_id,ordinal,text,content_sha256,chunker_name,chunker_version
-            ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
-            (document_id, "legacy evidence", "c" * 64, "legacy", "1"),
-        )
-        chunk_id = cursor.fetchone()[0]
-        manifest_ids = []
-        for model_name, dimension, index_name in (
-            ("legacy-a", 4, "legacy-a-index"),
-            ("legacy-b", 8, "legacy-b-index"),
-        ):
-            cursor.execute(
-                """INSERT INTO embedding_manifests(
-                    chunk_id,model_name,dimension,distance_metric,index_status
-                ) VALUES (%s,%s,%s,'Cosine','complete') RETURNING id""",
-                (chunk_id, model_name, dimension),
+def test_wrapper_workflow_runs_entirely_from_postgresql(service):
+    """A fresh run can scrape, index, and finish without filesystem state."""
+    runs = build_run_service(service.config)
+    workflow = build_workflow_operation_service(service.config)
+    external_run_id = f"fr_wrapper_{uuid4().hex}"
+    external_invocation_id = f"fc_{uuid4().hex}"
+    created = runs.create(
+        "PostgreSQL-only wrapper integration",
+        external_run_id,
+        execution_mode="autonomous_local",
+    )
+
+    invocation = workflow.begin_operation(
+        external_run_id,
+        external_invocation_id,
+        "fscrape",
+        {"urls": ["https://integration.example/wrapper"]},
+    )
+    assert invocation.run_id == created.id
+    assert runs.status(run_id=created.id).state == "extracting"
+
+    manifest = service.ingest_batch(
+        external_invocation_id,
+        "scrape",
+        [
+            IngestRequest(
+                "https://integration.example/wrapper",
+                b"# PostgreSQL authority\n\nIndexed wrapper evidence.",
             )
-            manifest_ids.append(cursor.fetchone()[0])
-            cursor.execute(
-                """INSERT INTO index_jobs(
-                    entity_type,entity_id,index_name,operation,status
-                ) VALUES ('chunk',%s,%s,'upsert','complete')""",
-                (chunk_id, index_name),
-            )
+        ],
+        research_run_external_id=external_run_id,
+    )
+    workflow.complete_operation(
+        external_run_id,
+        external_invocation_id,
+        succeeded=True,
+        output=manifest,
+    )
+    assert runs.status(run_id=created.id).state == "indexing"
 
-    assert migrate(TEST_DSN, "0005_run_lifecycle") == 5
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """INSERT INTO research_runs(
-            original_request,query_plan,skill_version,retrieval_policy_version,
-            status,external_run_id)
-            VALUES('populated v5 run','{}','v5','v5','running',%s) RETURNING id""",
-            (f"fr_v5_{uuid4().hex}",),
+            """UPDATE index_jobs j
+               SET status='complete', completed_at=now(), error=NULL
+               FROM embedding_manifests m
+               JOIN chunks c ON c.id=m.chunk_id
+               JOIN documents d ON d.id=c.document_id
+               JOIN research_run_assets ra ON ra.snapshot_id=d.snapshot_id
+               WHERE j.manifest_id=m.id AND ra.run_id=%s""",
+            (created.id,),
         )
-        legacy_run_id = cursor.fetchone()[0]
+        assert cursor.rowcount > 0
         cursor.execute(
-            """INSERT INTO research_runs(
-            original_request,query_plan,skill_version,retrieval_policy_version,
-            status,outcome,completed_at,external_run_id)
-            VALUES('populated partial v5 run','{}','v5','v5','complete','partial',
-              now(),%s) RETURNING id""",
-            (f"fr_v5_partial_{uuid4().hex}",),
+            """UPDATE embedding_manifests m
+               SET index_status='complete', indexed_at=now(), error=NULL
+               FROM chunks c
+               JOIN documents d ON d.id=c.document_id
+               JOIN research_run_assets ra ON ra.snapshot_id=d.snapshot_id
+               WHERE m.chunk_id=c.id AND ra.run_id=%s""",
+            (created.id,),
         )
-        legacy_partial_run_id = cursor.fetchone()[0]
 
-    # PostgreSQL transactional DDL leaves no partial workflow objects after an
-    # interrupted attempt, so the supported repair is a normal forward retry.
-    with pytest.raises(RuntimeError, match="synthetic interruption"):  # noqa: SIM117
-        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-            cursor.execute("CREATE TABLE interrupted_v6_probe(id integer)")
-            raise RuntimeError("synthetic interruption")
-    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute("SELECT to_regclass('interrupted_v6_probe')")
-        assert cursor.fetchone()[0] is None
+    finished = workflow.finish_run(external_run_id, outcome="satisfied")
+    assert finished.state == "completed"
+    assert finished.declared_outcome == "satisfied"
+    assert finished.lifecycle_revision == 9
 
-    assert migrate(TEST_DSN) >= 15
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """SELECT state,lifecycle_revision,execution_mode,objective
-            FROM research_runs WHERE id=%s""",
-            (legacy_run_id,),
+            """SELECT count(*) FROM research_invocations
+               WHERE run_id=%s AND external_invocation_id=%s
+                 AND status='complete'""",
+            (created.id, external_invocation_id),
         )
-        assert cursor.fetchone() == ("created", 0, "legacy", "populated v5 run")
-        cursor.execute(
-            "SELECT state,declared_outcome FROM research_runs WHERE id=%s",
-            (legacy_partial_run_id,),
-        )
-        assert cursor.fetchone() == ("partial", "partial")
-        cursor.execute(
-            """SELECT count(*),count(DISTINCT index_definition_id)
-            FROM embedding_manifests WHERE chunk_id=%s""",
-            (chunk_id,),
-        )
-        assert cursor.fetchone() == (2, 2)
-        cursor.execute(
-            """SELECT count(*),count(DISTINCT manifest_id),count(DISTINCT index_definition_id)
-            FROM index_jobs WHERE manifest_id=ANY(%s)""",
-            (manifest_ids,),
-        )
-        assert cursor.fetchone() == (2, 2, 2)
-        cursor.execute(
-            """INSERT INTO index_definitions(
-                fingerprint,physical_collection,model_name,model_revision,
-                dimension,distance_metric,normalization,instruction_template_hash
-            ) VALUES (%s,%s,'legacy-a','',16,'Cosine','unit-length','')
-            RETURNING id""",
-            ("d" * 64, "legacy-dimension-variant"),
-        )
-        definition_id = cursor.fetchone()[0]
-        cursor.execute(
-            """INSERT INTO embedding_manifests(
-                chunk_id,model_name,model_revision,dimension,distance_metric,
-                normalization,instruction_template_hash,index_status,index_definition_id
-            ) VALUES (%s,'legacy-a','',16,'Cosine','unit-length','','pending',%s)""",
-            (chunk_id, definition_id),
-        )
-        cursor.execute(
-            """SELECT conname FROM pg_constraint
-            WHERE conrelid='embedding_manifests'::regclass AND contype='u'
-            ORDER BY conname"""
-        )
-        assert [row[0] for row in cursor.fetchall()] == [
-            "embedding_manifests_definition_key",
-            "embedding_manifests_id_definition_key",
-        ]
+        assert cursor.fetchone()[0] == 1
 
 
 def test_workflow_repository_records_are_idempotent_and_referential(service):
@@ -312,28 +263,17 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             {"spec_id": str(spec_id)},
             "semantic-artifact:spec",
         )
-        export_id = uow.record_compatibility_export(
-            run_id,
-            "_meta.json",
-            5,
-            "a" * 64,
-            "complete",
-            "export:meta:v5",
-            invocation_id=invocation_id,
-            database_revision=0,
-        )
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT r.research_spec_id,r.budget_snapshot_id,r.budget_policy_version,
             count(DISTINCT i.id),count(DISTINCT e.id),
-            count(DISTINCT c.id),count(DISTINCT a.id),count(DISTINCT x.id)
+            count(DISTINCT c.id),count(DISTINCT a.id)
             FROM research_runs r
             LEFT JOIN research_invocations i ON i.run_id=r.id
             LEFT JOIN research_events e ON e.run_id=r.id
             LEFT JOIN semantic_calls c ON c.run_id=r.id
             LEFT JOIN semantic_artifacts a ON a.run_id=r.id
-            LEFT JOIN compatibility_exports x ON x.run_id=r.id
             WHERE r.id=%s GROUP BY r.research_spec_id,r.budget_snapshot_id,
             r.budget_policy_version""",
             (run_id,),
@@ -346,9 +286,8 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             1,
             1,
             1,
-            1,
         )
-        assert artifact_id is not None and export_id is not None
+        assert artifact_id is not None
 
 
 def test_phase1_gate_run_spec_and_transactional_rejection(service):
@@ -464,61 +403,6 @@ def test_phase1_gate_run_spec_and_transactional_rejection(service):
         )
         assert cursor.fetchone()[0] == 0
     assert first_spec_id != second_spec_id
-
-
-def test_shadow_comparisons_are_queryable_append_only_and_do_not_mutate_run(service):
-    runs = ResearchRunService(service.uow_factory)
-    created = runs.create(
-        "shadow adapter",
-        f"fr_shadow_{uuid4().hex}",
-        execution_mode="agent_led",
-    )
-    adapter = LegacyEntryPointAdapter(service.uow_factory, AdapterMode.SHADOW)
-    decision = {
-        "action": "search",
-        "status": "complete",
-        "input": {"query": "adapter comparison"},
-    }
-    external_invocation_id = f"fc_{uuid4().hex}"
-    first = adapter.route(
-        "fsearch",
-        decision,
-        service_proposal={"action": "retrieve"},
-        external_run_id=created.external_id,
-        external_invocation_id=external_invocation_id,
-        idempotency_key="shadow:comparison:one",
-    )
-    replay = adapter.route(
-        "fsearch",
-        decision,
-        service_proposal={"action": "retrieve"},
-        external_run_id=created.external_id,
-        external_invocation_id=external_invocation_id,
-        idempotency_key="shadow:comparison:one",
-    )
-    assert replay.comparison_id == first.comparison_id
-    status = runs.status(run_id=created.id)
-    assert status.state == "created"
-    assert status.lifecycle_revision == 0
-    with service.uow_factory() as uow:
-        rows = uow.runs.list_legacy_adapter_comparisons(
-            external_run_id=created.external_id
-        )
-    assert len(rows) == 1
-    assert rows[0]["adapter_mode"] == "shadow"
-    assert rows[0]["workflow_revision"] == 0
-    assert rows[0]["divergent"] is True
-    with service.uow_factory() as uow:
-        divergent = uow.runs.list_legacy_adapter_comparisons(
-            external_run_id=created.external_id, divergent_only=True
-        )
-    assert [row["id"] for row in divergent] == [first.comparison_id]
-    with connect(TEST_DSN) as connection, connection.cursor() as cursor:  # noqa: SIM117
-        with pytest.raises(Exception, match="append-only"):
-            cursor.execute(
-                "UPDATE legacy_adapter_comparisons SET divergent=true WHERE id=%s",
-                (first.comparison_id,),
-            )
 
 
 def test_budget_snapshot_changes_require_policy_or_run_revision(service):
@@ -1414,11 +1298,11 @@ def test_batch_rejects_invalid_run_and_active_reuse_before_ledger_mutation(servi
         run_id = uow.start_run("finished owner", {"external_run_id": finished_run})
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """UPDATE research_runs SET status='complete',outcome='test-complete',
+            """UPDATE research_runs SET state='completed',declared_outcome='test-complete',
             completed_at=now() WHERE id=%s""",
             (run_id,),
         )
-    with pytest.raises(ValueError, match="require a running research run"):
+    with pytest.raises(ValueError, match="nonterminal research run"):
         service.ingest_batch(
             finished_invocation,
             "integration",
@@ -1453,7 +1337,7 @@ def test_finished_run_is_immutable_and_rejects_new_evidence(service):
         run_id = uow.start_run("original request", {"external_run_id": external_id})
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """UPDATE research_runs SET status='complete',outcome='test-complete',
+            """UPDATE research_runs SET state='completed',declared_outcome='test-complete',
             completed_at=now() WHERE id=%s""",
             (run_id,),
         )
@@ -1479,9 +1363,9 @@ def test_finished_run_is_immutable_and_rejects_new_evidence(service):
             )
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            "SELECT original_request,status FROM research_runs WHERE id=%s", (run_id,)
+            "SELECT objective,state FROM research_runs WHERE id=%s", (run_id,)
         )
-        assert cursor.fetchone() == ("original request", "complete")
+        assert cursor.fetchone() == ("original request", "completed")
 
 
 def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
@@ -1510,32 +1394,28 @@ def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
         return revision
 
     first_terminal_revision = advance_to_validating(0)
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-    assert (
-        store_cli.main(
-            [
-                "run-finish",
-                external_id,
-                "--outcome",
-                "satisfied",
-                "--source-manifest-sha256",
-                "a" * 64,
-                "--answer-sha256",
-                "b" * 64,
-            ]
-        )
-        == 0
+    runs.transition(
+        run_id,
+        "completed",
+        expected_revision=first_terminal_revision,
+        idempotency_key="finish:first",
+        actor_type="integration-test",
+        outcome="satisfied",
+        completion={
+            "source_manifest_sha256": "a" * 64,
+            "answer_sha256": "b" * 64,
+        },
     )
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
     assert store_cli.main(["run-reopen", external_id]) == 0
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """SELECT status,outcome,completed_at,source_manifest_sha256,answer_sha256,
+            """SELECT declared_outcome,completed_at,source_manifest_sha256,answer_sha256,
             state,lifecycle_revision,reopened_from_revision
             FROM research_runs WHERE id=%s""",
             (run_id,),
         )
         assert cursor.fetchone() == (
-            "running",
             None,
             None,
             None,
@@ -1546,20 +1426,26 @@ def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
         )
         with pytest.raises(Exception) as error:
             cursor.execute(
-                "UPDATE research_runs SET status='unexpected' WHERE id=%s", (run_id,)
+                "UPDATE research_runs SET state='unexpected' WHERE id=%s", (run_id,)
             )
-        assert "research_runs_lifecycle_check" in str(error.value)
+        assert "research_runs_state_check" in str(error.value)
     second_terminal_revision = advance_to_validating(first_terminal_revision + 2)
-    assert store_cli.main(["run-finish", external_id, "--outcome", "satisfied"]) == 0
+    runs.transition(
+        run_id,
+        "completed",
+        expected_revision=second_terminal_revision,
+        idempotency_key="finish:second",
+        actor_type="integration-test",
+        outcome="satisfied",
+    )
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """SELECT status,outcome,source_manifest_sha256,answer_sha256,
+            """SELECT declared_outcome,source_manifest_sha256,answer_sha256,
             state,lifecycle_revision
             FROM research_runs WHERE id=%s""",
             (run_id,),
         )
         assert cursor.fetchone() == (
-            "complete",
             "satisfied",
             None,
             None,
@@ -2218,9 +2104,9 @@ class TestMigration0015TerminalDecisions:
             run_id = uuid4()
             cursor.execute(
                 """INSERT INTO research_runs(
-                    id, original_request, query_plan, skill_version,
-                    retrieval_policy_version, status, state, execution_mode, objective, external_run_id
-                ) VALUES (%s, 'test', '{}', 'v1', 'v1', 'running', 'created', 'autonomous_local', 'test', %s)""",
+                    id, objective, query_plan, skill_version,
+                    retrieval_policy_version, state, execution_mode, external_run_id
+                ) VALUES (%s, 'test', '{}', 'v1', 'v1', 'created', 'autonomous_local', %s)""",
                 (run_id, f"fr_test_{uuid4().hex}"),
             )
             # Insert a row
@@ -2280,8 +2166,8 @@ class TestMigration0015TerminalDecisions:
             else:
                 os.environ.pop("DATABASE_URL", None)
 
-    def test_compatibility_with_existing_tables(self):
-        """Verify migration doesn't break existing Phase 1/2/3 tables."""
+    def test_current_schema_contains_all_workflow_tables(self):
+        """Verify the current baseline creates every required workflow table."""
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
@@ -2310,7 +2196,7 @@ class TestMigration0015TerminalDecisions:
 
 
 # ---------------------------------------------------------------------------
-# Issue #36: Integration tests for compatibility command handlers (N3)
+# PostgreSQL command-handler integration tests
 # ---------------------------------------------------------------------------
 
 
@@ -2855,446 +2741,7 @@ def test_run_annotate_unknown_external_id(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# Catalog import integration tests (issue #37)
 # ---------------------------------------------------------------------------
-
-
-def test_catalog_import_apply_run_and_invocation(tmp_path, monkeypatch):
-    """Verify a full apply() round-trip with run + invocation."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    from research_store.catalog_import import CatalogImportService
-    from research_store.container import build_catalog_import_service
-
-    service = build_catalog_import_service()
-    import_svc = CatalogImportService(
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-
-    # Create a minimal Catalog v5 root with a run and invocation
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-    run_id = "fr_" + "a" * 32
-    run_data = {
-        "schema_version": 5,
-        "research_run_id": run_id,
-        "objective": "Test import",
-    }
-    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
-
-    inv_dir = root / "invocations"
-    inv_dir.mkdir(parents=True)
-    inv_id = "fc_" + "b" * 32
-    inv_data = {
-        "schema_version": 5,
-        "invocation_id": inv_id,
-        "operation": "search",
-        "run_id": run_id,
-    }
-    (inv_dir / f"{inv_id}.json").write_text(json.dumps(inv_data))
-
-    # Apply the import
-    report = import_svc.apply(root)
-
-    assert report.records_inserted == 2
-    assert report.records_skipped == 0
-    assert report.records_malformed == 0
-    assert report.completed_at is not None
-
-    # Verify records exist in PostgreSQL
-    with connect(TEST_DSN) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT id FROM research_runs WHERE external_run_id = %s",
-            (run_id,),
-        )
-        run_row = cur.fetchone()
-        assert run_row is not None
-
-        cur.execute(
-            "SELECT id FROM research_invocations WHERE external_invocation_id = %s",
-            (inv_id,),
-        )
-        inv_row = cur.fetchone()
-        assert inv_row is not None
-
-
-def test_catalog_import_idempotent_apply(tmp_path, monkeypatch):
-    """Verify that a second apply() is a no-op (idempotent)."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    from research_store.catalog_import import CatalogImportService
-    from research_store.container import build_catalog_import_service
-
-    service = build_catalog_import_service()
-    import_svc = CatalogImportService(
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-    run_id = "fr_" + "c" * 32
-    run_data = {
-        "schema_version": 5,
-        "research_run_id": run_id,
-        "objective": "Test idempotency",
-    }
-    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
-
-    # First apply
-    report1 = import_svc.apply(root)
-    assert report1.records_inserted == 1
-
-    # Second apply — should be idempotent
-    report2 = import_svc.apply(root)
-    assert report2.records_skipped == 1
-    assert report2.records_inserted == 0
-
-
-def test_catalog_import_tracking_table_populated(tmp_path, monkeypatch):
-    """Verify that the tracking table records the import."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    from research_store.catalog_import import CatalogImportService
-    from research_store.container import build_catalog_import_service
-
-    service = build_catalog_import_service()
-    import_svc = CatalogImportService(
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-    run_id = "fr_" + "d" * 32
-    run_data = {
-        "schema_version": 5,
-        "research_run_id": run_id,
-        "objective": "Test tracking",
-    }
-    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
-
-    import_svc.apply(root)
-
-    with connect(TEST_DSN) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT id, status, records_inserted FROM catalog_import_tracking ORDER BY started_at DESC LIMIT 1"
-        )
-        row = cur.fetchone()
-        assert row is not None
-        import_id, status, inserted = row
-        assert status == "completed"
-        assert inserted == 1
-
-        # Verify the record map exists
-        cur.execute(
-            "SELECT catalog_type, catalog_id, mapping_status FROM catalog_import_record_map WHERE import_run_id = %s",
-            (str(import_id),),
-        )
-        mappings = cur.fetchall()
-        assert len(mappings) == 1
-        assert mappings[0][0] == "run"
-        assert mappings[0][1] == run_id
-        assert mappings[0][2] == "inserted"
-
-
-def test_catalog_import_reconcile_with_history(tmp_path, monkeypatch):
-    """Verify reconcile() returns correct summaries after imports."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    from research_store.catalog_import import CatalogImportService
-    from research_store.container import build_catalog_import_service
-
-    service = build_catalog_import_service()
-    import_svc = CatalogImportService(
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-
-    # Create and apply an import
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-    run_id = "fr_" + "e" * 32
-    run_data = {
-        "schema_version": 5,
-        "research_run_id": run_id,
-        "objective": "Test reconcile",
-    }
-    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
-
-    import_svc.apply(root)
-
-    # Run reconciliation
-    report = import_svc.reconcile()
-
-    assert report.total_imports >= 1
-    assert len(report.imports) >= 1
-    # The import we just did should be in the list
-    found = any(imp.get("catalog_root") == str(root) for imp in report.imports)
-    assert found
-
-
-def test_catalog_import_dry_run_pending_records(tmp_path, monkeypatch):
-    """Verify dry-run marks events/claims/assessments as pending."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    from research_store.catalog_import import CatalogImportService
-    from research_store.container import build_catalog_import_service
-
-    service = build_catalog_import_service()
-    import_svc = CatalogImportService(
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-
-    # Create a Catalog root with runs + events
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-    run_id = "fr_" + "f" * 32
-    run_data = {
-        "schema_version": 5,
-        "research_run_id": run_id,
-        "objective": "Test pending",
-    }
-    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
-
-    events_file = root / "events.jsonl"
-    events_file.write_text(
-        json.dumps({"schema_version": 5, "event_id": "fe_" + "a" * 32, "event": "test"})
-        + "\n"
-    )
-
-    report = import_svc.dry_run(root)
-
-    # Run should be "inserted"
-    inserted = [m for m in report.mappings if m.status == "inserted"]
-    assert len(inserted) == 1
-    assert inserted[0].catalog_type == "run"
-
-    # Event should be "pending" (not "inserted") because it lacks run_id
-    pending = [m for m in report.mappings if m.status == "pending"]
-    assert len(pending) == 1
-    assert pending[0].catalog_type == "event"
-
-    # Omitted count should include the pending event
-    assert report.records_omitted >= 1
-
-
-def test_catalog_import_apply_all_malformed_raises(tmp_path, monkeypatch):
-    """Verify apply() raises ImportApplyError when all records are malformed."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    from research_store.catalog_import import (
-        CatalogImportService,
-        ImportApplyError,
-    )
-    from research_store.container import build_catalog_import_service
-
-    service = build_catalog_import_service()
-    import_svc = CatalogImportService(
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-
-    # Create a Catalog with only malformed records (bad schema version + bad ID)
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-    run_data = {
-        "schema_version": 3,
-        "research_run_id": "not-a-valid-id",
-    }
-    (runs_dir / "bad.json").write_text(json.dumps(run_data))
-
-    with pytest.raises(ImportApplyError, match="Apply aborted.*malformed records"):
-        import_svc.apply(root)
-
-
-def test_catalog_import_cli_dry_run(monkeypatch, capsys, tmp_path):
-    """Verify catalog-import CLI produces JSON output in dry-run mode."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    from research_store import cli as store_cli
-
-    # Create a minimal Catalog root with a valid run ID (fr_ + 32 hex chars)
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-    run_id = f"fr_{uuid4().hex[:32]}"
-    run_data = {
-        "schema_version": 5,
-        "research_run_id": run_id,
-        "objective": "Test CLI dry-run",
-    }
-    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
-
-    assert store_cli.main(["catalog-import", str(root)]) == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["dry_run"] is True
-    assert report["total_records"] == 1
-    assert report["valid_records"] == 1
-    assert report["records_inserted"] == 1
-    assert report["malformed_records"] == 0
-
-
-def test_catalog_import_cli_reconcile(monkeypatch, capsys, tmp_path):
-    """Verify catalog-reconcile CLI produces JSON output."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    from research_store import cli as store_cli
-    from research_store.catalog_import import CatalogImportService
-    from research_store.container import build_catalog_import_service
-
-    # First do an import so there is history to reconcile
-    service = build_catalog_import_service()
-    import_svc = CatalogImportService(
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-    run_id = "fr_" + "b" * 32
-    run_data = {
-        "schema_version": 5,
-        "research_run_id": run_id,
-        "objective": "Test reconcile CLI",
-    }
-    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
-    import_svc.apply(root)
-
-    assert store_cli.main(["catalog-reconcile"]) == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["total_imports"] >= 1
-    assert len(report["imports"]) >= 1
-
-
-def test_catalog_import_apply_pending_warning(tmp_path, monkeypatch):
-    """Verify apply() includes a warning when pending records are present."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    from research_store.catalog_import import CatalogImportService
-    from research_store.container import build_catalog_import_service
-
-    service = build_catalog_import_service()
-    import_svc = CatalogImportService(
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-
-    # Create a Catalog root with a run and an event
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-    run_id = f"fr_{uuid4().hex[:32]}"
-    run_data = {
-        "schema_version": 5,
-        "research_run_id": run_id,
-        "objective": "Test pending warning",
-    }
-    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
-
-    events_file = root / "events.jsonl"
-    events_file.write_text(
-        json.dumps(
-            {"schema_version": 5, "event_id": "fe_" + uuid4().hex[:32], "event": "test"}
-        )
-        + "\n"
-    )
-
-    report = import_svc.apply(root)
-
-    # Run should be inserted
-    assert report.records_inserted >= 1
-    # Event should be omitted (pending)
-    assert report.records_omitted >= 1
-    # Report should include a warning about pending records
-    assert any("additional context" in err for err in report.errors)
-
-
-def test_catalog_import_apply_idempotency_integration(tmp_path, monkeypatch):
-    """Verify apply() idempotency on a second run correctly skips records."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    import json
-
-    from research_store.catalog_import import CatalogImportService
-    from research_store.container import build_catalog_import_service
-
-    service = build_catalog_import_service()
-    import_svc = CatalogImportService(
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-    run_id = "fr_" + uuid4().hex
-    run_data = {
-        "schema_version": 5,
-        "research_run_id": run_id,
-        "objective": "Test idempotency integration",
-    }
-    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
-
-    # First run
-    report1 = import_svc.apply(root)
-    assert report1.records_inserted == 1
-    assert report1.records_skipped == 0
-
-    # Second run
-    report2 = import_svc.apply(root)
-    assert report2.records_inserted == 0
-    assert report2.records_skipped == 1
-
-
-def test_catalog_import_apply_conflict_detection_integration(tmp_path, monkeypatch):
-    """Verify apply() correctly detects and reports conflicts."""
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    import json
-
-    from research_store.catalog_import import CatalogImportService
-    from research_store.container import build_catalog_import_service
-
-    service = build_catalog_import_service()
-    import_svc = CatalogImportService(
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-
-    # First we need to populate a run in DB
-    run_id = "fr_" + uuid4().hex
-    uow_f = (
-        service.uow_factory if hasattr(service, "uow_factory") else service._uow_factory
-    )
-    with uow_f() as uow:
-        cur = uow.connection.cursor()
-        cur.execute(
-            """INSERT INTO research_runs (
-                external_run_id, original_request, status, state,
-                lifecycle_revision, execution_mode, objective,
-                current_coverage_revision, metadata
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (run_id, "unknown", "running", "created", 5, "legacy", "Test", 0, "{}"),
-        )
-        uow.connection.commit()
-
-    root = tmp_path / "catalog"
-    runs_dir = root / "runs"
-    runs_dir.mkdir(parents=True)
-
-    # Run in catalog has older revision/different data, representing a conflict (or just existing)
-    # Actually, the logic in _dry_run_map_record says "skipped" if it exists.
-    # But wait, earlier we said if it exists it returns skipped with conflict_detail="PostgreSQL run already exists; Catalog is older".
-    run_data = {
-        "schema_version": 5,
-        "research_run_id": run_id,
-        "objective": "Test conflict integration",
-    }
-    (runs_dir / f"{run_id}.json").write_text(json.dumps(run_data))
-
-    report = import_svc.apply(root)
-    assert report.records_inserted == 0
-    assert report.records_skipped == 1
-    assert report.mappings[0].conflict_detail is not None
 
 
 # ---------------------------------------------------------------------------

@@ -1,14 +1,14 @@
 """Add the authoritative workflow-state foundation.
 
-The revision is additive and preserves every corpus, snapshot, index, job, and
-legacy research-run row. PostgreSQL runs Alembic DDL transactionally, so an
-interrupted upgrade rolls back to v5 and can be retried with ``upgrade head``.
+This revision establishes the PostgreSQL workflow authority on a clean schema.
+PostgreSQL runs Alembic DDL transactionally, so an interrupted migration can be
+retried with ``upgrade head``.
 """
 
 from alembic import op
 
 revision = "0006_workflow_state"
-down_revision = "0005_run_lifecycle"
+down_revision = "0004_manifest_definition_key"
 branch_labels = None
 depends_on = None
 
@@ -17,38 +17,21 @@ def upgrade():
     op.execute(
         """
         ALTER TABLE research_runs
-          ADD COLUMN state text,
+          ADD COLUMN state text NOT NULL DEFAULT 'created',
           ADD COLUMN lifecycle_revision bigint NOT NULL DEFAULT 0,
           ADD COLUMN reopened_from_revision bigint,
-          ADD COLUMN execution_mode text,
-          ADD COLUMN objective text,
+          ADD COLUMN execution_mode text NOT NULL DEFAULT 'agent_led',
           ADD COLUMN budget_policy_version text,
           ADD COLUMN current_coverage_revision bigint NOT NULL DEFAULT 0,
           ADD COLUMN declared_outcome text,
-          ADD COLUMN metadata jsonb NOT NULL DEFAULT '{}';
-
-        UPDATE research_runs
-        SET state=CASE status
-              WHEN 'complete' THEN
-                CASE WHEN outcome='partial' THEN 'partial' ELSE 'completed' END
-              WHEN 'failed' THEN 'failed'
-              ELSE 'created'
-            END,
-            execution_mode='legacy',
-            objective=original_request,
-            declared_outcome=outcome;
-
-        ALTER TABLE research_runs
-          ALTER COLUMN state SET NOT NULL,
-          ALTER COLUMN execution_mode SET NOT NULL,
-          ALTER COLUMN objective SET NOT NULL,
+          ADD COLUMN metadata jsonb NOT NULL DEFAULT '{}',
           ADD CONSTRAINT research_runs_state_check CHECK(state IN (
             'created','planning','corpus_review','acquiring','extracting',
             'indexing','coverage_review','retrieving','synthesizing',
             'validating','completed','partial','failed','cancelled'
           )),
           ADD CONSTRAINT research_runs_execution_mode_check CHECK(execution_mode IN (
-            'agent_led','autonomous_local','deterministic_debug','legacy'
+            'agent_led','autonomous_local','deterministic_debug'
           )),
           ADD CONSTRAINT research_runs_revision_check CHECK(
             lifecycle_revision >= 0
@@ -183,39 +166,6 @@ def upgrade():
         CREATE INDEX semantic_artifacts_call_idx
           ON semantic_artifacts(semantic_call_id,created_at,id);
 
-        CREATE TABLE compatibility_exports(
-          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-          run_id uuid NOT NULL REFERENCES research_runs(id),
-          invocation_id uuid,
-          export_type text NOT NULL,
-          export_schema_version integer NOT NULL CHECK(export_schema_version > 0),
-          database_revision bigint,
-          event_cursor uuid,
-          source_state_sha256 text NOT NULL
-            CHECK(source_state_sha256 ~ '^[0-9a-f]{64}$'),
-          blob_uri text,
-          filesystem_path text,
-          status text NOT NULL
-            CHECK(status IN ('pending','complete','failed')),
-          error text,
-          metadata jsonb NOT NULL DEFAULT '{}',
-          idempotency_key text NOT NULL CHECK(idempotency_key <> ''),
-          created_at timestamptz NOT NULL DEFAULT now(),
-          completed_at timestamptz,
-          CHECK(database_revision IS NOT NULL OR event_cursor IS NOT NULL),
-          CHECK(database_revision IS NULL OR database_revision >= 0),
-          UNIQUE(run_id,idempotency_key),
-          UNIQUE(invocation_id,idempotency_key),
-          FOREIGN KEY(invocation_id,run_id)
-            REFERENCES research_invocations(id,run_id),
-          FOREIGN KEY(event_cursor,run_id)
-            REFERENCES research_events(id,run_id)
-        );
-        CREATE INDEX compatibility_exports_run_idx
-          ON compatibility_exports(run_id,created_at,id);
-        CREATE INDEX compatibility_exports_invocation_idx
-          ON compatibility_exports(invocation_id,created_at,id);
-
         CREATE TABLE research_run_transitions(
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           run_id uuid NOT NULL REFERENCES research_runs(id),
@@ -264,8 +214,6 @@ def upgrade():
         CREATE TRIGGER research_events_append_only
           BEFORE UPDATE OR DELETE ON research_events
           FOR EACH ROW EXECUTE FUNCTION reject_workflow_ledger_mutation();
-
-        INSERT INTO schema_migrations(version) VALUES (6) ON CONFLICT DO NOTHING;
         """
     )
 

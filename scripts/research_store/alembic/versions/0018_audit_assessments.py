@@ -15,7 +15,7 @@ partial audit invocation for a research run or invocation target.
 * ``target_type`` — ``'run'`` or ``'invocation'`` (which entity was audited)
 * ``target_id`` — domain-level UUID of the audited entity
 * ``target_hash`` — SHA-256 hex digest of the audit packet at assessment time
-* ``evaluator_version`` — evaluator version string (e.g. ``catalog-v5.0``)
+* ``evaluator_version`` — evaluator version string (e.g. ``research-audit-v1``)
 * ``prompt_template_version`` — prompt template version (e.g. ``staged-research-audit-v1``)
 * ``policy_version`` — audit policy version applied
 * ``stage_set`` — text array of stages that were requested (e.g. ``{rubric,acquisition,evidence,synthesis}``)
@@ -99,12 +99,10 @@ referential-validation errors recorded in ``error_details``.
   outputs as JSON, including target hash, provenance, and status.
 * ``audit-query`` — returns assessments filtered by run, target, or status.
 
-## Catalog v5 compatibility
+## PostgreSQL authority
 
-Filesystem (Catalog v5 assessment files, scratch directories) is derived
-only — never authoritative. Regenerating Catalog v5 assessment files from
-PostgreSQL state is a Phase 5 deliverable (issue #35 — Catalog v5 exporter).
-Until then, deleting Catalog v5 files does not affect audit availability.
+Audit assessments and stage outputs are stored exclusively in PostgreSQL.
+Scratch directories are operational diagnostics and are never read as state.
 
 ## Partial-stage behavior
 
@@ -334,13 +332,6 @@ def upgrade():
           END IF;
         END $$;
         """
-    )
-
-    # ----------------------------------------------------------------
-    # 8. Record migration
-    # ----------------------------------------------------------------
-    op.execute(
-        "INSERT INTO schema_migrations(version) VALUES (18) ON CONFLICT DO NOTHING"
     )
 
 

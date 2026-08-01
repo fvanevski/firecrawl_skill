@@ -95,7 +95,7 @@ class TestMigration0024:
         source = migration_path.read_text()
         assert "CREATE TABLE IF NOT EXISTS normalized_blocks" in source
         assert "CREATE TABLE IF NOT EXISTS transformation_records" in source
-        assert "schema_migrations" in source
+        assert "schema_migrations" not in source
 
     def test_migration_docstring(self):
         """Migration should have a docstring explaining the schema."""

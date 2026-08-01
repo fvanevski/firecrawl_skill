@@ -33,19 +33,6 @@ case "${FIRECRAWL_RESEARCH_PERSIST:-auto}" in
   off) export FIRECRAWL_RESEARCH_ACTIVE=0 ;;
   *) echo "ERROR: FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off" >&2; exit 2 ;;
 esac
-ADAPTER_MODE="${FIRECRAWL_LEGACY_ADAPTER_MODE:-compatibility}"
-case "$ADAPTER_MODE" in
-  compatibility) ;;
-  shadow|authoritative)
-    if [[ -z "${DATABASE_URL:-}" ]]; then
-      echo "ERROR: $ADAPTER_MODE adapter mode requires DATABASE_URL" >&2
-      exit 1
-    fi
-    "$SCRIPT_DIR/research-db" ingest-ready >/dev/null
-    ;;
-  *) echo "ERROR: FIRECRAWL_LEGACY_ADAPTER_MODE must be compatibility, shadow, or authoritative" >&2; exit 2 ;;
-esac
-
 # ── Defaults ────────────────────────────────────────────────────────────────
 FORMAT="markdown"
 SUMMARY=false
@@ -113,29 +100,35 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
-CATALOG_META="$OUTPUT_DIR/_meta.json"
-catalog_finish() {
-  local code="$1"
-  local status="completed"
-  local error=""
-  if (( code != 0 )); then
-    status="failed"
-    error="fscrape exited with status $code"
+WORKFLOW_STARTED=0
+workflow_abort() {
+  local code="$?"
+  if [[ "${FIRECRAWL_RESEARCH_ACTIVE:-0}" == "1" && "$WORKFLOW_STARTED" == "1" ]]; then
+    "$SCRIPT_DIR/research-db" run-operation-finish \
+      "$RESEARCH_RUN_ID" "$INVOCATION_ID" \
+      --status failed \
+      --error "fscrape exited with status $code" >/dev/null 2>&1 || true
   fi
-  python3 "$SCRIPT_DIR/invocation_catalog.py" finish --invocation-id "$INVOCATION_ID" --status "$status" --meta "$CATALOG_META" --error "$error" --exit-code "$code" >/dev/null 2>&1 || true
+  exit "$code"
 }
 
-CATALOG_INPUT="$OUTPUT_DIR/_catalog_input.json"
-python3 - "$CATALOG_INPUT" "$FORMAT" "$SUMMARY" "${SCHEMA:+schema}" "${SCHEMA_FILE:+schema_file}" "${URLS[@]}" <<'PYEOF'
+if [[ "${FIRECRAWL_RESEARCH_ACTIVE:-0}" == "1" ]]; then
+  if [[ -z "$RESEARCH_RUN_ID" ]]; then
+    echo "ERROR: persistent fscrape requires --research-run-id or FIRECRAWL_RESEARCH_RUN_ID" >&2
+    exit 1
+  fi
+  WORKFLOW_INPUT="$OUTPUT_DIR/_workflow_input.json"
+  python3 - "$WORKFLOW_INPUT" "$FORMAT" "$SUMMARY" "${SCHEMA:+schema}" "${SCHEMA_FILE:+schema_file}" "${URLS[@]}" <<'PYEOF'
 import json, sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({"format": sys.argv[2], "summary": sys.argv[3] == "true", "schema_mode": sys.argv[4] or sys.argv[5], "urls": sys.argv[6:]}), encoding="utf-8")
 PYEOF
-
-catalog_start=(start --invocation-id "$INVOCATION_ID" --operation scrape --input-json "$(<"$CATALOG_INPUT")")
-[[ -n "$RESEARCH_RUN_ID" ]] && catalog_start+=(--research-run-id "$RESEARCH_RUN_ID")
-python3 "$SCRIPT_DIR/invocation_catalog.py" "${catalog_start[@]}" >/dev/null
-trap 'catalog_finish $?' EXIT
+  "$SCRIPT_DIR/research-db" run-operation-start \
+    "$RESEARCH_RUN_ID" "$INVOCATION_ID" fscrape \
+    --input-file "$WORKFLOW_INPUT" >/dev/null
+  WORKFLOW_STARTED=1
+  trap workflow_abort EXIT
+fi
 
 echo -e "\033[1;32m── fscrape: ${#URLS[@]} URL(s) ──\033[0m" >&2
 echo -e "  \033[1mformat:\033[0m $FORMAT" >&2
@@ -389,20 +382,16 @@ print(f"\nFiles saved to: \033[1;36m{outdir}\033[0m")
 print(f"\n── Next: '\033[1;36mrtk proxy {script_dir}/fread {outdir}\033[0m' to read content ──")
 PYEOF
 
-# PostgreSQL becomes authoritative when DATABASE_URL is configured. Scratch
-# artifacts remain a compatibility export, and persistence uses this explicit
-# manifest rather than scanning directories.
+# Persist successful results through the authoritative PostgreSQL corpus store.
+# Scratch files remain local diagnostics only.
 if [[ "${FIRECRAWL_RESEARCH_ACTIVE:-0}" == "1" ]]; then
-  persist_args=("$OUTPUT_DIR/_meta.json" --output "$OUTPUT_DIR/_corpus.json")
-  [[ -n "$RESEARCH_RUN_ID" ]] && persist_args+=(--research-run-id "$RESEARCH_RUN_ID")
+  persist_args=("$OUTPUT_DIR/_meta.json" --output "$OUTPUT_DIR/_corpus.json" --research-run-id "$RESEARCH_RUN_ID")
   "${FIRECRAWL_RESEARCH_PYTHON:-python3}" "$SCRIPT_DIR/persist_results.py" "${persist_args[@]}" >/dev/null
+  "$SCRIPT_DIR/research-db" run-operation-finish \
+    "$RESEARCH_RUN_ID" "$INVOCATION_ID" \
+    --status succeeded \
+    --output-file "$OUTPUT_DIR/_corpus.json" >/dev/null
+  WORKFLOW_STARTED=0
+  trap - EXIT
   echo "  Corpus IDs: $OUTPUT_DIR/_corpus.json" >&2
 fi
-
-adapter_args=(
-  --entry-point fscrape --action scrape --status complete
-  --metadata "$OUTPUT_DIR/_meta.json" --invocation-id "$INVOCATION_ID"
-  --idempotency-key "legacy-adapter:$INVOCATION_ID:fscrape:complete"
-)
-[[ -n "$RESEARCH_RUN_ID" ]] && adapter_args+=(--research-run-id "$RESEARCH_RUN_ID")
-"${FIRECRAWL_RESEARCH_PYTHON:-python3}" "$SCRIPT_DIR/legacy_adapter.py" "${adapter_args[@]}" >/dev/null

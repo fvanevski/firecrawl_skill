@@ -4,13 +4,12 @@ Covers:
 - Event parity: every new invocation event is authoritative in PostgreSQL
 - Concurrent append: stable ordering under concurrent writes
 - Sanitization: secrets are redacted before storage
-- Filesystem records are derived, not authoritative
+- No filesystem record participates in invocation authority
 - Event ordering is stable and queryable
 - Duplicate/retried commands are idempotent
 - Invalid and unknown IDs are rejected
 - Transaction rollback preserves consistency
-- PostgreSQL failure before export
-- Export failure after PostgreSQL commit
+- PostgreSQL failures roll back invocation mutations
 """
 
 from __future__ import annotations
@@ -27,10 +26,10 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 import pytest
-from research_store.invocation_catalog import (
+from research_store.invocation_service import (
     InvocationAlreadyRunning,
-    InvocationCatalogError,
-    InvocationCatalogService,
+    InvocationError,
+    InvocationService,
     InvocationRecord,
 )
 from research_store.invocation_events import (
@@ -107,8 +106,8 @@ def event_service(uow_factory):
 
 
 @pytest.fixture()
-def catalog_service(uow_factory):
-    return InvocationCatalogService(uow_factory)
+def invocation_service(uow_factory):
+    return InvocationService(uow_factory)
 
 
 # ------------------------------------------------------------------
@@ -162,12 +161,12 @@ class TestEventParity:
             assert len(events) == 1
             assert events[0].event_type == etype
 
-    def test_event_is_queryable_by_invocation(self, run_id, catalog_service):
-        inv = catalog_service.begin(
+    def test_event_is_queryable_by_invocation(self, run_id, invocation_service):
+        inv = invocation_service.begin(
             run_id, f"fc_{uuid4().hex[:32]}", "search", {"query": "test"}
         )
-        catalog_service.add_event(run_id, inv.id, "pivot", {"query": "pivot query"})
-        events = catalog_service.list_events(run_id, invocation_id=inv.id)
+        invocation_service.add_event(run_id, inv.id, "pivot", {"query": "pivot query"})
+        events = invocation_service.list_events(run_id, invocation_id=inv.id)
         # begin() creates invocation_started event, add_event creates pivot event
         assert len(events) == 2
         types = {e.event_type for e in events}
@@ -385,66 +384,31 @@ class TestIdempotency:
 # ------------------------------------------------------------------
 
 
-class TestFilesystemDerivation:
-    """Filesystem records are derived after database commit."""
+class TestPostgresAuthority:
+    """Invocation state has no filesystem dependency."""
 
-    def test_export_invocation_to_filesystem(self, run_id, database_url, tmp_path):
-        import dataclasses
-
-        from research_store.config import StoreConfig
-
-        config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
-
-        from research_store.container import build_run_service
-        from research_store.invocation_catalog import InvocationCatalogService
-
-        service = build_run_service(config)
-        catalog_service = InvocationCatalogService(
-            service.uow_factory, event_service=service.event_service
-        )
-
-        inv = catalog_service.begin(
-            run_id, f"fc_{uuid4().hex[:32]}", "search", {"query": "test"}
-        )
-        catalog_service.add_event(run_id, inv.id, "pivot", {"query": "pivot query"})
-
-        # Export to filesystem
-        catalog_path = tmp_path / "catalog" / "invocations"
-        catalog_path.mkdir(parents=True)
-
-        catalog_record = catalog_service.export_to_catalog_format(run_id, inv.id)
-        assert catalog_record["schema_version"] == 5
-        assert catalog_record["operation"] == "search"
-        # begin() creates invocation_started, add_event creates pivot
-        assert len(catalog_record["events"]) == 2
-        assert catalog_record["events"][0]["event_type"] == "invocation_started"
-        assert catalog_record["events"][1]["event_type"] == "pivot"
-
-    def test_filesystem_not_read_for_state(self, run_id, database_url):
-        """Verify that current state is determined from PostgreSQL, not filesystem."""
+    def test_postgresql_is_the_only_state_source(self, run_id, database_url):
+        """Current invocation state is read exclusively from PostgreSQL."""
         import dataclasses
 
         from research_store.config import StoreConfig
         from research_store.container import build_run_service
-        from research_store.invocation_catalog import InvocationCatalogService
+        from research_store.invocation_service import InvocationService
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
         service = build_run_service(config)
-        catalog_service = InvocationCatalogService(
+        invocation_service = InvocationService(
             service.uow_factory, event_service=service.event_service
         )
 
-        inv = catalog_service.begin(
+        inv = invocation_service.begin(
             run_id, f"fc_{uuid4().hex[:32]}", "search", {"query": "test"}
         )
 
         # State should be "running" from PostgreSQL
-        status = catalog_service.status(invocation_id=inv.id)
+        status = invocation_service.status(invocation_id=inv.id)
         assert status.status == "running"
-
-        # Even if filesystem doesn't exist, state is still queryable
-        # (the test passes if no exception is raised)
 
 
 # ------------------------------------------------------------------
@@ -493,16 +457,16 @@ class TestInvalidIds:
 
 
 # ------------------------------------------------------------------
-# Invocation catalog tests
+# Invocation service tests
 # ------------------------------------------------------------------
 
 
-class TestInvocationCatalog:
-    """PostgreSQL-backed invocation catalog API."""
+class TestInvocationService:
+    """PostgreSQL-backed invocation service API."""
 
-    def test_begin_creates_invocation_and_event(self, run_id, catalog_service):
+    def test_begin_creates_invocation_and_event(self, run_id, invocation_service):
         ext_id = f"fc_{uuid4().hex[:32]}"
-        record = catalog_service.begin(
+        record = invocation_service.begin(
             run_id, ext_id, "search", {"query": "test query"}
         )
         assert isinstance(record, InvocationRecord)
@@ -511,13 +475,13 @@ class TestInvocationCatalog:
         assert record.status == "running"
 
         # Verify event was appended
-        events = catalog_service.list_events(run_id)
+        events = invocation_service.list_events(run_id)
         assert any(e.event_type == "invocation_started" for e in events)
 
-    def test_complete_updates_invocation(self, run_id, catalog_service):
+    def test_complete_updates_invocation(self, run_id, invocation_service):
         ext_id = f"fc_{uuid4().hex[:32]}"
-        record = catalog_service.begin(run_id, ext_id, "search", {"query": "test"})
-        completed = catalog_service.complete(
+        record = invocation_service.begin(run_id, ext_id, "search", {"query": "test"})
+        completed = invocation_service.complete(
             run_id,
             record.id,
             "succeeded",
@@ -527,34 +491,34 @@ class TestInvocationCatalog:
         assert completed.completed_at is not None
         assert completed.output == {"results": [{"url": "https://example.com"}]}
 
-    def test_complete_non_running_raises(self, run_id, catalog_service):
+    def test_complete_non_running_raises(self, run_id, invocation_service):
         ext_id = f"fc_{uuid4().hex[:32]}"
-        record = catalog_service.begin(run_id, ext_id, "search", {"query": "test"})
-        catalog_service.complete(run_id, record.id, "succeeded")
-        with pytest.raises(InvocationCatalogError):
-            catalog_service.complete(run_id, record.id, "succeeded")
+        record = invocation_service.begin(run_id, ext_id, "search", {"query": "test"})
+        invocation_service.complete(run_id, record.id, "succeeded")
+        with pytest.raises(InvocationError):
+            invocation_service.complete(run_id, record.id, "succeeded")
 
-    def test_duplicate_invocation_id_raises(self, run_id, catalog_service):
+    def test_duplicate_invocation_id_raises(self, run_id, invocation_service):
         ext_id = f"fc_{uuid4().hex[:32]}"
-        catalog_service.begin(run_id, ext_id, "search", {"query": "test"})
+        invocation_service.begin(run_id, ext_id, "search", {"query": "test"})
         with pytest.raises(InvocationAlreadyRunning):
-            catalog_service.begin(
+            invocation_service.begin(
                 run_id, ext_id, "scrape", {"url": "https://example.com"}
             )
 
-    def test_list_invocations(self, run_id, catalog_service):
+    def test_list_invocations(self, run_id, invocation_service):
         for idx in range(3):
-            catalog_service.begin(
+            invocation_service.begin(
                 run_id, f"fc_{uuid4().hex[:32]}", "search", {"query": f"test {idx}"}
             )
-        invocations = catalog_service.list_invocations(run_id)
+        invocations = invocation_service.list_invocations(run_id)
         assert len(invocations) == 3
 
-    def test_list_invocations_filtered(self, run_id, catalog_service):
-        catalog_service.begin(run_id, f"fc_{uuid4().hex[:32]}", "search", {})
-        catalog_service.begin(run_id, f"fc_{uuid4().hex[:32]}", "scrape", {})
-        search_invocs = catalog_service.list_invocations(run_id, operation="search")
-        scrape_invocs = catalog_service.list_invocations(run_id, operation="scrape")
+    def test_list_invocations_filtered(self, run_id, invocation_service):
+        invocation_service.begin(run_id, f"fc_{uuid4().hex[:32]}", "search", {})
+        invocation_service.begin(run_id, f"fc_{uuid4().hex[:32]}", "scrape", {})
+        search_invocs = invocation_service.list_invocations(run_id, operation="search")
+        scrape_invocs = invocation_service.list_invocations(run_id, operation="scrape")
         assert len(search_invocs) == 1
         assert len(scrape_invocs) == 1
 
@@ -635,23 +599,23 @@ class TestExportFailureIsolation:
 
         from research_store.config import StoreConfig
         from research_store.container import build_run_service
-        from research_store.invocation_catalog import InvocationCatalogService
+        from research_store.invocation_service import InvocationService
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
         service = build_run_service(config)
-        catalog_service = InvocationCatalogService(
+        invocation_service = InvocationService(
             service.uow_factory, event_service=service.event_service
         )
 
         # This should succeed even if filesystem is unavailable
-        record = catalog_service.begin(
+        record = invocation_service.begin(
             run_id, f"fc_{uuid4().hex[:32]}", "search", {"query": "test"}
         )
         assert record.status == "running"
 
         # Verify state is in PostgreSQL
-        status = catalog_service.status(invocation_id=record.id)
+        status = invocation_service.status(invocation_id=record.id)
         assert status.status == "running"
 
 
@@ -700,54 +664,3 @@ class TestNextEventSequence:
 
 
 # ------------------------------------------------------------------
-# export_to_catalog_format tests
-# ------------------------------------------------------------------
-
-
-class TestExportCatalogFormat:
-    """Export produces correct Catalog v5-compatible format."""
-
-    def test_export_format_fields(self, run_id, database_url):
-        import dataclasses
-
-        from research_store.config import StoreConfig
-        from research_store.container import build_run_service
-        from research_store.invocation_catalog import InvocationCatalogService
-
-        config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
-
-        service = build_run_service(config)
-        catalog_service = InvocationCatalogService(
-            service.uow_factory, event_service=service.event_service
-        )
-
-        inv = catalog_service.begin(
-            run_id, f"fc_{uuid4().hex[:32]}", "search", {"query": "test"}
-        )
-        catalog_service.add_event(run_id, inv.id, "pivot", {"query": "pivot query"})
-        catalog_service.complete(run_id, inv.id, "succeeded", output={"results": []})
-
-        export = catalog_service.export_to_catalog_format(run_id, inv.id)
-
-        # Verify schema version
-        assert export["schema_version"] == 5
-
-        # Verify field mapping
-        assert "invocation_id" in export
-        assert "external_invocation_id" in export
-        assert "research_run_id" in export
-        assert "operation" in export
-        assert export["operation"] == "search"
-
-        # Verify events are serialized
-        assert "events" in export
-        # begin() creates invocation_started, add_event creates pivot, complete creates invocation_finished
-        assert len(export["events"]) == 3
-        event_types = {e["event_type"] for e in export["events"]}
-        assert event_types == {"invocation_started", "pivot", "invocation_finished"}
-
-        # Verify execution status mapping
-        assert export["execution"]["status"] == "succeeded"
-
-        # Verify completed_at is set
-        assert export["finished_at"] is not None

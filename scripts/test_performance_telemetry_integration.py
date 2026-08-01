@@ -100,16 +100,13 @@ class TestTelemetryLifecycle:
         # Create a research run row (required for FK).
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{gen_uuid().hex[:8]}",
                 ),
             )
@@ -182,16 +179,13 @@ class TestTelemetryLifecycle:
         # Create a research run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -220,16 +214,13 @@ class TestTelemetryLifecycle:
         # Create a research run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -261,16 +252,13 @@ class TestTelemetryLifecycle:
         run_id = uuid4()
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -388,30 +376,24 @@ class TestRunScopedCacheIsolation:
         # Create parent run rows (required for FK constraint).
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_a),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_a_{uuid4().hex[:8]}",
                 ),
             )
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_b),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_b_{uuid4().hex[:8]}",
                 ),
             )
@@ -628,16 +610,13 @@ class TestCacheEventProvenance:
         # Create parent run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -688,16 +667,13 @@ class TestCacheEventProvenance:
         # Create parent run row but no cache events.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -751,16 +727,13 @@ class TestCacheEventClassification:
         # Create parent run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -816,16 +789,13 @@ class TestCacheEventClassification:
         # Create parent run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -916,16 +886,13 @@ class TestAbsentTelemetryTables:
         # Create a research run row (required for FK).
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -991,16 +958,13 @@ class TestNoSamplesInExistingTables:
         # Create a research run row (required for FK).
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -1048,16 +1012,13 @@ class TestNoSamplesInExistingTables:
         # Create a research run row (required for FK).
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test objective",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test objective",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -1116,16 +1077,13 @@ class TestTokenCompleteness:
         # Create a research run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -1213,16 +1171,13 @@ class TestTokenCompleteness:
         # Create a research run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -1310,16 +1265,13 @@ class TestEmbeddingCompleteness:
         # Create a research run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -1368,16 +1320,13 @@ class TestEmbeddingCompleteness:
         # Create a research run row.
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -1424,16 +1373,13 @@ class TestEmbeddingCompleteness:
 
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -1485,16 +1431,13 @@ class TestResourceCompleteness:
 
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -1549,16 +1492,13 @@ class TestResourceCompleteness:
 
         with telemetry_connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs (id, original_request, status,
-                   state, execution_mode, objective, external_run_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO research_runs (id, objective, state, execution_mode, external_run_id)
+                   VALUES (%s, %s, %s, %s, %s)""",
                 (
                     str(run_id),
                     "Test",
-                    "running",
                     "created",
                     "agent_led",
-                    "Test",
                     f"test_{uuid4().hex[:8]}",
                 ),
             )
@@ -1621,9 +1561,8 @@ class TestOverlappingCampaignCacheIsolation:
             for run_id, suffix in ((run_a, "a"), (run_b, "b")):
                 cur.execute(
                     """INSERT INTO research_runs (
-                           id, original_request, status, state,
-                           execution_mode, objective, external_run_id
-                       ) VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                           id, objective, state, execution_mode, external_run_id
+                       ) VALUES (%s, %s, %s, %s, %s)""",
                     (
                         str(run_id),
                         "Overlapping cache isolation",

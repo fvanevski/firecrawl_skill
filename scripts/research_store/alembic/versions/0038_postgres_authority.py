@@ -18,14 +18,15 @@ authoritative telemetry completeness:
 * ``sampling_interval_seconds`` is a double precision number for the fixed
   interval used during sampling.
 
-## Compatibility
+## Authority boundary
 
-* Forward-only migration. No existing rows are modified.
+* This revision is the clean PostgreSQL-only schema head. Deployments using an
+  earlier schema must reset the disposable research datastore before use.
 """
 
 from alembic import op
 
-revision = "0038_res_sample_completeness"
+revision = "0038_postgres_authority"
 down_revision = "0037_not_invoked_token_source"
 branch_labels = None
 depends_on = None

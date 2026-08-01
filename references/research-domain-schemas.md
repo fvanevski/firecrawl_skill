@@ -17,10 +17,10 @@ writes, orchestration, budget selection, or workflow transitions.
 | `EvidencePacket` | `evidence-packet-v1` | `evidence-packet-v1` |
 
 These are the first canonical versions, so there are no predecessor versions
-or legacy field aliases. Existing Catalog v5 and `research_workflow.py`
-structures remain separate compatibility formats. A future version may be read
-compatibly only after its conversion is explicit, deterministic, tested, and
-registered. Writers always emit the current exact version.
+or field aliases. A future version may be read only after its conversion is
+explicit, deterministic, tested, and registered. Writers always emit the
+current exact version. PostgreSQL records carrying these artifacts are the sole
+authoritative persisted representation.
 
 ## Validation boundary
 

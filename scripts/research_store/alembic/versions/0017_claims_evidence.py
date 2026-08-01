@@ -82,7 +82,7 @@ The ``ClaimManifestService`` (added in the same PR) validates that:
 ## Survival guarantee
 
 Claims and links are stored exclusively in PostgreSQL. Deleting scratch
-directories or Catalog v5 files does not affect their availability.
+directories does not affect their availability.
 They are queryable via the ``claim-manifest list`` CLI command and the
 service API.
 
@@ -248,13 +248,6 @@ def upgrade():
           END IF;
         END $$;
         """
-    )
-
-    # ----------------------------------------------------------------
-    # 6. Record migration
-    # ----------------------------------------------------------------
-    op.execute(
-        "INSERT INTO schema_migrations(version) VALUES (17) ON CONFLICT DO NOTHING"
     )
 
 

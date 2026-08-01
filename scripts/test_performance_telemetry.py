@@ -1385,7 +1385,7 @@ def test_resource_sampler_backfills_complete_window_on_initial_gpu_sample(
     )
     monkeypatch.setattr(resource_sampler, "_HAS_PYNVML", True)
     monkeypatch.setattr(resource_sampler, "_HAS_PSUTIL", False)
-    monkeypatch.setattr(resource_sampler, "pynvml", fake_nvml)
+    monkeypatch.setattr(resource_sampler, "pynvml", fake_nvml, raising=False)
 
     sampler = resource_sampler.ResourceSampler(
         interval_seconds=0.01,

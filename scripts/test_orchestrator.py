@@ -13,7 +13,7 @@ These tests verify:
 * Restart/replay behavior: the orchestrator detects existing state.
 * Hard-budget rejection: budget-exhausted terminal condition.
 * False-completion prevention: insufficient coverage cannot complete.
-* Compatibility behavior: legacy adapter is called when configured.
+* PostgreSQL-backed orchestration and lifecycle behavior.
 """
 
 from __future__ import annotations
@@ -1272,7 +1272,7 @@ class TestResearchOrchestrator(unittest.TestCase):
 
 
 class TestFsearchSmartIntegration(unittest.TestCase):
-    """Test that fsearch_smart accepts the --orchestrator flag."""
+    """Test the PostgreSQL-only fsearch_smart command surface."""
 
     @unittest.skipUnless(
         os.path.exists(
@@ -1281,8 +1281,7 @@ class TestFsearchSmartIntegration(unittest.TestCase):
         "fsearch_smart not found at expected path",
     )
     def test_orchestrator_flag_parsed(self):
-        """Test that --research-spec is a valid argument (orchestrator
-        flag was removed; legacy flags are accepted but have no effect)."""
+        """The active command surface exposes only current orchestrator inputs."""
         import subprocess
 
         skill_root = os.path.dirname(__file__)
@@ -1294,6 +1293,30 @@ class TestFsearchSmartIntegration(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn("--research-spec", result.stdout)
+        self.assertIn("--max-adaptive-cycles", result.stdout)
+        self.assertNotIn("--orchestrator", result.stdout)
+        self.assertNotIn("--complexity", result.stdout)
+
+    def test_removed_flags_are_rejected(self):
+        """Removed compatibility flags fail instead of silently doing nothing."""
+        import subprocess
+
+        skill_root = os.path.dirname(__file__)
+        fsearch_path = os.path.join(skill_root, "..", "scripts", "fsearch_smart")
+        result = subprocess.run(  # noqa: PLW1510
+            [
+                sys.executable,
+                fsearch_path,
+                "test objective",
+                "--dry-run",
+                "--complexity",
+                "simple",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unrecognized arguments", result.stderr)
 
 
 # ===================================================================

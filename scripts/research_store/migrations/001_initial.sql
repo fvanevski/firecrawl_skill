@@ -1,6 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TABLE IF NOT EXISTS schema_migrations(version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS sources(
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), canonical_url text UNIQUE NOT NULL,
  registered_domain text, source_type text, first_seen_at timestamptz NOT NULL DEFAULT now(),
@@ -54,9 +53,9 @@ CREATE TABLE IF NOT EXISTS embedding_manifests(
  indexed_at timestamptz, error text, UNIQUE(chunk_id, model_name, model_revision, instruction_template_hash));
 
 CREATE TABLE IF NOT EXISTS research_runs(
- id uuid PRIMARY KEY DEFAULT gen_random_uuid(), original_request text NOT NULL, query_plan jsonb,
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), objective text NOT NULL, query_plan jsonb,
  skill_version text, llm_model text, retrieval_policy_version text, started_at timestamptz NOT NULL DEFAULT now(),
- completed_at timestamptz, status text NOT NULL, error text);
+ completed_at timestamptz, error text);
 CREATE TABLE IF NOT EXISTS retrieval_events(
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), run_id uuid NOT NULL REFERENCES research_runs(id), stage text NOT NULL,
  query text, filters jsonb, retriever text, candidate_type text, candidate_id uuid, raw_score double precision,
@@ -82,6 +81,3 @@ CREATE TABLE IF NOT EXISTS relations(
  CHECK(relation_class = 'model_inferred' OR extraction_model IS NULL));
 CREATE INDEX IF NOT EXISTS relations_subject_idx ON relations(subject_type, subject_id);
 CREATE INDEX IF NOT EXISTS relations_object_idx ON relations(object_type, object_id);
-
-INSERT INTO schema_migrations(version) VALUES (1) ON CONFLICT DO NOTHING;
-

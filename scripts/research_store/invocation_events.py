@@ -128,7 +128,7 @@ class InvocationEvent:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a dictionary suitable for compatibility export."""
+        """Serialize the authoritative event record."""
         return {
             "event_id": str(self.id),
             "event_type": self.event_type,
@@ -403,8 +403,7 @@ class EventService:
     def get_next_sequence(self, run_id: UUID) -> int:
         """Return the next available sequence number for a run.
 
-        This is used by callers who need to compute the sequence
-        number themselves (e.g. for compatibility exports).
+        This is used by callers that need to reserve or inspect event order.
         """
         with self.uow_factory() as uow:
             return uow.runs.next_event_sequence(run_id)

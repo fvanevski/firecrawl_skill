@@ -468,7 +468,7 @@ class PostgresUnitOfWork:
                 }
                 for r in cur.fetchall()
             ]
-            cur.execute("SELECT status,count(*) FROM research_runs GROUP BY status")
+            cur.execute("SELECT state,count(*) FROM research_runs GROUP BY state")
             overview["research_runs"] = dict(cur.fetchall())
             return overview
 
@@ -684,25 +684,23 @@ class PostgresUnitOfWork:
             )
             return [dict(zip(keys, row)) for row in cur.fetchall()]
 
-    def start_run(self, original_request, metadata):
+    def start_run(self, objective, metadata):
         with self.connection.cursor() as cur:
             cur.execute(
-                """INSERT INTO research_runs(original_request,query_plan,skill_version,llm_model,
-                retrieval_policy_version,status,external_run_id,catalog_pointer,state,
-                execution_mode,objective,budget_policy_version,metadata)
-                VALUES(%s,%s,%s,%s,%s,'running',%s,%s,'created',%s,%s,%s,%s)
+                """INSERT INTO research_runs(objective,query_plan,skill_version,llm_model,
+                retrieval_policy_version,external_run_id,state,
+                execution_mode,budget_policy_version,metadata)
+                VALUES(%s,%s,%s,%s,%s,%s,'created',%s,%s,%s)
                 ON CONFLICT(external_run_id) DO NOTHING
                 RETURNING id""",
                 (
-                    original_request,
+                    objective,
                     json.dumps(metadata.get("query_plan")),
                     metadata.get("skill_version"),
                     metadata.get("llm_model"),
                     metadata.get("policy_version"),
                     metadata.get("external_run_id"),
-                    metadata.get("catalog_pointer"),
                     metadata.get("execution_mode", "agent_led"),
-                    original_request,
                     metadata.get("budget_policy_version"),
                     _canonical_json(metadata.get("metadata", {})),
                 ),
@@ -719,7 +717,7 @@ class PostgresUnitOfWork:
             if existing is None:
                 raise RuntimeError("research run conflict could not be resolved")
             if existing[1:] != (
-                original_request,
+                objective,
                 metadata.get("execution_mode", "agent_led"),
             ):
                 raise ValueError("external run ID was used for another run")
@@ -731,7 +729,7 @@ class PostgresUnitOfWork:
         with self.connection.cursor() as cur:
             columns = """id,external_run_id,state,lifecycle_revision,
                 reopened_from_revision,execution_mode,objective,declared_outcome,
-                status,completed_at,error"""
+                completed_at,error"""
             if run_id is not None:
                 cur.execute(
                     f"SELECT {columns} FROM research_runs WHERE id=%s", (run_id,)
@@ -753,7 +751,6 @@ class PostgresUnitOfWork:
             "execution_mode",
             "objective",
             "declared_outcome",
-            "legacy_status",
             "completed_at",
             "error",
         )
@@ -1013,13 +1010,6 @@ class PostgresUnitOfWork:
             )
             transition_id = cur.fetchone()[0]
             terminal = next_state in {"completed", "partial", "failed", "cancelled"}
-            legacy_status = (
-                "failed"
-                if next_state in {"failed", "cancelled"}
-                else "complete"
-                if terminal
-                else "running"
-            )
             declared_outcome = outcome or {
                 "completed": "satisfied",
                 "partial": "partial",
@@ -1029,10 +1019,9 @@ class PostgresUnitOfWork:
             cur.execute(
                 """UPDATE research_runs SET state=%s,lifecycle_revision=%s,
                 reopened_from_revision=CASE WHEN %s THEN %s ELSE reopened_from_revision END,
-                status=%s,declared_outcome=%s,outcome=%s,
+                declared_outcome=%s,
                 completed_at=CASE WHEN %s THEN now() ELSE NULL END,
                 error=%s,
-                catalog_pointer=coalesce(%s,catalog_pointer),
                 source_manifest_sha256=CASE WHEN %s THEN %s ELSE source_manifest_sha256 END,
                 answer_sha256=CASE WHEN %s THEN %s ELSE answer_sha256 END
                 WHERE id=%s""",
@@ -1041,12 +1030,9 @@ class PostgresUnitOfWork:
                     next_revision,
                     reopen,
                     current_revision,
-                    legacy_status,
-                    declared_outcome,
                     declared_outcome,
                     terminal,
                     error,
-                    completion.get("catalog_pointer"),
                     terminal,
                     completion.get("source_manifest_sha256"),
                     terminal,
@@ -3267,204 +3253,6 @@ class PostgresUnitOfWork:
                 )
             return row[0]
 
-    def record_compatibility_export(
-        self,
-        run_id,
-        export_type,
-        export_schema_version,
-        source_state_sha256,
-        status,
-        idempotency_key,
-        *,
-        invocation_id=None,
-        database_revision=None,
-        event_cursor=None,
-        blob_uri=None,
-        filesystem_path=None,
-        error=None,
-        metadata=None,
-    ):
-        with self.connection.cursor() as cur:
-            self._lock_workflow_run(cur, run_id)
-            cur.execute(
-                """INSERT INTO compatibility_exports(
-                run_id,invocation_id,export_type,export_schema_version,database_revision,
-                event_cursor,source_state_sha256,blob_uri,filesystem_path,status,error,
-                metadata,idempotency_key,completed_at)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                  CASE WHEN %s IN ('complete','failed') THEN now() ELSE NULL END)
-                ON CONFLICT(run_id,idempotency_key) DO UPDATE
-                  SET status=CASE
-                        WHEN compatibility_exports.status='complete' THEN 'complete'
-                        ELSE excluded.status
-                      END,
-                      database_revision=excluded.database_revision,
-                      event_cursor=excluded.event_cursor,
-                      blob_uri=coalesce(excluded.blob_uri,compatibility_exports.blob_uri),
-                      filesystem_path=coalesce(
-                        excluded.filesystem_path,
-                        compatibility_exports.filesystem_path
-                      ),
-                      error=CASE
-                        WHEN compatibility_exports.status='complete' THEN NULL
-                        ELSE excluded.error
-                      END,
-                      metadata=compatibility_exports.metadata || excluded.metadata,
-                      completed_at=CASE
-                        WHEN compatibility_exports.status='complete'
-                          THEN compatibility_exports.completed_at
-                        WHEN excluded.status IN ('complete','failed') THEN now()
-                        ELSE NULL
-                      END
-                RETURNING id,export_type,source_state_sha256""",
-                (
-                    run_id,
-                    invocation_id,
-                    export_type,
-                    export_schema_version,
-                    database_revision,
-                    event_cursor,
-                    source_state_sha256,
-                    blob_uri,
-                    filesystem_path,
-                    status,
-                    error,
-                    _canonical_json(metadata or {}),
-                    idempotency_key,
-                    status,
-                ),
-            )
-            export_id, stored_type, stored_hash = cur.fetchone()
-            if (stored_type, stored_hash) != (export_type, source_state_sha256):
-                raise ValueError("idempotency key was used for another export")
-            return export_id
-
-    def record_legacy_adapter_comparison(
-        self,
-        entry_point,
-        adapter_mode,
-        legacy_decision,
-        service_proposal,
-        legacy_sha256,
-        proposal_sha256,
-        divergent,
-        divergence_reasons,
-        idempotency_key,
-        *,
-        run_id=None,
-        external_run_id=None,
-        external_invocation_id=None,
-        workflow_revision=None,
-    ):
-        with self.connection.cursor() as cur:
-            cur.execute(
-                """INSERT INTO legacy_adapter_comparisons(
-                run_id,external_run_id,external_invocation_id,entry_point,
-                adapter_mode,legacy_decision,service_proposal,legacy_sha256,
-                proposal_sha256,divergent,divergence_reasons,workflow_revision,
-                idempotency_key)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT(idempotency_key) DO NOTHING
-                RETURNING id,run_id,external_run_id,external_invocation_id,
-                  entry_point,adapter_mode,legacy_sha256,proposal_sha256,divergent,
-                  divergence_reasons,workflow_revision""",
-                (
-                    run_id,
-                    external_run_id,
-                    external_invocation_id,
-                    entry_point,
-                    adapter_mode,
-                    _canonical_json(legacy_decision),
-                    _canonical_json(service_proposal),
-                    legacy_sha256,
-                    proposal_sha256,
-                    divergent,
-                    _canonical_json(divergence_reasons),
-                    workflow_revision,
-                    idempotency_key,
-                ),
-            )
-            row = cur.fetchone()
-            if row is None:
-                cur.execute(
-                    """SELECT id,run_id,external_run_id,external_invocation_id,
-                    entry_point,adapter_mode,legacy_sha256,proposal_sha256,divergent,
-                    divergence_reasons,workflow_revision
-                    FROM legacy_adapter_comparisons WHERE idempotency_key=%s""",
-                    (idempotency_key,),
-                )
-                row = cur.fetchone()
-            expected = (
-                run_id,
-                external_run_id,
-                external_invocation_id,
-                entry_point,
-                adapter_mode,
-                legacy_sha256,
-                proposal_sha256,
-                divergent,
-                divergence_reasons,
-                workflow_revision,
-            )
-            if row[1:] != expected:
-                raise ValueError(
-                    "idempotency key was used for another legacy adapter comparison"
-                )
-            return row[0]
-
-    def list_legacy_adapter_comparisons(
-        self,
-        *,
-        external_run_id=None,
-        external_invocation_id=None,
-        entry_point=None,
-        divergent_only=False,
-        limit=100,
-    ):
-        if not 1 <= limit <= 1000:
-            raise ValueError("comparison query limit must be 1..1000")
-        with self.connection.cursor() as cur:
-            cur.execute(
-                """SELECT id,run_id,external_run_id,external_invocation_id,
-                entry_point,adapter_mode,legacy_decision,service_proposal,
-                legacy_sha256,proposal_sha256,divergent,divergence_reasons,
-                workflow_revision,idempotency_key,created_at
-                FROM legacy_adapter_comparisons
-                WHERE (%s::text IS NULL OR external_run_id=%s)
-                  AND (%s::text IS NULL OR external_invocation_id=%s)
-                  AND (%s::text IS NULL OR entry_point=%s)
-                  AND (NOT %s OR divergent)
-                ORDER BY created_at,id LIMIT %s""",
-                (
-                    external_run_id,
-                    external_run_id,
-                    external_invocation_id,
-                    external_invocation_id,
-                    entry_point,
-                    entry_point,
-                    divergent_only,
-                    limit,
-                ),
-            )
-            keys = (
-                "id",
-                "run_id",
-                "external_run_id",
-                "external_invocation_id",
-                "entry_point",
-                "adapter_mode",
-                "legacy_decision",
-                "service_proposal",
-                "legacy_sha256",
-                "proposal_sha256",
-                "divergent",
-                "divergence_reasons",
-                "workflow_revision",
-                "idempotency_key",
-                "created_at",
-            )
-            return [dict(zip(keys, row)) for row in cur.fetchall()]
-
     def link_run_asset(
         self, external_run_id, snapshot_id, role="acquired", metadata=None
     ):
@@ -3472,7 +3260,7 @@ class PostgresUnitOfWork:
             cur.execute(
                 """INSERT INTO research_run_assets(run_id,snapshot_id,role,metadata)
                 SELECT id,%s,%s,%s FROM research_runs
-                WHERE external_run_id=%s AND status='running'
+                WHERE external_run_id=%s AND state NOT IN ('completed','partial','failed','cancelled')
                 ON CONFLICT(run_id,snapshot_id,role) DO UPDATE
                 SET metadata=research_run_assets.metadata || excluded.metadata""",
                 (snapshot_id, role, json.dumps(metadata or {}), external_run_id),
@@ -3491,15 +3279,15 @@ class PostgresUnitOfWork:
             research_run_id = None
             if research_run_external_id is not None:
                 cur.execute(
-                    """SELECT id,status FROM research_runs
+                    """SELECT id,state FROM research_runs
                     WHERE external_run_id=%s FOR SHARE""",
                     (research_run_external_id,),
                 )
                 run = cur.fetchone()
                 if run is None:
                     raise KeyError(research_run_external_id)
-                if run[1] != "running":
-                    raise ValueError("ingestion batches require a running research run")
+                if run[1] in {"completed", "partial", "failed", "cancelled"}:
+                    raise ValueError("ingestion batches require a nonterminal research run")
                 research_run_id = run[0]
             cur.execute(
                 """SELECT b.id,b.operation,r.external_run_id,b.status
@@ -3665,7 +3453,7 @@ class PostgresUnitOfWork:
             cur.execute(
                 f"""INSERT INTO retrieval_events(run_id,{",".join(fields)})
                 SELECT id,{",".join(["%s"] * len(fields))}
-                FROM research_runs WHERE id=%s AND status='running'""",
+                FROM research_runs WHERE id=%s AND state NOT IN ('completed','partial','failed','cancelled')""",
                 [*values, run_id],
             )
             if cur.rowcount != 1:
@@ -3697,7 +3485,7 @@ class PostgresUnitOfWork:
             cur.executemany(
                 f"""INSERT INTO retrieval_events(run_id, {column_list})
                     SELECT research_runs.id, %s, {field_placeholders}
-                    FROM research_runs WHERE id=%s AND status='running'""",
+                    FROM research_runs WHERE id=%s AND state NOT IN ('completed','partial','failed','cancelled')""",
                 [
                     (
                         execution_id,

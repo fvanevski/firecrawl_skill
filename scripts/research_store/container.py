@@ -8,7 +8,6 @@ from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
 from .extraction_service import ExtractionService
 from .indexing import OpenAICompatibleEmbedder
-from .legacy_adapter import AdapterMode, LegacyEntryPointAdapter
 from .postgres import PostgresUnitOfWork
 from .qdrant import QdrantIndex
 from .retrieval import CohereCompatibleReranker
@@ -89,6 +88,25 @@ def build_run_service(config: StoreConfig | None = None) -> ResearchRunService:
     )
 
 
+def build_invocation_service(config: StoreConfig | None = None):
+    """Build the authoritative PostgreSQL invocation service."""
+    from .invocation_service import InvocationService
+
+    run_service = build_run_service(config)
+    return InvocationService(run_service.uow_factory)
+
+
+def build_workflow_operation_service(config: StoreConfig | None = None):
+    """Build wrapper workflow boundaries over PostgreSQL state."""
+    from .workflow_service import WorkflowOperationService
+
+    run_service = build_run_service(config)
+    return WorkflowOperationService(
+        run_service,
+        build_invocation_service(config),
+    )
+
+
 def build_semantic_service(config: StoreConfig | None = None) -> SemanticCallService:
     config = config or StoreConfig.from_env()
     config.require_database()
@@ -126,51 +144,6 @@ def build_acquisition_service(
         ),
         blob_store=ContentAddressedBlobStore(config.blob_root),
         search_adapter=search_adapter,
-    )
-
-
-def build_compatibility_export_service(config: StoreConfig | None = None):
-    from .compat_export import SearchCompatibilityExporter
-
-    config = config or StoreConfig.from_env()
-    config.require_database()
-    return SearchCompatibilityExporter(
-        partial(
-            PostgresUnitOfWork,
-            config.database_url,
-            config.physical_collection,
-            config.embedding_model,
-            config.embedding_revision,
-            config.embedding_dimension,
-            config.parser_version,
-            config.normalization_version,
-            config.chunker_version,
-        ),
-        blob_store=ContentAddressedBlobStore(config.blob_root),
-    )
-
-
-def build_legacy_adapter(
-    mode: AdapterMode, config: StoreConfig | None = None
-) -> LegacyEntryPointAdapter:
-
-    if mode == AdapterMode.COMPATIBILITY:
-        return LegacyEntryPointAdapter(None, mode)
-    config = config or StoreConfig.from_env()
-    config.require_database()
-    return LegacyEntryPointAdapter(
-        partial(
-            PostgresUnitOfWork,
-            config.database_url,
-            config.physical_collection,
-            config.embedding_model,
-            config.embedding_revision,
-            config.embedding_dimension,
-            config.parser_version,
-            config.normalization_version,
-            config.chunker_version,
-        ),
-        mode,
     )
 
 
@@ -231,9 +204,6 @@ def build_orchestrator(
             ),
             max_adaptive_cycles=getattr(orchestrator_config, "max_adaptive_cycles", 10),
             resume_on_conflict=getattr(orchestrator_config, "resume_on_conflict", True),
-            legacy_adapter_mode=getattr(
-                orchestrator_config, "legacy_adapter_mode", "authoritative"
-            ),
             resource_governor=governor,
             host_artifact_supplier=getattr(
                 orchestrator_config, "host_artifact_supplier", None
@@ -393,70 +363,6 @@ def build_evidence_service(config: StoreConfig | None = None):
         ),
         budget_policy=DEFAULT_POLICY,
         tokenizer_name=config.tokenizer_name,
-    )
-
-
-def build_catalog_export_service(config: StoreConfig | None = None):
-    """Build a Catalog v5 compatibility exporter.
-
-    Args:
-        config: Store config. Uses ``StoreConfig.from_env()`` when
-            ``None``.
-
-    Returns:
-        A ``CatalogExportService`` instance wired to the configured
-        PostgreSQL connection and blob store.
-    """
-    from .blob import ContentAddressedBlobStore
-    from .catalog_export import CatalogExportService
-    from .postgres import PostgresUnitOfWork
-
-    config = config or StoreConfig.from_env()
-    config.require_database()
-    return CatalogExportService(
-        partial(
-            PostgresUnitOfWork,
-            config.database_url,
-            config.physical_collection,
-            config.embedding_model,
-            config.embedding_revision,
-            config.embedding_dimension,
-            config.parser_version,
-            config.normalization_version,
-            config.chunker_version,
-        ),
-        blob_store=ContentAddressedBlobStore(config.blob_root),
-    )
-
-
-def build_catalog_import_service(config: StoreConfig | None = None):
-    """Build a CatalogImportService wired to the PostgreSQL database.
-
-    Args:
-        config: Store config. Uses ``StoreConfig.from_env()`` when
-            ``None``.
-
-    Returns:
-        A ``CatalogImportService`` instance wired to the configured
-        PostgreSQL connection.
-    """
-    from .catalog_import import CatalogImportService
-    from .postgres import PostgresUnitOfWork
-
-    config = config or StoreConfig.from_env()
-    config.require_database()
-    return CatalogImportService(
-        partial(
-            PostgresUnitOfWork,
-            config.database_url,
-            config.physical_collection,
-            config.embedding_model,
-            config.embedding_revision,
-            config.embedding_dimension,
-            config.parser_version,
-            config.normalization_version,
-            config.chunker_version,
-        )
     )
 
 

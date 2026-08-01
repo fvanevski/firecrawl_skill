@@ -790,39 +790,18 @@ class TestServiceIntegration:
 
     def test_prepare_ingest_uses_hierarchical_chunker(self):
         """_prepare_ingest uses hierarchical_chunks internally."""
+        from dataclasses import replace
+
         from research_store.config import StoreConfig
 
-        # We can't easily test the full ingestion without a database,
-        # but we can verify the config has the new field
-        config = StoreConfig(
-            database_url="postgresql://localhost/test",
-            qdrant_url="http://localhost:6333",
-            qdrant_api_key="",
-            qdrant_collection="test",
-            qdrant_alias="test",
-            valkey_url="redis://localhost:6379/0",
-            blob_root=__import__("pathlib").Path("/tmp/test_blobs"),
-            scratch_root=__import__("pathlib").Path("/tmp/test_scratch"),
-            embedding_model="embed",
-            embedding_url="",
-            embedding_api_key="",
-            embedding_revision="main",
-            embedding_dimension=1024,
-            reranker_url="",
-            reranker_model="rerank",
-            reranker_api_key="",
-            reranker_candidate_limit=40,
+        # Build from the complete current configuration surface, then override
+        # only the fields relevant to hierarchical chunking.
+        config = replace(
+            StoreConfig.from_env(),
             chunker_name="hierarchical",
             chunker_version="hierarchical-v1",
             chunker_max_tokens=1000,
             tokenizer_name="cl100k_base",
-            parser_version="markdown-v1",
-            normalization_version="cleanup-v1",
-            parser_registry_version="canonical-v1",
-            max_index_attempts=5,
-            job_lease_seconds=300,
-            worker_poll_seconds=5,
-            embedding_batch_size=32,
         )
         assert config.chunker_max_tokens == 1000
         assert config.chunker_version == "hierarchical-v1"

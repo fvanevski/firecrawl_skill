@@ -37,21 +37,6 @@ BENCHMARKS = {
 }
 
 
-def catalog_record_valid(record):
-    return (
-        record.get("schema_version") == 5
-        and record.get("execution", {}).get("status") in {"succeeded", "failed"}
-        and (
-            bool(record.get("input", {}).get("dry_run"))
-            or (
-                record.get("snapshot", {}).get("availability") == "available"
-                and bool(record.get("operational_metrics"))
-                and record.get("data_completeness") in {"complete", "partial"}
-            )
-        )
-    )
-
-
 def now_stamp():
     return dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")  # noqa: DTZ005
 
@@ -80,8 +65,7 @@ class Campaign:
         self.logs = self.root / "logs"
         self.scratch = self.root / "scratch"
         self.proxy_dir = self.root / "proxy"
-        self.catalog = self.root / "catalog"
-        for directory in (self.logs, self.scratch, self.proxy_dir, self.catalog):
+        for directory in (self.logs, self.scratch, self.proxy_dir):
             directory.mkdir(parents=True, exist_ok=True)
         self.real_cli = shutil.which("firecrawl")
         if not self.real_cli:
@@ -102,7 +86,6 @@ class Campaign:
                 "FC_OPERATION_COUNTER": str(self.counter),
                 "FC_OPERATION_MAX": str(args.max_operations),
                 "FIRECRAWL_API_URL": args.api_url.rstrip("/"),
-                "FIRECRAWL_CATALOG_DIR": str(self.catalog),
                 "TMPDIR": str(self.scratch),
                 "PYTHONDONTWRITEBYTECODE": "1",
             }
@@ -420,19 +403,6 @@ class Campaign:
     def finish(self):
         metrics = self.metrics()
         operations = json.loads(self.counter.read_text(encoding="utf-8"))
-        catalog_records = []
-        for path in (
-            (self.catalog / "invocations").glob("fc_*.json")
-            if (self.catalog / "invocations").is_dir()
-            else []
-        ):
-            try:
-                catalog_records.append(json.loads(path.read_text(encoding="utf-8")))
-            except (OSError, ValueError):
-                continue
-        catalog_pass = bool(catalog_records) and all(
-            catalog_record_valid(record) for record in catalog_records
-        )
         required_cases_pass = all(
             case["status"] == "pass" for case in self.cases if case.get("required")
         )
@@ -448,11 +418,6 @@ class Campaign:
             "operations": operations,
             "cases": self.cases,
             "quality_metrics": metrics,
-            "catalog": {
-                "path": str(self.catalog),
-                "record_count": len(catalog_records),
-                "pass": catalog_pass,
-            },
             "required_cases_pass": required_cases_pass,
             "quality_pass": quality_pass,
         }
@@ -467,7 +432,6 @@ class Campaign:
             f"- Operations: `{operations['count']}/{operations['max']}`",
             f"- Required cases: `{'PASS' if required_cases_pass else 'FAIL'}`",
             f"- Quality gates: `{'PASS' if quality_pass else 'FAIL'}`",
-            f"- Catalog records: `{len(catalog_records)}` (`{'PASS' if catalog_pass else 'FAIL'}`)",
             "",
             "## Cases",
             "",

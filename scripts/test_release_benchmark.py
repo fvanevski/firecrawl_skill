@@ -163,8 +163,12 @@ class TestMetricEngine:
         engine = MetricEngine("postgresql://nonexistent/test")
         try:
             engine.connect()
-        except psycopg.OperationalError:  # Expected — no DB running
-            pass
+        except RuntimeError as exc:
+            assert psycopg is None
+            assert "psycopg is required" in str(exc)
+        except Exception as exc:  # psycopg is optional in local unit environments
+            assert psycopg is not None
+            assert isinstance(exc, psycopg.OperationalError)
         finally:
             engine.close()  # Should be safe
 
@@ -958,7 +962,7 @@ class TestAuthoritativeCandidateRecall:
                 ),
                 BenchmarkSource(
                     schema_version="benchmark-source-v2",
-                    file_path="scripts/catalog_v5.py",
+                    file_path="scripts/research_store/normalization.py",
                     relevance=False,
                     role="distractor",
                     source_class="Distractor source",
