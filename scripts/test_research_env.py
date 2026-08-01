@@ -5,7 +5,6 @@ import pathlib
 import shutil
 import subprocess
 
-
 SOURCE_ADAPTER = pathlib.Path(__file__).with_name("research-env")
 
 
