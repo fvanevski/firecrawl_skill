@@ -66,8 +66,7 @@ def test_loads_root_env_and_ignores_legacy_nested_path(
 ) -> None:
     root, adapter, environment = _sandbox(tmp_path)
     (root / ".env").write_text(
-        'EMBEDDING_MODEL="root-model"\n'
-        'CUSTOM_FROM_ENV_FILE="loaded from root"\n',
+        'EMBEDDING_MODEL="root-model"\nCUSTOM_FROM_ENV_FILE="loaded from root"\n',
         encoding="utf-8",
     )
     legacy_dir = root / "firecrawl"
@@ -89,8 +88,7 @@ def test_loads_root_env_and_ignores_legacy_nested_path(
 def test_explicit_environment_wins_over_root_env(tmp_path: pathlib.Path) -> None:
     root, adapter, environment = _sandbox(tmp_path)
     (root / ".env").write_text(
-        'EMBEDDING_MODEL="file-model"\n'
-        'EMBEDDING_REVISION="file-revision"\n',
+        'EMBEDDING_MODEL="file-model"\nEMBEDDING_REVISION="file-revision"\n',
         encoding="utf-8",
     )
     environment["EMBEDDING_MODEL"] = "explicit-model"
