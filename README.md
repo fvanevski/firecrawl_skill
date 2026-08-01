@@ -14,6 +14,7 @@ This Codex skill combines Firecrawl web acquisition with a persistent, auditable
 - Pre-classify web targets using expanded semantic profiles (`breaking_news`, `legislative_legal`, `ecommerce`, `forum`, `news_article`, `media_release`, `academic_debate`) to trigger structured schema extraction and bypass raw anti-bot markdown limitations.
 - Persist source, immutable snapshot, versioned derivation, chunk, run, batch, and retrieval-event identities.
 - Rebuild, activate, roll back, or prune fingerprinted Qdrant vector indexes without modifying authoritative corpus data.
+- Reset the container-backed PostgreSQL, Qdrant, Valkey, and blob stores to a guarded, migrated, empty state for clean installation and live-test workflows.
 - Manage multi-step research runs (`fr_<uuid>`) with explicit lifecycle states, automatic semantic audits (`--auto-audit`), pivots, and Catalog v5 provenance.
 - Map validated ResearchSpec semantics to versioned hard resource caps, rule-coded proposal rejections, stricter user limits, and immutable per-run PostgreSQL budget snapshots.
 - Construct complete evidence packets with claim-to-passage bindings, corroboration/contradiction/qualification groups, near-duplicate detection, source-independence assessment, and token-budget enforcement.
@@ -60,6 +61,110 @@ FIRECRAWL_CATALOG_DISABLED=1 FIRECRAWL_RESEARCH_PERSIST=off \
 ```
 
 Explicit `DATABASE_URL`, Qdrant/Valkey endpoints and keys, blob root, and `FIRECRAWL_RESEARCH_PYTHON` take precedence over `scripts/research-env`. See `references/research-store-operations.md` for the full configuration surface.
+
+## Clean datastore initialization
+
+Use `scripts/reset-firecrawl-research` when no existing research assets need to be retained and the container-backed persistence stack should be initialized from a clean state.
+
+The reset is destructive. It removes:
+
+- the PostgreSQL authoritative database volume;
+- the Valkey persistence volume;
+- Qdrant collections and snapshots;
+- the content-addressed research blob corpus.
+
+It preserves repository files, Compose configuration, source secret files, and published Git tags/releases.
+
+The default paths and Docker volumes are:
+
+```text
+PostgreSQL Compose: /opt/containers/research-postgres
+Qdrant Compose:     /opt/containers/research-qdrant
+Valkey Compose:     /opt/containers/research-valkey
+Blob root:          /opt/containers/research-assets/blobs
+
+PostgreSQL volume:  research_postgres_data
+Valkey volume:      research_valkey_data
+Qdrant runtime:     research_qdrant_runtime_secrets
+```
+
+Run interactively from a clean `main` checkout:
+
+```bash
+cd "<skill-root>"
+scripts/reset-firecrawl-research
+```
+
+The script displays the resolved destructive targets and requires typing `RESET`.
+
+Fast-forward `main` before resetting:
+
+```bash
+scripts/reset-firecrawl-research --pull
+```
+
+Run noninteractively only after reviewing the configured paths and volume names:
+
+```bash
+scripts/reset-firecrawl-research --pull --yes
+```
+
+Leave the persistent index worker stopped after initialization:
+
+```bash
+scripts/reset-firecrawl-research --no-start-worker
+```
+
+The script fails closed unless:
+
+- the checkout is clean and on `main`;
+- local `main` matches `origin/main`, unless `--pull` is supplied;
+- the research virtual environment exists;
+- the configured Compose projects and `agent-search` network are available;
+- the resolved blob root matches the expected guarded path;
+- all research worker processes have stopped.
+
+A successful reset then:
+
+1. stops the persistent worker and all three datastores;
+2. removes PostgreSQL and Valkey state;
+3. clears Qdrant data, Qdrant snapshots, and research blobs;
+4. starts clean PostgreSQL, Qdrant, and Valkey services;
+5. verifies PostgreSQL connectivity and an empty Valkey database;
+6. migrates PostgreSQL to the current Alembic head;
+7. creates and activates an empty Qdrant collection for the current embedding fingerprint;
+8. starts the persistent index worker unless disabled;
+9. runs `research-db doctor`;
+10. verifies that the authoritative corpus tables contain zero rows.
+
+Expected clean-state diagnostics include:
+
+```text
+schema.at_head:                         true
+index_jobs:                             empty
+ingestion_batches.partial_or_failed:    0
+blobs.referenced:                       0
+blobs.unreferenced:                     empty
+qdrant.coverage.missing:                0
+qdrant.coverage.orphaned:               0
+index_reconcile.total_active_chunks:    0
+index_reconcile.definitions:            1
+valkey.ok:                              true
+embedding.ok:                           true
+reranker.ok:                            true
+```
+
+The initialized Qdrant alias is `research_chunks_active`; the physical collection name is derived from the current embedding fingerprint. With the default released embedding identity, it is normally `research_chunks_b80052e273d5`.
+
+After reset, confirm the store directly:
+
+```bash
+"<skill-root>/scripts/research-db" status
+"<skill-root>/scripts/research-db" ingest-ready
+"<skill-root>/scripts/research-db" doctor
+```
+
+A clean reset intentionally removes all prior research state. Do not use this procedure for upgrade, recovery, migration, or index-only repair when retained assets have value. Use the backup, restore, Qdrant rebuild, and Valkey-loss procedures in `references/operations-runbook.md` instead.
 
 ## Corpus and index lifecycle
 
@@ -174,6 +279,6 @@ env PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider \
 
 Integration tests automatically connect to the disposable `firecrawl_test` PostgreSQL database (port 55432) and the local vLLM endpoint (port 8002) using defaults injected by `scripts/conftest.py`. The guarded session setup drops the public schema and covers populated migrations, database concurrency, derivations, retry ledgers, leases, runs, budget snapshots, and manifest binding. Use a separate recorded disposable-service campaign for wrapper preflight/fail-closed behavior, Valkey loss, damaged Qdrant rebuild, alias activation, and rollback proofs required before production.
 
-For the design invariants, read `references/research-store-architecture.md`. For deployment, migration, backup/restore, worker, indexing, and recovery procedures, read `references/research-store-operations.md`. For Catalog v5 manifests and semantic audits, read `references/catalog-v5.md`.
+For the design invariants, read `references/research-store-architecture.md`. For deployment, migration, clean-state reset, backup/restore, worker, indexing, and recovery procedures, read `references/operations-runbook.md`. For Catalog v5 manifests and semantic audits, read `references/catalog-v5.md`.
 The Phase 5 exit decision and its acceptance evidence are recorded in
 GitHub Issue #49 and `gate-report-phase5.md`.

@@ -11,6 +11,7 @@
 secrets/
 credentials/
 *.secret
+.evidence/
 
 # --- Python & Bytecode ---
 __pycache__/

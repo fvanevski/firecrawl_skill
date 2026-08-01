@@ -1,0 +1,507 @@
+#!/usr/bin/env bash
+#
+# reset-firecrawl-research.sh
+#
+# Destructively reset the Firecrawl Research Skill persistence stack to a
+# clean, migrated, live-test-ready state:
+#
+#   - PostgreSQL authoritative state
+#   - Qdrant vector projection
+#   - Valkey transient state
+#   - content-addressed research blob corpus
+#
+# The script preserves Compose files, source secrets, repository files, and
+# the published v1.0.0 tag. It removes only the configured datastore state.
+#
+# Usage:
+#   ./reset-firecrawl-research.sh
+#   ./reset-firecrawl-research.sh --yes
+#   ./reset-firecrawl-research.sh --pull --yes
+#   ./reset-firecrawl-research.sh --no-start-worker --yes
+#
+# Optional environment overrides:
+#   SKILL_ROOT
+#   PG_DIR
+#   QDRANT_DIR
+#   VALKEY_DIR
+#   PG_SERVICE
+#   PG_PSQL_SERVICE
+#   QDRANT_SERVICE
+#   VALKEY_SERVICE
+#   VALKEY_CLI_SERVICE
+#   POSTGRES_VOLUME
+#   VALKEY_VOLUME
+#   QDRANT_RUNTIME_SECRETS_VOLUME
+#   EXPECTED_BLOB_ROOT
+#   WORKER_SERVICE
+#   COMPOSE_WAIT_TIMEOUT
+#
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+PROGRAM="${0##*/}"
+
+SKILL_ROOT="${SKILL_ROOT:-$HOME/.codex/skills/firecrawl}"
+PG_DIR="${PG_DIR:-/opt/containers/research-postgres}"
+QDRANT_DIR="${QDRANT_DIR:-/opt/containers/research-qdrant}"
+VALKEY_DIR="${VALKEY_DIR:-/opt/containers/research-valkey}"
+
+PG_SERVICE="${PG_SERVICE:-postgres}"
+PG_PSQL_SERVICE="${PG_PSQL_SERVICE:-psql}"
+QDRANT_SERVICE="${QDRANT_SERVICE:-qdrant}"
+VALKEY_SERVICE="${VALKEY_SERVICE:-valkey}"
+VALKEY_CLI_SERVICE="${VALKEY_CLI_SERVICE:-valkey-cli}"
+
+POSTGRES_VOLUME="${POSTGRES_VOLUME:-research_postgres_data}"
+VALKEY_VOLUME="${VALKEY_VOLUME:-research_valkey_data}"
+QDRANT_RUNTIME_SECRETS_VOLUME="${
+  QDRANT_RUNTIME_SECRETS_VOLUME:-research_qdrant_runtime_secrets
+}"
+
+EXPECTED_BLOB_ROOT="${
+  EXPECTED_BLOB_ROOT:-/opt/containers/research-assets/blobs
+}"
+WORKER_SERVICE="${WORKER_SERVICE:-firecrawl-research-indexer.service}"
+COMPOSE_WAIT_TIMEOUT="${COMPOSE_WAIT_TIMEOUT:-180}"
+
+ASSUME_YES=0
+PULL_MAIN=0
+START_WORKER=1
+
+usage() {
+  cat <<EOF
+Usage: $PROGRAM [OPTIONS]
+
+Destructively initialize Firecrawl Research Skill databases and blobs.
+
+Options:
+  -y, --yes              Skip the interactive RESET confirmation.
+      --pull             Fast-forward local main from origin before reset.
+      --no-start-worker  Leave the persistent index worker stopped.
+  -h, --help             Show this help.
+
+Important:
+  This permanently removes all research PostgreSQL, Qdrant, Valkey, and
+  blob-corpus data at the configured locations. Compose files and source
+  secret files are preserved.
+EOF
+}
+
+log() {
+  printf '\n==> %s\n' "$*"
+}
+
+warn() {
+  printf 'WARNING: %s\n' "$*" >&2
+}
+
+die() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+on_error() {
+  local rc=$?
+  printf '\nERROR: reset failed at line %s (exit %s).\n' \
+    "${BASH_LINENO[0]:-unknown}" "$rc" >&2
+  printf 'The persistent worker has not been automatically restarted.\n' >&2
+  exit "$rc"
+}
+trap on_error ERR
+
+need_command() {
+  command -v "$1" >/dev/null 2>&1 ||
+    die "required command not found: $1"
+}
+
+as_root() {
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+realpath_m() {
+  realpath -m -- "$1"
+}
+
+assert_exact_path() {
+  local actual expected label
+  actual="$(realpath_m "$1")"
+  expected="$(realpath_m "$2")"
+  label="$3"
+
+  [[ "$actual" == "$expected" ]] ||
+    die "$label path mismatch: resolved '$actual', expected '$expected'"
+  [[ "$actual" != "/" ]] || die "refusing to operate on filesystem root"
+}
+
+compose_file_exists() {
+  local dir="$1"
+  [[ -f "$dir/docker-compose.yaml" ||
+     -f "$dir/docker-compose.yml" ||
+     -f "$dir/compose.yaml" ||
+     -f "$dir/compose.yml" ]]
+}
+
+compose() {
+  local dir="$1"
+  shift
+  (
+    cd "$dir"
+    docker compose "$@"
+  )
+}
+
+remove_volume_if_present() {
+  local volume="$1"
+  if docker volume inspect "$volume" >/dev/null 2>&1; then
+    docker volume rm "$volume" >/dev/null
+    printf 'Removed Docker volume: %s\n' "$volume"
+  else
+    printf 'Docker volume already absent: %s\n' "$volume"
+  fi
+}
+
+clear_directory() {
+  local dir="$1"
+  local expected="$2"
+  local label="$3"
+
+  assert_exact_path "$dir" "$expected" "$label"
+  as_root mkdir -p -- "$dir"
+  as_root find "$dir" -mindepth 1 -delete
+  printf 'Cleared %s: %s\n' "$label" "$(realpath_m "$dir")"
+}
+
+wait_for_workflows_to_stop() {
+  local processes attempt
+
+  for attempt in {1..15}; do
+    processes="$(
+      pgrep -af \
+        '(^|/)(research-db|python[^ ]*) .*worker|research_store.*worker' ||
+        true
+    )"
+    [[ -z "$processes" ]] && return
+    sleep 1
+  done
+
+  printf '%s\n' "$processes" >&2
+  die "research worker process remains active; stop it before resetting"
+}
+
+validate_compose_projects() {
+  local dir
+  for dir in "$PG_DIR" "$QDRANT_DIR" "$VALKEY_DIR"; do
+    [[ -d "$dir" ]] || die "container directory not found: $dir"
+    compose_file_exists "$dir" ||
+      die "no Compose file found in: $dir"
+    compose "$dir" config >/dev/null
+  done
+
+  docker network inspect agent-search >/dev/null 2>&1 ||
+    die "required Docker network does not exist: agent-search"
+}
+
+confirm_reset() {
+  if (( ASSUME_YES )); then
+    return
+  fi
+
+  cat <<EOF
+
+This will permanently erase:
+
+  PostgreSQL volume: $POSTGRES_VOLUME
+  Valkey volume:     $VALKEY_VOLUME
+  Qdrant data:       $QDRANT_DIR/qdrant_data
+  Qdrant snapshots:  $QDRANT_DIR/qdrant_snapshots
+  Research blobs:    $EXPECTED_BLOB_ROOT
+
+Repository files, Compose configuration, and source secret files are retained.
+
+EOF
+
+  local reply
+  read -r -p 'Type RESET to continue: ' reply
+  [[ "$reply" == "RESET" ]] || die "reset cancelled"
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    -y|--yes)
+      ASSUME_YES=1
+      ;;
+    --pull)
+      PULL_MAIN=1
+      ;;
+    --no-start-worker)
+      START_WORKER=0
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      die "unknown option: $arg"
+      ;;
+  esac
+done
+
+for command_name in \
+  bash docker find git jq pgrep realpath systemctl; do
+  need_command "$command_name"
+done
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+  need_command sudo
+fi
+
+log "Validating repository"
+[[ -d "$SKILL_ROOT/.git" ]] ||
+  die "SKILL_ROOT is not a Git checkout: $SKILL_ROOT"
+cd "$SKILL_ROOT"
+
+[[ "$(git branch --show-current)" == "main" ]] ||
+  die "checkout must be on branch main"
+[[ -z "$(git status --porcelain)" ]] ||
+  die "Git working tree is not clean"
+
+if (( PULL_MAIN )); then
+  git pull --ff-only origin main
+elif git show-ref --verify --quiet refs/remotes/origin/main; then
+  [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] ||
+    die "local main differs from origin/main; rerun with --pull after review"
+fi
+
+[[ -x "$SKILL_ROOT/.venv-research-store/bin/python" ]] ||
+  die "research virtualenv Python is missing or not executable"
+
+export FIRECRAWL_RESEARCH_PYTHON="$SKILL_ROOT/.venv-research-store/bin/python"
+export FIRECRAWL_RESEARCH_PERSIST=on
+export RESEARCH_POSTGRES_DIR="$PG_DIR"
+export RESEARCH_QDRANT_DIR="$QDRANT_DIR"
+export RESEARCH_VALKEY_DIR="$VALKEY_DIR"
+
+# shellcheck disable=SC1091
+source "$SKILL_ROOT/scripts/research-env"
+
+[[ -n "${DATABASE_URL:-}" ]] || die "DATABASE_URL did not resolve"
+[[ -n "${QDRANT_URL:-}" ]] || die "QDRANT_URL did not resolve"
+[[ -n "${VALKEY_URL:-}" ]] || die "VALKEY_URL did not resolve"
+[[ -n "${BLOB_ROOT:-}" ]] || die "BLOB_ROOT did not resolve"
+
+assert_exact_path "$BLOB_ROOT" "$EXPECTED_BLOB_ROOT" "BLOB_ROOT"
+assert_exact_path \
+  "$QDRANT_DIR/qdrant_data" \
+  "$QDRANT_DIR/qdrant_data" \
+  "Qdrant data"
+assert_exact_path \
+  "$QDRANT_DIR/qdrant_snapshots" \
+  "$QDRANT_DIR/qdrant_snapshots" \
+  "Qdrant snapshots"
+
+validate_compose_projects
+confirm_reset
+
+log "Stopping research workers"
+if systemctl --user list-unit-files "$WORKER_SERVICE" \
+  --no-legend 2>/dev/null |
+  grep -q .; then
+  systemctl --user stop "$WORKER_SERVICE"
+fi
+wait_for_workflows_to_stop
+
+log "Stopping datastore containers"
+compose "$VALKEY_DIR" down --remove-orphans
+compose "$QDRANT_DIR" down --remove-orphans
+compose "$PG_DIR" down --remove-orphans
+
+log "Removing datastore state"
+remove_volume_if_present "$POSTGRES_VOLUME"
+remove_volume_if_present "$VALKEY_VOLUME"
+remove_volume_if_present "$QDRANT_RUNTIME_SECRETS_VOLUME"
+
+clear_directory \
+  "$QDRANT_DIR/qdrant_data" \
+  "$QDRANT_DIR/qdrant_data" \
+  "Qdrant data"
+clear_directory \
+  "$QDRANT_DIR/qdrant_snapshots" \
+  "$QDRANT_DIR/qdrant_snapshots" \
+  "Qdrant snapshots"
+clear_directory "$BLOB_ROOT" "$EXPECTED_BLOB_ROOT" "research blob root"
+
+log "Starting clean PostgreSQL"
+compose "$PG_DIR" up -d --wait \
+  --wait-timeout "$COMPOSE_WAIT_TIMEOUT" "$PG_SERVICE"
+
+log "Starting clean Qdrant"
+compose "$QDRANT_DIR" up -d --wait \
+  --wait-timeout "$COMPOSE_WAIT_TIMEOUT" "$QDRANT_SERVICE"
+
+log "Starting clean Valkey"
+compose "$VALKEY_DIR" up -d --wait \
+  --wait-timeout "$COMPOSE_WAIT_TIMEOUT" "$VALKEY_SERVICE"
+
+log "Checking clean datastore connectivity"
+compose "$PG_DIR" run --rm -T "$PG_PSQL_SERVICE" \
+  -Atc 'SELECT current_database(), current_user;' >/dev/null
+
+valkey_ping="$(
+  compose "$VALKEY_DIR" run --rm -T "$VALKEY_CLI_SERVICE" ping |
+    tail -n 1 | tr -d '\r'
+)"
+[[ "$valkey_ping" == "PONG" ]] ||
+  die "Valkey ping failed: $valkey_ping"
+
+valkey_size="$(
+  compose "$VALKEY_DIR" run --rm -T "$VALKEY_CLI_SERVICE" dbsize |
+    tail -n 1 | tr -d '\r'
+)"
+[[ "$valkey_size" == "0" ]] ||
+  die "Valkey database is not empty: dbsize=$valkey_size"
+
+log "Applying current PostgreSQL migrations"
+"$SKILL_ROOT/scripts/research-db" migrate
+status_json="$("$SKILL_ROOT/scripts/research-db" status)"
+printf '%s\n' "$status_json" | jq .
+
+jq -e '
+  .at_head == true
+  and (.current | type == "string")
+  and .current == .head
+' <<<"$status_json" >/dev/null ||
+  die "PostgreSQL schema is not at Alembic head"
+
+"$SKILL_ROOT/scripts/research-db" ingest-ready >/dev/null
+
+log "Creating the empty current Qdrant index"
+index_build_json="$(
+  "$SKILL_ROOT/scripts/research-db" \
+    index-build --current-config --all
+)"
+printf '%s\n' "$index_build_json" | jq .
+
+index_id="$(jq -r '.index_definition.id // empty' <<<"$index_build_json")"
+scheduled="$(jq -r '.scheduled // 0' <<<"$index_build_json")"
+
+[[ -n "$index_id" ]] || die "index-build did not return an index definition ID"
+
+# A genuinely empty reset normally schedules zero jobs. If the implementation
+# ever creates bootstrap jobs, drain them before activation.
+if [[ "$scheduled" =~ ^[0-9]+$ ]] && (( scheduled > 0 )); then
+  "$SKILL_ROOT/scripts/research-db" worker --once --batch-size 64
+fi
+
+"$SKILL_ROOT/scripts/research-db" reconcile-qdrant |
+  jq -e '.ok == true' >/dev/null
+"$SKILL_ROOT/scripts/research-db" index-activate "$index_id" |
+  jq .
+"$SKILL_ROOT/scripts/research-db" index-list |
+  jq .
+
+if (( START_WORKER )); then
+  log "Starting persistent research worker"
+  systemctl --user daemon-reload
+  systemctl --user start "$WORKER_SERVICE"
+  sleep 8
+  systemctl --user is-active --quiet "$WORKER_SERVICE" ||
+    die "persistent research worker did not become active"
+else
+  warn "persistent research worker left stopped by request"
+fi
+
+log "Running final research-store diagnostics"
+set +e
+doctor_json="$("$SKILL_ROOT/scripts/research-db" doctor)"
+doctor_rc=$?
+set -e
+printf '%s\n' "$doctor_json" | jq .
+
+if (( START_WORKER )) && (( doctor_rc != 0 )); then
+  die "research-db doctor returned exit status $doctor_rc"
+fi
+
+jq -e '
+  .schema.at_head == true
+  and .blobs.ok == true
+  and .blobs.referenced == 0
+  and (.blobs.missing_or_corrupt | length) == 0
+  and (.blobs.unreferenced | length) == 0
+  and .qdrant.ok == true
+  and .qdrant.query_embedding_compatible == true
+  and .qdrant.coverage.missing == 0
+  and .qdrant.coverage.orphaned == 0
+  and .index_reconcile.ok == true
+  and .index_reconcile.total_active_chunks == 0
+  and .index_reconcile.definitions == 1
+  and (.index_reconcile.discrepancies | length) == 0
+  and .valkey.ok == true
+  and .embedding.ok == true
+  and .reranker.ok == true
+' <<<"$doctor_json" >/dev/null ||
+  die "final doctor report did not satisfy the clean-state contract"
+
+if (( START_WORKER )); then
+  jq -e '.worker.current_worker_available == true' \
+    <<<"$doctor_json" >/dev/null ||
+    die "doctor does not report an available persistent worker"
+fi
+
+log "Confirming authoritative corpus tables are empty"
+corpus_counts="$(
+  compose "$PG_DIR" run --rm -T "$PG_PSQL_SERVICE" -Atc "
+    SELECT 'asset_snapshots', count(*) FROM asset_snapshots
+    UNION ALL
+    SELECT 'chunks', count(*) FROM chunks
+    UNION ALL
+    SELECT 'documents', count(*) FROM documents
+    UNION ALL
+    SELECT 'research_runs', count(*) FROM research_runs
+    UNION ALL
+    SELECT 'sources', count(*) FROM sources
+    ORDER BY 1;
+  "
+)"
+printf '%s\n' "$corpus_counts"
+
+if sed '/^[[:space:]]*$/d' <<<"$corpus_counts" |
+  grep -Ev \
+    '^(asset_snapshots|chunks|documents|research_runs|sources)\|0$' |
+  grep -q .; then
+  die "one or more authoritative corpus tables are not empty"
+fi
+
+cat <<EOF
+
+Reset complete.
+
+Repository:
+  main commit: $(git rev-parse HEAD)
+
+PostgreSQL:
+  schema head: $(jq -r '.head' <<<"$status_json")
+  corpus rows: 0
+
+Qdrant:
+  alias:      $(jq -r '.qdrant.alias' <<<"$doctor_json")
+  collection: $(jq -r '.qdrant.collection' <<<"$doctor_json")
+  dimension:  $(jq -r '.embedding.dimension' <<<"$doctor_json")
+  points:     0
+
+Valkey:
+  reachable: true
+  initial DB size: 0
+
+Blob corpus:
+  root:       $BLOB_ROOT
+  files:      0
+
+Persistent worker:
+  $(if (( START_WORKER )); then printf 'active'; else printf 'stopped'; fi)
+
+The Firecrawl Research Skill is ready for live testing.
+EOF
