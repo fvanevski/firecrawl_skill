@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-import workflow_test_cases as cases
-from workflow_test_cases import *
+import test_workflow_cases as cases
+from test_workflow_cases import *
 
 
 def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):
