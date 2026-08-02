@@ -52,7 +52,7 @@ Supported controls include `--limit`, `--scrape-limit`, `--sources`, `--tbs`,
 defaults.
 
 The removed `--dir`, `--reuse-search`, and `--scrape-ranks` options fail with
-migration guidance. `FIRECRAWL_RESEARCH_PERSIST=off` is rejected.
+migration guidance. Authoritative PostgreSQL preflight is unconditional.
 
 JSON and console results include run and invocation IDs, search-response ID,
 stable candidate IDs, extraction invocation and outcomes, and authoritative

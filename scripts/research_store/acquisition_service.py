@@ -247,9 +247,7 @@ class AcquisitionResult:
     candidate_count: int
     candidates: list[dict[str, Any]]
     postgres_committed: bool
-    scratch_exported: bool
     event_id: UUID | None = None
-    scratch_error: str | None = None
     search_response: dict[str, Any] = field(default_factory=dict)
     replayed: bool = False
 
@@ -279,8 +277,6 @@ class AcquisitionService:
         limit: int = 20,
         sources: str = "web",
         tbs: str | None = None,
-        scratch_dir: Path | str | None = None,
-        export_scratch: bool = True,
         metadata: dict[str, Any] | None = None,
         authority_context: AuthoritativeAcquisitionContext | None = None,
         replay_existing: bool = False,
@@ -385,21 +381,6 @@ class AcquisitionService:
                 uow.commit()
                 postgres_committed = True
 
-        scratch_exported = False
-        scratch_err = None
-        if export_scratch and scratch_dir:
-            try:
-                self._export_scratch_artifacts(
-                    Path(scratch_dir),
-                    query_text,
-                    adapter_result.raw_payload,
-                    candidates,
-                    resp_data,
-                )
-                scratch_exported = True
-            except Exception as exc:  # noqa: BLE001
-                scratch_err = f"{type(exc).__name__}: {exc}"
-
         return AcquisitionResult(
             search_response_id=resp_data["id"],
             run_id=run_id,
@@ -409,9 +390,7 @@ class AcquisitionService:
             candidate_count=len(candidates),
             candidates=candidates,
             postgres_committed=postgres_committed,
-            scratch_exported=scratch_exported,
             event_id=event_id,
-            scratch_error=scratch_err,
             search_response=resp_data,
             replayed=False,
         )
@@ -523,7 +502,6 @@ class AcquisitionService:
             candidate_count=len(candidates),
             candidates=candidates,
             postgres_committed=True,
-            scratch_exported=False,
             search_response=response,
             replayed=True,
         )
@@ -591,35 +569,3 @@ class AcquisitionService:
                     )
             uow.commit()
         return reconciled
-
-    def _export_scratch_artifacts(
-        self,
-        target_dir: Path,
-        query_text: str,
-        raw_payload: bytes,
-        candidates: list[dict[str, Any]],
-        resp_data: dict[str, Any],
-    ) -> None:
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        search_json_path = target_dir / "_search.json"
-        search_json_path.write_bytes(raw_payload)
-
-        created_at_val = resp_data.get("created_at")
-        created_at_str = (
-            created_at_val.isoformat()
-            if hasattr(created_at_val, "isoformat")
-            else str(created_at_val)
-        )
-
-        meta_json_path = target_dir / "_meta.json"
-        meta_content = {
-            "query": query_text,
-            "search_response_id": str(resp_data["id"]),
-            "run_id": str(resp_data["run_id"]),
-            "backend": resp_data["backend"],
-            "status": resp_data["status"],
-            "candidate_count": len(candidates),
-            "created_at": created_at_str,
-        }
-        meta_json_path.write_text(json.dumps(meta_content, indent=2), encoding="utf-8")

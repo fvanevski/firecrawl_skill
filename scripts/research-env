@@ -88,7 +88,6 @@ export QDRANT_ALIAS="${QDRANT_ALIAS:-research_chunks_active}"
 export PARSER_VERSION="${PARSER_VERSION:-canonical-v1}"
 export NORMALIZATION_VERSION="${NORMALIZATION_VERSION:-normalization-v1}"
 export CHUNKER_VERSION="${CHUNKER_VERSION:-hierarchical-v1}"
-export FIRECRAWL_RESEARCH_PERSIST="${FIRECRAWL_RESEARCH_PERSIST:-auto}"
 export FIRECRAWL_RESEARCH_PYTHON="$research_python"
 
 unset research_skill_root research_env_file research_env_dump research_env_entry

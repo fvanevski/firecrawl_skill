@@ -80,9 +80,9 @@ A new unrelated scrape key is not represented as a retry.
 
 ## Migration from file-oriented inspection
 
-| Former `fread`/scratch use case | Database-native equivalent |
+| Former filesystem inspection use case | Database-native equivalent |
 |---|---|
-| `fread --history` | `finspect runs`, then `invocations` and `search-responses` |
+| list retained acquisition history | `finspect runs`, then `invocations` and `search-responses` |
 | directory index / result-rank lookup | `search-responses`, then candidate IDs from `replay-search` |
 | read a result file | `inspect <asset-id>` plus `passages <asset-id>` |
 | `--skip` / `--lines` | Continue `passages` with its lossless opaque cursor |

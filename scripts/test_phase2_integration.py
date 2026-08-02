@@ -252,131 +252,87 @@ class TestBlobStoreIsolation:
 
 
 @pytest.mark.skipif(not TEST_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
-class TestScratchDeletionSurvival:
-    """
-    Exit criterion 1 & 7 & 8:
-      - Candidates survive scratch deletion.
-      - Export failure does not invalidate committed acquisition.
-      - No candidate exists only in scratch state.
-    """
+class TestAuthoritativeAcquisitionPersistence:
+    """Successful acquisition is represented only by authoritative records."""
 
-    def test_candidates_survive_scratch_deletion(self, tmp_path, prepared_database):
-        """Deleting the scratch directory after a successful acquisition does not
-        remove search responses or candidates from PostgreSQL."""
+    def test_success_has_no_scratch_result_surface(self, tmp_path, prepared_database):
         migrate(TEST_DSN)
         config = replace(
             StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
         )
         run_svc = build_run_service(config)
 
-        ext_id = f"run-scratch-del-{uuid4()}"
-        run_svc.create(objective="test scratch deletion survival", external_id=ext_id)
+        ext_id = f"run-authoritative-only-{uuid4()}"
+        run_svc.create(objective="test authoritative acquisition", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
 
-        scratch_dir = tmp_path / "scratch_del"
         adapter = StubSearchAdapter(
-            _make_success_payload("https://survivor.example.com/doc")
+            _make_success_payload("https://authoritative.example.com/doc")
         )
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
+        result = acq_svc.execute_search(run_id, "authoritative-only acquisition")
 
-        res = acq_svc.execute_search(
-            run_id,
-            "scratch deletion test",
-            scratch_dir=scratch_dir,
-            export_scratch=True,
+        assert result.postgres_committed is True
+        assert not hasattr(result, "scratch_exported")
+        assert not hasattr(result, "scratch_error")
+        assert len(run_svc.list_candidates(run_id)) == 1
+        stored = run_svc.get_search_response(result.search_response_id)
+        assert stored["status"] == "succeeded"
+        assert stored["result_count"] == 1
+
+    def test_success_writes_no_acquisition_artifacts_under_tmpdir(
+        self, tmp_path, prepared_database, monkeypatch
+    ):
+        migrate(TEST_DSN)
+        monitored_tmp = tmp_path / "monitored-tmp"
+        monitored_tmp.mkdir()
+        monkeypatch.setenv("TMPDIR", str(monitored_tmp))
+        config = replace(
+            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
         )
-        assert res.postgres_committed is True
-        assert res.scratch_exported is True
-        assert (scratch_dir / "_search.json").is_file()
+        run_svc = build_run_service(config)
+        ext_id = f"run-no-temp-artifacts-{uuid4()}"
+        run_svc.create(
+            objective="test no temp acquisition artifacts", external_id=ext_id
+        )
+        run_id = run_svc.status(external_id=ext_id).id
+        adapter = StubSearchAdapter(
+            _make_success_payload("https://no-temp-artifacts.example.com/doc")
+        )
 
-        # Delete all scratch files
-        for f in scratch_dir.iterdir():
-            f.unlink()
-        scratch_dir.rmdir()
-        assert not scratch_dir.exists()
+        result = build_acquisition_service(
+            config, search_adapter=adapter
+        ).execute_search(run_id, "no temp artifacts")
 
-        # Candidates must still exist in PostgreSQL
-        cands = run_svc.list_candidates(run_id)
-        assert len(cands) == 1
-        assert cands[0]["canonical_url"] == "https://survivor.example.com/doc"
+        assert result.postgres_committed is True
+        assert list(monitored_tmp.rglob("*")) == []
+        assert len(run_svc.list_candidates(run_id)) == 1
 
-        stored_resp = run_svc.get_search_response(res.search_response_id)
-        assert stored_resp["status"] == "succeeded"
-        assert stored_resp["result_count"] == 1
-
-    def test_scratch_write_failure_does_not_invalidate_postgres(
+    def test_removed_scratch_arguments_fail_before_provider_execution(
         self, tmp_path, prepared_database
     ):
-        """When the scratch export fails (e.g. path is a regular file), the
-        PostgreSQL acquisition must still be committed and candidates intact."""
         migrate(TEST_DSN)
         config = replace(
             StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
         )
         run_svc = build_run_service(config)
-
-        ext_id = f"run-scratch-fail-p2-{uuid4()}"
-        run_svc.create(objective="test scratch fail p2", external_id=ext_id)
+        ext_id = f"run-reject-scratch-args-{uuid4()}"
+        run_svc.create(objective="test removed scratch arguments", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
-
-        # Create a file where the scratch directory would be, forcing mkdir failure
-        blocker = tmp_path / "scratch_blocked"
-        blocker.write_text("I am a file, not a directory")
-
         adapter = StubSearchAdapter(
-            _make_success_payload("https://resilient.example.com/page")
+            _make_success_payload("https://must-not-run.example.com/doc")
         )
-        acq_svc = build_acquisition_service(config, search_adapter=adapter)
+        service = build_acquisition_service(config, search_adapter=adapter)
 
-        res = acq_svc.execute_search(
-            run_id, "scratch fail isolation", scratch_dir=blocker, export_scratch=True
-        )
+        with pytest.raises(TypeError):
+            service.execute_search(
+                run_id,
+                "removed scratch arguments",
+                scratch_dir=tmp_path / "removed",
+            )
 
-        # Scratch export failed but PostgreSQL is authoritative
-        assert res.postgres_committed is True
-        assert res.scratch_exported is False
-        assert res.scratch_error is not None
-
-        cands = run_svc.list_candidates(run_id)
-        assert len(cands) == 1, (
-            "candidate must exist in DB regardless of scratch failure"
-        )
-        assert cands[0]["canonical_url"] == "https://resilient.example.com/page"
-
-    def test_no_candidate_only_in_scratch_state(self, tmp_path, prepared_database):
-        """Scratch generation always follows the DB commit. Candidates retrieved from
-        scratch must also exist in PostgreSQL — never exclusively in scratch."""
-        migrate(TEST_DSN)
-        config = replace(
-            StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
-        )
-        run_svc = build_run_service(config)
-
-        ext_id = f"run-no-scratch-only-{uuid4()}"
-        run_svc.create(objective="no scratch-only candidates", external_id=ext_id)
-        run_id = run_svc.status(external_id=ext_id).id
-
-        scratch_dir = tmp_path / "scratch_check"
-        adapter = StubSearchAdapter(
-            _make_success_payload("https://check-a.com", "https://check-b.com")
-        )
-        acq_svc = build_acquisition_service(config, search_adapter=adapter)
-
-        res = acq_svc.execute_search(
-            run_id, "scratch only check", scratch_dir=scratch_dir, export_scratch=True
-        )
-        assert res.postgres_committed is True
-
-        # Read scratch file candidate list
-        meta = json.loads((scratch_dir / "_meta.json").read_bytes())
-        scratch_count = meta["candidate_count"]
-
-        # Verify the same count exists in DB
-        db_cands = run_svc.list_candidates(run_id)
-        assert len(db_cands) == scratch_count, (
-            "candidate count in DB must match scratch meta; "
-            "no candidate may exist only in scratch"
-        )
+        assert adapter.call_count == 0
+        assert run_svc.list_candidates(run_id) == []
 
 
 @pytest.mark.skipif(not TEST_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL")
@@ -489,11 +445,8 @@ class TestTriageReplayDeterminism:
       - Triage replay produces the same candidate IDs and cards.
     """
 
-    def test_triage_replay_identical_ids_after_scratch_purge(
-        self, tmp_path, prepared_database
-    ):
-        """build_triage_input and replay_candidates return the same candidate IDs
-        before and after the scratch directory is completely deleted."""
+    def test_triage_replay_identical_ids(self, tmp_path, prepared_database):
+        """Repeated database-native triage reads return the same candidate IDs."""
         migrate(TEST_DSN)
         config = replace(
             StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
@@ -504,8 +457,6 @@ class TestTriageReplayDeterminism:
         run_svc.create(objective="triage replay determinism", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
 
-        scratch_dir = tmp_path / "triage_scratch"
-
         adapter = StubSearchAdapter(
             _make_success_payload(
                 "https://triage-a.com/doc1",
@@ -514,27 +465,19 @@ class TestTriageReplayDeterminism:
             )
         )
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
-        acq_svc.execute_search(
-            run_id, "triage replay query", scratch_dir=scratch_dir, export_scratch=True
-        )
+        acq_svc.execute_search(run_id, "triage replay query")
 
-        # Capture initial triage output (with scratch present)
+        # Capture initial triage output.
         triage_before = run_svc.build_triage_input(run_id, limit=10)
         ids_before = {c["id"] for c in triage_before["candidate_cards"]}
         assert len(ids_before) == 3
 
-        # Obliterate the scratch directory entirely
-        for f in list(scratch_dir.iterdir()):
-            f.unlink()
-        scratch_dir.rmdir()
-        assert not scratch_dir.exists()
-
-        # Replay from PostgreSQL authority
+        # Replay from PostgreSQL authority.
         triage_after = run_svc.build_triage_input(run_id, limit=10)
         ids_after = {c["id"] for c in triage_after["candidate_cards"]}
 
         assert ids_before == ids_after, (
-            "Triage IDs must be identical before and after scratch deletion; "
+            "Triage IDs must be identical across database-native reads; "
             f"missing={ids_before - ids_after}, extra={ids_after - ids_before}"
         )
 
@@ -1013,7 +956,7 @@ class TestPhase2EndToEnd:
         """Complete Phase 2 lifecycle:
         a) Execute search → PostgreSQL committed.
         b) Same URL across two branches → recurrence_count == 2.
-        c) Delete scratch → candidates still in DB.
+        c) Authoritative candidates remain queryable.
         d) Build triage input → IDs match.
         e) Reconcile after crash simulation → missing candidates recovered.
         """
@@ -1037,10 +980,7 @@ class TestPhase2EndToEnd:
         run_svc.create(objective="phase2 e2e scenario", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
 
-        scratch_dir = tmp_path / "e2e_scratch"
-        res1 = acq_svc.execute_search(
-            run_id, "e2e query alpha", scratch_dir=scratch_dir, export_scratch=True
-        )
+        res1 = acq_svc.execute_search(run_id, "e2e query alpha")
         assert res1.postgres_committed is True
         assert res1.candidate_count == 2
 
@@ -1060,12 +1000,9 @@ class TestPhase2EndToEnd:
         assert shared_cand is not None
         assert shared_cand["recurrence_count"] == 2
 
-        # --- (c) Delete scratch → candidates survive ---
-        for f in scratch_dir.iterdir():
-            f.unlink()
-        scratch_dir.rmdir()
-        cands_after_del = run_svc.list_candidates(run_id)
-        assert len(cands_after_del) == 3  # shared + unique-a + unique-b
+        # --- (c) Authoritative candidates remain queryable ---
+        persisted_candidates = run_svc.list_candidates(run_id)
+        assert len(persisted_candidates) == 3  # shared + unique-a + unique-b
 
         # --- (d) Triage IDs stable ---
         triage = run_svc.build_triage_input(run_id, limit=10)

@@ -109,7 +109,7 @@ Run these drills quarterly or after any infrastructure change.
 |------|--------|---------------------|--------|
 | 1 | Create a disposable database | `createdb firecrawl_drill_migration` | [ ] |
 | 2 | Set DATABASE_URL | `export DATABASE_URL='postgresql://...@localhost/firecrawl_drill_migration'` | [ ] |
-| 3 | Import existing data | `rtk proxy "<skill-root>/scripts/research-db" import-scratch "$SCRATCH_ROOT"` | [ ] |
+| 3 | Restore PostgreSQL and blob backups | Use the tested backup/restore procedure; old filesystem trees require the last pre-removal release or an external one-shot migration tool | [ ] |
 | 4 | Run migrations | `rtk proxy "<skill-root>/scripts/research-db" migrate` | [ ] |
 | 5 | Verify schema | `rtk proxy "<skill-root>/scripts/research-db" status` — current = head | [ ] |
 | 6 | Verify corpus data | `rtk proxy "<skill-root>/scripts/research-db" corpus-overview` — data preserved | [ ] |

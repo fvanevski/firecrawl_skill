@@ -67,9 +67,7 @@ OPERATIONS_RUNBOOK_COMMANDS = [
     ("index-prune", ["--force", "--index-id", "test-id"]),
     ("reindex", ["--all"]),
     ("reconcile-qdrant", []),
-    # Scratch diagnostics and derivations
-    ("import-scratch", ["--dry-run", "/tmp/test-scratch"]),
-    ("import-scratch", ["/tmp/test-scratch"]),
+    # Derivations and explicit exports
     ("rederive", ["--all"]),
     ("rederive", ["--snapshot", "test-snapshot-id"]),
     ("rederive-v2", ["--all"]),
@@ -338,7 +336,6 @@ class TestDocumentationFiles:
         content = runbook.read_text(encoding="utf-8")
 
         required_vars = [
-            "FIRECRAWL_RESEARCH_PERSIST",
             "DATABASE_URL",
             "BLOB_ROOT",
             "QDRANT_URL",
@@ -388,6 +385,26 @@ class TestDocumentationFiles:
             for token in forbidden:
                 assert token.lower() not in content, (
                     f"Removed runtime identifier {token!r} found in {rel_path}"
+                )
+
+    def test_removed_scratch_interfaces_are_not_documented(self) -> None:
+        removed = (
+            "persist_results.py",
+            "scripts/fread",
+            "import-scratch",
+            "FIRECRAWL_RESEARCH_PERSIST",
+            "SCRATCH_ROOT",
+        )
+        documentation = [SKILL_ROOT / "README.md", SKILL_ROOT / "SKILL.md"]
+        documentation.extend((SKILL_ROOT / "docs").glob("*.md"))
+        documentation.extend((SKILL_ROOT / "references").glob("*.md"))
+
+        for path in documentation:
+            content = path.read_text(encoding="utf-8")
+            for marker in removed:
+                assert marker not in content, (
+                    f"removed interface {marker!r} remains documented in "
+                    f"{path.relative_to(SKILL_ROOT)}"
                 )
 
     def test_recovery_drill_checklist_exists(self) -> None:

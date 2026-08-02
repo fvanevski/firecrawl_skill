@@ -166,7 +166,6 @@ def _make_service(
     mock_config.qdrant_alias = "test"
     mock_config.valkey_url = "redis://localhost:6379/0"
     mock_config.blob_root = MagicMock()
-    mock_config.scratch_root = MagicMock()
     mock_config.embedding_model = "test-model"
     mock_config.embedding_url = ""
     mock_config.embedding_api_key = ""

@@ -32,7 +32,6 @@ class StoreConfig:
     qdrant_alias: str
     valkey_url: str
     blob_root: Path
-    scratch_root: Path
     embedding_model: str
     embedding_url: str
     embedding_api_key: str
@@ -76,7 +75,6 @@ class StoreConfig:
 
     @classmethod
     def from_env(cls) -> StoreConfig:
-        temp = Path(os.environ.get("TMPDIR", "/tmp"))
         return cls(
             database_url=os.environ.get("DATABASE_URL", ""),
             qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
@@ -88,9 +86,6 @@ class StoreConfig:
                 os.environ.get(
                     "BLOB_ROOT", Path.home() / ".local/share/firecrawl/blobs"
                 )
-            ),
-            scratch_root=Path(
-                os.environ.get("SCRATCH_ROOT", temp / "firecrawl_scratch")
             ),
             embedding_model=os.environ.get("EMBEDDING_MODEL", "embed"),
             embedding_url=os.environ.get("EMBEDDING_URL", ""),

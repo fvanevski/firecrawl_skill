@@ -1,13 +1,7 @@
 # classifier.py — Automated pre-scrape candidate classification and schema selection
-#
-# Usage:
-#   python3 classifier.py <scratch_dir_or_meta_json> [--schema-profile ecommerce|forum]
-#
 
 import argparse
 import json
-import os
-import sys
 
 # ── Heuristic Profiles ──────────────────────────────────────────────────────
 PROFILES = {
@@ -483,151 +477,26 @@ def classify_target(url, title="", snippet=""):
     return "editorial_markdown", False
 
 
-def process_directory(directory, chosen_profile=None):
-    """
-    Scans a search scratch directory (containing _meta.json or _search.json),
-    classifies all found URLs, and compiles a Selective Scrape Plan.
-    """
-    meta_path = os.path.join(directory, "_meta.json")
-    search_path = os.path.join(directory, "_search.json")
-
-    source_file = None
-    if os.path.exists(meta_path):
-        source_file = meta_path
-    elif os.path.exists(search_path):
-        source_file = search_path
-
-    if not source_file:
-        print(
-            f"❌ Error: No valid metadata file (_meta.json or _search.json) found in {directory}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    try:
-        with open(source_file) as f:
-            data = json.load(f)
-    except Exception as e:  # noqa: BLE001
-        print(f"❌ Error reading metadata file: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    results = data.get("results", [])
-    if not results and "queries_executed" in data:
-        # It's a master smart search directory - let's gather all query results
-        for q in data["queries_executed"]:
-            results.extend(q.get("metadata", {}).get("results", []))
-
-    plan = {
-        "source_directory": directory,
-        "total_urls_evaluated": len(results),
-        "candidates": [],
-        "fallbacks": [],
-    }
-
-    print(
-        f"\nEvaluating {len(results)} URLs for schema match in: {directory}...",
-        file=sys.stderr,
-    )
-
-    for item in results:
-        url = item.get("url")
-        title = item.get("title", "")
-        snippet = item.get("snippet", item.get("preview_head", ""))
-
-        category, is_match = classify_target(url, title, snippet)
-
-        # If the user specified a specific profile, only flag matches for that profile
-        is_candidate = is_match
-        if chosen_profile and category != chosen_profile:
-            is_candidate = False
-
-        record = {
-            "url": url,
-            "title": title,
-            "snippet": snippet[:120] + "..." if len(snippet) > 120 else snippet,
-            "classified_category": category,
-        }
-
-        if is_candidate:
-            record["matched_profile"] = category
-            plan["candidates"].append(record)
-        else:
-            plan["fallbacks"].append(record)
-
-    # Write plan to a file
-    plan_path = os.path.join(directory, "_scrape_plan.json")
-    with open(plan_path, "w") as pf:
-        json.dump(plan, pf, indent=2)
-
-    return plan, plan_path
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="classifier.py — Heuristic URL pre-classification for structured schema extraction."
     )
     parser.add_argument(
         "target",
-        help="Directory containing _meta.json/_search.json, or a specific URL to evaluate.",
+        help="URL to evaluate.",
     )
-    parser.add_argument(
-        "-p",
-        "--profile",
-        choices=list(PROFILES.keys()),
-        help="Target schema profile to filter candidates.",
-    )
-    parser.add_argument(
-        "-u",
-        "--url",
-        action="store_true",
-        help="Evaluate target as a raw URL instead of a directory.",
-    )
-    parser.add_argument(
-        "-t", "--title", default="", help="Page title (used with --url)."
-    )
-    parser.add_argument(
-        "-s", "--snippet", default="", help="Snippet context (used with --url)."
-    )
+    parser.add_argument("-t", "--title", default="", help="Page title.")
+    parser.add_argument("-s", "--snippet", default="", help="Snippet context.")
 
     args = parser.parse_args()
 
-    if args.url:
-        category, is_match = classify_target(args.target, args.title, args.snippet)
-        result = {
-            "url": args.target,
-            "is_candidate": is_match,
-            "classified_category": category,
-        }
-        print(json.dumps(result, indent=2))
-        sys.exit(0)
-
-    if os.path.isdir(args.target):
-        plan, plan_path = process_directory(args.target, args.profile)
-
-        print("\n\033[1;32m=== Selective Scrape Plan Generated ===\033[0m")
-        print(f"Plan file: \033[1;36m{plan_path}\033[0m")
-        print(f"Total evaluated: {plan['total_urls_evaluated']}")
-        print(f"  ↳ \033[1;32mCandidates (Schema)\033[0m: {len(plan['candidates'])}")
-        print(f"  ↳ \033[1;33mFallbacks (Markdown)\033[0m: {len(plan['fallbacks'])}")
-
-        if plan["candidates"]:
-            print("\n\033[1mCandidates identified:\033[0m")
-            for c in plan["candidates"]:
-                print(
-                    f"  - \033[1;36m[{c['classified_category'].upper()}]\033[0m {c['title']} ({c['url'][:50]}...)"
-                )
-        else:
-            print(
-                "\nNo candidates matching structured profiles were found. Standard markdown recommended."
-            )
-
-        sys.exit(0)
-    else:
-        print(
-            f"❌ Error: Target '{args.target}' is not a directory. Use --url to evaluate raw URLs.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    category, is_match = classify_target(args.target, args.title, args.snippet)
+    result = {
+        "url": args.target,
+        "is_candidate": is_match,
+        "classified_category": category,
+    }
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

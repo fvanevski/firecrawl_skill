@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -414,6 +415,69 @@ def test_blob_probe_fsyncs_file_and_directory_and_removes_probe_state(
     assert not context.blob_root.exists()
 
 
+def test_rc6_removes_legacy_runtime_surfaces(monkeypatch: pytest.MonkeyPatch):
+    from dataclasses import fields
+    from inspect import signature
+
+    from research_store.acquisition_service import AcquisitionResult
+    from research_store.cli import parser
+
+    for removed_path in (
+        SCRIPTS / "persist_results.py",
+        SCRIPTS / "fread",
+    ):
+        assert not removed_path.exists()
+
+    monkeypatch.setenv("SCRATCH_ROOT", "/tmp/must-not-be-read")
+    config = StoreConfig.from_env()
+    assert "scratch_root" not in StoreConfig.__dataclass_fields__
+    assert not hasattr(config, "scratch_root")
+
+    result_fields = {field.name for field in fields(AcquisitionResult)}
+    assert {"scratch_exported", "scratch_error"}.isdisjoint(result_fields)
+
+    search_parameters = signature(AcquisitionService.execute_search).parameters
+    assert {"scratch_dir", "export_scratch"}.isdisjoint(search_parameters)
+
+    root = parser()
+    subparsers = next(
+        action
+        for action in root._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    assert "import-scratch" not in subparsers.choices
+
+    acquisition_parser = subparsers.choices["acquisition-search"]
+    option_strings = {
+        option
+        for action in acquisition_parser._actions
+        for option in action.option_strings
+    }
+    assert "--scratch-dir" not in option_strings
+
+
+def test_rc6_supported_runtime_has_no_removed_persistence_switches():
+    removed = (
+        "FIRECRAWL_RESEARCH_ACTIVE",
+        "FIRECRAWL_CAPTURE_RAW",
+        "FIRECRAWL_RESEARCH_PERSIST",
+    )
+    runtime_paths = (
+        SCRIPTS / "frun",
+        SCRIPTS / "research-env",
+        SCRIPTS / "fsearch",
+        SCRIPTS / "fscrape",
+        SCRIPTS / "research_store" / "fsearch_service.py",
+        SCRIPTS / "research_store" / "fscrape_cli.py",
+    )
+    for path in runtime_paths:
+        text = path.read_text(encoding="utf-8")
+        for marker in removed:
+            assert marker not in text, (
+                f"{marker} remains in {path.relative_to(SCRIPTS.parent)}"
+            )
+
+
 _LITERAL_MARKERS = (
     "firecrawl_scratch",
     "SCRATCH_ROOT",
@@ -457,32 +521,13 @@ _EXCLUDED_PARTS = {
 # intentionally reduce this mapping as they delete each legacy surface.
 # New paths, new markers, or increased counts fail the gate.
 _LEGACY_SURFACE_ALLOWLIST: dict[tuple[str, str], int] = {
-    ("scripts/classifier.py", "_meta.json"): 4,
-    ("scripts/classifier.py", "_search.json"): 4,
-    ("scripts/fread", "_meta.json"): 4,
-    ("scripts/fread", "firecrawl_scratch"): 1,
-    ("scripts/fread", "fread"): 1,
+    # Remaining runtime diagnostics are owned by RC-7 / issue #190.
     ("scripts/fsearch_smart", "_meta.json"): 1,
     ("scripts/fsearch_smart", "firecrawl_scratch"): 1,
     ("scripts/live_validate.py", "_meta.json"): 1,
-    ("scripts/persist_results.py", "_corpus.json"): 3,
-    ("scripts/persist_results.py", "_meta.json"): 4,
-    ("scripts/persist_results.py", "persist_results.py"): 1,
-    ("scripts/persist_results.py", "scratch-only persistence"): 4,
-    ("scripts/persist_results.py", "scratch_file"): 22,
-    ("scripts/research_store/acquisition_service.py", "_meta.json"): 1,
-    ("scripts/research_store/acquisition_service.py", "_search.json"): 1,
-    ("scripts/research_store/acquisition_service.py", "scratch_dir"): 3,
-    ("scripts/research_store/cli.py", "_meta.json"): 1,
-    ("scripts/research_store/cli.py", "import-scratch"): 2,
-    ("scripts/research_store/cli.py", "scratch_dir"): 3,
-    ("scripts/research_store/cli.py", "scratch_file"): 1,
-    ("scripts/research_store/config.py", "SCRATCH_ROOT"): 1,
-    ("scripts/research_store/config.py", "firecrawl_scratch"): 1,
     ("scripts/research_store/fsearch_service.py", "--reuse-search"): 2,
     ("scripts/research_store/fsearch_service.py", "reuse_search"): 1,
     ("scripts/research_store/fsearch_service.py", "scrape_ranks"): 1,
-    ("scripts/research_store/fsearch_service.py", "scratch_dir"): 1,
     ("scripts/research_workflow.py", "scratch_file"): 1,
 }
 
@@ -703,7 +748,6 @@ def test_guarded_success_is_visible_after_commit_and_retry_is_idempotent(
         status.id,
         "authoritative acquisition",
         idempotency_key=idempotency_key,
-        export_scratch=False,
     )
     assert result.postgres_committed is True
 
@@ -725,7 +769,6 @@ def test_guarded_success_is_visible_after_commit_and_retry_is_idempotent(
         status.id,
         "authoritative acquisition",
         idempotency_key=idempotency_key,
-        export_scratch=False,
     )
     assert retried.search_response_id == result.search_response_id
     assert len(run_service.list_search_responses(status.id)) == 1
@@ -758,7 +801,6 @@ def test_commit_failure_never_returns_success_and_retry_recovers(
             status.id,
             "commit must fail closed",
             idempotency_key=idempotency_key,
-            export_scratch=False,
         )
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
@@ -774,7 +816,6 @@ def test_commit_failure_never_returns_success_and_retry_recovers(
         status.id,
         "commit must fail closed",
         idempotency_key=idempotency_key,
-        export_scratch=False,
     )
     assert recovered.postgres_committed is True
     assert len(run_service.list_search_responses(status.id)) == 1

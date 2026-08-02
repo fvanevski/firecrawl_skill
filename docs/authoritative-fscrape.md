@@ -63,7 +63,7 @@ Supported options:
 - `--json`
 
 `FIRECRAWL_RESEARCH_RUN_ID` and `FIRECRAWL_INVOCATION_ID` provide ID defaults.
-`FIRECRAWL_RESEARCH_PERSIST=off` is rejected. Both
+Authoritative PostgreSQL preflight is unconditional. Both
 `--output-dir PATH` and `--output-dir=PATH` fail with migration guidance to
 separate database-native export tooling.
 

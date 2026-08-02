@@ -1,13 +1,13 @@
 ---
 name: firecrawl
-description: "Acquire, retain, retrieve, and audit web research with Firecrawl. Use when Codex needs to search or scrape the web, query or inspect the authoritative PostgreSQL research corpus, run hybrid lexical/vector retrieval, fetch bounded citation passages, preserve scratch artifacts, diagnose ingestion or indexing, or manage research provenance and recovery."
+description: "Acquire, retain, retrieve, and audit web research with Firecrawl. Use when Codex needs to search or scrape the web, query or inspect the authoritative PostgreSQL research corpus, run hybrid lexical/vector retrieval, fetch bounded citation passages, diagnose ingestion or indexing, or manage research provenance and recovery."
 ---
 
 <!-- @format -->
 
 # Firecrawl Research Corpus and Acquisition
 
-PostgreSQL is the sole authority for research workflow state, invocations, claims, audits, and corpus identities. Content-addressed blobs retain immutable payloads, Qdrant is a rebuildable vector projection, Valkey provides transient wakeups, and scratch directories are disposable diagnostics. Use the database first for retained research. Use Firecrawl acquisition wrappers when the corpus lacks current evidence, then retrieve through compact database manifests and bounded passages.
+PostgreSQL is the sole authority for research workflow state, invocations, claims, audits, and corpus identities. Content-addressed blobs retain immutable payloads, Qdrant is a rebuildable vector projection, Valkey provides transient wakeups, and local temporary files are never authoritative storage. Use the database first for retained research. Use Firecrawl acquisition wrappers when the corpus lacks current evidence, then retrieve through compact database manifests and bounded passages.
 
 ## Choose the First Operation
 
@@ -15,7 +15,7 @@ PostgreSQL is the sole authority for research workflow state, invocations, claim
 2. Inspect promising candidate manifests, then call `fetch-passages` with a token bound. Do not preload full documents.
 3. Run `fsearch_smart`, `fsearch`, or `fscrape` only when the corpus is empty, stale, incomplete, or the request explicitly requires new web acquisition.
 4. Inspect the invocation or research-run record before retrying failed or weak acquisition. Distinguish acquisition, persistence, indexing, and retrieval failures.
-5. Use `fread` only for wrapper diagnostics, scratch history, and filesystem-only/private runs.
+5. Use `finspect` and bounded `research-db` inspection commands for history, replay, asset inspection, and passages.
 
 ```bash
 rtk proxy "<skill-root>/scripts/research-db" corpus-overview
@@ -32,33 +32,18 @@ Resolve paths relative to this skill root. Do not assume the skill lives under a
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>"
 rtk proxy "<skill-root>/scripts/fsearch" "<query>" --limit 20 --scrape-limit 5
 rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/article"
-rtk proxy "<skill-root>/scripts/fread" --history
+rtk proxy "<skill-root>/scripts/finspect" runs
 ```
 
-Keep `rtk proxy` at the outer agent-visible boundary. Do not add RTK inside the wrappers: their direct `firecrawl` subprocesses write and inspect artifact files and must retain unmodified streams and exit codes.
+Keep `rtk proxy` at the outer agent-visible boundary. Do not add RTK inside the wrappers: their direct `firecrawl` subprocesses must retain unmodified streams and exit codes.
 
-The scripts write scratch output below the platform temporary directory's `firecrawl_scratch/` subdirectory unless a custom output directory is provided. They honor `TMPDIR` and otherwise use Python's platform-aware temporary-directory lookup, which works on conventional Linux and Android Termux layouts.
+`fsearch` and `fscrape` require a valid `fr_<uuid>` run and a writable PostgreSQL store before provider execution. They return bounded JSON or console results containing stable run, invocation, response, candidate, snapshot, document, chunk, batch, and index-job identities. Payload bytes are retained only in the immutable content-addressed blob store.
 
-Generate one `fc_<uuid>` invocation ID for every top-level wrapper run. Use it as the scratch root and persist it in every generated orientation or metadata artifact (`_index.md`, `_meta.json`, and `_context.json` where applicable). A smart search propagates the same ID to every subquery so its hierarchy remains unambiguous:
-
-```text
-<platform-temp>/firecrawl_scratch/
-├── fc_<uuid-a>/
-│   └── search/
-├── fc_<uuid-b>/
-│   └── scrape/
-└── fc_<uuid-c>/
-    └── smart/
-        ├── query_01/
-        ├── query_02/
-        └── query_NN/
-```
-
-Treat `fc_<uuid>` as the research invocation boundary, `search|scrape|smart` as the operation, and `query_NN` as smart-search branch provenance. Preserve explicit `--dir` or `--output-dir` paths for artifact reuse, but still record the generated or inherited invocation ID in their metadata. Use `--invocation-id` only to deliberately attach a wrapper call to an existing invocation.
+Generate one `fc_<uuid>` invocation ID for every top-level wrapper run. Use `--invocation-id` only to deliberately attach a retry to an existing invocation; use the same idempotency key for uncertain retries.
 
 ## PostgreSQL Workflow Provenance
 
-Every persistent top-level operation belongs to an explicit `fr_<uuid>` run and records an authoritative `fc_<uuid>` invocation in PostgreSQL. Wrapper startup validates the run before network acquisition, records the invocation, and advances only permitted lifecycle stages. Wrapper completion records the terminal invocation status and advances to indexing only after corpus persistence succeeds. Scratch metadata is useful for inspection but is never read to determine run or invocation state.
+Every persistent top-level operation belongs to an explicit `fr_<uuid>` run and records an authoritative `fc_<uuid>` invocation in PostgreSQL. Wrapper startup validates the run before network acquisition, records the invocation, and advances only permitted lifecycle stages. Wrapper completion records the terminal invocation status and advances to indexing only after corpus persistence succeeds. No filesystem manifest is read to determine run, invocation, replay, or corpus state.
 
 ```bash
 RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start "<research objective>" --mode autonomous_local)"
@@ -86,16 +71,9 @@ No filesystem workflow mirror or adapter mode exists. See `references/workflow-s
 
 ## Authoritative Research Asset Store
 
-PostgreSQL is authoritative; content-addressed blobs retain immutable payload bytes; versioned Qdrant collections are rebuildable retrieval projections; Valkey provides optional wakeups only. Scratch files are disposable diagnostics. Successful persistent wrappers create an authoritative invocation, persist an ingestion batch, write `_corpus.json` with stable source, snapshot, document, and chunk IDs, and attach those records to `--research-run-id fr_<uuid>`.
+PostgreSQL is authoritative; content-addressed blobs retain immutable payload bytes; versioned Qdrant collections are rebuildable retrieval projections; Valkey provides optional wakeups only. Every supported acquisition command requires authoritative preflight and fails before Firecrawl execution when PostgreSQL, schema, blob durability, or run binding is invalid. There is no non-persistent acquisition success path.
 
-Set `FIRECRAWL_RESEARCH_PERSIST=auto|on|off`. Use `auto` to persist when a database resolves, `on` to require persistence before acquisition begins, and `off` for filesystem-only acquisition. Persistence is fail-closed: if an enabled store cannot retain every successful Firecrawl result, preserve diagnostic scratch output and the partial corpus manifest, then return nonzero. Never silently downgrade to scratch-only mode. For private scratch-only runs, disable research persistence:
-
-```bash
-FIRECRAWL_RESEARCH_PERSIST=off \
-  rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/private"
-```
-
-Use manifest-first database operations for retained research:
+Use database operations for retained research:
 
 ```bash
 rtk proxy "<skill-root>/scripts/research-db" corpus-overview
@@ -117,7 +95,7 @@ rtk proxy "<skill-root>/scripts/research-db" index-rollback "<index-id>"
 rtk proxy "<skill-root>/scripts/research-db" index-prune --dry-run
 ```
 
-Initialize with `research-db migrate`, then use `research-db ingest-ready` for the writable-store preflight. Persistence `on` runs that preflight before Firecrawl acquisition. Treat `doctor` as read-only: it reports schema, blob, worker, job, active-index, Qdrant coverage, and model-service health without creating or repairing anything. Import old scratch trees with `import-scratch --dry-run` before applying the idempotent import. Use `rederive` to rebuild parser/chunker derivations from retained blob bytes, and `export-invocation fc_<uuid>` to reconstruct `_corpus.json` after an interrupted export.
+Initialize with `research-db migrate`, then use `research-db ingest-ready` for the writable-store preflight. Treat `doctor` as read-only: it reports schema, blob, worker, job, active-index, Qdrant coverage, and model-service health without creating or repairing anything. Old filesystem trees must be migrated with the last pre-removal release or an external one-shot migration tool. Use `rederive` to rebuild parser/chunker derivations from retained blob bytes, and explicit export commands to reconstruct requested JSON artifacts from authoritative records.
 
 Read `references/research-store-architecture.md` for boundaries and consistency rules. Read `references/research-store-operations.md` before deploying the worker, changing an embedding definition, migrating, restoring, rebuilding, pruning, or running live fixtures. Read `references/workflow-state-schema.md` for the authoritative workflow tables and `references/budget-policy.md` for deterministic caps, rejection rules, persisted budget snapshots, and v7 repair.
 
@@ -125,13 +103,13 @@ For operations, deployment, backup/restore, Qdrant rebuild, Valkey loss, endpoin
 
 ## Scripts
 
-| Script                  | Purpose                                                                                                       | Output files                                                                                                         |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `scripts/fsearch_smart` | Coverage-led research orchestrator via `ResearchOrchestrator`                                                 | `fc_<uuid>/smart/` with consolidated metadata and scratch diagnostic files                                        |
-| `scripts/fsearch`       | Search Firecrawl, preserve all candidates, and scrape a bounded subset                                        | `_search.json`, `_index.md`, `_context.json`, `_candidates.json`, `_meta.json`, `result_NNN.md` or `result_NNN.json` |
-| `scripts/fscrape`       | Scrape arbitrary URLs to scratch files                                                                        | `_index.md`, `_meta.json`, `url_NNN.md` or `url_NNN.json`                                                            |
-| `scripts/fread`         | Read scratch files, list history, walk directories, and grep results                                          | Console output only                                                                                                  |
-| `scripts/research-db`   | Migrate, import, inspect, retrieve, rederive, index, reconcile, export, and diagnose the authoritative corpus | JSON manifests and bounded passages                                                                                  |
+| Script | Purpose | Authoritative result |
+| --- | --- | --- |
+| `scripts/fsearch_smart` | Coverage-led research orchestrator via `ResearchOrchestrator` | PostgreSQL workflow, acquisition, provenance, and corpus records |
+| `scripts/fsearch` | Search Firecrawl, persist all candidates, and scrape a bounded subset | Stable response, candidate, extraction, corpus, batch, and job IDs |
+| `scripts/fscrape` | Scrape arbitrary URLs through the direct authoritative service | Stable snapshot, document, derivation, chunk, batch, and job IDs |
+| `scripts/finspect` | List, replay, inspect, and retrieve bounded retained records | Bounded JSON/console output |
+| `scripts/research-db` | Migrate, inspect, retrieve, rederive, index, reconcile, export, and diagnose the authoritative corpus | JSON manifests and bounded passages |
 
 ## Procedure
 
@@ -162,77 +140,55 @@ Use a validated `ResearchSpec` to express scope and source requirements. `--max-
 Use `fsearch` for a specific query or when you already know the query shape.
 
 ```bash
-rtk proxy "<skill-root>/scripts/fsearch" "<query>" --limit 20 --scrape-limit 5 --sources web,news --tbs qdr:d
-rtk proxy "<skill-root>/scripts/fsearch" "<query>" --limit 50 --scrape-limit 0
+rtk proxy "<skill-root>/scripts/fsearch" "<query>" --research-run-id "$RUN_ID" --limit 20 --scrape-limit 5 --sources web,news --tbs qdr:d
+rtk proxy "<skill-root>/scripts/fsearch" "<query>" --research-run-id "$RUN_ID" --limit 50 --scrape-limit 0 --json
 ```
 
-Workflow:
-
-1. Note the scratch directory printed by the command.
-2. Record the printed invocation ID when coordinating multiple research steps.
-3. Read `_index.md` for orientation, then `_context.json` for the compact selected-source manifest.
-4. Use `_candidates.json` only when screening unscripted candidates, domains, branch provenance, or scores.
-5. Treat `result_000.md` as rank 1, `result_001.md` as rank 2, and so on.
-6. If an unscripted candidate is more relevant, scrape its stored URL into the existing scratch directory; do not repeat the search. For a single query, reuse its raw response with `--scrape-ranks 2,7,11 --dir <dir>`.
-7. Use `research-db run-status <run-id>` for workflow state and `fread <scratch-dir>` for mechanical acquisition diagnostics.
+The command commits the search response and all candidates before reporting success. Selected extraction uses stable candidate IDs internally. Inspect or replay retained search results with `finspect search-responses`, `finspect replay-search`, and `finspect scrape-candidates`; do not rerun a query merely to select different candidates.
 
 ### 3. Scrape Known URLs
 
 ```bash
-rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/article" "https://example.com/article2"
+rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/article" "https://example.com/article2" --research-run-id "$RUN_ID"
 ```
 
-Use `--output-dir <dir>` to reuse an existing scratch directory.
-
-For structured extraction, pass an inline JSON schema or a schema file path. Schema mode forces JSON output and skips markdown cleanup.
+For structured extraction, pass an inline JSON schema or a schema file path. Schema mode forces JSON output and persists the validated structured payload with its MIME type and provenance.
 
 ```bash
-rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/product" \
+rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/product" --research-run-id "$RUN_ID" \
   --schema '{"type":"object","properties":{"name":{"type":"string"},"price":{"type":"string"}},"required":["name","price"]}'
 
-rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/product" --schema-file "./schema.json"
+rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/product" --research-run-id "$RUN_ID" --schema-file "./schema.json"
 ```
 
-### 4. Inspect Scratch Files Selectively
+### 4. Inspect Retained Results Selectively
 
-Do not load large scrape files directly. Use `fread` to inspect indexes, grep directories, and read slices.
+Use database-native commands rather than loading full payloads.
 
 ```bash
-rtk proxy "<skill-root>/scripts/fread" "$SCRATCH_DIR"
-rtk proxy "<skill-root>/scripts/fread" "$SCRATCH_DIR" --grep "pattern"
-rtk proxy "<skill-root>/scripts/fread" "$SCRATCH_DIR/result_001.md" --skip 30 --lines 50
-rtk proxy "<skill-root>/scripts/fread" --history
+rtk proxy "<skill-root>/scripts/finspect" runs
+rtk proxy "<skill-root>/scripts/finspect" invocations --run-id "$RUN_ID"
+rtk proxy "<skill-root>/scripts/finspect" search-responses --run-id "$RUN_ID"
+rtk proxy "<skill-root>/scripts/finspect" inspect "<asset-id>"
+rtk proxy "<skill-root>/scripts/finspect" passages "<asset-id>" --max-tokens 2000
 ```
 
 ## Decision Flow
 
-If zero successful pages are scraped:
+If zero successful pages are acquired:
 
-- Inspect `research-db run-status <run-id>` and `research-db doctor` first. Then read the branch `_search_error.log`; if candidates were returned but no pages scraped, distinguish candidate acquisition from extraction failure before changing the query.
-- Broaden the query only after distinguishing those cases.
-- Remove restrictive `--tbs` filters.
-- Inspect `_candidates.json` for promising unscripted ranks and reuse `_search.json` before searching again.
-- For a direct `fsearch`, increase `--limit` when candidate coverage is thin and `--scrape-limit` only when the candidate ledger already contains strong unscripted sources.
-- Try the MCP fallback if the Firecrawl CLI itself is unavailable.
+- Inspect `research-db run-status <run-id>`, the invocation record, extraction attempts, and `research-db doctor` before changing the query.
+- Distinguish search transport, candidate parsing, extraction, ingestion, and indexing failures.
+- Broaden the query only after identifying the failed stage.
+- Remove restrictive `--tbs` filters when candidate coverage is thin.
+- Increase `--limit` when the retained candidate ledger is weak and `--scrape-limit` only when it already contains strong candidates.
+- Replay the stored response and select candidates by stable ID rather than repeating acquisition.
 
-If multiple smart-search branches exist:
-
-- Read the consolidated root index first.
-- Read `_context.json` next; it maps the selected sources to their branch, facet, score, file, and word count without loading full pages.
-- Use `_candidates.json` to compare all unique URLs only when the selected context is insufficient.
-- Use `_meta.json` for complete strategy, query, retry, and per-branch provenance.
-- Treat `query_*/_search.json` as the immutable raw acquisition layer; do not rerun a search merely to choose a different candidate.
-- Grep the root directory for exact terms.
-- Load only the specific result files and line ranges that matter.
-- Do not pass a single result file to `fread --grep`; grep its containing scratch directory instead.
+For smart-search branches, use authoritative workflow and provenance records for normal execution and resume. Local diagnostics remain non-authoritative until their removal under #190.
 
 ## MCP Fallback
 
-The CLI scripts are the primary workflow because they preserve scratch files and metadata. If the `firecrawl` command is unavailable or broken, use available Firecrawl MCP tools directly:
-
-1. Search with the Firecrawl MCP search tool.
-2. Scrape the best URLs with the Firecrawl MCP scrape tool, requesting markdown.
-3. Write results to scratch files manually if the task still needs disk-backed context control.
+The bundled CLI scripts are the primary workflow because they enforce authoritative preflight and persistence. If the `firecrawl` command is unavailable or broken, use available Firecrawl MCP tools only through an integration that persists the response into the authoritative acquisition service; do not treat ad hoc local files as successful acquisition.
 
 ## Markdown Cleanup
 
@@ -240,11 +196,10 @@ The CLI scripts are the primary workflow because they preserve scratch files and
 
 ## Verification
 
-- Index shows at least one `[OK]` result, or the error count is expected.
-- Scratch file exists at the path stated in the index.
-- `fread` output starts with a header like `-- fread: result_NNN.md --` followed by file stats.
-- Content preview matches the article topic rather than site navigation or anti-bot boilerplate.
-- Enabled persistence records the invocation batch and every success/failure, and `_corpus.json` resolves to the same stable IDs.
+- The command reports stable authoritative IDs or a stage-specific failure.
+- Search response and candidates are committed before success is reported.
+- Scrape payload bytes resolve through `BLOB_ROOT`, and PostgreSQL provenance resolves to the same snapshot, document, derivation, and chunk IDs.
+- Bounded passages match the source topic rather than site navigation or anti-bot boilerplate.
 - The worker reports a current heartbeat, no stale or dead fixture jobs, and exact PostgreSQL/Qdrant coverage for the active fingerprint.
 - `doctor` changes no database, blob, Qdrant, Valkey, or filesystem state.
 
@@ -267,4 +222,4 @@ rtk proxy "<skill-root>/scripts/live_validate.py" \
 
 Inspect the generated `report.md` and `manifest.json` below the printed platform-temporary artifact directory. Never treat backend reachability failures as query-quality failures.
 
-For an authorized live-corpus campaign, retain a tagged `research-store-v3` fixture set with unchanged and changed snapshots, overlapping positive controls, an unrelated negative control, one `fscrape`, one bounded `fsearch`, and one bounded parent `smart_search`. Verify wrapper-to-batch-to-PostgreSQL/blob-to-worker-to-Qdrant-to-hybrid-retrieval provenance, worker restart recovery, index activation and rollback, linked `fr_<uuid>` retrieval events, and private mode producing no PostgreSQL, blob, or Qdrant writes.
+For an authorized live-corpus campaign, retain a tagged `research-store-v3` fixture set with unchanged and changed snapshots, overlapping positive controls, an unrelated negative control, one `fscrape`, one bounded `fsearch`, and one bounded parent `smart_search`. Verify wrapper-to-batch-to-PostgreSQL/blob-to-worker-to-Qdrant-to-hybrid-retrieval provenance, worker restart recovery, index activation and rollback, linked `fr_<uuid>` retrieval events, and failed authoritative preflight producing no Firecrawl, PostgreSQL, blob, or Qdrant writes.

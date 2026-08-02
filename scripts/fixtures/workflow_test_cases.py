@@ -237,7 +237,6 @@ def fake_cli(tmp_path):
     env["FAKE_FIRECRAWL_LOG"] = str(tmp_path / "calls.jsonl")
     env["FIRECRAWL_AUDIT_AUTO_SEMANTIC"] = "0"
     env["FIRECRAWL_RESEARCH_AUTO_ENV"] = "0"
-    env["FIRECRAWL_RESEARCH_PERSIST"] = "off"
     env["DATABASE_URL"] = ""
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env, tmp_path
@@ -353,29 +352,8 @@ def test_fsearch_rejects_removed_scratch_options_before_firecrawl(
     assert list(tmp_path.glob("**/_search.json")) == []
 
 
-def test_fsearch_persistence_off_fails_before_firecrawl(fake_cli):
-    env, tmp_path = fake_cli
-
-    result = run_script(
-        "fsearch",
-        "zero-results",
-        "--research-run-id",
-        "fr_" + "b" * 32,
-        "--json",
-        env=env,
-    )
-
-    assert result.returncode == 2
-    payload = json.loads(result.stdout)
-    assert payload["failure_stage"] == "preflight"
-    assert "FIRECRAWL_RESEARCH_PERSIST=off was removed" in payload["error"]
-    assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
-    assert not any(tmp_path.glob("**/_meta.json"))
-
-
 def test_fsearch_missing_database_fails_before_firecrawl(fake_cli):
     env, tmp_path = fake_cli
-    env["FIRECRAWL_RESEARCH_PERSIST"] = "on"
 
     result = run_script(
         "fsearch",
@@ -433,30 +411,6 @@ def test_fscrape_rejects_undocumented_format(fake_cli):
     result = run_script("fscrape", "https://example.com", "--format", "text", env=env)
     assert result.returncode == 1
     assert "unsupported format" in result.stderr
-
-
-def test_fread_history_grep_slice_and_invalid_regex(fake_cli):
-    env, tmp_path = fake_cli
-    root = tmp_path / "termux tmp" / "firecrawl_scratch" / "session O'Brien"
-    root.mkdir(parents=True)
-    (root / "_meta.json").write_text(
-        json.dumps(
-            {"query": "portable", "results": [{"status": "ok"}], "total_words": 4}
-        ),
-        encoding="utf-8",
-    )
-    (root / "result_000.md").write_text("one\nneedle\nthree\nfour\n", encoding="utf-8")
-    env["TMPDIR"] = str(tmp_path / "termux tmp")
-    assert "portable" in run_script("fread", "--history", env=env).stdout
-    assert "needle" in run_script("fread", root, "--grep", "needle", env=env).stdout
-    sliced = run_script(
-        "fread", root / "result_000.md", "--skip", "1", "--lines", "1", env=env
-    )
-    assert "needle" in sliced.stdout
-    assert "lines \x1b[1;36m2-2\x1b[0m" in sliced.stdout
-    assert "showing:\x1b[0m first" not in sliced.stdout
-    invalid = run_script("fread", root, "--grep", "[", env=env)
-    assert invalid.returncode == 2
 
 
 def test_smart_search_rejects_removed_arguments(fake_cli):
