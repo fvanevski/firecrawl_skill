@@ -8,9 +8,9 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from research_store import inspection_cli
 from research_store.config import StoreConfig
 from research_store.direct_scrape_service import DirectScrapeService
-from research_store import inspection_cli
 from research_store.inspection_cli import execute, parser
 from research_store.inspection_contract import (
     InspectionBoundError,
