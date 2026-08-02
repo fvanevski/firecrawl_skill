@@ -253,7 +253,27 @@ _EXCLUDED_PARTS = {
 
 # Path-specific baseline for issue #184. Later scratch-removal issues must
 # intentionally reduce this mapping as they delete each legacy surface.
-_LEGACY_SURFACE_ALLOWLIST: dict[tuple[str, str], int] = {}
+_LEGACY_SURFACE_ALLOWLIST: dict[tuple[str, str], int] = {
+    ("scripts/fread", "firecrawl_scratch"): 1,
+    ("scripts/fread", "fread"): 1,
+    ("scripts/fscrape", "firecrawl_scratch"): 2,
+    ("scripts/fscrape", "fread"): 1,
+    ("scripts/fscrape", "persist_results.py"): 1,
+    ("scripts/fscrape", "scratch_file"): 3,
+    ("scripts/fsearch", "firecrawl_scratch"): 1,
+    ("scripts/fsearch", "fread"): 1,
+    ("scripts/fsearch", "persist_results.py"): 1,
+    ("scripts/fsearch", "scratch_file"): 7,
+    ("scripts/fsearch_smart", "firecrawl_scratch"): 1,
+    ("scripts/persist_results.py", "persist_results.py"): 1,
+    ("scripts/persist_results.py", "scratch-only persistence"): 4,
+    ("scripts/persist_results.py", "scratch_file"): 22,
+    ("scripts/research_store/cli.py", "import-scratch"): 2,
+    ("scripts/research_store/cli.py", "scratch_file"): 1,
+    ("scripts/research_store/config.py", "SCRATCH_ROOT"): 1,
+    ("scripts/research_store/config.py", "firecrawl_scratch"): 1,
+    ("scripts/research_workflow.py", "scratch_file"): 1,
+}
 
 
 def _is_runtime_source(relative: Path) -> bool:
@@ -362,7 +382,6 @@ def test_secure_ephemeral_temp_files_are_not_legacy_storage(tmp_path: Path):
     assert _legacy_surface_inventory(tmp_path) == {}
 
 
-@pytest.mark.integration
 def test_authoritative_preflight_against_disposable_postgresql(tmp_path: Path):
     database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
     if not database_url:
