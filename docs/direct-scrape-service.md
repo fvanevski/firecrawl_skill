@@ -51,6 +51,16 @@ actual parser type and implementation version selected from the MIME-aware
 registry while preserving the established configured parser-version contract.
 The optional `parser_name` persistence argument is additive and trailing, so
 legacy positional callers retain their existing behavior. Document reuse
-includes the exact parser identity. Identical source bytes may reuse
-an immutable snapshot, but JSON, HTML, Markdown, and plain-text parsing cannot
+includes the exact parser identity. Identical source bytes may reuse an
+immutable snapshot, but JSON, HTML, Markdown, and plain-text parsing cannot
 silently reuse one another's documents, chunks, or derivations.
+
+## Validation boundary
+
+Focused CI uses deterministic transport adapters and disposable PostgreSQL to
+validate command construction, every supported format and MIME contract,
+preflight ordering, parser-aware persistence, concurrent idempotency, retry
+lineage, crash recovery, immutable provenance, and index-job creation. It does
+not make a live Firecrawl network request. Live provider validation remains an
+exact-candidate release-gate responsibility under parent epic #183 rather than
+a prerequisite for deterministic pull-request tests.
