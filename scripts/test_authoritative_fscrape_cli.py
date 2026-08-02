@@ -189,26 +189,82 @@ def test_schema_file_is_read_only_as_explicit_input(tmp_path: Path):
     }
 
 
-def test_removed_output_dir_has_migration_message(capsys):
+@pytest.mark.parametrize(
+    "removed_args",
+    [
+        ("--output-dir", "/tmp/legacy"),
+        ("--output-dir=/tmp/legacy",),
+    ],
+)
+@pytest.mark.parametrize("json_output", [False, True])
+def test_removed_output_dir_has_migration_message(
+    removed_args,
+    json_output,
+    capsys,
+):
     factory = mock.Mock()
+    raw = [
+        "https://example.com",
+        "--research-run-id",
+        RUN_ID,
+        *removed_args,
+    ]
+    if json_output:
+        raw.append("--json")
 
-    code = main(
-        [
-            "https://example.com",
-            "--research-run-id",
-            RUN_ID,
-            "--output-dir",
-            "/tmp/legacy",
-            "--json",
-        ],
-        service_factory=factory,
-    )
+    code = main(raw, service_factory=factory)
 
     assert code == 2
     factory.assert_not_called()
-    payload = json.loads(capsys.readouterr().out)
-    assert "--output-dir was removed" in payload["error"]
-    assert "database-native export" in payload["error"]
+    captured = capsys.readouterr()
+    if json_output:
+        payload = json.loads(captured.out)
+        message = payload["error"]
+        assert payload["failure_stage"] == "preflight"
+    else:
+        message = captured.err
+        assert captured.out == ""
+    assert "--output-dir was removed" in message
+    assert "database-native export" in message
+
+
+@pytest.mark.parametrize(
+    "format_args",
+    [
+        ("--format", "text"),
+        ("--format=text",),
+    ],
+)
+@pytest.mark.parametrize("json_output", [False, True])
+def test_invalid_format_has_consistent_preflight_contract(
+    format_args,
+    json_output,
+    capsys,
+):
+    factory = mock.Mock()
+    raw = [
+        "https://example.com",
+        "--research-run-id",
+        RUN_ID,
+        *format_args,
+    ]
+    if json_output:
+        raw.append("--json")
+
+    code = main(raw, service_factory=factory)
+
+    assert code == 2
+    factory.assert_not_called()
+    captured = capsys.readouterr()
+    if json_output:
+        payload = json.loads(captured.out)
+        assert payload["failure_stage"] == "preflight"
+        assert "invalid choice" in payload["error"]
+        assert captured.err == ""
+    else:
+        assert captured.out == ""
+        assert "ERROR [preflight]" in captured.err
+        assert "invalid choice" in captured.err
 
 
 def test_cli_does_not_create_acquisition_artifacts_under_tmpdir(
@@ -234,6 +290,7 @@ def test_cli_does_not_create_acquisition_artifacts_under_tmpdir(
     assert code == 0
     assert list(tmp_path.iterdir()) == []
     payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == "authoritative-fscrape-v1"
     assert payload["items"][0]["source_id"] is not None
 
 
@@ -253,6 +310,7 @@ def test_partial_cli_result_is_authoritative_and_nonzero(capsys):
 
     assert code == 5
     payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == "authoritative-fscrape-v1"
     assert payload["status"] == "partial"
     assert [item["status"] for item in payload["items"]] == [
         "succeeded",
@@ -280,12 +338,24 @@ def test_persistence_off_is_rejected(monkeypatch: pytest.MonkeyPatch, capsys):
     assert "PostgreSQL-authoritative" in payload["error"]
 
 
-def test_public_launcher_is_thin_and_delegates_to_service_module():
+def test_public_launcher_is_thin_and_has_no_legacy_storage_markers():
     launcher = (SCRIPTS / "fscrape").read_text(encoding="utf-8")
 
     assert "research_store.fscrape_cli" in launcher
     assert 'exec "$research_python"' in launcher
-    assert "firecrawl scrape" not in launcher
-    assert "mkdir" not in launcher
-    assert " -o " not in launcher
-    assert "python3 - <<" not in launcher
+    for removed in (
+        "firecrawl scrape",
+        "mkdir",
+        " -o ",
+        "python3 - <<",
+        "firecrawl_scratch",
+        "SCRATCH_ROOT",
+        "scratch_file",
+        "raw_scratch_file",
+        "scratch_dir",
+        "persist_results.py",
+        "fread",
+        "_corpus.json",
+        "_meta.json",
+    ):
+        assert removed not in launcher
