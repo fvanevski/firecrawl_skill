@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 from research_store.config import StoreConfig
 from research_store.direct_scrape_service import DirectScrapeService
+from research_store import inspection_cli
 from research_store.inspection_cli import execute, parser
 from research_store.inspection_contract import (
     InspectionBoundError,
@@ -17,8 +18,10 @@ from research_store.inspection_contract import (
     InspectionNotFoundError,
     PageRequest,
     PassageBounds,
+    _bounded_json,
     _decode_cursor,
     _encode_cursor,
+    _scope_fingerprint,
 )
 from research_store.inspection_service import InspectionService
 
@@ -80,13 +83,20 @@ def service(tmp_path, responses, **kwargs):
     )
 
 
-def test_cursor_round_trip_and_kind_isolation():
+def test_cursor_round_trip_and_scope_isolation():
     timestamp = datetime(2026, 8, 2, tzinfo=timezone.utc)
     row_id = uuid4()
-    encoded = _encode_cursor("runs", timestamp, row_id)
-    assert _decode_cursor("runs", encoded) == (timestamp, row_id)
+    scope = _scope_fingerprint("runs", tenant="one")
+    encoded = _encode_cursor("runs", timestamp, row_id, scope=scope)
+    assert _decode_cursor("runs", encoded, scope=scope) == (timestamp, row_id)
     with pytest.raises(ValueError, match="invalid pagination cursor"):
-        _decode_cursor("invocations", encoded)
+        _decode_cursor(
+            "runs",
+            encoded,
+            scope=_scope_fingerprint("runs", tenant="two"),
+        )
+    with pytest.raises(ValueError, match="invalid pagination cursor"):
+        _decode_cursor("invocations", encoded, scope=scope)
 
 
 def test_page_bounds_are_hard():
@@ -96,6 +106,13 @@ def test_page_bounds_are_hard():
         PassageBounds(max_chars=64_001)
     with pytest.raises(ValueError, match="max_tokens"):
         PassageBounds(max_tokens=16_001)
+
+
+def test_nested_json_is_bounded():
+    value = _bounded_json({"payload": "x" * 20_000}, limit=100)
+    assert value["truncated"] is True
+    assert value["original_char_count"] > 100
+    assert len(value["preview"]) == 100
 
 
 def test_list_runs_uses_keyset_cursor(tmp_path):
@@ -110,20 +127,17 @@ def test_list_runs_uses_keyset_cursor(tmp_path):
     assert result["truncated"] is True
     assert result["next_cursor"]
     assert (
-        "ORDER BY started_at DESC,id DESC" in connection.cursor_value.statements[0][0]
+        result["output_bounds"]["serialized_chars"]
+        <= result["output_bounds"]["max_serialized_chars"]
+    )
+    assert (
+        "ORDER BY started_at DESC,id DESC"
+        in connection.cursor_value.statements[0][0]
     )
 
 
-def test_replay_requires_only_response_id_and_verifies_blob(tmp_path):
-    response_id = uuid4()
-    run_id = uuid4()
-    payload = json.dumps({"success": True, "data": {"web": []}}).encode()
-    digest = hashlib.sha256(payload).hexdigest()
-    path = tmp_path / digest[:2] / digest[2:4] / digest
-    path.parent.mkdir(parents=True)
-    path.write_bytes(payload)
-    now = datetime.now(timezone.utc)
-    response_row = (
+def _response_row(response_id, run_id, payload, digest, now):
+    return (
         response_id,
         run_id,
         "fr_test",
@@ -147,7 +161,31 @@ def test_replay_requires_only_response_id_and_verifies_blob(tmp_path):
         now,
         None,
     )
-    inspector, _ = service(tmp_path, [[response_row], []])
+
+
+def test_replay_requires_only_response_id_and_verifies_blob(tmp_path):
+    response_id = uuid4()
+    run_id = uuid4()
+    payload = json.dumps({"success": True, "data": {"web": []}}).encode()
+    digest = hashlib.sha256(payload).hexdigest()
+    path = tmp_path / digest[:2] / digest[2:4] / digest
+    path.parent.mkdir(parents=True)
+    path.write_bytes(payload)
+    inspector, _ = service(
+        tmp_path,
+        [
+            [
+                _response_row(
+                    response_id,
+                    run_id,
+                    payload,
+                    digest,
+                    datetime.now(timezone.utc),
+                )
+            ],
+            [],
+        ],
+    )
     result = inspector.replay_search(response_id)
     assert result["response"]["id"] == str(response_id)
     assert result["payload"]["success"] is True
@@ -156,67 +194,34 @@ def test_replay_requires_only_response_id_and_verifies_blob(tmp_path):
 
 def test_replay_fails_closed_on_integrity_mismatch(tmp_path):
     response_id = uuid4()
-    digest = hashlib.sha256(b"expected").hexdigest()
+    payload = b"expected"
+    digest = hashlib.sha256(payload).hexdigest()
     path = tmp_path / digest[:2] / digest[2:4] / digest
     path.parent.mkdir(parents=True)
     path.write_bytes(b"tampered")
-    now = datetime.now(timezone.utc)
-    row = (
-        response_id,
-        uuid4(),
-        "fr_test",
-        "q",
-        "firecrawl",
-        None,
-        "succeeded",
-        200,
-        "v1",
-        digest,
-        len(b"expected"),
-        "application/json",
-        digest,
-        0,
-        None,
-        {},
-        {},
-        "key",
-        now,
-        now,
-        now,
-        None,
+    inspector, _ = service(
+        tmp_path,
+        [
+            [
+                _response_row(
+                    response_id,
+                    uuid4(),
+                    payload,
+                    digest,
+                    datetime.now(timezone.utc),
+                )
+            ],
+            [],
+        ],
     )
-    inspector, _ = service(tmp_path, [[row], []])
     with pytest.raises(InspectionIntegrityError):
         inspector.replay_search(response_id)
 
 
 def test_replay_rejects_oversize_before_blob_read(tmp_path):
-    now = datetime.now(timezone.utc)
-    digest = "a" * 64
-    row = (
-        uuid4(),
-        uuid4(),
-        "fr_test",
-        "q",
-        "firecrawl",
-        None,
-        "succeeded",
-        200,
-        "v1",
-        digest,
-        11,
-        "application/json",
-        digest,
-        0,
-        None,
-        {},
-        {},
-        "key",
-        now,
-        now,
-        now,
-        None,
-    )
+    payload = b"expected-data"
+    digest = hashlib.sha256(payload).hexdigest()
+    row = _response_row(uuid4(), uuid4(), payload, digest, datetime.now(timezone.utc))
     inspector, _ = service(tmp_path, [[row], []])
     with pytest.raises(InspectionBoundError, match="exceeds max_bytes"):
         inspector.replay_search(row[0], max_bytes=10)
@@ -228,15 +233,31 @@ def test_missing_response_is_typed(tmp_path):
         inspector.replay_search(uuid4())
 
 
-def test_candidate_scrape_uses_stable_ids_and_preserves_preflight_boundary(tmp_path):
+def test_candidate_scrape_uses_stable_ids_and_bounds_result(tmp_path):
     candidate = uuid4()
     run_id = uuid4()
+    invocation_id = uuid4()
     calls = []
 
     class Direct:
         def execute(self, actual_run, requests, *, idempotency_key=None):
             calls.append((actual_run, requests, idempotency_key))
-            return SimpleNamespace(to_dict=lambda: {"status": "complete"})
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "run_id": str(actual_run),
+                    "invocation_id": str(invocation_id),
+                    "idempotency_key": idempotency_key,
+                    "status": "complete",
+                    "replayed": False,
+                    "items": [
+                        {
+                            "candidate_id": str(candidate),
+                            "status": "succeeded",
+                            "chunk_ids": [str(uuid4()) for _ in range(150)],
+                        }
+                    ],
+                }
+            )
 
     inspector, _ = service(
         tmp_path,
@@ -244,7 +265,10 @@ def test_candidate_scrape_uses_stable_ids_and_preserves_preflight_boundary(tmp_p
         direct_scrape_factory=lambda: Direct(),
     )
     result = inspector.scrape_candidates([candidate], idempotency_key="stable-key")
-    assert result == {"status": "complete"}
+    assert result["kind"] == "candidate_scrape"
+    assert result["status"] == "complete"
+    assert result["items"][0]["chunk_ids"]["returned_count"] == 100
+    assert result["items"][0]["chunk_ids"]["truncated"] is True
     assert calls[0][0] == run_id
     assert calls[0][1][0].candidate_id == candidate
     assert calls[0][1][0].url is None
@@ -296,51 +320,223 @@ def test_candidate_lookup_failure_never_constructs_direct_service(tmp_path):
     assert constructed is False
 
 
-def test_passages_are_bounded_and_cursorable(tmp_path):
-    rows = [
-        (
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            0,
-            3,
-            "a" * 64,
-            "abcdef",
-        ),
-        (
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            1,
-            3,
-            "b" * 64,
-            "ghijkl",
-        ),
-    ]
-    inspector, _ = service(tmp_path, [rows])
-    result = inspector.passages(
-        uuid4(), PassageBounds(limit=2, max_chars=8, max_tokens=10)
+def _passage_row(chunk_id, document_id, text, ordinal=0):
+    return (
+        chunk_id,
+        document_id,
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        ordinal,
+        len(text),
+        hashlib.sha256(text.encode()).hexdigest(),
+        "bpe_fake",
+        text,
     )
-    assert result["item_count"] == 2
-    assert result["items"][1]["text"] == "gh"
-    assert result["items"][1]["text_truncated"] is True
-    assert result["truncated"] is True
-    assert result["next_cursor"]
 
 
-def test_cli_routes_database_native_commands_without_paths():
+def test_passage_cursor_resumes_inside_clipped_chunk_without_loss(tmp_path):
+    asset_id = uuid4()
+    chunk_id = uuid4()
+    document_id = uuid4()
+    row = _passage_row(chunk_id, document_id, "abcdefghij")
+    inspector, _ = service(tmp_path, [[row], [row], [row], [row]])
+    cursor = None
+    parts = []
+    for _ in range(4):
+        page = inspector.passages(
+            asset_id,
+            PassageBounds(limit=1, max_chars=3, max_tokens=100, cursor=cursor),
+        )
+        parts.append(page["items"][0]["text"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert "".join(parts) == "abcdefghij"
+    assert cursor is None
+
+
+def test_passage_cursor_cannot_cross_asset_scope(tmp_path):
+    chunk_id = uuid4()
+    document_id = uuid4()
+    row = _passage_row(chunk_id, document_id, "abcdef")
+    inspector, _ = service(tmp_path, [[row]])
+    first = inspector.passages(
+        uuid4(), PassageBounds(limit=1, max_chars=2, max_tokens=100)
+    )
+    with pytest.raises(ValueError, match="invalid pagination cursor"):
+        inspector.passages(
+            uuid4(),
+            PassageBounds(
+                limit=1,
+                max_chars=2,
+                max_tokens=100,
+                cursor=first["next_cursor"],
+            ),
+        )
+
+
+def test_missing_candidate_attempt_scope_is_typed(tmp_path):
+    inspector, _ = service(tmp_path, [[]])
+    with pytest.raises(InspectionNotFoundError, match="candidate not found"):
+        inspector.list_extraction_attempts(candidate_id=uuid4())
+
+
+def test_attempt_history_uses_invocation_result_for_reused_corpus(tmp_path):
+    candidate = uuid4()
+    run_id = uuid4()
+    invocation_id = uuid4()
+    attempt_id = uuid4()
+    source_id = uuid4()
+    snapshot_id = uuid4()
+    document_id = uuid4()
+    derivation_id = uuid4()
+    chunk_ids = [uuid4(), uuid4()]
+    now = datetime.now(timezone.utc)
+    attempt_row = (
+        attempt_id,
+        run_id,
+        "fr_test",
+        invocation_id,
+        "fc_test",
+        candidate,
+        2,
+        "firecrawl_main_content",
+        "v1",
+        "markdown",
+        now,
+        now,
+        "succeeded",
+        200,
+        "complete",
+        "a" * 64,
+        10,
+        "text/markdown",
+        "b" * 64,
+        10,
+        "text/markdown",
+        "parser",
+        "none",
+        None,
+        "acceptable",
+        None,
+        True,
+        None,
+        None,
+        None,
+        None,
+        [],
+        0,
+        now,
+    )
+    invocation_output = {
+        "items": [
+            {
+                "extraction_attempt_id": str(attempt_id),
+                "source_id": str(source_id),
+                "snapshot_id": str(snapshot_id),
+                "document_id": str(document_id),
+                "derivation_id": str(derivation_id),
+                "chunk_ids": [str(value) for value in chunk_ids],
+            }
+        ]
+    }
+    inspector, _ = service(
+        tmp_path,
+        [[(run_id, "fr_test")], [attempt_row], [(invocation_id, invocation_output)]],
+    )
+    result = inspector.list_extraction_attempts(candidate_id=candidate)
+    item = result["items"][0]
+    assert item["snapshot_id"] == str(snapshot_id)
+    assert item["document_id"] == str(document_id)
+    assert item["derivation_id"] == str(derivation_id)
+    assert item["chunk_ids"]["items"] == [str(value) for value in chunk_ids]
+
+
+def test_retry_routes_to_retry_failed_with_prior_lineage(tmp_path):
+    prior = uuid4()
+    run_id = uuid4()
+    candidate = uuid4()
+    retried = []
+    stored_input = {
+        "requests": [
+            {
+                "url": None,
+                "candidate_id": str(candidate),
+                "format": "markdown",
+                "summary": False,
+                "schema": None,
+                "mime_type": "text/markdown",
+                "options": {},
+            }
+        ]
+    }
+
+    class Direct:
+        def retry_failed(self, actual_run, requests, **kwargs):
+            retried.append((actual_run, requests, kwargs))
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "run_id": str(actual_run),
+                    "invocation_id": str(uuid4()),
+                    "idempotency_key": kwargs["idempotency_key"],
+                    "status": "complete",
+                    "replayed": False,
+                    "items": [],
+                }
+            )
+
+    inspector, _ = service(
+        tmp_path,
+        [[(run_id, stored_input)]],
+        direct_scrape_factory=lambda: Direct(),
+    )
+    result = inspector.retry_candidates(prior, idempotency_key="retry-key")
+    assert result["kind"] == "candidate_retry"
+    assert retried[0][0] == run_id
+    assert retried[0][1][0].candidate_id == candidate
+    assert retried[0][2]["prior_invocation_id"] == prior
+
+
+def test_cli_nonzero_for_partial_or_failed_acquisition(monkeypatch, capsys):
+    class FakeService:
+        def scrape_candidates(self, *_args, **_kwargs):
+            return {"kind": "candidate_scrape", "status": "partial"}
+
+    monkeypatch.setattr(inspection_cli, "build_inspection_service", FakeService)
+    code = inspection_cli.main(["scrape-candidates", str(uuid4())])
+    assert code == 5
+    assert json.loads(capsys.readouterr().out)["status"] == "partial"
+
+
+def test_cli_complete_acquisition_returns_zero(monkeypatch):
+    class FakeService:
+        def scrape_candidates(self, *_args, **_kwargs):
+            return {"kind": "candidate_scrape", "status": "complete"}
+
+    monkeypatch.setattr(inspection_cli, "build_inspection_service", FakeService)
+    assert inspection_cli.main(["scrape-candidates", str(uuid4())]) == 0
+
+
+def test_cli_routes_retry_and_pattern_commands():
+    prior = uuid4()
     service = SimpleNamespace(
-        replay_search=lambda response_id, max_bytes: {
-            "response_id": response_id,
-            "max_bytes": max_bytes,
-        }
+        retry_candidates=lambda invocation_id, idempotency_key: {
+            "invocation_id": invocation_id,
+            "idempotency_key": idempotency_key,
+        },
+        pattern_search=lambda pattern, mode, run, bounds: {
+            "pattern": pattern,
+            "mode": mode,
+        },
     )
-    args = parser().parse_args(["replay-search", str(uuid4()), "--max-bytes", "99"])
-    result = execute(args, service)
-    assert result["max_bytes"] == 99
+    retry_args = parser().parse_args(
+        ["retry-candidates", str(prior), "--idempotency-key", "retry-key"]
+    )
+    retry_result = execute(retry_args, service)
+    assert retry_result["invocation_id"] == str(prior)
+    pattern_args = parser().parse_args(
+        ["pattern-search", "foo|bar", "--mode", "regex"]
+    )
+    assert execute(pattern_args, service) == {"pattern": "foo|bar", "mode": "regex"}
