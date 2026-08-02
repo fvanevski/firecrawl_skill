@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -7,22 +8,37 @@ from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
-from uuid import uuid4
+from urllib.parse import quote, urlsplit, urlunsplit
+from uuid import UUID, uuid4
 
 import pytest
+from psycopg import sql
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store.acquisition_authority import (
+    ACQUISITION_ENTRY_STATES,
+    ACQUISITION_TABLE_PRIVILEGES,
     AcquisitionPreflightError,
-    execute_authoritative_acquisition,
     require_authoritative_acquisition,
 )
-from research_store.acquisition_service import FirecrawlSearchAdapter
+from research_store.acquisition_service import (
+    AcquisitionService,
+    FirecrawlSearchAdapter,
+)
 from research_store.config import StoreConfig
+from research_store.container import build_acquisition_service, build_run_service
+from research_store.domain import SearchAdapterResult, utcnow
+from research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
+from research_store.run_service import TERMINAL_STATES
 
 _SCHEMA_HEAD = "0042_authoritative_acquisition"
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
 
 class _FakeCursor:
@@ -31,12 +47,19 @@ class _FakeCursor:
         *,
         schema_heads: tuple[str, ...] = (_SCHEMA_HEAD,),
         run_exists: bool = True,
+        run_state: str = "acquiring",
+        lifecycle_revision: int = 7,
         read_only: bool = False,
+        denied_privileges: frozenset[tuple[str, str]] = frozenset(),
     ):
         self.schema_heads = schema_heads
         self.run_exists = run_exists
+        self.run_state = run_state
+        self.lifecycle_revision = lifecycle_revision
         self.read_only = read_only
+        self.denied_privileges = denied_privileges
         self.last_sql = ""
+        self.last_params = None
 
     def __enter__(self):
         return self
@@ -44,8 +67,9 @@ class _FakeCursor:
     def __exit__(self, *_args):
         return False
 
-    def execute(self, sql, _params=None):
-        self.last_sql = " ".join(sql.split())
+    def execute(self, sql_text, params=None):
+        self.last_sql = " ".join(sql_text.split())
+        self.last_params = params
 
     def fetchall(self):
         if "FROM alembic_version" not in self.last_sql:
@@ -55,8 +79,13 @@ class _FakeCursor:
     def fetchone(self):
         if self.last_sql == "SHOW transaction_read_only":
             return ("on" if self.read_only else "off",)
+        if "has_table_privilege" in self.last_sql:
+            table, privilege = self.last_params
+            return ((table, privilege) not in self.denied_privileges,)
         if "FROM research_runs WHERE id=" in self.last_sql:
-            return (uuid4(),) if self.run_exists else None
+            if not self.run_exists:
+                return None
+            return (uuid4(), self.run_state, self.lifecycle_revision)
         raise AssertionError(f"unexpected fetchone for {self.last_sql}")
 
 
@@ -96,11 +125,36 @@ def _preflight(tmp_path: Path, cursor: _FakeCursor, *, run_id=None, dry_run=Fals
     context = require_authoritative_acquisition(
         run_id=run_id,
         dry_run=dry_run,
-        config=_config(tmp_path, "postgresql://research@test/research"),
+        config=_config(tmp_path, "postgresql://research:secret@test/research"),
         connect_factory=connect_factory,
         expected_heads_factory=lambda: frozenset({_SCHEMA_HEAD}),
     )
     return context, connection
+
+
+def _guarded_search(
+    adapter: FirecrawlSearchAdapter,
+    *,
+    run_id: UUID | str | None,
+    config: StoreConfig,
+    connect_factory=connect,
+    expected_heads_factory=lambda: frozenset({_SCHEMA_HEAD}),
+):
+    preflight_kwargs = {
+        "run_id": run_id,
+        "config": config,
+        "connect_factory": connect_factory,
+    }
+    if expected_heads_factory is not None:
+        preflight_kwargs["expected_heads_factory"] = expected_heads_factory
+    context = require_authoritative_acquisition(**preflight_kwargs)
+    return context, adapter.search("guarded acquisition")
+
+
+def test_public_api_does_not_expose_generic_acquisition_callback():
+    import research_store
+
+    assert not hasattr(research_store, "execute_authoritative_acquisition")
 
 
 def test_acquisition_preflight_rejects_missing_database(tmp_path: Path):
@@ -144,6 +198,23 @@ def test_acquisition_preflight_rejects_read_only_store(tmp_path: Path):
         )
 
 
+def test_acquisition_preflight_rejects_incomplete_acquisition_privileges(
+    tmp_path: Path,
+):
+    _, connect_factory = _connect_with(
+        _FakeCursor(
+            denied_privileges=frozenset({("research_events", "INSERT")})
+        )
+    )
+    with pytest.raises(AcquisitionPreflightError, match="research_events:INSERT"):
+        require_authoritative_acquisition(
+            run_id=uuid4(),
+            config=_config(tmp_path, "postgresql://research@test/research"),
+            connect_factory=connect_factory,
+            expected_heads_factory=lambda: frozenset({_SCHEMA_HEAD}),
+        )
+
+
 def test_acquisition_preflight_rejects_missing_run(tmp_path: Path):
     _, connect_factory = _connect_with(_FakeCursor(run_exists=False))
     run_id = uuid4()
@@ -156,21 +227,66 @@ def test_acquisition_preflight_rejects_missing_run(tmp_path: Path):
         )
 
 
-def test_acquisition_preflight_accepts_valid_run_and_writable_blob_root(
+@pytest.mark.parametrize("terminal_state", sorted(TERMINAL_STATES))
+def test_acquisition_preflight_rejects_terminal_run(
+    tmp_path: Path,
+    terminal_state: str,
+):
+    _, connect_factory = _connect_with(_FakeCursor(run_state=terminal_state))
+    terminal_pattern = rf"terminal \({terminal_state}\)"
+    with pytest.raises(AcquisitionPreflightError, match=terminal_pattern):
+        require_authoritative_acquisition(
+            run_id=uuid4(),
+            config=_config(tmp_path, "postgresql://research@test/research"),
+            connect_factory=connect_factory,
+            expected_heads_factory=lambda: frozenset({_SCHEMA_HEAD}),
+        )
+
+
+@pytest.mark.parametrize(
+    "ineligible_state",
+    sorted(
+        {
+            "extracting",
+            "indexing",
+            "retrieving",
+            "synthesizing",
+            "validating",
+        }
+    ),
+)
+def test_acquisition_preflight_rejects_non_terminal_ineligible_state(
+    tmp_path: Path,
+    ineligible_state: str,
+):
+    assert ineligible_state not in ACQUISITION_ENTRY_STATES
+    _, connect_factory = _connect_with(_FakeCursor(run_state=ineligible_state))
+    with pytest.raises(AcquisitionPreflightError, match="not acquisition-eligible"):
+        require_authoritative_acquisition(
+            run_id=uuid4(),
+            config=_config(tmp_path, "postgresql://research@test/research"),
+            connect_factory=connect_factory,
+            expected_heads_factory=lambda: frozenset({_SCHEMA_HEAD}),
+        )
+
+
+def test_acquisition_preflight_returns_run_revision_without_leaking_credentials(
     tmp_path: Path,
 ):
     run_id = uuid4()
     context, connection = _preflight(
         tmp_path,
-        _FakeCursor(),
+        _FakeCursor(run_state="acquiring", lifecycle_revision=11),
         run_id=run_id,
     )
 
     assert context.run_id == run_id
+    assert context.run_state == "acquiring"
+    assert context.lifecycle_revision == 11
     assert context.schema_heads == frozenset({_SCHEMA_HEAD})
     assert context.blob_root == tmp_path / "blobs"
-    assert context.blob_root.is_dir()
-    assert not list(context.blob_root.iterdir())
+    assert not context.blob_root.exists()
+    assert "secret" not in repr(context)
     assert connection.rolled_back is True
 
 
@@ -183,44 +299,121 @@ def test_acquisition_preflight_allows_dry_run_without_run(tmp_path: Path):
     )
     assert context.dry_run is True
     assert context.run_id is None
+    assert context.run_state is None
+    assert context.lifecycle_revision is None
 
 
-def test_failed_preflight_prevents_firecrawl_subprocess_invocation(tmp_path: Path):
+@pytest.mark.parametrize(
+    "case",
+    (
+        "missing_database",
+        "invalid_database",
+        "unreachable_database",
+        "schema_mismatch",
+        "read_only",
+        "missing_privilege",
+        "missing_run",
+        "terminal_run",
+        "ineligible_run",
+    ),
+)
+def test_every_database_preflight_failure_prevents_network(
+    tmp_path: Path,
+    case: str,
+):
     runner = mock.Mock()
     adapter = FirecrawlSearchAdapter(runner=runner)
+    config = _config(tmp_path, "postgresql://research@test/research")
+    cursor = _FakeCursor()
+    expected_heads = lambda: frozenset({_SCHEMA_HEAD})
 
-    def invoke_firecrawl(_context):
-        return adapter.search("must not run")
-
-    with pytest.raises(AcquisitionPreflightError, match="DATABASE_URL is required"):
-        execute_authoritative_acquisition(
-            invoke_firecrawl,
-            run_id=uuid4(),
-            config=_config(tmp_path, ""),
+    if case == "missing_database":
+        config = _config(tmp_path, "")
+    elif case == "invalid_database":
+        config = _config(tmp_path, "sqlite:///research.db")
+    elif case == "unreachable_database":
+        connect_factory = mock.Mock(side_effect=OSError("connection refused"))
+        with pytest.raises(AcquisitionPreflightError, match="connection refused"):
+            _guarded_search(
+                adapter,
+                run_id=uuid4(),
+                config=config,
+                connect_factory=connect_factory,
+                expected_heads_factory=expected_heads,
+            )
+        runner.assert_not_called()
+        return
+    elif case == "schema_mismatch":
+        cursor = _FakeCursor(schema_heads=("0041_old",))
+    elif case == "read_only":
+        cursor = _FakeCursor(read_only=True)
+    elif case == "missing_privilege":
+        cursor = _FakeCursor(
+            denied_privileges=frozenset({("search_responses", "INSERT")})
         )
+    elif case == "missing_run":
+        cursor = _FakeCursor(run_exists=False)
+    elif case == "terminal_run":
+        cursor = _FakeCursor(run_state="completed")
+    elif case == "ineligible_run":
+        cursor = _FakeCursor(run_state="synthesizing")
 
+    _, connect_factory = _connect_with(cursor)
+    with pytest.raises(AcquisitionPreflightError):
+        _guarded_search(
+            adapter,
+            run_id=uuid4(),
+            config=config,
+            connect_factory=connect_factory,
+            expected_heads_factory=expected_heads,
+        )
     runner.assert_not_called()
 
 
-def test_acquisition_preflight_rejects_unwritable_blob_root(
+def test_unwritable_blob_root_prevents_network(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     from research_store import acquisition_authority
 
+    runner = mock.Mock()
+    adapter = FirecrawlSearchAdapter(runner=runner)
     _, connect_factory = _connect_with(_FakeCursor())
     monkeypatch.setattr(
         acquisition_authority.tempfile,
         "NamedTemporaryFile",
         mock.Mock(side_effect=OSError("permission denied")),
     )
-    with pytest.raises(AcquisitionPreflightError, match="BLOB_ROOT is not writable"):
-        require_authoritative_acquisition(
+
+    with pytest.raises(AcquisitionPreflightError, match="not durably writable"):
+        _guarded_search(
+            adapter,
             run_id=uuid4(),
             config=_config(tmp_path, "postgresql://research@test/research"),
             connect_factory=connect_factory,
-            expected_heads_factory=lambda: frozenset({_SCHEMA_HEAD}),
         )
+    runner.assert_not_called()
+    assert not (tmp_path / "blobs").exists()
+
+
+def test_blob_probe_fsyncs_file_and_directory_and_removes_probe_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from research_store import acquisition_authority
+
+    fsync_calls: list[int] = []
+    real_fsync = acquisition_authority.os.fsync
+
+    def recording_fsync(descriptor: int):
+        fsync_calls.append(descriptor)
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(acquisition_authority.os, "fsync", recording_fsync)
+    context, _ = _preflight(tmp_path, _FakeCursor(), run_id=uuid4())
+
+    assert len(fsync_calls) >= 3
+    assert not context.blob_root.exists()
 
 
 _LITERAL_MARKERS = (
@@ -228,14 +421,25 @@ _LITERAL_MARKERS = (
     "SCRATCH_ROOT",
     "persist_results.py",
     "import-scratch",
+    "_corpus.json",
+    "_search.json",
+    "_meta.json",
+    "_context.json",
+    "--reuse-search",
 )
 _TOKEN_MARKERS = {
     "scratch_file": re.compile(r"(?<![A-Za-z0-9_])scratch_file(?![A-Za-z0-9_])"),
+    "raw_scratch_file": re.compile(
+        r"(?<![A-Za-z0-9_])raw_scratch_file(?![A-Za-z0-9_])"
+    ),
+    "scratch_dir": re.compile(r"(?<![A-Za-z0-9_])scratch_dir(?![A-Za-z0-9_])"),
     "fread": re.compile(r"(?<![A-Za-z0-9_])fread(?![A-Za-z0-9_])"),
     "scratch-only persistence": re.compile(
         r"(?<![A-Za-z0-9_])scratch(?:-|_|\s+)only(?![A-Za-z0-9_])",
         re.IGNORECASE,
     ),
+    "reuse_search": re.compile(r"(?<![A-Za-z0-9_])reuse_search(?![A-Za-z0-9_])"),
+    "scrape_ranks": re.compile(r"(?<![A-Za-z0-9_])scrape_ranks(?![A-Za-z0-9_])"),
 }
 _PATH_MARKERS = {
     "scripts/persist_results.py": "persist_results.py",
@@ -253,6 +457,7 @@ _EXCLUDED_PARTS = {
 
 # Path-specific baseline for issue #184. Later scratch-removal issues must
 # intentionally reduce this mapping as they delete each legacy surface.
+# New paths, new markers, or increased counts fail the gate.
 _LEGACY_SURFACE_ALLOWLIST: dict[tuple[str, str], int] = {
     ("scripts/fread", "firecrawl_scratch"): 1,
     ("scripts/fread", "fread"): 1,
@@ -326,8 +531,9 @@ def _legacy_surface_inventory(repo_root: Path) -> dict[tuple[str, str], int]:
 def test_legacy_surface_inventory_has_not_grown():
     actual = _legacy_surface_inventory(SCRIPTS.parent)
     assert actual == _LEGACY_SURFACE_ALLOWLIST, (
-        "legacy scratch surface changed; update the path-specific allowlist only "
-        f"for an intentional removal or approved migration:\nactual={actual!r}"
+        "legacy runtime storage surface changed; update the path-specific "
+        "allowlist only for an intentional removal or approved migration:\n"
+        f"actual={actual!r}"
     )
 
 
@@ -336,7 +542,9 @@ def test_legacy_surface_inventory_excludes_tests_fixtures_and_generated_files(
 ):
     repo = tmp_path
     (repo / "scripts" / "fixtures").mkdir(parents=True)
-    (repo / "scripts" / "research_store" / "alembic" / "versions").mkdir(parents=True)
+    (repo / "scripts" / "research_store" / "alembic" / "versions").mkdir(
+        parents=True
+    )
     (repo / "scripts" / "test_removed_compat.py").write_text(
         "SCRATCH_ROOT = 'removed'\n",
         encoding="utf-8",
@@ -360,55 +568,292 @@ def test_legacy_surface_inventory_excludes_tests_fixtures_and_generated_files(
     assert _legacy_surface_inventory(repo) == {}
 
 
-def test_secure_ephemeral_temp_files_are_not_legacy_storage(tmp_path: Path):
+def test_inventory_detects_indirect_file_handoffs_and_local_replay(tmp_path: Path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "runtime.py").write_text(
+        "search_path = '_search.json'\n"
+        "corpus_path = '_corpus.json'\n"
+        "context_path = '_context.json'\n"
+        "reuse_search = True\n"
+        "scrape_ranks = [1, 3]\n",
+        encoding="utf-8",
+    )
+
+    inventory = _legacy_surface_inventory(tmp_path)
+    assert inventory[("scripts/runtime.py", "_search.json")] == 1
+    assert inventory[("scripts/runtime.py", "_corpus.json")] == 1
+    assert inventory[("scripts/runtime.py", "_context.json")] == 1
+    assert inventory[("scripts/runtime.py", "reuse_search")] == 1
+    assert inventory[("scripts/runtime.py", "scrape_ranks")] == 1
+
+
+def test_secure_ephemeral_and_explicit_export_files_are_not_legacy_storage(
+    tmp_path: Path,
+):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     (scripts / "atomic_export.py").write_text(
         "import tempfile\n"
+        "from pathlib import Path\n"
         "with tempfile.NamedTemporaryFile(delete=True) as handle:\n"
-        "    handle.write(b'ephemeral')\n",
+        "    handle.write(b'ephemeral')\n"
+        "export_path = Path('requested-report.json')\n"
+        "export_path.write_text('{}')\n",
         encoding="utf-8",
     )
 
     assert _legacy_surface_inventory(tmp_path) == {}
 
 
-def test_authoritative_preflight_against_disposable_postgresql(tmp_path: Path):
-    database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
-    if not database_url:
-        pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL is not configured")
-
-    from research_store.postgres import (
-        PostgresUnitOfWork,
-        migrate,
-        require_disposable_database_reset,
-    )
-
-    require_disposable_database_reset(
-        database_url,
-        os.environ.get("RESEARCH_STORE_TEST_ALLOW_RESET", ""),
-    )
-    migrate(database_url)
-    config = _config(tmp_path, database_url)
-    external_id = f"fr_{uuid4().hex}"
-    with PostgresUnitOfWork(
-        database_url,
-        config.physical_collection,
-        config.embedding_model,
-        config.embedding_revision,
-        config.embedding_dimension,
-        config.parser_version,
-        config.normalization_version,
-        config.chunker_version,
-    ) as uow:
-        run_id = uow.start_run(
-            "issue 184 authoritative acquisition preflight",
+class _SuccessfulSearchAdapter:
+    def __init__(self):
+        self.call_count = 0
+        self.raw_payload = json.dumps(
             {
-                "external_run_id": external_id,
-                "execution_mode": "autonomous_local",
-                "metadata": {"test": "issue-184"},
-            },
+                "success": True,
+                "data": [
+                    {
+                        "url": "https://example.com/authority",
+                        "title": "Authority test",
+                        "description": "Committed provider response",
+                    }
+                ],
+            }
+        ).encode()
+
+    def search(self, _query_text: str, **_kwargs) -> SearchAdapterResult:
+        self.call_count += 1
+        return SearchAdapterResult(
+            raw_payload=self.raw_payload,
+            http_status=200,
+            provider_request_id=f"authority-{self.call_count}",
+            transport_error=None,
+            transport_metadata={"attempt": self.call_count},
+            requested_at=utcnow(),
+            responded_at=utcnow(),
         )
 
-    context = require_authoritative_acquisition(run_id=run_id, config=config)
-    assert context.run_id == run_id
+
+class _CommitFailingUnitOfWork:
+    def __init__(self, inner):
+        self.inner = inner
+        self.runs = None
+
+    def __enter__(self):
+        entered = self.inner.__enter__()
+        self.runs = entered.runs
+        return self
+
+    def __exit__(self, *args):
+        return self.inner.__exit__(*args)
+
+    def commit(self):
+        raise RuntimeError("simulated authoritative commit failure")
+
+
+@pytest.fixture(scope="module")
+def prepared_database():
+    if not TEST_DSN:
+        return None
+    require_disposable_database_reset(
+        TEST_DSN,
+        os.environ.get("RESEARCH_STORE_TEST_ALLOW_RESET", ""),
+    )
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute("DROP SCHEMA public CASCADE")
+        cursor.execute("CREATE SCHEMA public")
+    migrate(TEST_DSN)
+    return TEST_DSN
+
+
+def _create_run(config: StoreConfig, objective: str):
+    run_service = build_run_service(config)
+    external_id = f"fr_{uuid4().hex}"
+    run_service.create(objective=objective, external_id=external_id)
+    return run_service, run_service.status(external_id=external_id)
+
+
+@pytest.mark.skipif(
+    not TEST_DSN,
+    reason="requires explicit disposable PostgreSQL test DSN",
+)
+def test_guarded_success_is_visible_after_commit_and_retry_is_idempotent(
+    tmp_path: Path,
+    prepared_database,
+):
+    config = _config(tmp_path, TEST_DSN)
+    run_service, status = _create_run(config, "issue 184 committed acquisition")
+    adapter = _SuccessfulSearchAdapter()
+    acquisition_service = build_acquisition_service(config, search_adapter=adapter)
+    idempotency_key = f"authority:{uuid4()}"
+
+    context = require_authoritative_acquisition(run_id=status.id, config=config)
+    assert context.lifecycle_revision == status.lifecycle_revision
+    result = acquisition_service.execute_search(
+        status.id,
+        "authoritative acquisition",
+        idempotency_key=idempotency_key,
+        export_scratch=False,
+    )
+    assert result.postgres_committed is True
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT id, run_id, raw_blob_sha256
+            FROM search_responses
+            WHERE run_id=%s AND idempotency_key=%s""",
+            (status.id, idempotency_key),
+        )
+        committed = cursor.fetchall()
+    assert len(committed) == 1
+    assert committed[0][0] == result.search_response_id
+    assert committed[0][1] == status.id
+    assert re.fullmatch(r"[0-9a-f]{64}", committed[0][2])
+
+    require_authoritative_acquisition(run_id=status.id, config=config)
+    retried = acquisition_service.execute_search(
+        status.id,
+        "authoritative acquisition",
+        idempotency_key=idempotency_key,
+        export_scratch=False,
+    )
+    assert retried.search_response_id == result.search_response_id
+    assert len(run_service.list_search_responses(status.id)) == 1
+    assert adapter.call_count == 2
+
+
+@pytest.mark.skipif(
+    not TEST_DSN,
+    reason="requires explicit disposable PostgreSQL test DSN",
+)
+def test_commit_failure_never_returns_success_and_retry_recovers(
+    tmp_path: Path,
+    prepared_database,
+):
+    config = _config(tmp_path, TEST_DSN)
+    run_service, status = _create_run(config, "issue 184 commit failure")
+    adapter = _SuccessfulSearchAdapter()
+    normal_service = build_acquisition_service(config, search_adapter=adapter)
+    base_factory = normal_service.uow_factory
+    failing_service = AcquisitionService(
+        lambda: _CommitFailingUnitOfWork(base_factory()),
+        blob_store=normal_service.blob_store,
+        search_adapter=adapter,
+    )
+    idempotency_key = f"authority-failure:{uuid4()}"
+
+    require_authoritative_acquisition(run_id=status.id, config=config)
+    with pytest.raises(RuntimeError, match="commit failure"):
+        failing_service.execute_search(
+            status.id,
+            "commit must fail closed",
+            idempotency_key=idempotency_key,
+            export_scratch=False,
+        )
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM search_responses WHERE idempotency_key=%s",
+            (idempotency_key,),
+        )
+        assert cursor.fetchone()[0] == 0
+    assert any(path.is_file() for path in config.blob_root.rglob("*"))
+
+    require_authoritative_acquisition(run_id=status.id, config=config)
+    recovered = normal_service.execute_search(
+        status.id,
+        "commit must fail closed",
+        idempotency_key=idempotency_key,
+        export_scratch=False,
+    )
+    assert recovered.postgres_committed is True
+    assert len(run_service.list_search_responses(status.id)) == 1
+
+
+def _database_url_for_role(database_url: str, role: str, password: str) -> str:
+    parsed = urlsplit(database_url)
+    hostname = parsed.hostname or "localhost"
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{quote(role)}:{quote(password)}@{hostname}{port}"
+    return urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
+
+
+@pytest.mark.skipif(
+    not TEST_DSN,
+    reason="requires explicit disposable PostgreSQL test DSN",
+)
+def test_restricted_role_fails_before_provider_execution(
+    tmp_path: Path,
+    prepared_database,
+):
+    admin_config = _config(tmp_path, TEST_DSN)
+    _, status = _create_run(admin_config, "issue 184 restricted role")
+    role = f"authority_probe_{uuid4().hex[:12]}"
+    password = uuid4().hex
+
+    role_created = False
+    try:
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT current_database()")
+            database_name = cursor.fetchone()[0]
+            cursor.execute(
+                sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                    sql.Identifier(role),
+                    sql.Literal(password),
+                )
+            )
+            cursor.execute(
+                sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                    sql.Identifier(database_name),
+                    sql.Identifier(role),
+                )
+            )
+            cursor.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
+            cursor.execute(
+                sql.SQL("GRANT SELECT ON TABLE alembic_version TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
+            for table, privileges in ACQUISITION_TABLE_PRIVILEGES.items():
+                granted = set(privileges)
+                if table == "research_events":
+                    granted.discard("INSERT")
+                privilege_sql = sql.SQL(", ").join(
+                    sql.SQL(privilege) for privilege in sorted(granted)
+                )
+                cursor.execute(
+                    sql.SQL("GRANT {} ON TABLE {} TO {}").format(
+                        privilege_sql,
+                        sql.Identifier(table),
+                        sql.Identifier(role),
+                    )
+                )
+        role_created = True
+
+        restricted_url = _database_url_for_role(TEST_DSN, role, password)
+        runner = mock.Mock()
+        adapter = FirecrawlSearchAdapter(runner=runner)
+        with pytest.raises(AcquisitionPreflightError, match="research_events:INSERT"):
+            _guarded_search(
+                adapter,
+                run_id=status.id,
+                config=_config(tmp_path, restricted_url),
+                expected_heads_factory=None,
+            )
+        runner.assert_not_called()
+    finally:
+        if role_created:
+            with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role))
+                )
+                cursor.execute(
+                    sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role))
+                )
