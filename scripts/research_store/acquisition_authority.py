@@ -12,7 +12,7 @@ Every acquisition entrypoint that can invoke Firecrawl or another network
 transport must complete :func:`require_authoritative_acquisition` first (or
 use :func:`execute_authoritative_acquisition`, which enforces that ordering).
 A failed preflight is terminal for that attempted acquisition; callers must
-not downgrade to scratch-only or otherwise non-persistent execution.
+not downgrade to diagnostic-only or otherwise non-persistent execution.
 
 Secure, short-lived temporary files remain valid implementation details for
 atomic writes and write probes. They are not persistent workflow state.
