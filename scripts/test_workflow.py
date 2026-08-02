@@ -1,9 +1,12 @@
 """Collection shim for the workflow tests with the authoritative fscrape contract."""
 
+import runpy
 from pathlib import Path
 
-import test_workflow_cases as cases
-from test_workflow_cases import *
+_CASES = runpy.run_path(str(Path(__file__).with_name("test_workflow_cases.py.inc")))
+globals().update(
+    {name: value for name, value in _CASES.items() if not name.startswith("__")}
+)
 
 
 def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):
@@ -11,7 +14,7 @@ def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):
     env, tmp_path = fake_cli
     output = tmp_path / "batch with spaces"
 
-    result = cases.run_script(
+    result = _CASES["run_script"](
         "fscrape",
         "https://example.com/a,b",
         "https://example.com/two",
