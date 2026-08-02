@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from workflow_test_cases import *
-from workflow_test_cases import run_script
+from fixtures.workflow_test_cases import *
+from fixtures.workflow_test_cases import run_script
 
 
 def test_fscrape_rejects_undocumented_format(fake_cli):
