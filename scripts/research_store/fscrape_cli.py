@@ -66,8 +66,7 @@ def main(
     raw = list(argv if argv is not None else sys.argv[1:])
     json_requested = "--json" in raw
     if any(
-        token == "--output-dir" or token.startswith("--output-dir=")
-        for token in raw
+        token == "--output-dir" or token.startswith("--output-dir=") for token in raw
     ):
         return emit_error(
             "preflight",
