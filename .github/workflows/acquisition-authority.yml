@@ -70,5 +70,6 @@ jobs:
         run: |
           python -m pytest \
             -q \
+            -ra \
             -p no:cacheprovider \
             scripts/test_acquisition_authority.py
