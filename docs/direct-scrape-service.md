@@ -64,3 +64,8 @@ lineage, crash recovery, immutable provenance, and index-job creation. It does
 not make a live Firecrawl network request. Live provider validation remains an
 exact-candidate release-gate responsibility under parent epic #183 rather than
 a prerequisite for deterministic pull-request tests.
+
+At the final reviewed head, the focused direct-scrape suite passes 20 tests on
+both Python 3.11 and 3.12, and the repository suite passes 1,472 tests with four
+existing skips on both versions. Ruff, acquisition-authority, release-invariant,
+strict-campaign, and research-environment checks also pass on the same head.
