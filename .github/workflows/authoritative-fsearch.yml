@@ -80,7 +80,13 @@ jobs:
             -q \
             -p no:cacheprovider \
             scripts/test_authoritative_fsearch.py \
-            scripts/test_authoritative_fsearch_review.py \
+            scripts/test_authoritative_fsearch_review.py
+          python -m pytest \
+            -q \
+            -p no:cacheprovider \
             scripts/test_workflow.py \
-            scripts/test_fsearch_wrapper_e2e.py \
-            -k "fsearch or TestWrapperContracts or TestPersistResultsIntegration"
+            -k fsearch
+          python -m pytest \
+            -q \
+            -p no:cacheprovider \
+            scripts/test_fsearch_wrapper_e2e.py
