@@ -59,6 +59,13 @@ def parser() -> argparse.ArgumentParser:
     )
     scrape.add_argument("--idempotency-key")
 
+    retry = sub.add_parser(
+        "retry-candidates",
+        help="retry failed items from a prior candidate acquisition",
+    )
+    retry.add_argument("prior_invocation_id")
+    retry.add_argument("--idempotency-key", required=True)
+
     attempts = sub.add_parser(
         "attempts", help="list extraction attempts and corpus IDs"
     )
@@ -80,6 +87,15 @@ def parser() -> argparse.ArgumentParser:
     lexical.add_argument("query")
     lexical.add_argument("--run")
     _passage_bounds(lexical)
+
+    pattern = sub.add_parser(
+        "pattern-search",
+        help="bounded case-insensitive literal or regular-expression search",
+    )
+    pattern.add_argument("pattern")
+    pattern.add_argument("--mode", choices=("literal", "regex"), default="literal")
+    pattern.add_argument("--run")
+    _passage_bounds(pattern)
     return root
 
 
@@ -118,6 +134,11 @@ def execute(args: argparse.Namespace, service: Any) -> dict[str, Any]:
             format=args.format,
             idempotency_key=args.idempotency_key,
         )
+    if args.command == "retry-candidates":
+        return service.retry_candidates(
+            args.prior_invocation_id,
+            idempotency_key=args.idempotency_key,
+        )
     if args.command == "attempts":
         return service.list_extraction_attempts(
             run=args.run,
@@ -130,6 +151,13 @@ def execute(args: argparse.Namespace, service: Any) -> dict[str, Any]:
         return service.passages(args.asset_id, _bounds(args))
     if args.command == "lexical-search":
         return service.lexical_search(args.query, run=args.run, bounds=_bounds(args))
+    if args.command == "pattern-search":
+        return service.pattern_search(
+            args.pattern,
+            mode=args.mode,
+            run=args.run,
+            bounds=_bounds(args),
+        )
     raise AssertionError(f"unhandled command: {args.command}")
 
 
@@ -165,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, sort_keys=True), file=sys.stderr)
         return 4
     print(json.dumps(result, indent=2 if args.pretty else None, sort_keys=True))
+    if result.get("kind") in {"candidate_scrape", "candidate_retry"}:
+        return 0 if result.get("status") == "complete" else 5
     return 0
 
 
