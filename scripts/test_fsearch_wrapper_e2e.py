@@ -1,13 +1,9 @@
-"""End-to-end integration tests for the fsearch wrapper with FIRECRAWL_RESEARCH_ACTIVE=1.
+"""Legacy persistence-bridge tests plus the authoritative fsearch launcher gate.
 
-These tests verify that the fsearch wrapper correctly:
-- Writes a _meta.json manifest when persistence is requested
-- Calls persist_results.py with the correct arguments
-- Produces a valid _corpus.json output
-- Handles run ID resolution through the authoritative service
-
-Note: These tests do NOT require a live Firecrawl instance. They mock the
-Firecrawl CLI and verify the wrapper behavior through manifest inspection.
+The fsearch launcher is now a PostgreSQL-authoritative Python entrypoint. The
+remaining tests in this module cover legacy ``persist_results.py`` inputs that
+are removed by later release-candidate issues; they do not describe fsearch's
+runtime contract.
 """
 
 from __future__ import annotations
@@ -27,21 +23,28 @@ def _corpus_output_path(manifest_path: Path) -> Path:
 SCRIPTS = Path(__file__).resolve().parent
 
 
-class TestFsearchWrapperManifest:
-    """Verify fsearch wrapper manifest generation."""
+class TestWrapperContracts:
+    """Verify the migrated fsearch and still-legacy fscrape launchers."""
 
-    def test_fsearch_manifest_contains_candidates(self, tmp_path, monkeypatch):
-        """fsearch wrapper writes a _meta.json with candidates array."""
-        # We can't actually run fsearch without Firecrawl, so we verify
-        # the manifest format that fsearch produces by reading the script.
+    def test_fsearch_is_authoritative_python_entrypoint(self):
         fsearch_path = SCRIPTS / "fsearch"
         assert fsearch_path.is_file()
 
-        # The fsearch script writes _meta.json with candidates array.
-        # Verify the manifest structure by reading the script source.
         content = fsearch_path.read_text()
-        assert '"candidates"' in content or "'candidates'" in content
-        assert '"_meta.json"' in content
+        assert content.startswith("#!/usr/bin/env bash")
+        assert "research-env" in content
+        assert "FIRECRAWL_RESEARCH_PYTHON" in content
+        assert "-m research_store.fsearch_service" in content
+        for removed in (
+            "_search.json",
+            "_meta.json",
+            "_context.json",
+            "_candidates.json",
+            "_index.md",
+            "result_",
+            "_corpus.json",
+        ):
+            assert removed not in content
 
     def test_fscrape_manifest_contains_results(self, tmp_path, monkeypatch):
         """fscrape wrapper writes a _meta.json with results array."""
@@ -54,11 +57,10 @@ class TestFsearchWrapperManifest:
 
 
 class TestPersistResultsIntegration:
-    """End-to-end persist_results.py through fsearch/fscrape manifest."""
+    """End-to-end persist_results.py through legacy search/scrape manifests."""
 
     def test_fsearch_manifest_persisted_with_run_id(self, tmp_path, monkeypatch):
-        """fsearch manifest with run_id is persisted authoritatively."""
-        # Create a realistic fsearch _meta.json manifest.
+        """Legacy fsearch manifest with run_id is accepted by the bridge."""
         scratch = tmp_path / "result_000.md"
         scratch.write_text("# Title\n\nParagraph one.\n", encoding="utf-8")
 
@@ -107,7 +109,6 @@ class TestPersistResultsIntegration:
         meta = tmp_path / "_meta.json"
         meta.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-        # Run persist_results.py without DATABASE_URL (scratch-only mode).
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SCRIPTS)
         env.pop("DATABASE_URL", None)
@@ -127,10 +128,9 @@ class TestPersistResultsIntegration:
         )
         assert result.returncode == 0, result.stderr
 
-        # Verify output.
         corpus = json.loads(_corpus_output_path(meta).read_text())
         assert len(corpus) == 1
-        assert corpus[0]["persisted"] is False  # No DB = scratch-only
+        assert corpus[0]["persisted"] is False
         assert corpus[0]["url"] == "https://example.com/article"
         assert corpus[0]["status"] == "ok"
 
@@ -190,7 +190,7 @@ class TestPersistResultsIntegration:
         assert corpus[0]["url"] == "https://example.com/page"
 
     def test_fsearch_manifest_with_missing_scratch(self, tmp_path, monkeypatch):
-        """fsearch manifest with missing scratch file is handled gracefully."""
+        """Legacy manifest with missing scratch is handled gracefully."""
         manifest = {
             "invocation_id": "fc_test_missing",
             "operation": "search",
@@ -223,7 +223,7 @@ class TestPersistResultsIntegration:
             env=env,
             timeout=30,
         )
-        assert result.returncode == 0  # scratch-only mode
+        assert result.returncode == 0
 
         corpus = json.loads(_corpus_output_path(meta).read_text())
         assert len(corpus) == 1
@@ -235,7 +235,7 @@ class TestPersistResultsIntegration:
         # TestSearchPersistence.test_fsearch_mixed_success_and_failure.
 
     def test_fsearch_manifest_multiple_candidates(self, tmp_path, monkeypatch):
-        """fsearch manifest with multiple candidates is fully processed."""
+        """Legacy manifest with multiple candidates is fully processed."""
         scratch1 = tmp_path / "result_000.md"
         scratch1.write_text("content one", encoding="utf-8")
         scratch2 = tmp_path / "result_001.md"

@@ -41,6 +41,10 @@ def _json_sha256(value) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
+class IndexingPersistenceError(RuntimeError):
+    """Index manifest or index-job persistence failed."""
+
+
 def connect(database_url: str):
     try:
         import psycopg
@@ -344,40 +348,45 @@ class PostgresUnitOfWork:
                     )
                     chunk_ids.append(cur.fetchone()[0])
 
-            definition = self._ensure_index_definition(cur)
-            for chunk_id in chunk_ids:
-                cur.execute(
-                    """INSERT INTO embedding_manifests(
-                    chunk_id,model_name,model_revision,dimension,distance_metric,
-                    normalization,instruction_template_hash,qdrant_collection,
-                    qdrant_point_id,index_status,index_definition_id)
-                    VALUES(%s,%s,%s,%s,'Cosine','unit-length','',%s,%s,'pending',%s)
-                    ON CONFLICT(chunk_id,index_definition_id) DO UPDATE
-                    SET qdrant_collection=excluded.qdrant_collection
-                    RETURNING id""",
-                    (
-                        chunk_id,
-                        self.embedding_model,
-                        self.embedding_revision,
-                        self.embedding_dimension,
-                        definition["physical_collection"],
-                        chunk_id,
-                        definition["id"],
-                    ),
-                )
-                manifest_id = cur.fetchone()[0]
-                cur.execute(
-                    """INSERT INTO index_jobs(
-                    entity_type,entity_id,index_name,operation,status,manifest_id,index_definition_id)
-                    VALUES('chunk',%s,%s,'upsert','pending',%s,%s)
-                    ON CONFLICT(manifest_id,operation) DO NOTHING""",
-                    (
-                        chunk_id,
-                        definition["physical_collection"],
-                        manifest_id,
-                        definition["id"],
-                    ),
-                )
+            try:
+                definition = self._ensure_index_definition(cur)
+                for chunk_id in chunk_ids:
+                    cur.execute(
+                        """INSERT INTO embedding_manifests(
+                        chunk_id,model_name,model_revision,dimension,distance_metric,
+                        normalization,instruction_template_hash,qdrant_collection,
+                        qdrant_point_id,index_status,index_definition_id)
+                        VALUES(%s,%s,%s,%s,'Cosine','unit-length','',%s,%s,'pending',%s)
+                        ON CONFLICT(chunk_id,index_definition_id) DO UPDATE
+                        SET qdrant_collection=excluded.qdrant_collection
+                        RETURNING id""",
+                        (
+                            chunk_id,
+                            self.embedding_model,
+                            self.embedding_revision,
+                            self.embedding_dimension,
+                            definition["physical_collection"],
+                            chunk_id,
+                            definition["id"],
+                        ),
+                    )
+                    manifest_id = cur.fetchone()[0]
+                    cur.execute(
+                        """INSERT INTO index_jobs(
+                        entity_type,entity_id,index_name,operation,status,manifest_id,index_definition_id)
+                        VALUES('chunk',%s,%s,'upsert','pending',%s,%s)
+                        ON CONFLICT(manifest_id,operation) DO NOTHING""",
+                        (
+                            chunk_id,
+                            definition["physical_collection"],
+                            manifest_id,
+                            definition["id"],
+                        ),
+                    )
+            except Exception as exc:
+                raise IndexingPersistenceError(
+                    f"index manifest/job persistence failed: {exc}"
+                ) from exc
             return IngestResult(
                 source_id,
                 snapshot_id,

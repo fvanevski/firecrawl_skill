@@ -3,12 +3,17 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from .acquisition_authority import (
+    ACQUISITION_ENTRY_STATES,
+    AuthoritativeAcquisitionContext,
+)
 from .blob import ContentAddressedBlobStore
 from .domain import SearchAdapterResult, utcnow
 from .ports import SearchAdapter
@@ -224,6 +229,14 @@ class FirecrawlSearchAdapter:
         )
 
 
+class AcquisitionAuthorityChangedError(RuntimeError):
+    """The preflight authority snapshot became stale before commit."""
+
+
+class AcquisitionIdempotencyConflictError(RuntimeError):
+    """An idempotency key was reused for a different search request."""
+
+
 @dataclass(frozen=True)
 class AcquisitionResult:
     search_response_id: UUID
@@ -238,6 +251,7 @@ class AcquisitionResult:
     event_id: UUID | None = None
     scratch_error: str | None = None
     search_response: dict[str, Any] = field(default_factory=dict)
+    replayed: bool = False
 
 
 class AcquisitionService:
@@ -268,88 +282,111 @@ class AcquisitionService:
         scratch_dir: Path | str | None = None,
         export_scratch: bool = True,
         metadata: dict[str, Any] | None = None,
+        authority_context: AuthoritativeAcquisitionContext | None = None,
+        replay_existing: bool = False,
     ) -> AcquisitionResult:
         run_id = UUID(str(run_id))
         if plan_id is not None:
             plan_id = UUID(str(plan_id))
         if plan_query_id is not None:
             plan_query_id = UUID(str(plan_query_id))
-
         if not query_text.strip():
             raise ValueError("query_text must be non-empty")
 
         key = idempotency_key or f"search:{run_id}:{plan_query_id or query_text}"
-
-        adapter_result = self.search_adapter.search(
-            query_text,
-            backend=backend,
-            limit=limit,
-            sources=sources,
-            tbs=tbs,
-        )
-
+        request_envelope = {
+            "schema_version": "authoritative-search-request-v1",
+            "query_text": query_text,
+            "backend": backend,
+            "limit": int(limit),
+            "sources": sources,
+            "tbs": tbs,
+            "parser_version": "firecrawl-search-v1",
+        }
         store = self.blob_store
         if store is None:
             store = ContentAddressedBlobStore(
                 Path(os.environ.get("BLOB_ROOT", "data/blobs"))
             )
 
-        postgres_committed = False
-        event_id = None
-        candidates = []
-        resp_data = {}
+        lock = (
+            self._search_idempotency_lock(run_id, key)
+            if replay_existing
+            else nullcontext(None)
+        )
+        with lock as lock_uow:
+            if lock_uow is not None:
+                existing = self._load_existing_search(
+                    lock_uow,
+                    run_id,
+                    key,
+                    request_envelope,
+                    authority_context,
+                )
+                if existing is not None:
+                    return existing
 
-        with self.uow_factory() as uow:
-            resp_data = uow.runs.record_search_response(
-                run_id,
+            adapter_result = self.search_adapter.search(
                 query_text,
-                backend,
-                adapter_result.raw_payload,
-                key,
-                store,
-                plan_id=plan_id,
-                plan_query_id=plan_query_id,
-                provider_request_id=adapter_result.provider_request_id,
-                http_status=adapter_result.http_status,
-                error_message=adapter_result.transport_error,
-                requested_at=adapter_result.requested_at,
-                responded_at=adapter_result.responded_at,
-                transport_metadata=adapter_result.transport_metadata,
-                **(metadata or {}),
+                backend=backend,
+                limit=limit,
+                sources=sources,
+                tbs=tbs,
             )
 
-            resp_id = resp_data["id"]
-
-            if resp_data["status"] in ("succeeded", "empty"):
-                candidates = uow.runs.record_response_candidates(
+            postgres_committed = False
+            event_id = None
+            candidates: list[dict[str, Any]] = []
+            resp_data: dict[str, Any] = {}
+            with self.uow_factory() as uow:
+                self._revalidate_authority(uow, authority_context, run_id)
+                persisted_metadata = dict(metadata or {})
+                persisted_metadata["request_envelope"] = request_envelope
+                resp_data = uow.runs.record_search_response(
                     run_id,
-                    resp_id,
+                    query_text,
+                    backend,
+                    adapter_result.raw_payload,
+                    key,
                     store,
                     plan_id=plan_id,
                     plan_query_id=plan_query_id,
+                    provider_request_id=adapter_result.provider_request_id,
+                    http_status=adapter_result.http_status,
+                    error_message=adapter_result.transport_error,
+                    requested_at=adapter_result.requested_at,
+                    responded_at=adapter_result.responded_at,
+                    transport_metadata=adapter_result.transport_metadata,
+                    **persisted_metadata,
                 )
-
-            event_id = uow.runs.append_event(
-                run_id,
-                "acquisition.search_executed",
-                "system",
-                f"event:{key}",
-                payload={
-                    "search_response_id": str(resp_id),
-                    "query_text": query_text,
-                    "backend": backend,
-                    "status": resp_data["status"],
-                    "candidate_count": len(candidates),
-                    "idempotency_key": key,
-                },
-            )
-
-            uow.commit()
-            postgres_committed = True
+                resp_id = resp_data["id"]
+                if resp_data["status"] in ("succeeded", "empty"):
+                    candidates = uow.runs.record_response_candidates(
+                        run_id,
+                        resp_id,
+                        store,
+                        plan_id=plan_id,
+                        plan_query_id=plan_query_id,
+                    )
+                event_id = uow.runs.append_event(
+                    run_id,
+                    "acquisition.search_executed",
+                    "system",
+                    f"event:{key}",
+                    payload={
+                        "search_response_id": str(resp_id),
+                        "query_text": query_text,
+                        "backend": backend,
+                        "status": resp_data["status"],
+                        "candidate_count": len(candidates),
+                        "idempotency_key": key,
+                    },
+                )
+                uow.commit()
+                postgres_committed = True
 
         scratch_exported = False
         scratch_err = None
-
         if export_scratch and scratch_dir:
             try:
                 self._export_scratch_artifacts(
@@ -376,7 +413,153 @@ class AcquisitionService:
             event_id=event_id,
             scratch_error=scratch_err,
             search_response=resp_data,
+            replayed=False,
         )
+
+    @contextmanager
+    def _search_idempotency_lock(
+        self,
+        run_id: UUID,
+        idempotency_key: str,
+    ) -> Iterator[Any]:
+        lock_name = f"authoritative-search:{run_id}:{idempotency_key}"
+        with self.uow_factory() as uow:
+            with uow.connection.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_lock(hashtextextended(%s,0))",
+                    (lock_name,),
+                )
+            uow.connection.commit()
+            try:
+                yield uow
+            finally:
+                uow.connection.rollback()
+                with uow.connection.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_advisory_unlock(hashtextextended(%s,0))",
+                        (lock_name,),
+                    )
+                uow.connection.commit()
+
+    def _load_existing_search(
+        self,
+        uow: Any,
+        run_id: UUID,
+        idempotency_key: str,
+        request_envelope: Mapping[str, Any],
+        authority_context: AuthoritativeAcquisitionContext | None,
+    ) -> AcquisitionResult | None:
+        with uow.connection.cursor() as cur:
+            cur.execute(
+                """SELECT id,query_text,backend,status,error_message,
+                          transport_metadata,provider_request_id,http_status,
+                          parser_version,raw_blob_sha256,raw_blob_bytes,mime_type,
+                          content_sha256,result_count,payload_summary,
+                          requested_at,responded_at,created_at
+                   FROM search_responses
+                   WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            self._revalidate_authority(uow, authority_context, run_id)
+            stored_transport = row[5] or {}
+            stored_envelope = stored_transport.get("request_envelope")
+            if stored_envelope != dict(request_envelope):
+                raise AcquisitionIdempotencyConflictError(
+                    "search idempotency key was used for another request"
+                )
+            cur.execute(
+                """SELECT o.id,o.candidate_id,o.rank,c.canonical_url,
+                          c.original_url,o.title,o.snippet,o.raw_item
+                   FROM candidate_occurrences o
+                   JOIN search_candidates c ON c.id=o.candidate_id
+                   WHERE o.run_id=%s AND o.search_response_id=%s
+                   ORDER BY o.rank,o.id""",
+                (run_id, row[0]),
+            )
+            candidates = [
+                {
+                    "id": item[0],
+                    "candidate_id": item[1],
+                    "rank": item[2],
+                    "canonical_url": item[3],
+                    "original_url": item[4],
+                    "title": item[5],
+                    "snippet": item[6],
+                    "raw_item": item[7],
+                }
+                for item in cur.fetchall()
+            ]
+        response = {
+            "id": row[0],
+            "run_id": run_id,
+            "query_text": row[1],
+            "backend": row[2],
+            "status": row[3],
+            "error_message": row[4],
+            "transport_metadata": stored_transport,
+            "provider_request_id": row[6],
+            "http_status": row[7],
+            "parser_version": row[8],
+            "raw_blob_sha256": row[9],
+            "raw_blob_bytes": row[10],
+            "mime_type": row[11],
+            "content_sha256": row[12],
+            "result_count": row[13],
+            "payload_summary": row[14],
+            "idempotency_key": idempotency_key,
+            "requested_at": row[15],
+            "responded_at": row[16],
+            "created_at": row[17],
+        }
+        return AcquisitionResult(
+            search_response_id=row[0],
+            run_id=run_id,
+            query_text=row[1],
+            backend=row[2],
+            status=row[3],
+            candidate_count=len(candidates),
+            candidates=candidates,
+            postgres_committed=True,
+            scratch_exported=False,
+            search_response=response,
+            replayed=True,
+        )
+
+    @staticmethod
+    def _revalidate_authority(
+        uow: Any,
+        context: AuthoritativeAcquisitionContext | None,
+        run_id: UUID,
+    ) -> None:
+        if context is None:
+            return
+        if context.run_id != run_id or context.lifecycle_revision is None:
+            raise AcquisitionAuthorityChangedError(
+                "authoritative search requires the matching run-bound preflight context"
+            )
+        with uow.connection.cursor() as cur:
+            cur.execute(
+                "SELECT state,lifecycle_revision FROM research_runs WHERE id=%s FOR UPDATE",
+                (run_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise AcquisitionAuthorityChangedError(
+                f"research run disappeared before search persistence: {run_id}"
+            )
+        state, revision = str(row[0]), int(row[1])
+        if state not in ACQUISITION_ENTRY_STATES:
+            raise AcquisitionAuthorityChangedError(
+                f"research run is no longer acquisition-eligible: {state}"
+            )
+        if revision != context.lifecycle_revision:
+            raise AcquisitionAuthorityChangedError(
+                "research run lifecycle revision changed before search persistence: "
+                f"expected {context.lifecycle_revision}, current {revision}"
+            )
 
     def reconcile_pending_searches(self, run_id: UUID) -> list[dict[str, Any]]:
         """Reconcile search responses for a run to ensure candidates are extracted without duplicates."""

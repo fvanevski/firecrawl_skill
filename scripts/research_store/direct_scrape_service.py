@@ -28,6 +28,7 @@ from .acquisition_authority import (
 from .config import StoreConfig
 from .derivation_service import _configuration_sha256
 from .domain import IngestRequest, utcnow
+from .postgres import IndexingPersistenceError
 from .url import canonicalize_candidate_url
 
 _SUPPORTED_FORMATS = frozenset(
@@ -75,7 +76,13 @@ class DirectScrapeError(RuntimeError):
 
 
 class DirectScrapePersistenceError(DirectScrapeError):
-    """The provider result could not be committed authoritatively."""
+    """A typed authoritative persistence failure."""
+
+    def __init__(self, message: str, *, stage: str = "ingestion") -> None:
+        if stage not in {"ingestion", "indexing"}:
+            raise ValueError(f"invalid direct-scrape persistence stage: {stage}")
+        super().__init__(message)
+        self.stage = stage
 
 
 def require_direct_scrape_persistence(uow_factory: Callable[[], Any]) -> None:
@@ -196,6 +203,7 @@ class DirectScrapeItemResult:
     reused_chunks: bool = False
     error: str | None = None
     diagnostic: str | None = None
+    failure_class: str | None = None
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> DirectScrapeItemResult:
@@ -1102,9 +1110,15 @@ class DirectScrapeService:
                 self._record_item(uow, run_id, invocation_id, result)
             self._notify_jobs(result.chunk_ids)
             return result
+        except IndexingPersistenceError as exc:
+            raise DirectScrapePersistenceError(
+                f"authoritative direct scrape indexing persistence failed: {exc}",
+                stage="indexing",
+            ) from exc
         except Exception as exc:
             raise DirectScrapePersistenceError(
-                f"authoritative direct scrape persistence failed: {exc}"
+                f"authoritative direct scrape ingestion persistence failed: {exc}",
+                stage="ingestion",
             ) from exc
 
     def _persist_failure(
@@ -1185,6 +1199,7 @@ class DirectScrapeService:
                 raw_blob_sha256=raw_ref.sha256 if raw_ref is not None else None,
                 error=diagnostic or "Firecrawl scrape failed",
                 diagnostic=diagnostic,
+                failure_class=failure_class,
             )
             self._record_transport_event(
                 uow,

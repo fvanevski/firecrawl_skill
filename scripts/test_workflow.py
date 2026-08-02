@@ -304,123 +304,128 @@ def test_invocation_id_format_and_validation():
         invocations.validate_invocation_id("unsafe/path")
 
 
-def test_default_storage_uses_unique_invocation_directories(fake_cli):
+def test_fsearch_requires_authoritative_run_before_firecrawl(fake_cli):
     env, tmp_path = fake_cli
     env["TMPDIR"] = str(tmp_path / "scratch root")
-    first = run_script(
-        "fsearch", "first query", "--limit", "3", "--scrape-limit", "0", env=env
+
+    result = run_script(
+        "fsearch",
+        "first query",
+        "--limit",
+        "3",
+        "--scrape-limit",
+        "0",
+        env=env,
     )
-    second = run_script("fscrape", "https://example.com/one", env=env)
-    assert first.returncode == 0, first.stderr
-    assert second.returncode == 0, second.stderr
-    search_dirs = list((Path(env["TMPDIR"]) / "firecrawl_scratch").glob("fc_*/search"))
-    scrape_dirs = list((Path(env["TMPDIR"]) / "firecrawl_scratch").glob("fc_*/scrape"))
-    assert len(search_dirs) == 1
-    assert len(scrape_dirs) == 1
-    search_meta = json.loads(
-        (search_dirs[0] / "_meta.json").read_text(encoding="utf-8")
-    )
-    scrape_meta = json.loads(
-        (scrape_dirs[0] / "_meta.json").read_text(encoding="utf-8")
-    )
-    assert search_meta["invocation_id"] == search_dirs[0].parent.name
-    assert scrape_meta["invocation_id"] == scrape_dirs[0].parent.name
-    assert search_meta["invocation_id"] != scrape_meta["invocation_id"]
-    assert search_meta["invocation_id"] in (search_dirs[0] / "_index.md").read_text(
-        encoding="utf-8"
-    )
-    assert scrape_meta["invocation_id"] in (scrape_dirs[0] / "_index.md").read_text(
-        encoding="utf-8"
-    )
-    history = run_script("fread", "--history", env=env)
-    assert history.returncode == 0
-    assert search_meta["invocation_id"] in history.stdout
-    assert scrape_meta["invocation_id"] in history.stdout
-    assert f"{search_meta['invocation_id']}{os.sep}search" in history.stdout
-    assert f"{scrape_meta['invocation_id']}{os.sep}scrape" in history.stdout
+
+    assert result.returncode == 2
+    assert "--research-run-id or FIRECRAWL_RESEARCH_RUN_ID is required" in result.stderr
+    assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
+    assert not (Path(env["TMPDIR"]) / "firecrawl_scratch").exists()
 
 
-def test_fsearch_reuses_search_artifact_for_noncontiguous_ranks(fake_cli):
+@pytest.mark.parametrize(
+    ("removed_args", "expected"),
+    [
+        (["--dir", "deprecated-output"], "--dir was removed"),
+        (["--reuse-search"], "--reuse-search was removed"),
+        (["--scrape-ranks", "1,3"], "--scrape-ranks was removed"),
+    ],
+)
+def test_fsearch_rejects_removed_scratch_options_before_firecrawl(
+    fake_cli, removed_args, expected
+):
     env, tmp_path = fake_cli
-    output = tmp_path / "reuse"
-    assert (
-        run_script(
-            "fsearch",
-            "portable",
-            "--limit",
-            "3",
-            "--scrape-limit",
-            "0",
-            "--dir",
-            output,
-            env=env,
-        ).returncode
-        == 0
-    )
-    original_id = json.loads((output / "_meta.json").read_text(encoding="utf-8"))[
-        "invocation_id"
-    ]
+
     result = run_script(
         "fsearch",
         "portable",
-        "--limit",
-        "3",
-        "--scrape-ranks",
-        "1,3",
-        "--dir",
-        output,
+        "--research-run-id",
+        "fr_" + "a" * 32,
+        *removed_args,
         env=env,
     )
-    assert result.returncode == 0, result.stderr
-    meta = json.loads((output / "_meta.json").read_text(encoding="utf-8"))
-    assert meta["invocation_id"] == original_id
-    assert meta["total_scraped"] == 2
-    assert [entry["index"] for entry in meta["results"]] == [0, 2]
-    calls = [
-        json.loads(line)
-        for line in Path(env["FAKE_FIRECRAWL_LOG"]).read_text().splitlines()
-    ]
-    assert [call[0] for call in calls].count("search") == 1
+
+    assert result.returncode == 2
+    assert expected in result.stderr
+    assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
+    assert list(tmp_path.glob("**/_meta.json")) == []
+    assert list(tmp_path.glob("**/_search.json")) == []
 
 
-def test_fsearch_handles_zero_results(fake_cli):
+def test_fsearch_persistence_off_fails_before_firecrawl(fake_cli):
     env, tmp_path = fake_cli
-    output = tmp_path / "zero"
-    result = run_script("fsearch", "zero-results", "--dir", output, env=env)
-    assert result.returncode == 0, result.stderr
-    meta = json.loads((output / "_meta.json").read_text(encoding="utf-8"))
-    assert meta["candidate_count"] == 0
-    assert meta["total_scraped"] == 0
 
-
-def test_fsearch_handles_success_without_output_file(fake_cli):
-    env, tmp_path = fake_cli
-    output = tmp_path / "no-output"
-    result = run_script("fsearch", "no-output", "--dir", output, env=env)
-    assert result.returncode == 0, result.stderr
-    meta = json.loads((output / "_meta.json").read_text(encoding="utf-8"))
-    assert meta["candidate_count"] == 0
-    assert (output / "_search.json").is_file()
-
-
-def test_fsearch_retries_transient_search_failure_and_keeps_diagnostics(fake_cli):
-    env, tmp_path = fake_cli
-    env["FAKE_FIRECRAWL_FAIL_SEARCH_ATTEMPTS"] = "1"
-    env["FAKE_FIRECRAWL_FAILURE_COUNT"] = str(tmp_path / "search-failures")
-    env["FIRECRAWL_SEARCH_RETRIES"] = "1"
-    output = tmp_path / "retry"
     result = run_script(
-        "fsearch", "retry query", "--scrape-limit", "0", "--dir", output, env=env
+        "fsearch",
+        "zero-results",
+        "--research-run-id",
+        "fr_" + "b" * 32,
+        "--json",
+        env=env,
     )
-    assert result.returncode == 0, result.stderr
-    assert "Transient Firecrawl search failure" in result.stderr
-    assert "EAI_AGAIN" in (output / "_search_error.log").read_text(encoding="utf-8")
-    assert (
-        json.loads((output / "_meta.json").read_text(encoding="utf-8"))[
-            "candidate_count"
-        ]
-        == 3
+
+    assert result.returncode == 2
+    payload = json.loads(result.stdout)
+    assert payload["failure_stage"] == "preflight"
+    assert "FIRECRAWL_RESEARCH_PERSIST=off was removed" in payload["error"]
+    assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
+    assert not any(tmp_path.glob("**/_meta.json"))
+
+
+def test_fsearch_missing_database_fails_before_firecrawl(fake_cli):
+    env, tmp_path = fake_cli
+    env["FIRECRAWL_RESEARCH_PERSIST"] = "on"
+
+    result = run_script(
+        "fsearch",
+        "no-output",
+        "--research-run-id",
+        "fr_" + "c" * 32,
+        "--json",
+        env=env,
     )
+
+    assert result.returncode == 2
+    payload = json.loads(result.stdout)
+    assert payload["failure_stage"] == "preflight"
+    assert "DATABASE_URL is required" in payload["error"]
+    assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
+    assert not any(tmp_path.glob("**/_search.json"))
+
+
+def test_fsearch_metadata_adapter_retries_transient_transport_without_files(tmp_path):
+    from types import SimpleNamespace
+
+    from research_store.fsearch_service import MetadataOnlyFirecrawlSearchAdapter
+
+    calls = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        if len(calls) == 1:
+            return SimpleNamespace(
+                returncode=1,
+                stdout=b"",
+                stderr=b"Error: getaddrinfo EAI_AGAIN example.org",
+            )
+        return SimpleNamespace(
+            returncode=0,
+            stdout=b'{"success":true,"data":{"web":[]}}',
+            stderr=b"",
+        )
+
+    result = MetadataOnlyFirecrawlSearchAdapter(runner=runner).search(
+        "retry query", retries=1
+    )
+
+    assert len(calls) == 2
+    assert result.http_status == 200
+    assert result.transport_error is None
+    assert result.transport_metadata["attempts"] == 2
+    assert result.transport_metadata["implicit_scrape"] is False
+    assert "-o" not in calls[0]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_fscrape_rejects_undocumented_format(fake_cli):
@@ -1010,36 +1015,20 @@ def test_local_gateway_can_hold_output_budget_after_length_retry(monkeypatch):
     assert result.provenance["expand_output_on_length"] is False
 
 
-def test_fsearch_writes_complete_candidate_ledger(fake_cli):
-    env, tmp_path = fake_cli
-    output = tmp_path / "scratch O'Brien"
-    result = run_script(
-        "fsearch",
-        "portable query",
-        "--limit",
-        "3",
-        "--scrape-limit",
-        "2",
-        "--tbs",
-        "qdr:w",
-        "--dir",
-        output,
-        env=env,
-    )
-    assert result.returncode == 0, result.stderr
-    meta = json.loads((output / "_meta.json").read_text(encoding="utf-8"))
-    assert meta["candidate_count"] == 3
-    assert meta["total_scraped"] == 2
-    assert len(meta["candidates"]) == 3
-    assert (output / "_candidates.json").is_file()
-    assert (output / "_context.json").is_file()
-    calls = [
-        json.loads(line)
-        for line in Path(env["FAKE_FIRECRAWL_LOG"]).read_text().splitlines()
-    ]
-    assert ["--tbs", "qdr:w"] == calls[0][
-        calls[0].index("--tbs") : calls[0].index("--tbs") + 2
-    ]
+def test_fsearch_help_exposes_authoritative_controls_not_scratch_options(fake_cli):
+    env, _ = fake_cli
+
+    result = run_script("fsearch", "--help", env=env)
+
+    assert result.returncode == 0
+    assert "--research-run-id" in result.stdout
+    assert "--scrape-limit" in result.stdout
+    assert "--tbs" in result.stdout
+    assert "--profile" in result.stdout
+    assert "--dir" not in result.stdout
+    assert "--reuse-search" not in result.stdout
+    assert "--scrape-ranks" not in result.stdout
+    assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
 
 
 def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):
