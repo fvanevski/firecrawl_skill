@@ -136,7 +136,7 @@ class FScrapeResult:
             corpus_ids[f"{name[:-4]}_count"] = len(values)
             corpus_ids[f"{name}_truncated"] = truncated
         return {
-            "schem_version": "authoritative-fscrape-v1",
+            "schema_version": "authoritative-fscrape-v1",
             "status": self.batch.status,
             "run_id": str(self.batch.run_id),
             "research_run_id": self.research_run_id,
