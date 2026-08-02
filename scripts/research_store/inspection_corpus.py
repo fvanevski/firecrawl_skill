@@ -361,9 +361,12 @@ def passages(
                 "text",
             ),
         )
-    if marker is not None and marker[3] > 0:
-        if not rows or UUID(str(rows[0]["id"])) != marker[2]:
-            raise ValueError("pagination cursor no longer resolves to its chunk")
+    if (
+        marker is not None
+        and marker[3] > 0
+        and (not rows or UUID(str(rows[0]["id"])) != marker[2])
+    ):
+        raise ValueError("pagination cursor no longer resolves to its chunk")
     selected, chars, tokens, exhausted_by, resume = _bound_passage_rows(
         rows, bounds, start_offset=start_offset
     )
@@ -500,11 +503,14 @@ def lexical_search(
                 "text",
             ),
         )
-    if marker is not None and marker[2] > 0:
-        if not rows or UUID(str(rows[0]["id"])) != marker[1]:
-            raise ValueError(
-                "pagination cursor no longer resolves to its lexical match"
-            )
+    if (
+        marker is not None
+        and marker[2] > 0
+        and (not rows or UUID(str(rows[0]["id"])) != marker[1])
+    ):
+        raise ValueError(
+            "pagination cursor no longer resolves to its lexical match"
+        )
     selected, chars, tokens, exhausted_by, resume = _bound_passage_rows(
         rows, bounds, start_offset=start_offset
     )
@@ -632,9 +638,12 @@ def pattern_search(
                 "text",
             ),
         )
-    if marker is not None and marker[3] > 0:
-        if not rows or UUID(str(rows[0]["id"])) != marker[2]:
-            raise ValueError("pagination cursor no longer resolves to its match")
+    if (
+        marker is not None
+        and marker[3] > 0
+        and (not rows or UUID(str(rows[0]["id"])) != marker[2])
+    ):
+        raise ValueError("pagination cursor no longer resolves to its match")
     selected, chars, tokens, exhausted_by, resume = _bound_passage_rows(
         rows, bounds, start_offset=start_offset
     )
