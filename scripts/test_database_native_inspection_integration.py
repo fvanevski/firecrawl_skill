@@ -290,9 +290,7 @@ def _insert_fixture(tmp_path: Path) -> dict[str, object]:
             cursor.execute(
                 "UPDATE research_invocations SET output=%s WHERE id=%s",
                 (
-                    json.dumps(
-                        {"schema_version": "direct-scrape-v1", "items": [item]}
-                    ),
+                    json.dumps({"schema_version": "direct-scrape-v1", "items": [item]}),
                     invocation_id,
                 ),
             )
@@ -364,9 +362,7 @@ def test_database_native_acceptance_paths(tmp_path):
     assert scrape["status"] == "complete"
     assert calls[-1][0] == ids["run"]
     with pytest.raises(InspectionError, match="one research run"):
-        inspector.scrape_candidates(
-            [ids["candidate1"], ids["candidate_other"]]
-        )
+        inspector.scrape_candidates([ids["candidate1"], ids["candidate_other"]])
 
     retry = inspector.retry_candidates(
         ids["invocation2"], idempotency_key="integration-retry"

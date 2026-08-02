@@ -352,8 +352,7 @@ def scrape_candidates(
         raise InspectionError("candidate IDs must belong to one research run")
     run_id = next(iter(run_ids))
     requests = [
-        DirectScrapeRequest(candidate_id=item, format=format)
-        for item in identifiers
+        DirectScrapeRequest(candidate_id=item, format=format) for item in identifiers
     ]
     result = service.direct_scrape_factory().execute(
         run_id,

@@ -131,8 +131,7 @@ def test_list_runs_uses_keyset_cursor(tmp_path):
         <= result["output_bounds"]["max_serialized_chars"]
     )
     assert (
-        "ORDER BY started_at DESC,id DESC"
-        in connection.cursor_value.statements[0][0]
+        "ORDER BY started_at DESC,id DESC" in connection.cursor_value.statements[0][0]
     )
 
 
@@ -536,7 +535,5 @@ def test_cli_routes_retry_and_pattern_commands():
     )
     retry_result = execute(retry_args, service)
     assert retry_result["invocation_id"] == str(prior)
-    pattern_args = parser().parse_args(
-        ["pattern-search", "foo|bar", "--mode", "regex"]
-    )
+    pattern_args = parser().parse_args(["pattern-search", "foo|bar", "--mode", "regex"])
     assert execute(pattern_args, service) == {"pattern": "foo|bar", "mode": "regex"}

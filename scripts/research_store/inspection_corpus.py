@@ -508,9 +508,7 @@ def lexical_search(
         and marker[2] > 0
         and (not rows or UUID(str(rows[0]["id"])) != marker[1])
     ):
-        raise ValueError(
-            "pagination cursor no longer resolves to its lexical match"
-        )
+        raise ValueError("pagination cursor no longer resolves to its lexical match")
     selected, chars, tokens, exhausted_by, resume = _bound_passage_rows(
         rows, bounds, start_offset=start_offset
     )
