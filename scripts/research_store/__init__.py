@@ -3,7 +3,6 @@
 from .acquisition_authority import (
     AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
-    execute_authoritative_acquisition,
     require_authoritative_acquisition,
 )
 from .acquisition_service import AcquisitionService, FirecrawlSearchAdapter
@@ -69,6 +68,5 @@ __all__ = [
     "StoreConfig",
     "TransformationRecord",
     "evaluate_quality",
-    "execute_authoritative_acquisition",
     "require_authoritative_acquisition",
 ]
