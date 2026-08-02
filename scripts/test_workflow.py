@@ -2,11 +2,11 @@
 
 from pathlib import Path
 
-from workflow_test_cases import *  # noqa: F403
+from workflow_test_cases import *
 from workflow_test_cases import run_script
 
 
-def test_fscrape_rejects_undocumented_format(fake_cli):  # noqa: F811
+def test_fscrape_rejects_undocumented_format(fake_cli):
     env, _ = fake_cli
 
     result = run_script(
@@ -22,7 +22,7 @@ def test_fscrape_rejects_undocumented_format(fake_cli):  # noqa: F811
     assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
 
 
-def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):  # noqa: F811
+def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):
     """The removed storage export fails before provider invocation."""
     env, tmp_path = fake_cli
     output = tmp_path / "batch with spaces"
