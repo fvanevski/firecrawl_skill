@@ -74,22 +74,23 @@ class FScrapeService:
     def execute(self, request: FScrapeRequest) -> FScrapeResult:
         run_status = self._resolve_run(request.research_run_id)
         run_id = UUID(str(run_status.id))
-        external_id = request.external_invocation_id or new_invocation_id()
+        requested_external_id = request.external_invocation_id or new_invocation_id()
         direct_requests = request.direct_requests()
         key = request.idempotency_key or default_idempotency_key(
             run_id,
-            external_id,
+            requested_external_id,
             direct_requests,
         )
         batch = self.direct_service.execute(
             run_id,
             direct_requests,
             idempotency_key=key,
-            external_invocation_id=external_id,
+            external_invocation_id=requested_external_id,
         )
+        authoritative_external_id = self._authoritative_external_invocation_id(batch)
         return FScrapeResult(
             research_run_id=request.research_run_id,
-            external_invocation_id=external_id,
+            external_invocation_id=authoritative_external_id,
             batch=batch,
             index_job_ids_by_chunk=self._index_job_ids(batch),
         )
@@ -105,6 +106,28 @@ class FScrapeService:
             raise FScrapeError(
                 "preflight", f"research run lookup failed: {exc}"
             ) from exc
+
+    def _authoritative_external_invocation_id(
+        self, batch: DirectScrapeBatchResult
+    ) -> str:
+        with self.direct_service.uow_factory() as uow, uow.connection.cursor() as cur:
+            cur.execute(
+                """SELECT external_invocation_id
+                FROM research_invocations
+                WHERE id=%s AND run_id=%s AND operation='direct_scrape'""",
+                (batch.invocation_id, batch.run_id),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise DirectScrapePersistenceError(
+                "authoritative direct scrape invocation is not committed"
+            )
+        external_id = row[0]
+        if not external_id:
+            raise DirectScrapePersistenceError(
+                "authoritative direct scrape invocation has no external identity"
+            )
+        return str(external_id)
 
     def _index_job_ids(
         self, batch: DirectScrapeBatchResult
