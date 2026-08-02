@@ -31,13 +31,20 @@ constructed or invoked. A failed preflight therefore produces no network call.
 
 Provider output is captured from stdout in memory. Structured JSON output is
 validated against the supplied Draft 2020-12 schema before corpus ingestion. An
-invalid provider payload is retained as a failed extraction attempt, not
-committed as a successful document.
+invalid provider payload is retained in `BLOB_ROOT` and recorded as a failed
+extraction attempt; it is not committed as a successful document.
 
 After ingestion commits, `fscrape` reads the PostgreSQL `index_jobs` rows for the
 committed chunk IDs. Missing index jobs are an indexing failure; the command does
 not report a successful authoritative acquisition with incomplete projection
 work.
+
+Before returning a result, `fscrape` reads the committed
+`research_invocations.external_invocation_id`. The result therefore reports the
+PostgreSQL identity rather than independently echoing the current request. This
+also applies to explicit-key replay: if a later caller supplies a different
+`--invocation-id` with an already committed `--idempotency-key`, the replayed
+result reports the original committed invocation identity.
 
 ## CLI
 
@@ -56,20 +63,25 @@ Supported options:
 - `--json`
 
 `FIRECRAWL_RESEARCH_RUN_ID` and `FIRECRAWL_INVOCATION_ID` provide ID defaults.
-`FIRECRAWL_RESEARCH_PERSIST=off` is rejected. The removed `--output-dir` option
-fails with migration guidance to database-native export tooling.
+`FIRECRAWL_RESEARCH_PERSIST=off` is rejected. Both
+`--output-dir PATH` and `--output-dir=PATH` fail with migration guidance to
+separate database-native export tooling.
+
+All parser and argument failures, including unsupported formats, use the same
+preflight error contract and exit code. When `--json` is present, errors are
+written as bounded JSON to stdout; otherwise they are written to stderr.
 
 Normal calls receive an idempotency key scoped to the external invocation ID.
 Retrying the same invocation replays the committed batch without another
 provider call. An explicit `--idempotency-key` requests caller-controlled replay
-semantics.
+semantics, while PostgreSQL remains authoritative for the identity returned.
 
 ## Result contract
 
-JSON output uses `authoritative-fscrape-v1` and contains bounded lists with total
-counts and truncation flags. It reports:
+JSON output contains `schema_version: authoritative-fscrape-v1` and bounded lists
+with total counts and truncation flags. It reports:
 
-- internal run, batch/invocation, and external invocation IDs;
+- internal run, batch/invocation, and committed external invocation IDs;
 - per-URL success or failure in original request order;
 - candidate and extraction-attempt IDs;
 - source, snapshot, document, derivation, and chunk IDs;
@@ -85,7 +97,6 @@ Exit codes:
 
 | Code | Stage |
 | ---: | --- |
-| 1 | unsupported legacy format contract |
 | 2 | argument or authoritative preflight |
 | 5 | one or more extraction items failed |
 | 6 | PostgreSQL/blob ingestion or idempotency failure |
