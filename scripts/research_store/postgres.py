@@ -179,6 +179,7 @@ class PostgresUnitOfWork:
         chunker_version: str,
         normalization_version: str,
         chunker_name: str = "structural",
+        parser_name: str = "markdown",
     ) -> IngestResult:
         domain = urlsplit(canonical_url).hostname
         document_hash = hashlib.sha256(normalized_text.encode()).hexdigest()
@@ -234,10 +235,11 @@ class PostgresUnitOfWork:
 
             cur.execute(
                 """SELECT id FROM documents
-                WHERE snapshot_id=%s AND parser_name='markdown' AND parser_version=%s
+                WHERE snapshot_id=%s AND parser_name=%s AND parser_version=%s
                   AND normalization_version=%s AND document_sha256=%s""",
                 (
                     snapshot_id,
+                    parser_name,
                     parser_version,
                     normalization_version,
                     document_hash,
@@ -256,13 +258,14 @@ class PostgresUnitOfWork:
                 cur.execute(
                     """INSERT INTO documents(snapshot_id,title,published_at,normalized_markdown,normalized_text,parser_name,
                     parser_version,normalization_version,document_sha256,metadata,extraction_attempt_id)
-                    VALUES(%s,%s,%s,%s,%s,'markdown',%s,%s,%s,%s,%s) RETURNING id""",
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                     (
                         snapshot_id,
                         request.title,
                         request.published_at,
                         normalized_text,
                         normalized_text,
+                        parser_name,
                         parser_version,
                         normalization_version,
                         document_hash,

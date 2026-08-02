@@ -7,6 +7,17 @@ from .acquisition_authority import (
 )
 from .acquisition_service import AcquisitionService, FirecrawlSearchAdapter
 from .config import StoreConfig
+from .direct_scrape_service import (
+    DirectScrapeBatchResult,
+    DirectScrapeError,
+    DirectScrapeItemResult,
+    DirectScrapePersistenceError,
+    DirectScrapeRequest,
+    DirectScrapeService,
+    FirecrawlDirectScrapeAdapter,
+    ScrapeTransportResult,
+    build_direct_scrape_service,
+)
 from .domain import (
     VALID_NORMALIZATION_DISPOSITIONS,
     VALID_NORMALIZATION_RULE_IDS,
@@ -46,12 +57,19 @@ __all__ = [
     "BlobReference",
     "ContextKeys",
     "CorpusService",
+    "DirectScrapeBatchResult",
+    "DirectScrapeError",
+    "DirectScrapeItemResult",
+    "DirectScrapePersistenceError",
+    "DirectScrapeRequest",
+    "DirectScrapeService",
     "ExecutionModePolicy",
     "ExtractionAttempt",
     "ExtractionAttemptRepository",
     "ExtractionError",
     "ExtractionQualityMetrics",
     "ExtractionService",
+    "FirecrawlDirectScrapeAdapter",
     "FirecrawlSearchAdapter",
     "NormalizedBlock",
     "OrchestratorConfig",
@@ -61,12 +79,14 @@ __all__ = [
     "QualityService",
     "ResearchOrchestrator",
     "ResearchRunService",
+    "ScrapeTransportResult",
     "SemanticCallService",
     "StageHandler",
     "StageOutcome",
     "StageResult",
     "StoreConfig",
     "TransformationRecord",
+    "build_direct_scrape_service",
     "evaluate_quality",
     "require_authoritative_acquisition",
 ]
