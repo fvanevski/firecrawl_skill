@@ -65,12 +65,10 @@ def main(
 ) -> int:
     raw = list(argv if argv is not None else sys.argv[1:])
     json_requested = "--json" in raw
-    if "--format" in raw:
-        index = raw.index("--format") + 1
-        if index < len(raw) and raw[index] not in SUPPORTED_FORMATS:
-            print(f"ERROR: unsupported format: {raw[index]}", file=sys.stderr)
-            return 1
-    if "--output-dir" in raw:
+    if any(
+        token == "--output-dir" or token.startswith("--output-dir=")
+        for token in raw
+    ):
         return emit_error(
             "preflight",
             "--output-dir was removed; fscrape no longer writes acquisition "
