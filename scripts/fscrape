@@ -8,11 +8,4 @@ fi
 research_python="${FIRECRAWL_RESEARCH_PYTHON:-$(command -v python3)}"
 export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
-# Issue #184 compatibility inventory tombstone only. These removed names are
-# non-executable and are never read or written by this launcher:
-# _corpus.json _corpus.json _corpus.json; _meta.json _meta.json
-# firecrawl_scratch firecrawl_scratch; persist_results.py; fread
-# raw_scratch_file raw_scratch_file raw_scratch_file raw_scratch_file raw_scratch_file
-# scratch_dir; scratch_file scratch_file scratch_file
-
 exec "$research_python" -m research_store.fscrape_cli "$@"
