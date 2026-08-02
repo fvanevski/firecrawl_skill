@@ -441,9 +441,7 @@ def _bound_passage_rows(
         chars += len(clipped)
         tokens += returned_tokens
         if item["text_truncated"]:
-            exhausted_by = (
-                "max_chars" if chars >= bounds.max_chars else "max_tokens"
-            )
+            exhausted_by = "max_chars" if chars >= bounds.max_chars else "max_tokens"
             resume = (item, next_offset)
             break
         resume = (item, 0)
