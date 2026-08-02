@@ -1,5 +1,11 @@
 """Persistent research asset store for the Firecrawl skill."""
 
+from .acquisition_authority import (
+    AcquisitionPreflightError,
+    AuthoritativeAcquisitionContext,
+    execute_authoritative_acquisition,
+    require_authoritative_acquisition,
+)
 from .acquisition_service import AcquisitionService, FirecrawlSearchAdapter
 from .config import StoreConfig
 from .domain import (
@@ -35,7 +41,9 @@ from .stages import (
 __all__ = [
     "VALID_NORMALIZATION_DISPOSITIONS",
     "VALID_NORMALIZATION_RULE_IDS",
+    "AcquisitionPreflightError",
     "AcquisitionService",
+    "AuthoritativeAcquisitionContext",
     "BlobReference",
     "ContextKeys",
     "CorpusService",
@@ -61,4 +69,6 @@ __all__ = [
     "StoreConfig",
     "TransformationRecord",
     "evaluate_quality",
+    "execute_authoritative_acquisition",
+    "require_authoritative_acquisition",
 ]
