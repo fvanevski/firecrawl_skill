@@ -462,14 +462,6 @@ _LEGACY_SURFACE_ALLOWLIST: dict[tuple[str, str], int] = {
     ("scripts/fread", "_meta.json"): 4,
     ("scripts/fread", "firecrawl_scratch"): 1,
     ("scripts/fread", "fread"): 1,
-    ("scripts/fscrape", "_corpus.json"): 3,
-    ("scripts/fscrape", "_meta.json"): 2,
-    ("scripts/fscrape", "firecrawl_scratch"): 2,
-    ("scripts/fscrape", "fread"): 1,
-    ("scripts/fscrape", "persist_results.py"): 1,
-    ("scripts/fscrape", "raw_scratch_file"): 5,
-    ("scripts/fscrape", "scratch_dir"): 1,
-    ("scripts/fscrape", "scratch_file"): 3,
     ("scripts/fsearch_smart", "_meta.json"): 1,
     ("scripts/fsearch_smart", "firecrawl_scratch"): 1,
     ("scripts/live_validate.py", "_meta.json"): 1,
@@ -549,6 +541,11 @@ def test_legacy_surface_inventory_has_not_grown():
         "allowlist only for an intentional removal or approved migration:\n"
         f"actual={actual!r}"
     )
+
+
+def test_fscrape_has_no_legacy_storage_markers():
+    inventory = _legacy_surface_inventory(SCRIPTS.parent)
+    assert not any(path == "scripts/fscrape" for path, _marker in inventory)
 
 
 def test_legacy_surface_inventory_excludes_tests_fixtures_and_generated_files(

@@ -1,9 +1,9 @@
-"""Legacy persistence-bridge tests plus the authoritative fsearch launcher gate.
+"""Legacy persistence-bridge tests plus authoritative launcher gates.
 
-The fsearch launcher is now a PostgreSQL-authoritative Python entrypoint. The
-remaining tests in this module cover legacy ``persist_results.py`` inputs that
-are removed by later release-candidate issues; they do not describe fsearch's
-runtime contract.
+The fsearch and fscrape launchers are PostgreSQL-authoritative Python
+entrypoints. The remaining tests in this module cover legacy
+``persist_results.py`` inputs that are removed by later release-candidate
+issues; they do not describe either launcher's runtime contract.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ SCRIPTS = Path(__file__).resolve().parent
 
 
 class TestWrapperContracts:
-    """Verify the migrated fsearch and still-legacy fscrape launchers."""
+    """Verify the migrated authoritative launchers."""
 
     def test_fsearch_is_authoritative_python_entrypoint(self):
         fsearch_path = SCRIPTS / "fsearch"
@@ -46,14 +46,29 @@ class TestWrapperContracts:
         ):
             assert removed not in content
 
-    def test_fscrape_manifest_contains_results(self, tmp_path, monkeypatch):
-        """fscrape wrapper writes a _meta.json with results array."""
+    def test_fscrape_is_authoritative_python_entrypoint(self):
         fscrape_path = SCRIPTS / "fscrape"
         assert fscrape_path.is_file()
 
         content = fscrape_path.read_text()
-        assert '"results"' in content or "'results'" in content
-        assert '"_meta.json"' in content
+        assert content.startswith("#!/usr/bin/env bash")
+        assert "research-env" in content
+        assert "FIRECRAWL_RESEARCH_PYTHON" in content
+        assert "-m research_store.fscrape_cli" in content
+        for removed in (
+            '"results"',
+            '"_meta.json"',
+            "firecrawl scrape",
+            "mkdir ",
+            " -o ",
+            "python3 - <<",
+            "firecrawl_scratch",
+            "scratch_file",
+            "persist_results.py",
+            "fread",
+            "_corpus.json",
+        ):
+            assert removed not in content
 
 
 class TestPersistResultsIntegration:

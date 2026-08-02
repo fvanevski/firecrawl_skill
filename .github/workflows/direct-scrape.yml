@@ -1,4 +1,4 @@
-name: Direct scrape contract
+name: Authoritative fscrape contract
 
 on:
   pull_request:
@@ -12,10 +12,10 @@ permissions:
   contents: read
 
 jobs:
-  direct-scrape:
-    name: "Direct scrape — Python ${{ matrix.python-version }}"
+  authoritative-fscrape:
+    name: "Authoritative fscrape — Python ${{ matrix.python-version }}"
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
@@ -45,7 +45,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install \
             -r requirements-research-store.txt \
-            pytest
+            pytest \
+            ruff
+
+      - name: Run required quality checks
+        run: |
+          ruff check .
+          ruff format --check .
 
       - name: Start disposable PostgreSQL
         run: |
@@ -53,16 +59,18 @@ jobs:
             -e POSTGRES_PASSWORD=postgres \
             -p 5432:5432 \
             postgres:16-alpine
-          sleep 5
-          for i in $(seq 1 10); do
+          for i in $(seq 1 15); do
             PGPASSWORD=postgres psql \
               -h 127.0.0.1 \
               -U postgres \
               -c "CREATE DATABASE firecrawl_direct_scrape_test;" \
-              2>/dev/null && break || sleep 1
+              2>/dev/null && break
+            sleep 1
           done
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -lqt \
+            | grep -q firecrawl_direct_scrape_test
 
-      - name: Run direct scrape tests
+      - name: Run authoritative fscrape tests
         env:
           RESEARCH_STORE_TEST_DATABASE_URL: >-
             postgresql://postgres:postgres@127.0.0.1/firecrawl_direct_scrape_test
@@ -71,4 +79,16 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_direct_scrape_service.py
+            scripts/test_direct_scrape_service.py \
+            scripts/test_authoritative_fscrape.py \
+            scripts/test_authoritative_fscrape_cli.py
+          python -m pytest \
+            -q \
+            -p no:cacheprovider \
+            scripts/test_acquisition_authority.py \
+            -k 'legacy_surface_inventory or fscrape_has_no_legacy_storage_markers'
+          python -m pytest \
+            -q \
+            -p no:cacheprovider \
+            scripts/test_workflow.py \
+            -k fscrape
