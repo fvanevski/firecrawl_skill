@@ -10,13 +10,14 @@ from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
 from .direct_scrape_service import build_direct_scrape_service
 from .inspection_contract import InspectionNotFoundError, PageRequest, PassageBounds
-from .inspection_corpus import inspect_asset, lexical_search, passages
+from .inspection_corpus import inspect_asset, lexical_search, passages, pattern_search
 from .inspection_history import (
     list_extraction_attempts,
     list_invocations,
     list_runs,
     list_search_responses,
     replay_search,
+    retry_candidates,
     scrape_candidates,
 )
 from .postgres import connect
@@ -75,6 +76,18 @@ class InspectionService:
             idempotency_key=idempotency_key,
         )
 
+    def retry_candidates(
+        self,
+        prior_invocation_id: UUID | str,
+        *,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return retry_candidates(
+            self,
+            prior_invocation_id,
+            idempotency_key=idempotency_key,
+        )
+
     def list_extraction_attempts(
         self,
         *,
@@ -103,6 +116,22 @@ class InspectionService:
     ) -> dict[str, Any]:
         return lexical_search(self, query, run=run, bounds=bounds or PassageBounds())
 
+    def pattern_search(
+        self,
+        pattern: str,
+        *,
+        mode: str = "literal",
+        run: UUID | str | None = None,
+        bounds: PassageBounds | None = None,
+    ) -> dict[str, Any]:
+        return pattern_search(
+            self,
+            pattern,
+            mode=mode,
+            run=run,
+            bounds=bounds or PassageBounds(),
+        )
+
     def _resolve_run(self, value: UUID | str) -> tuple[UUID, str | None]:
         text = str(value)
         try:
@@ -117,7 +146,8 @@ class InspectionService:
                 )
             else:
                 cursor.execute(
-                    "SELECT id,external_run_id FROM research_runs WHERE external_run_id=%s",
+                    "SELECT id,external_run_id FROM research_runs "
+                    "WHERE external_run_id=%s",
                     (text,),
                 )
             row = cursor.fetchone()
