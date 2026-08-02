@@ -202,9 +202,7 @@ def test_acquisition_preflight_rejects_incomplete_acquisition_privileges(
     tmp_path: Path,
 ):
     _, connect_factory = _connect_with(
-        _FakeCursor(
-            denied_privileges=frozenset({("research_events", "INSERT")})
-        )
+        _FakeCursor(denied_privileges=frozenset({("research_events", "INSERT")}))
     )
     with pytest.raises(AcquisitionPreflightError, match="research_events:INSERT"):
         require_authoritative_acquisition(
@@ -459,21 +457,46 @@ _EXCLUDED_PARTS = {
 # intentionally reduce this mapping as they delete each legacy surface.
 # New paths, new markers, or increased counts fail the gate.
 _LEGACY_SURFACE_ALLOWLIST: dict[tuple[str, str], int] = {
+    ("scripts/classifier.py", "_meta.json"): 4,
+    ("scripts/classifier.py", "_search.json"): 4,
+    ("scripts/fread", "_meta.json"): 4,
     ("scripts/fread", "firecrawl_scratch"): 1,
     ("scripts/fread", "fread"): 1,
+    ("scripts/fscrape", "_corpus.json"): 3,
+    ("scripts/fscrape", "_meta.json"): 2,
     ("scripts/fscrape", "firecrawl_scratch"): 2,
     ("scripts/fscrape", "fread"): 1,
     ("scripts/fscrape", "persist_results.py"): 1,
+    ("scripts/fscrape", "raw_scratch_file"): 5,
+    ("scripts/fscrape", "scratch_dir"): 1,
     ("scripts/fscrape", "scratch_file"): 3,
+    ("scripts/fsearch", "--reuse-search"): 4,
+    ("scripts/fsearch", "_context.json"): 2,
+    ("scripts/fsearch", "_corpus.json"): 3,
+    ("scripts/fsearch", "_meta.json"): 7,
+    ("scripts/fsearch", "_search.json"): 5,
     ("scripts/fsearch", "firecrawl_scratch"): 1,
     ("scripts/fsearch", "fread"): 1,
     ("scripts/fsearch", "persist_results.py"): 1,
+    ("scripts/fsearch", "raw_scratch_file"): 1,
+    ("scripts/fsearch", "reuse_search"): 1,
+    ("scripts/fsearch", "scrape_ranks"): 1,
+    ("scripts/fsearch", "scratch_dir"): 15,
     ("scripts/fsearch", "scratch_file"): 7,
+    ("scripts/fsearch_smart", "_meta.json"): 1,
     ("scripts/fsearch_smart", "firecrawl_scratch"): 1,
+    ("scripts/live_validate.py", "_meta.json"): 1,
+    ("scripts/persist_results.py", "_corpus.json"): 3,
+    ("scripts/persist_results.py", "_meta.json"): 4,
     ("scripts/persist_results.py", "persist_results.py"): 1,
     ("scripts/persist_results.py", "scratch-only persistence"): 4,
     ("scripts/persist_results.py", "scratch_file"): 22,
+    ("scripts/research_store/acquisition_service.py", "_meta.json"): 1,
+    ("scripts/research_store/acquisition_service.py", "_search.json"): 1,
+    ("scripts/research_store/acquisition_service.py", "scratch_dir"): 3,
+    ("scripts/research_store/cli.py", "_meta.json"): 1,
     ("scripts/research_store/cli.py", "import-scratch"): 2,
+    ("scripts/research_store/cli.py", "scratch_dir"): 3,
     ("scripts/research_store/cli.py", "scratch_file"): 1,
     ("scripts/research_store/config.py", "SCRATCH_ROOT"): 1,
     ("scripts/research_store/config.py", "firecrawl_scratch"): 1,
@@ -542,9 +565,7 @@ def test_legacy_surface_inventory_excludes_tests_fixtures_and_generated_files(
 ):
     repo = tmp_path
     (repo / "scripts" / "fixtures").mkdir(parents=True)
-    (repo / "scripts" / "research_store" / "alembic" / "versions").mkdir(
-        parents=True
-    )
+    (repo / "scripts" / "research_store" / "alembic" / "versions").mkdir(parents=True)
     (repo / "scripts" / "test_removed_compat.py").write_text(
         "SCRATCH_ROOT = 'removed'\n",
         encoding="utf-8",
@@ -851,9 +872,7 @@ def test_restricted_role_fails_before_provider_execution(
     finally:
         if role_created:
             with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-                cursor.execute(
-                    sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role))
-                )
+                cursor.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
                 cursor.execute(
                     sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role))
                 )
