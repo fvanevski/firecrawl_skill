@@ -281,14 +281,12 @@ def _is_runtime_source(relative: Path) -> bool:
         return False
     if any(part in _EXCLUDED_PARTS for part in relative.parts):
         return False
-    if relative.parts[:4] == (
+    return relative.parts[:4] != (
         "scripts",
         "research_store",
         "alembic",
         "versions",
-    ):
-        return False
-    return True
+    )
 
 
 def _legacy_surface_inventory(repo_root: Path) -> dict[tuple[str, str], int]:
