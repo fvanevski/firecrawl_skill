@@ -153,6 +153,8 @@ jobs:
             scripts/test_performance_telemetry_integration.py \
             scripts/test_strict_campaign.py \
             scripts/test_release_evidence.py \
+            scripts/test_database_native_inspection.py \
+            scripts/test_database_native_inspection_integration.py \
             scripts/test_research_store_integration.py
 
   strict-campaign-contract:
