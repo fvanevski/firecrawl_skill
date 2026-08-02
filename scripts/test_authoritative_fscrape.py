@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 from unittest import mock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+from research_store.config import StoreConfig
+from research_store.container import build_run_service
 from research_store.direct_scrape_service import (
     DirectScrapeBatchResult,
     DirectScrapeItemResult,
@@ -28,12 +32,16 @@ from research_store.fscrape_contract import (
 from research_store.fscrape_service import (
     FScrapeService,
     ValidatedDirectScrapeService,
+    build_fscrape_service,
 )
+from research_store.postgres import connect
 
 RUN_UUID = UUID("11111111-1111-4111-8111-111111111111")
 RUN_ID = f"fr_{RUN_UUID.hex}"
 INVOCATION_UUID = UUID("22222222-2222-4222-8222-222222222222")
 EXTERNAL_INVOCATION_ID = "fc_33333333333343338333333333333333"
+OTHER_EXTERNAL_INVOCATION_ID = "fc_44444444444444448444444444444444"
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
 
 def _item(
@@ -108,8 +116,9 @@ def _batch(
 
 
 class _Cursor:
-    def __init__(self, rows):
-        self.rows = rows
+    def __init__(self, index_rows, authoritative_external_id):
+        self.index_rows = index_rows
+        self.authoritative_external_id = authoritative_external_id
         self.sql = None
         self.params = None
 
@@ -123,13 +132,22 @@ class _Cursor:
         self.sql = " ".join(sql.split())
         self.params = params
 
+    def fetchone(self):
+        if "FROM research_invocations" in self.sql:
+            return (self.authoritative_external_id,)
+        raise AssertionError(f"unexpected fetchone for {self.sql}")
+
     def fetchall(self):
-        return list(self.rows)
+        if "FROM index_jobs" in self.sql:
+            return list(self.index_rows)
+        raise AssertionError(f"unexpected fetchall for {self.sql}")
 
 
 class _UnitOfWork:
-    def __init__(self, rows):
-        self.connection = SimpleNamespace(cursor=lambda: _Cursor(rows))
+    def __init__(self, index_rows, authoritative_external_id):
+        self.connection = SimpleNamespace(
+            cursor=lambda: _Cursor(index_rows, authoritative_external_id)
+        )
 
     def __enter__(self):
         return self
@@ -151,11 +169,20 @@ class _RunService:
 
 
 class _RecordingDirectService:
-    def __init__(self, *, batch=None, index_rows=()):
+    def __init__(
+        self,
+        *,
+        batch=None,
+        index_rows=(),
+        authoritative_external_id=EXTERNAL_INVOCATION_ID,
+    ):
         self.batch = batch
         self.index_rows = index_rows
+        self.authoritative_external_id = authoritative_external_id
         self.calls = []
-        self.uow_factory = lambda: _UnitOfWork(self.index_rows)
+        self.uow_factory = lambda: _UnitOfWork(
+            self.index_rows, self.authoritative_external_id
+        )
 
     def execute(self, run_id, requests, **kwargs):
         self.calls.append((run_id, tuple(requests), kwargs))
@@ -209,6 +236,7 @@ def test_each_supported_format_delegates_to_direct_service(
     assert requests[0].effective_format == effective_format
     assert requests[0].effective_mime_type == mime_type
     assert kwargs["external_invocation_id"] == EXTERNAL_INVOCATION_ID
+    assert result.external_invocation_id == EXTERNAL_INVOCATION_ID
     assert result.to_dict()["items"][0]["mime_type"] == mime_type
 
 
@@ -382,6 +410,42 @@ def test_missing_committed_index_job_fails_closed():
     assert error.value.stage == "indexing"
 
 
+def test_result_uses_committed_external_identity_on_explicit_key_replay():
+    direct = _RecordingDirectService(
+        batch=_batch((_item(0),), replayed=True),
+        authoritative_external_id=EXTERNAL_INVOCATION_ID,
+    )
+
+    result = FScrapeService(direct, _RunService()).execute(
+        FScrapeRequest(
+            urls=("https://example.com/replay",),
+            research_run_id=RUN_ID,
+            external_invocation_id=OTHER_EXTERNAL_INVOCATION_ID,
+            idempotency_key="caller-key",
+        )
+    )
+
+    assert direct.calls[0][2]["external_invocation_id"] == OTHER_EXTERNAL_INVOCATION_ID
+    assert result.external_invocation_id == EXTERNAL_INVOCATION_ID
+    assert result.to_dict()["external_invocation_id"] == EXTERNAL_INVOCATION_ID
+
+
+def test_missing_authoritative_external_identity_fails_closed():
+    direct = _RecordingDirectService(authoritative_external_id=None)
+
+    with pytest.raises(
+        DirectScrapePersistenceError,
+        match="has no external identity",
+    ):
+        FScrapeService(direct, _RunService()).execute(
+            FScrapeRequest(
+                urls=("https://example.com/missing-identity",),
+                research_run_id=RUN_ID,
+                external_invocation_id=EXTERNAL_INVOCATION_ID,
+            )
+        )
+
+
 def test_default_idempotency_is_invocation_scoped_and_explicit_key_is_preserved():
     direct = _RecordingDirectService()
     service = FScrapeService(direct, _RunService())
@@ -402,7 +466,7 @@ def test_default_idempotency_is_invocation_scoped_and_explicit_key_is_preserved(
     service.execute(
         FScrapeRequest(
             **base,
-            external_invocation_id="fc_44444444444444448444444444444444",
+            external_invocation_id=OTHER_EXTERNAL_INVOCATION_ID,
         )
     )
     assert direct.calls[-1][2]["idempotency_key"] != first_key
@@ -417,7 +481,7 @@ def test_default_idempotency_is_invocation_scoped_and_explicit_key_is_preserved(
     assert direct.calls[-1][2]["idempotency_key"] == "caller-key"
 
 
-def test_result_lists_are_bounded():
+def test_result_lists_are_bounded_and_schema_versioned():
     items = tuple(_item(index) for index in range(105))
     result = FScrapeResult(
         research_run_id=RUN_ID,
@@ -426,6 +490,130 @@ def test_result_lists_are_bounded():
         index_job_ids_by_chunk={},
     ).to_dict()
 
+    assert result["schema_version"] == "authoritative-fscrape-v1"
+    assert "schem_version" not in result
     assert result["item_count"] == 105
     assert len(result["items"]) == 100
     assert result["items_truncated"] is True
+
+
+class _SequenceAdapter:
+    def __init__(self, outcomes):
+        self.outcomes = iter(outcomes)
+        self.calls = []
+
+    def scrape(self, url, **_kwargs):
+        self.calls.append(url)
+        return next(self.outcomes)
+
+
+@pytest.mark.skipif(
+    not TEST_DSN,
+    reason="requires explicit disposable PostgreSQL test DSN",
+)
+def test_postgres_wrapper_persists_structured_outcomes_and_replays_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    monkeypatch.setenv("TMPDIR", str(temp_root))
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=TEST_DSN,
+        blob_root=tmp_path / "blobs",
+    )
+    run_external_id = f"fr_{uuid4().hex}"
+    invocation_external_id = f"fc_{uuid4().hex}"
+    replay_requested_external_id = f"fc_{uuid4().hex}"
+    idempotency_key = f"fscrape-integration:{uuid4()}"
+    run_service = build_run_service(config)
+    run_service.create(
+        objective="authoritative fscrape integration",
+        external_id=run_external_id,
+    )
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "integer"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+    adapter = _SequenceAdapter(
+        [
+            ScrapeTransportResult(raw_payload=b'{"answer": 42}'),
+            ScrapeTransportResult(raw_payload=b'{"answer": "wrong"}'),
+        ]
+    )
+    service = build_fscrape_service(config, adapter_factory=lambda: adapter)
+    request = FScrapeRequest(
+        urls=(
+            "https://example.com/valid-structured",
+            "https://example.com/invalid-structured",
+        ),
+        research_run_id=run_external_id,
+        schema=schema,
+        idempotency_key=idempotency_key,
+        external_invocation_id=invocation_external_id,
+    )
+
+    result = service.execute(request)
+
+    assert result.status == "partial"
+    assert result.external_invocation_id == invocation_external_id
+    assert [item.status for item in result.batch.items] == ["succeeded", "failed"]
+    assert result.batch.items[0].mime_type == "application/json"
+    assert result.batch.items[0].chunk_ids
+    assert result.batch.items[1].failure_class == "schema_validation"
+    assert result.batch.items[1].extraction_attempt_id is not None
+    assert result.to_dict()["items"][0]["index_job_ids"]
+    assert adapter.calls == [
+        "https://example.com/valid-structured",
+        "https://example.com/invalid-structured",
+    ]
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cur:
+        cur.execute(
+            """SELECT external_invocation_id,status
+            FROM research_invocations WHERE id=%s AND run_id=%s""",
+            (result.batch.invocation_id, result.batch.run_id),
+        )
+        assert cur.fetchone() == (invocation_external_id, "partial")
+        attempts = []
+        for item in result.batch.items:
+            cur.execute(
+                """SELECT exit_status,failure_class,raw_blob_sha256,
+                normalized_blob_sha256
+                FROM extraction_attempts WHERE id=%s""",
+                (item.extraction_attempt_id,),
+            )
+            attempts.append(cur.fetchone())
+        cur.execute(
+            "SELECT count(*) FROM research_invocations WHERE run_id=%s",
+            (result.batch.run_id,),
+        )
+        assert cur.fetchone()[0] == 1
+
+    assert attempts[0][0:2] == ("succeeded", "none")
+    assert attempts[0][2] is not None
+    assert attempts[0][3] is not None
+    assert attempts[1][0:2] == ("failed", "schema_validation")
+    assert attempts[1][2] is not None
+    assert attempts[1][3] is None
+    assert any(path.is_file() for path in config.blob_root.rglob("*"))
+
+    replay_adapter = _SequenceAdapter([])
+    replay_service = build_fscrape_service(
+        config, adapter_factory=lambda: replay_adapter
+    )
+    replayed = replay_service.execute(
+        replace(
+            request,
+            external_invocation_id=replay_requested_external_id,
+        )
+    )
+
+    assert replayed.batch.replayed is True
+    assert replayed.batch.invocation_id == result.batch.invocation_id
+    assert replayed.external_invocation_id == invocation_external_id
+    assert replay_adapter.calls == []
+    assert list(temp_root.iterdir()) == []
