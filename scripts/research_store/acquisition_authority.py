@@ -167,7 +167,7 @@ def require_authoritative_acquisition(
             connection.rollback()
     except AcquisitionPreflightError:
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise AcquisitionPreflightError(
             f"authoritative PostgreSQL preflight failed: {exc}"
         ) from exc
