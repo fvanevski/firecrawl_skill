@@ -27,6 +27,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check final diff
+        run: git diff --check "origin/${GITHUB_BASE_REF:-main}...HEAD"
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
