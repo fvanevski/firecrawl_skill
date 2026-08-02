@@ -336,9 +336,7 @@ def test_legacy_surface_inventory_excludes_tests_fixtures_and_generated_files(
 ):
     repo = tmp_path
     (repo / "scripts" / "fixtures").mkdir(parents=True)
-    (repo / "scripts" / "research_store" / "alembic" / "versions").mkdir(
-        parents=True
-    )
+    (repo / "scripts" / "research_store" / "alembic" / "versions").mkdir(parents=True)
     (repo / "scripts" / "test_removed_compat.py").write_text(
         "SCRATCH_ROOT = 'removed'\n",
         encoding="utf-8",
@@ -348,12 +346,7 @@ def test_legacy_surface_inventory_excludes_tests_fixtures_and_generated_files(
         encoding="utf-8",
     )
     (
-        repo
-        / "scripts"
-        / "research_store"
-        / "alembic"
-        / "versions"
-        / "old.py"
+        repo / "scripts" / "research_store" / "alembic" / "versions" / "old.py"
     ).write_text(
         "scratch_file = 'historical'\n",
         encoding="utf-8",
