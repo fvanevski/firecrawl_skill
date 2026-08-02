@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import workflow_test_cases as cases
-from workflow_test_cases import *  # noqa: F403
+from workflow_test_cases import *
 
 
 def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):
