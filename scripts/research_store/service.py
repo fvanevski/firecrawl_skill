@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
 from typing import Any
@@ -19,6 +20,48 @@ from .parsing import structural_blocks
 from .parsing.interfaces import ParserSelectionError, UnsupportedFormatError
 from .retrieval import reciprocal_rank_fusion
 from .url import canonicalize_url
+
+
+@dataclass(frozen=True)
+class ParsedContent:
+    """Parsed blocks plus the exact parser identity that produced them."""
+
+    blocks: tuple[Any, ...]
+    parser_name: str
+    parser_version: str
+
+
+@dataclass(frozen=True)
+class PreparedIngest:
+    """Named, stable boundary between parsing and PostgreSQL persistence."""
+
+    request: IngestRequest
+    canonical_url: str
+    blob: Any
+    normalized_text: str
+    blocks: tuple[Any, ...]
+    chunks: tuple[Any, ...]
+    parser_name: str
+    parser_version: str
+    parser_implementation_version: str
+    chunker_version: str
+    normalization_version: str
+    chunker_name: str
+
+    def persist_args(self) -> tuple[Any, ...]:
+        return (
+            self.request,
+            self.canonical_url,
+            self.blob,
+            self.normalized_text,
+            self.blocks,
+            self.chunks,
+            self.parser_version,
+            self.chunker_version,
+            self.normalization_version,
+            self.chunker_name,
+            f"{self.parser_name}@{self.parser_implementation_version}",
+        )
 
 
 class CorpusService:
@@ -67,7 +110,7 @@ class CorpusService:
         """
         prepared = self._prepare_ingest(request)
         with self.uow_factory() as uow:
-            result = uow.snapshots.persist_ingest(*prepared)
+            result = uow.snapshots.persist_ingest(*prepared.persist_args())
 
         # Associate with a research run when requested.
         if run_id is not None or external_run_id is not None:
@@ -133,7 +176,11 @@ class CorpusService:
             # Run not found or not in a running state — skip silently.
             pass
 
-    def _prepare_ingest(self, request: IngestRequest):
+    def prepare_ingest(self, request: IngestRequest) -> PreparedIngest:
+        """Prepare an ingestion using a typed, format-aware parser contract."""
+        return self._prepare_ingest(request)
+
+    def _prepare_ingest(self, request: IngestRequest) -> PreparedIngest:
         canonical = canonicalize_url(request.final_url or request.requested_url)
         blob = self.blob_store.put(BytesIO(request.content), request.mime_type)
         normalized = (
@@ -144,8 +191,8 @@ class CorpusService:
         raw = normalized
         text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
 
-        # Use typed parser registry when available, fall back to legacy
-        blocks = self._parse_content(raw, request.mime_type)
+        parsed = self._parse_content_with_identity(raw, request.mime_type)
+        blocks = list(parsed.blocks)
         if not blocks:
             raise ValueError("retrieved content produced no structural blocks")
         chunks = hierarchical_chunks(
@@ -155,7 +202,6 @@ class CorpusService:
             chunker_version=self.config.chunker_version,
             chunker_name=self.config.chunker_name,
         )
-        # Convert HierarchicalChunk to legacy Chunk for DB persistence
         from .domain import Chunk
 
         legacy_chunks: list[Chunk] = []
@@ -173,45 +219,32 @@ class CorpusService:
                     parent_block_ordinal=hc.parent_block_ordinal,
                 )
             )
-        return (
-            request,
-            canonical,
-            blob,
-            text,
-            blocks,
-            legacy_chunks,
-            self.config.parser_version,
-            self.config.chunker_version,
-            self.config.normalization_version,
-            self.config.chunker_name,
+        return PreparedIngest(
+            request=request,
+            canonical_url=canonical,
+            blob=blob,
+            normalized_text=text,
+            blocks=tuple(blocks),
+            chunks=tuple(legacy_chunks),
+            parser_name=parsed.parser_name,
+            parser_version=self.config.parser_version,
+            parser_implementation_version=parsed.parser_version,
+            chunker_version=self.config.chunker_version,
+            normalization_version=self.config.normalization_version,
+            chunker_name=self.config.chunker_name,
         )
 
     def _parse_content(self, raw: bytes, mime_type: str | None) -> list:
-        """Parse content using the typed parser registry with HTML fallback.
+        """Compatibility wrapper returning only parsed blocks."""
+        return list(self._parse_content_with_identity(raw, mime_type).blocks)
 
-        Selection order:
-        1. Typed parser from the registry (e.g. ``HtmlMainContentParser``
-           for ``text/html``).
-        2. When the primary HTML parser fails, try the legacy
-           ``HtmlNormalizedParser`` as an intermediate fallback.
-        3. When both HTML parsers fail, fall back to the legacy
-           ``structural_blocks()`` regex parser (Markdown-only).
-
-        Args:
-            raw: Raw byte payload.
-            mime_type: MIME type hint from the scraper.
-
-        Returns:
-            List of Block instances (typed or legacy).
-
-        Raises:
-            UnsupportedFormatError: When the MIME type is explicitly unsupported.
-            ParserSelectionError: When no parser can be selected.
-        """
+    def _parse_content_with_identity(
+        self, raw: bytes, mime_type: str | None
+    ) -> ParsedContent:
+        """Parse bytes and retain the exact parser type and version."""
         if self.parser_registry is not None:
             try:
                 record = self.parser_registry.select(mime_type, raw=raw)
-                # Instantiate the parser from its fully-qualified type name
                 from importlib import import_module
 
                 module_name, class_name = record.selected_parser_type.rsplit(".", 1)
@@ -219,12 +252,17 @@ class CorpusService:
                 parser = getattr(mod, class_name)()
                 parse_result = parser.parse(raw, mime_type=mime_type)
                 if not parse_result.success:
-                    # Parse produced an error — treat as unsupported
                     raise UnsupportedFormatError(
                         mime_type=mime_type,
                         suggestion=parse_result.error or "Parser reported an error",
                     )
-                return [b.to_legacy_block() for b in parse_result.blocks]
+                return ParsedContent(
+                    blocks=tuple(
+                        block.to_legacy_block() for block in parse_result.blocks
+                    ),
+                    parser_name=record.selected_parser_type,
+                    parser_version=parse_result.parser_version,
+                )
             except (UnsupportedFormatError, ParserSelectionError):
                 raise
             except (
@@ -234,15 +272,15 @@ class CorpusService:
                 ImportError,
                 json.JSONDecodeError,
             ) as exc:
-                # Expected parser failures — try HTML normalized fallback
-                # before falling through to legacy regex
                 if self._is_html_content(mime_type, raw):
                     logging.getLogger(__name__).debug(
                         "Primary HTML parser failed (%s), trying normalized HTML fallback: %s",
                         type(exc).__name__,
                         exc,
                     )
-                    normalized_result = self._try_normalized_html(raw, mime_type)
+                    normalized_result = self._try_normalized_html_with_identity(
+                        raw, mime_type
+                    )
                     if normalized_result is not None:
                         return normalized_result
                 logging.getLogger(__name__).debug(
@@ -251,14 +289,14 @@ class CorpusService:
                     exc,
                 )
             except Exception as exc:
-                # Unexpected errors — try HTML normalized fallback
-                # before falling through to legacy regex
                 if self._is_html_content(mime_type, raw):
                     logging.getLogger(__name__).exception(
                         "Unexpected parser error, trying normalized HTML fallback: %s",
                         exc,  # noqa: TRY401
                     )
-                    normalized_result = self._try_normalized_html(raw, mime_type)
+                    normalized_result = self._try_normalized_html_with_identity(
+                        raw, mime_type
+                    )
                     if normalized_result is not None:
                         return normalized_result
                 logging.getLogger(__name__).exception(
@@ -271,9 +309,12 @@ class CorpusService:
                 "HTML parsing failed for both primary and fallback parsers"
             )
 
-        # Legacy fallback: Markdown-only structural parser
         text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
-        return structural_blocks(text)
+        return ParsedContent(
+            blocks=tuple(structural_blocks(text)),
+            parser_name=f"{structural_blocks.__module__}.{structural_blocks.__name__}",
+            parser_version=self.config.parser_version,
+        )
 
     @staticmethod
     def _is_html_content(mime_type: str | None, raw: bytes) -> bool:
@@ -297,18 +338,28 @@ class CorpusService:
         return False
 
     def _try_normalized_html(self, raw: bytes, mime_type: str | None) -> list | None:
-        """Try the legacy HtmlNormalizedParser as an intermediate fallback.
+        """Compatibility wrapper for callers that only need blocks."""
+        parsed = self._try_normalized_html_with_identity(raw, mime_type)
+        return list(parsed.blocks) if parsed is not None else None
 
-        Returns a list of legacy ``Block`` instances on success, or
-        ``None`` when the normalized parser also fails.
-        """
+    def _try_normalized_html_with_identity(
+        self, raw: bytes, mime_type: str | None
+    ) -> ParsedContent | None:
+        """Try the normalized HTML parser while retaining its identity."""
         try:
             from .html_parser import HtmlNormalizedParser
 
             parser = HtmlNormalizedParser()
             parse_result = parser.parse(raw, mime_type=mime_type)
             if parse_result.success and parse_result.blocks:
-                return [b.to_legacy_block() for b in parse_result.blocks]
+                parser_name = f"{type(parser).__module__}.{type(parser).__name__}"
+                return ParsedContent(
+                    blocks=tuple(
+                        block.to_legacy_block() for block in parse_result.blocks
+                    ),
+                    parser_name=parser_name,
+                    parser_version=parse_result.parser_version,
+                )
         except Exception:
             logging.getLogger(__name__).exception(
                 "Normalized HTML fallback also failed"
@@ -361,7 +412,7 @@ class CorpusService:
                         raise RuntimeError(item.get("error") or "acquisition failed")
                     prepared = self._prepare_ingest(request)
                     with uow.savepoint():
-                        result = uow.persist_ingest(*prepared)
+                        result = uow.persist_ingest(*prepared.persist_args())
                         uow.record_batch_asset(
                             batch_id,
                             ordinal,

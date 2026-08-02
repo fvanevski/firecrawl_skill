@@ -31,6 +31,8 @@ class SnapshotRepository(Protocol):
         parser_version: str,
         chunker_version: str,
         normalization_version: str,
+        chunker_name: str = "structural",
+        parser_name: str = "markdown",
     ) -> IngestResult: ...
 
 
