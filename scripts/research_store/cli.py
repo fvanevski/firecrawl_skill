@@ -2884,22 +2884,64 @@ def main(argv=None):
         print(dumps({"duplicate_group_id": res_group_id}))
         return 0
     if args.command == "acquisition-search":
+        from .acquisition_authority import (
+            AcquisitionPreflightError,
+            require_authoritative_acquisition,
+        )
+        from .acquisition_service import AcquisitionIdempotencyConflictError
         from .container import build_acquisition_service
 
-        run_svc = build_run_service(config)
-        status = run_svc.status(external_id=args.external_id)
-        acq_svc = build_acquisition_service(config)
-        result = acq_svc.execute_search(
-            status.id,
-            args.query_text,
-            backend=args.backend,
-            plan_id=UUID(args.plan_id) if args.plan_id else None,
-            plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
-            idempotency_key=args.idempotency_key,
-            limit=args.limit,
-            sources=args.sources,
-            tbs=args.tbs,
-        )
+        try:
+            config.require_database()
+            run_svc = build_run_service(config)
+            status = run_svc.status(external_id=args.external_id)
+            context = require_authoritative_acquisition(
+                run_id=status.id,
+                config=config,
+            )
+            acq_svc = build_acquisition_service(config)
+        except (AcquisitionPreflightError, KeyError, RuntimeError, ValueError) as exc:
+            print(
+                dumps(
+                    {
+                        "schema_version": "authoritative-acquisition-error-v1",
+                        "status": "failed",
+                        "failure_stage": "preflight",
+                        "error": str(exc)[:500],
+                    }
+                ),
+                file=sys.stderr,
+            )
+            return 2
+
+        try:
+            result = acq_svc.execute_search(
+                status.id,
+                args.query_text,
+                backend=args.backend,
+                plan_id=UUID(args.plan_id) if args.plan_id else None,
+                plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
+                idempotency_key=args.idempotency_key,
+                limit=args.limit,
+                sources=args.sources,
+                tbs=args.tbs,
+                authority_context=context,
+                replay_existing=True,
+            )
+        except AcquisitionIdempotencyConflictError as exc:
+            print(
+                dumps(
+                    {
+                        "schema_version": "authoritative-acquisition-error-v1",
+                        "status": "failed",
+                        "failure_stage": "idempotency",
+                        "error": str(exc)[:500],
+                    }
+                ),
+                file=sys.stderr,
+            )
+            return 3
+
         print(
             dumps(
                 {
@@ -2911,10 +2953,11 @@ def main(argv=None):
                     "candidate_count": result.candidate_count,
                     "postgres_committed": result.postgres_committed,
                     "event_id": str(result.event_id) if result.event_id else None,
+                    "replayed": result.replayed,
                 }
             )
         )
-        return 0
+        return 0 if result.status in {"succeeded", "empty"} else 1
     if args.command == "acquisition-reconcile":
         from .container import build_acquisition_service
 

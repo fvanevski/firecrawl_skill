@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
+from .acquisition_authority import require_authoritative_acquisition
 from .acquisition_service import AcquisitionService
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
@@ -144,6 +145,8 @@ def build_acquisition_service(
         ),
         blob_store=ContentAddressedBlobStore(config.blob_root),
         search_adapter=search_adapter,
+        config=config,
+        authority_preflight=require_authoritative_acquisition,
     )
 
 

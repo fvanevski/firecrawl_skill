@@ -411,7 +411,6 @@ def evidence_packet(
                         "rank",
                         "selection_score",
                         "scrape_status",
-                        "scratch_file",
                         "word_count",
                         "triage",
                     )

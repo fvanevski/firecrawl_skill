@@ -12,6 +12,7 @@ from uuid import UUID
 
 from .acquisition_authority import (
     ACQUISITION_ENTRY_STATES,
+    AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
 )
 from .blob import ContentAddressedBlobStore
@@ -260,10 +261,16 @@ class AcquisitionService:
         uow_factory: Callable,
         blob_store: Any | None = None,
         search_adapter: SearchAdapter | None = None,
+        *,
+        config: Any | None = None,
+        authority_preflight: Callable[..., AuthoritativeAcquisitionContext]
+        | None = None,
     ):
         self.uow_factory = uow_factory
         self.blob_store = blob_store
         self.search_adapter = search_adapter or FirecrawlSearchAdapter()
+        self.config = config
+        self.authority_preflight = authority_preflight
 
     def execute_search(
         self,
@@ -279,7 +286,7 @@ class AcquisitionService:
         tbs: str | None = None,
         metadata: dict[str, Any] | None = None,
         authority_context: AuthoritativeAcquisitionContext | None = None,
-        replay_existing: bool = False,
+        replay_existing: bool = True,
     ) -> AcquisitionResult:
         run_id = UUID(str(run_id))
         if plan_id is not None:
@@ -289,6 +296,7 @@ class AcquisitionService:
         if not query_text.strip():
             raise ValueError("query_text must be non-empty")
 
+        authority_context = self._resolve_authority_context(run_id, authority_context)
         key = idempotency_key or f"search:{run_id}:{plan_query_id or query_text}"
         request_envelope = {
             "schema_version": "authoritative-search-request-v1",
@@ -506,14 +514,29 @@ class AcquisitionService:
             replayed=True,
         )
 
+    def _resolve_authority_context(
+        self,
+        run_id: UUID,
+        context: AuthoritativeAcquisitionContext | None,
+    ) -> AuthoritativeAcquisitionContext:
+        if context is None:
+            if self.authority_preflight is None or self.config is None:
+                raise AcquisitionPreflightError(
+                    "authoritative acquisition preflight is required before provider execution"
+                )
+            context = self.authority_preflight(run_id=run_id, config=self.config)
+        if context.run_id != run_id or context.lifecycle_revision is None:
+            raise AcquisitionPreflightError(
+                "authoritative acquisition requires a matching run-bound preflight context"
+            )
+        return context
+
     @staticmethod
     def _revalidate_authority(
         uow: Any,
-        context: AuthoritativeAcquisitionContext | None,
+        context: AuthoritativeAcquisitionContext,
         run_id: UUID,
     ) -> None:
-        if context is None:
-            return
         if context.run_id != run_id or context.lifecycle_revision is None:
             raise AcquisitionAuthorityChangedError(
                 "authoritative search requires the matching run-bound preflight context"

@@ -456,28 +456,6 @@ def test_rc6_removes_legacy_runtime_surfaces(monkeypatch: pytest.MonkeyPatch):
     assert "--scratch-dir" not in option_strings
 
 
-def test_rc6_supported_runtime_has_no_removed_persistence_switches():
-    removed = (
-        "FIRECRAWL_RESEARCH_ACTIVE",
-        "FIRECRAWL_CAPTURE_RAW",
-        "FIRECRAWL_RESEARCH_PERSIST",
-    )
-    runtime_paths = (
-        SCRIPTS / "frun",
-        SCRIPTS / "research-env",
-        SCRIPTS / "fsearch",
-        SCRIPTS / "fscrape",
-        SCRIPTS / "research_store" / "fsearch_service.py",
-        SCRIPTS / "research_store" / "fscrape_cli.py",
-    )
-    for path in runtime_paths:
-        text = path.read_text(encoding="utf-8")
-        for marker in removed:
-            assert marker not in text, (
-                f"{marker} remains in {path.relative_to(SCRIPTS.parent)}"
-            )
-
-
 _LITERAL_MARKERS = (
     "firecrawl_scratch",
     "SCRATCH_ROOT",
@@ -488,6 +466,9 @@ _LITERAL_MARKERS = (
     "_meta.json",
     "_context.json",
     "--reuse-search",
+    "FIRECRAWL_RESEARCH_ACTIVE",
+    "FIRECRAWL_CAPTURE_RAW",
+    "FIRECRAWL_RESEARCH_PERSIST",
 )
 _TOKEN_MARKERS = {
     "scratch_file": re.compile(r"(?<![A-Za-z0-9_])scratch_file(?![A-Za-z0-9_])"),
@@ -517,18 +498,21 @@ _EXCLUDED_PARTS = {
     "generated",
 }
 
-# Path-specific baseline for issue #184. Later scratch-removal issues must
-# intentionally reduce this mapping as they delete each legacy surface.
-# New paths, new markers, or increased counts fail the gate.
-_LEGACY_SURFACE_ALLOWLIST: dict[tuple[str, str], int] = {
-    # Remaining runtime diagnostics are owned by RC-7 / issue #190.
+# RC-6-owned runtime surfaces are empty. Remaining entries are classified
+# separately as RC-7 work or intentional removed-flag compatibility errors.
+_RC7_PENDING_RUNTIME_ALLOWLIST: dict[tuple[str, str], int] = {
     ("scripts/fsearch_smart", "_meta.json"): 1,
     ("scripts/fsearch_smart", "firecrawl_scratch"): 1,
     ("scripts/live_validate.py", "_meta.json"): 1,
+}
+_COMPATIBILITY_ERROR_ALLOWLIST: dict[tuple[str, str], int] = {
     ("scripts/research_store/fsearch_service.py", "--reuse-search"): 2,
     ("scripts/research_store/fsearch_service.py", "reuse_search"): 1,
     ("scripts/research_store/fsearch_service.py", "scrape_ranks"): 1,
-    ("scripts/research_workflow.py", "scratch_file"): 1,
+}
+_LEGACY_SURFACE_ALLOWLIST = {
+    **_RC7_PENDING_RUNTIME_ALLOWLIST,
+    **_COMPATIBILITY_ERROR_ALLOWLIST,
 }
 
 
@@ -588,6 +572,25 @@ def test_legacy_surface_inventory_has_not_grown():
     )
 
 
+def test_rc6_runtime_inventory_is_empty_outside_declared_boundaries():
+    actual = _legacy_surface_inventory(SCRIPTS.parent)
+    assert set(actual) == set(_RC7_PENDING_RUNTIME_ALLOWLIST) | set(
+        _COMPATIBILITY_ERROR_ALLOWLIST
+    )
+    prohibited = {
+        "SCRATCH_ROOT",
+        "scratch_file",
+        "scratch_dir",
+        "FIRECRAWL_RESEARCH_ACTIVE",
+        "FIRECRAWL_CAPTURE_RAW",
+        "FIRECRAWL_RESEARCH_PERSIST",
+        "persist_results.py",
+        "import-scratch",
+        "_corpus.json",
+    }
+    assert not any(marker in prohibited for _path, marker in actual)
+
+
 def test_fscrape_has_no_legacy_storage_markers():
     inventory = _legacy_surface_inventory(SCRIPTS.parent)
     assert not any(path == "scripts/fscrape" for path, _marker in inventory)
@@ -640,6 +643,22 @@ def test_inventory_detects_indirect_file_handoffs_and_local_replay(tmp_path: Pat
     assert inventory[("scripts/runtime.py", "_context.json")] == 1
     assert inventory[("scripts/runtime.py", "reuse_search")] == 1
     assert inventory[("scripts/runtime.py", "scrape_ranks")] == 1
+
+
+def test_inventory_detects_removed_persistence_switches(tmp_path: Path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "runtime.py").write_text(
+        "FIRECRAWL_RESEARCH_ACTIVE = '1'\n"
+        "FIRECRAWL_CAPTURE_RAW = '1'\n"
+        "FIRECRAWL_RESEARCH_PERSIST = 'off'\n",
+        encoding="utf-8",
+    )
+
+    inventory = _legacy_surface_inventory(tmp_path)
+    assert inventory[("scripts/runtime.py", "FIRECRAWL_RESEARCH_ACTIVE")] == 1
+    assert inventory[("scripts/runtime.py", "FIRECRAWL_CAPTURE_RAW")] == 1
+    assert inventory[("scripts/runtime.py", "FIRECRAWL_RESEARCH_PERSIST")] == 1
 
 
 def test_secure_ephemeral_and_explicit_export_files_are_not_legacy_storage(
@@ -696,6 +715,7 @@ class _CommitFailingUnitOfWork:
 
     def __enter__(self):
         entered = self.inner.__enter__()
+        self.connection = entered.connection
         self.runs = entered.runs
         return self
 
@@ -772,7 +792,8 @@ def test_guarded_success_is_visible_after_commit_and_retry_is_idempotent(
     )
     assert retried.search_response_id == result.search_response_id
     assert len(run_service.list_search_responses(status.id)) == 1
-    assert adapter.call_count == 2
+    assert retried.replayed is True
+    assert adapter.call_count == 1
 
 
 @pytest.mark.skipif(
@@ -792,6 +813,8 @@ def test_commit_failure_never_returns_success_and_retry_recovers(
         lambda: _CommitFailingUnitOfWork(base_factory()),
         blob_store=normal_service.blob_store,
         search_adapter=adapter,
+        config=config,
+        authority_preflight=require_authoritative_acquisition,
     )
     idempotency_key = f"authority-failure:{uuid4()}"
 
@@ -801,6 +824,7 @@ def test_commit_failure_never_returns_success_and_retry_recovers(
             status.id,
             "commit must fail closed",
             idempotency_key=idempotency_key,
+            replay_existing=False,
         )
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
@@ -905,3 +929,245 @@ def test_restricted_role_fails_before_provider_execution(
                 cursor.execute(
                     sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role))
                 )
+
+
+def test_acquisition_service_requires_preflight_before_provider_execution():
+    adapter = mock.Mock()
+    uow_factory = mock.Mock()
+    service = AcquisitionService(uow_factory, search_adapter=adapter)
+
+    with pytest.raises(AcquisitionPreflightError, match="preflight is required"):
+        service.execute_search(uuid4(), "must not reach provider")
+
+    adapter.search.assert_not_called()
+    uow_factory.assert_not_called()
+
+
+def test_acquisition_service_runs_injected_preflight_before_provider_execution():
+    adapter = mock.Mock()
+    uow_factory = mock.Mock()
+    preflight = mock.Mock(side_effect=AcquisitionPreflightError("schema not ready"))
+    config = object()
+    service = AcquisitionService(
+        uow_factory,
+        search_adapter=adapter,
+        config=config,
+        authority_preflight=preflight,
+    )
+    run_id = uuid4()
+
+    with pytest.raises(AcquisitionPreflightError, match="schema not ready"):
+        service.execute_search(run_id, "must not reach provider")
+
+    preflight.assert_called_once_with(run_id=run_id, config=config)
+    adapter.search.assert_not_called()
+    uow_factory.assert_not_called()
+
+
+def test_evidence_packet_drops_legacy_scratch_file_result_field():
+    from research_workflow import evidence_packet
+
+    packet = evidence_packet(
+        "objective",
+        {"questions": ["question"]},
+        [],
+        [
+            {
+                "selected": True,
+                "triage_candidate_id": "candidate-1",
+                "url": "https://example.test",
+                "scratch_file": "/tmp/firecrawl_scratch/result_001.md",
+            }
+        ],
+        [],
+        {},
+        {},
+        {},
+    )
+
+    serialized = json.dumps(packet, sort_keys=True)
+    assert "scratch_file" not in serialized
+    assert "firecrawl_scratch" not in serialized
+
+
+def test_acquisition_search_cli_preflight_failure_precedes_service_construction(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    from types import SimpleNamespace
+
+    from research_store import acquisition_authority, cli, container
+
+    fake_config = mock.Mock()
+    run_id = uuid4()
+    monkeypatch.setattr(
+        cli.StoreConfig,
+        "from_env",
+        classmethod(lambda _cls: fake_config),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_run_service",
+        lambda _config: SimpleNamespace(
+            status=lambda **_kwargs: SimpleNamespace(id=run_id)
+        ),
+    )
+    preflight = mock.Mock(side_effect=AcquisitionPreflightError("schema not ready"))
+    service_builder = mock.Mock()
+    monkeypatch.setattr(
+        acquisition_authority,
+        "require_authoritative_acquisition",
+        preflight,
+    )
+    monkeypatch.setattr(container, "build_acquisition_service", service_builder)
+
+    code = cli.main(["acquisition-search", "fr_test", "query"])
+
+    assert code == 2
+    fake_config.require_database.assert_called_once_with()
+    preflight.assert_called_once_with(run_id=run_id, config=fake_config)
+    service_builder.assert_not_called()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["failure_stage"] == "preflight"
+    assert payload["status"] == "failed"
+
+
+def test_acquisition_search_cli_returns_nonzero_for_persisted_provider_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    from types import SimpleNamespace
+
+    from research_store import acquisition_authority, cli, container
+    from research_store.acquisition_authority import AuthoritativeAcquisitionContext
+
+    fake_config = mock.Mock()
+    fake_config.database_url = "postgresql://research@test/research"
+    run_id = uuid4()
+    context = AuthoritativeAcquisitionContext(
+        database_url=fake_config.database_url,
+        run_id=run_id,
+        run_state="acquiring",
+        lifecycle_revision=1,
+        schema_heads=frozenset({_SCHEMA_HEAD}),
+        blob_root=Path("/tmp/blobs"),
+        dry_run=False,
+    )
+    result = SimpleNamespace(
+        search_response_id=uuid4(),
+        run_id=run_id,
+        query_text="query",
+        backend="firecrawl",
+        status="provider_error",
+        candidate_count=0,
+        postgres_committed=True,
+        event_id=uuid4(),
+        replayed=False,
+    )
+    service = SimpleNamespace(execute_search=mock.Mock(return_value=result))
+    monkeypatch.setattr(
+        cli.StoreConfig,
+        "from_env",
+        classmethod(lambda _cls: fake_config),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_run_service",
+        lambda _config: SimpleNamespace(
+            status=lambda **_kwargs: SimpleNamespace(id=run_id)
+        ),
+    )
+    monkeypatch.setattr(
+        acquisition_authority,
+        "require_authoritative_acquisition",
+        mock.Mock(return_value=context),
+    )
+    monkeypatch.setattr(container, "build_acquisition_service", lambda _config: service)
+
+    code = cli.main(
+        [
+            "acquisition-search",
+            "fr_test",
+            "query",
+            "--idempotency-key",
+            "stable-key",
+        ]
+    )
+
+    assert code == 1
+    kwargs = service.execute_search.call_args.kwargs
+    assert kwargs["authority_context"] is context
+    assert kwargs["replay_existing"] is True
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["status"] == "provider_error"
+    assert payload["postgres_committed"] is True
+
+
+def test_acquisition_search_cli_reports_idempotency_conflict_on_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    from types import SimpleNamespace
+
+    from research_store import acquisition_authority, cli, container
+    from research_store.acquisition_authority import AuthoritativeAcquisitionContext
+    from research_store.acquisition_service import AcquisitionIdempotencyConflictError
+
+    fake_config = mock.Mock()
+    fake_config.database_url = "postgresql://research@test/research"
+    run_id = uuid4()
+    context = AuthoritativeAcquisitionContext(
+        database_url=fake_config.database_url,
+        run_id=run_id,
+        run_state="acquiring",
+        lifecycle_revision=1,
+        schema_heads=frozenset({_SCHEMA_HEAD}),
+        blob_root=Path("/tmp/blobs"),
+        dry_run=False,
+    )
+    service = SimpleNamespace(
+        execute_search=mock.Mock(
+            side_effect=AcquisitionIdempotencyConflictError(
+                "search idempotency key was used for another request"
+            )
+        )
+    )
+    monkeypatch.setattr(
+        cli.StoreConfig,
+        "from_env",
+        classmethod(lambda _cls: fake_config),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_run_service",
+        lambda _config: SimpleNamespace(
+            status=lambda **_kwargs: SimpleNamespace(id=run_id)
+        ),
+    )
+    monkeypatch.setattr(
+        acquisition_authority,
+        "require_authoritative_acquisition",
+        mock.Mock(return_value=context),
+    )
+    monkeypatch.setattr(container, "build_acquisition_service", lambda _config: service)
+
+    code = cli.main(
+        [
+            "acquisition-search",
+            "fr_test",
+            "query",
+            "--idempotency-key",
+            "conflicting-key",
+        ]
+    )
+
+    assert code == 3
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["failure_stage"] == "idempotency"
+    assert "another request" in payload["error"]

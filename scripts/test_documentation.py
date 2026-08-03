@@ -448,3 +448,15 @@ class TestDocumentationFiles:
             assert drill in content, (
                 f"Drill '{drill}' not found in recovery-drill-checklist.md"
             )
+
+
+def test_authoritative_fsearch_documents_low_level_acquisition_exit_contract():
+    content = (SKILL_ROOT / "docs" / "authoritative-fsearch.md").read_text(
+        encoding="utf-8"
+    )
+    assert "research-db acquisition-search" in content
+    assert "before the Firecrawl adapter is constructed or invoked" in content
+    assert "`0` for persisted `succeeded` or `empty`" in content
+    assert "`2` for authoritative preflight failure" in content
+    assert "`3`" in content
+    assert "idempotency-key conflict" in content
