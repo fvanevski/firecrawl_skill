@@ -1,4 +1,4 @@
-name: Apply RC-10 corrective patch
+name: Build RC-10 corrective source
 
 on:
   pull_request:
@@ -6,20 +6,19 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-corrective-patch:
-    name: Apply and validate corrective patch
+  build-corrective-source:
+    name: Build and validate corrective source
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
       - name: Check out exact PR branch
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          persist-credentials: true
 
       - name: Verify and apply staged patch
         shell: bash
@@ -30,8 +29,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git apply --check .github/rc10-existing.patch
           git apply .github/rc10-existing.patch
-          rm .github/rc10-existing.patch
-          rm .github/workflows/export-pr-source.yml
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -90,15 +87,26 @@ jobs:
           python -m compileall -q scripts
           git diff --check
 
-      - name: Commit and push validated correction
+      - name: Package validated corrective source
         shell: bash
-        env:
-          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "fix(rc10): preserve retry lineage and enforce release gates"
-          git push origin "HEAD:$HEAD_BRANCH"
+          tar -czf "$RUNNER_TEMP/rc10-corrective-source.tar.gz" \
+            .github/workflows/authoritative-storage-gates.yml \
+            .github/workflows/ci.yml \
+            .github/workflows/release-campaign.yml \
+            references/release-candidate-gate-rc10.md \
+            references/pytest-skip-allowlist.json \
+            scripts/research_store/direct_scrape_service.py \
+            scripts/test_direct_scrape_service.py \
+            scripts/test_documentation.py \
+            scripts/verify_pytest_skips.py \
+            scripts/test_pytest_skip_verifier.py
+
+      - name: Upload validated corrective source
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc10-corrective-source-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/rc10-corrective-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
