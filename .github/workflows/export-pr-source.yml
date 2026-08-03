@@ -1,4 +1,4 @@
-name: Build RC-10 corrective source
+name: Apply RC-10 non-workflow correction
 
 on:
   pull_request:
@@ -6,21 +6,22 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build-corrective-source:
-    name: Build and validate corrective source
+  apply-non-workflow-correction:
+    name: Apply and validate non-workflow correction
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
       - name: Check out exact PR branch
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
+          persist-credentials: true
 
-      - name: Verify and apply staged patch
+      - name: Apply staged patch without workflow edits
         shell: bash
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
@@ -29,6 +30,11 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git apply --check .github/rc10-existing.patch
           git apply .github/rc10-existing.patch
+          git restore \
+            .github/workflows/authoritative-storage-gates.yml \
+            .github/workflows/ci.yml \
+            .github/workflows/release-campaign.yml
+          rm .github/rc10-existing.patch
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -87,26 +93,19 @@ jobs:
           python -m compileall -q scripts
           git diff --check
 
-      - name: Package validated corrective source
+      - name: Commit and push validated non-workflow correction
         shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          tar -czf "$RUNNER_TEMP/rc10-corrective-source.tar.gz" \
-            .github/workflows/authoritative-storage-gates.yml \
-            .github/workflows/ci.yml \
-            .github/workflows/release-campaign.yml \
-            references/release-candidate-gate-rc10.md \
-            references/pytest-skip-allowlist.json \
-            scripts/research_store/direct_scrape_service.py \
-            scripts/test_direct_scrape_service.py \
-            scripts/test_documentation.py \
-            scripts/verify_pytest_skips.py \
-            scripts/test_pytest_skip_verifier.py
-
-      - name: Upload validated corrective source
-        uses: actions/upload-artifact@v4
-        with:
-          name: rc10-corrective-source-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/rc10-corrective-source.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --name-only | grep -q '^.github/workflows/'; then
+            echo "refusing to push workflow changes from GITHUB_TOKEN" >&2
+            exit 1
+          fi
+          git commit -m "fix(rc10): preserve authoritative retry lineage"
+          git push origin "HEAD:$HEAD_BRANCH"
