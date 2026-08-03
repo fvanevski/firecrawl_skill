@@ -96,7 +96,9 @@ def test_firecrawl_proxy_enforces_cap_under_concurrent_calls(tmp_path: Path):
         counter = json.loads(campaign.counter.read_text(encoding="utf-8"))
         assert counter["count"] == 1
         assert len(counter["calls"]) == 1
-        assert any("operation cap exhausted" in stderr.lower() for _stdout, stderr in results)
+        assert any(
+            "operation cap exhausted" in stderr.lower() for _stdout, stderr in results
+        )
     finally:
         campaign.close()
 
