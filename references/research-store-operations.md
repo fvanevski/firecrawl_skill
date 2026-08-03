@@ -2,7 +2,7 @@
 
 # Research Store Operations
 
-Compact operator reference. `operations-runbook.md` is normative for recovery and destructive procedures.
+Compact operator reference. `authoritative-workflows.md` is canonical for acquisition, completion, and projection-recovery command ordering. `operations-runbook.md` is normative for recovery and destructive procedures.
 
 ## Configure authoritative services
 
@@ -28,12 +28,13 @@ scripts/fsearch 'bounded query' \
   --limit 20 \
   --scrape-limit 5
 
-scripts/fscrape 'https://example.com' \
-  --research-run-id "$RUN_ID"
-
+python3 scripts/drain_index_jobs.py --batch-size 64
+scripts/research-db run-status "$RUN_ID"
 scripts/frun finish "$RUN_ID" --outcome satisfied
 scripts/frun status "$RUN_ID"
 ```
+
+`research-db worker --once` is one bounded batch, not a complete drain. Do not start another acquisition on the same run or finish it until run-scoped indexing is complete. To add `fscrape` to the same run, drain before and after that operation as shown in `authoritative-workflows.md`.
 
 `fsearch_smart` creates a run when omitted; `--dry-run` performs planning only.
 
@@ -56,7 +57,11 @@ scripts/finspect scrape-candidates '<candidate-uuid>' \
   --idempotency-key '<stable-key>'
 ```
 
+Drain any new index work before another same-run acquisition or completion.
+
 ## Run the lease-safe worker
+
+Continuous service:
 
 ```bash
 scripts/research-db worker \
@@ -66,21 +71,28 @@ scripts/research-db worker \
   --max-attempts 5
 ```
 
-Valkey is optional latency optimization; PostgreSQL jobs remain durable.
+Bounded fail-closed drain:
+
+```bash
+python3 scripts/drain_index_jobs.py --batch-size 64
+```
+
+Valkey is an optional latency optimization; PostgreSQL jobs remain durable.
 
 ## Build, activate, and roll back Qdrant
 
 ```bash
 scripts/research-db index-list
 scripts/research-db index-build --current-config --all
-scripts/research-db worker --once --batch-size 64
+python3 scripts/drain_index_jobs.py --batch-size 64
 scripts/research-db reconcile-qdrant
+scripts/research-db doctor
 scripts/research-db index-activate '<index-id>'
 scripts/research-db index-rollback '<prior-index-id>'
 scripts/research-db index-prune --dry-run
 ```
 
-Qdrant is rebuilt from PostgreSQL chunks. Never infer workflow or corpus truth from vectors.
+Qdrant is rebuilt from PostgreSQL chunks. Never infer workflow or corpus truth from vectors. Activation requires complete PostgreSQL manifests/jobs and a reconciled compatible projection.
 
 ## Rederive and export
 
@@ -99,7 +111,7 @@ Capture PostgreSQL and `BLOB_ROOT` at one logical boundary. Restore them togethe
 ```bash
 scripts/research-db verify-blobs
 scripts/research-db index-build --current-config --all
-scripts/research-db worker --once --batch-size 64
+python3 scripts/drain_index_jobs.py --batch-size 64
 scripts/research-db reconcile-qdrant
 scripts/research-db doctor
 ```
