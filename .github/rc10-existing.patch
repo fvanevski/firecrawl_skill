@@ -1,0 +1,308 @@
+diff --git a/.github/workflows/authoritative-storage-gates.yml b/.github/workflows/authoritative-storage-gates.yml
+index 6a497105c7f57f1c68a91fc1735179956868f7d4..4a8fc24fdbd9a14bf6037a2beffcf786a4d48930 100644
+--- a/.github/workflows/authoritative-storage-gates.yml
++++ b/.github/workflows/authoritative-storage-gates.yml
+@@ -117,6 +117,7 @@ jobs:
+             -ra \
+             -p no:cacheprovider \
+             scripts/test_documentation.py \
++            scripts/test_pytest_skip_verifier.py \
+             scripts/test_documented_workflows.py \
+             scripts/test_documented_blob_transaction.py \
+             scripts/test_authoritative_storage_gate.py \
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index bbbb3a13b1a9d720f66f73464070857a079c0a64..b5f60353e435c2677049b88437e9705d2c605654 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -56,7 +56,8 @@ jobs:
+             scripts/test_release_invariant_contracts.py \
+             scripts/test_smoke_test.py \
+             scripts/test_release_campaign_verifier.py \
+-            scripts/test_exact_head_ci_evidence.py
++            scripts/test_exact_head_ci_evidence.py \
++            scripts/test_pytest_skip_verifier.py
+ 
+   test:
+     name: "Test — Python ${{ matrix.python-version }}"
+@@ -108,13 +109,17 @@ jobs:
+             qdrant/qdrant:v1.18.3-unprivileged
+           sleep 3
+ 
+-      - name: Run tests
++      - name: Run tests and classify skips
+         env:
+           RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_telemetry_test"
+           RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_telemetry_test"
++          PYTEST_JUNIT: ${{ runner.temp }}/pytest-${{ matrix.python-version }}.xml
++          PYTEST_SKIP_REPORT: ${{ runner.temp }}/pytest-skips-${{ matrix.python-version }}.json
+         run: |
+           python -m pytest \
+             -q \
++            -ra \
++            --junitxml="$PYTEST_JUNIT" \
+             -p no:cacheprovider \
+             scripts/test_research_domain.py \
+             scripts/test_research_store.py \
+@@ -155,6 +160,21 @@ jobs:
+             scripts/test_database_native_inspection.py \
+             scripts/test_database_native_inspection_integration.py \
+             scripts/test_research_store_integration.py
++          python scripts/verify_pytest_skips.py \
++            --junitxml "$PYTEST_JUNIT" \
++            --allowlist references/pytest-skip-allowlist.json \
++            --output "$PYTEST_SKIP_REPORT"
++
++      - name: Upload broad-suite test and skip evidence
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: broad-test-evidence-${{ github.event.pull_request.head.sha || github.sha }}-py${{ matrix.python-version }}
++          path: |
++            ${{ runner.temp }}/pytest-${{ matrix.python-version }}.xml
++            ${{ runner.temp }}/pytest-skips-${{ matrix.python-version }}.json
++          if-no-files-found: warn
++          retention-days: 90
+ 
+   strict-campaign-contract:
+     name: "Strict campaign contract tests — Python ${{ matrix.python-version }}"
+diff --git a/.github/workflows/release-campaign.yml b/.github/workflows/release-campaign.yml
+index f202db5760248b348ca152c36840bebb4be44265..4ae47f968691c5851ae081a1eede18092e9126a0 100644
+--- a/.github/workflows/release-campaign.yml
++++ b/.github/workflows/release-campaign.yml
+@@ -13,7 +13,7 @@ permissions:
+ 
+ jobs:
+   campaign:
+-    name: "Real release campaigns (issues #146/#153/#170)"
++    name: "Real release campaigns (issues #146/#153/#170/#183/#193)"
+     runs-on: [self-hosted, firecrawl-release]
+     timeout-minutes: 180
+     environment: release-campaign
+diff --git a/references/release-candidate-gate-rc10.md b/references/release-candidate-gate-rc10.md
+index b23a2f0d52824f6cdcc7992b4286e7a158a141ba..803a33b90d491439099f0c41305f1b3a8bba9ade 100644
+--- a/references/release-candidate-gate-rc10.md
++++ b/references/release-candidate-gate-rc10.md
+@@ -11,7 +11,7 @@ The dedicated RC-10 branch was created directly from current `main` after every
+ 39a157a79098fc6c65fbdb644547ee0a4edc2f49
+ ```
+ 
+-That merge commit has no file-tree difference from the exact RC-9 head `c53c4f637df893b0f2a6de12338e6d12fc08deee`, whose pull-request workflows completed successfully. RC-10 still requires all applicable checks to rerun against the final branch head; prior results are baseline evidence, not a substitute for exact-head validation.
++That merge commit has no file-tree difference from the exact RC-9 head `c53c4f637df893b0f2a6de12338e6d12fc08deee`, whose pull-request workflows completed successfully. Prior results are baseline evidence, not a substitute for exact-head validation.
+ 
+ ## Dependency closure
+ 
+@@ -29,7 +29,7 @@ That merge commit has no file-tree difference from the exact RC-9 head `c53c4f63
+ 
+ ## Authority contract under review
+ 
+-RC-10 does not alter the Target A architecture:
++RC-10 preserves the Target A architecture:
+ 
+ - PostgreSQL remains authoritative for workflow, acquisition metadata, provenance, corpus identities, evidence, audits, and durable jobs.
+ - `BLOB_ROOT` remains the immutable content-addressed store for provider payload bytes referenced by PostgreSQL.
+@@ -40,25 +40,36 @@ RC-10 does not alter the Target A architecture:
+ 
+ Payload bytes are not moved into PostgreSQL by this release candidate.
+ 
+-## Exact-head evidence requirements
++## Pre-merge exact-head requirements
+ 
+-The final branch head must pass the repository pull-request workflows without weakening tests:
++Every update to the RC branch must pass all applicable pull-request workflows on the exact branch head without weakening tests:
+ 
+-1. `CI`, including Ruff, release invariants, disposable-PostgreSQL/Qdrant tests, and strict campaign contracts on Python 3.11 and 3.12.
++1. `CI`, including Ruff, release invariants, disposable-PostgreSQL/Qdrant tests, strict campaign contracts, and classified skip evidence on Python 3.11 and 3.12.
+ 2. `Acquisition authority contract`, including failure-before-provider ordering.
+ 3. `Authoritative fsearch contract` and `Authoritative fscrape contract`.
+ 4. `Research environment adapter`.
+ 5. `Authoritative storage gates`, including disposable PostgreSQL, Qdrant, Valkey, worker/recovery, blob-integrity, deterministic export, documentation/parser, source-policy, and monitored-temporary-directory contracts on Python 3.11 and 3.12.
+ 
+-The exact final head, workflow conclusions, test counts, skipped external validation, and residual risks belong in issue #193 and the draft pull request. They are intentionally not embedded here because changing this file would itself change the candidate SHA.
++The draft RC pull request must use `Refs #193`, not `Closes #193`. Merging the pull request does not itself satisfy or close issue #193 because the credentialed release campaign can validate only the resulting exact current `main` SHA.
++
++## Post-merge release boundary
++
++After the corrective RC pull request merges:
++
++1. Resolve the exact resulting `main` SHA; do not infer it from the pull-request head or proposed merge commit.
++2. Confirm all push-triggered exact-head gates pass on that SHA.
++3. Dispatch the `Real release campaign` workflow from `refs/heads/main` with `candidate-sha` equal to that same SHA.
++4. Require the campaign identity guard to prove that the candidate SHA, dispatch SHA, workflow SHA, and checked-out repository SHA are identical.
++5. Require successful campaign execution, authoritative evidence verification, and artifact upload.
++6. Record the workflow run ID, artifact ID, artifact digest, exact candidate SHA, skipped or unavailable external checks, and residual risks in issue #193.
++7. Close issue #193 and parent epic #183 only after the credentialed campaign succeeds. A campaign failure requires an issue-scoped corrective PR and a new exact-head campaign; it must not be waived as residual risk.
++
++The required artifact is named `real-release-campaign-<exact-main-sha>` and must remain bound to the verified exact candidate through the campaign contract.
+ 
+ ## Compatibility review boundary
+ 
+ The release notes, migration guide, recovery drill checklist, authoritative workflows, and research-store architecture remain the controlling operator documents. RC-10 introduces no schema migration, data migration, payload relocation, command-surface change, Qdrant redesign, or Valkey correctness dependency.
+ 
+-## Non-goals
++## Corrective gate-fix scope
+ 
+-- No runtime implementation changes.
+-- No adjacent cleanup or formatting churn.
+-- No new persistence path or compatibility bridge.
+-- No weakening or replacement of the existing exact-head gates.
++RC-10 may contain only defects discovered while validating the aggregate candidate, together with their regression tests and gate/documentation corrections. It must not contain adjacent cleanup, unrelated formatting churn, a new persistence path, a compatibility bridge, or a weakening or replacement of existing exact-head gates.
+diff --git a/scripts/research_store/direct_scrape_service.py b/scripts/research_store/direct_scrape_service.py
+index bfea14eba0963fc1b5adff7c6869659bc37d8c81..6b6af65e1d88730b0af2fa1b66ca7d7b08dea8eb 100644
+--- a/scripts/research_store/direct_scrape_service.py
++++ b/scripts/research_store/direct_scrape_service.py
+@@ -1180,7 +1180,7 @@ class DirectScrapeService:
+                 parser_used=None,
+                 quality_metrics=None,
+                 failure_class=failure_class,
+-                retry_parent_id=None,
++                retry_parent_id=target.retry_parent_id,
+                 disposition="unassessed",
+                 error_message=diagnostic,
+                 selection_reason=None,
+diff --git a/scripts/test_direct_scrape_service.py b/scripts/test_direct_scrape_service.py
+index 36dbd5432a9538c167a25c8ffacce300c906c215..fd838500397f1c44cb2fa8d150edc043522488df 100644
+--- a/scripts/test_direct_scrape_service.py
++++ b/scripts/test_direct_scrape_service.py
+@@ -35,6 +35,7 @@ from research_store.direct_scrape_service import (
+     _ResolvedTarget,
+ )
+ from research_store.domain import IngestRequest
++from research_store.inspection_service import InspectionService
+ from research_store.parsing import get_registry
+ from research_store.postgres import PostgresUnitOfWork, connect
+ from research_store.service import CorpusService
+@@ -805,6 +806,93 @@ def test_format_parser_identity_retry_lineage_and_transport_provenance(
+         assert cur.fetchone()[0] == failed.invocation_id
+ 
+ 
++def test_failed_retry_preserves_attempt_and_invocation_lineage(tmp_path: Path):
++    _integration()
++    run_id = uuid4()
++    _insert_run(run_id)
++    request = [DirectScrapeRequest(url="https://example.com/retry-lineage")]
++
++    first_adapter = _SequenceAdapter(
++        [
++            ScrapeTransportResult(
++                raw_payload=b"",
++                returncode=1,
++                stderr=b"initial upstream failure",
++                metadata={"failure_class": "network"},
++            )
++        ]
++    )
++    first = _build_service(tmp_path, lambda: first_adapter).execute(
++        run_id,
++        request,
++        idempotency_key="retry-lineage-first",
++    )
++    assert first.status == "failed"
++
++    second_adapter = _SequenceAdapter(
++        [
++            ScrapeTransportResult(
++                raw_payload=b"",
++                returncode=1,
++                stderr=b"retry also failed",
++                metadata={"failure_class": "network"},
++            )
++        ]
++    )
++    second = _build_service(tmp_path, lambda: second_adapter).retry_failed(
++        run_id,
++        request,
++        prior_invocation_id=first.invocation_id,
++        idempotency_key="retry-lineage-second",
++    )
++    assert second.status == "failed"
++
++    third_adapter = _SequenceAdapter(
++        [
++            ScrapeTransportResult(
++                raw_payload=b"# Third attempt\n\nAuthoritative success.",
++                provider_request_id="provider-third",
++                metadata={"firecrawl_cli_version": "test-cli"},
++            )
++        ]
++    )
++    third = _build_service(tmp_path, lambda: third_adapter).retry_failed(
++        run_id,
++        request,
++        prior_invocation_id=second.invocation_id,
++        idempotency_key="retry-lineage-third",
++    )
++    assert third.status == "complete"
++
++    first_attempt = first.items[0].extraction_attempt_id
++    second_attempt = second.items[0].extraction_attempt_id
++    third_attempt = third.items[0].extraction_attempt_id
++    assert first_attempt is not None
++    assert second_attempt is not None
++    assert third_attempt is not None
++
++    inspector = InspectionService(_config(tmp_path))
++    attempts = inspector.list_extraction_attempts(
++        candidate_id=first.items[0].candidate_id
++    )
++    by_id = {item["id"]: item for item in attempts["items"]}
++    assert by_id[str(first_attempt)]["retry_parent_id"] is None
++    assert by_id[str(second_attempt)]["retry_parent_id"] == str(first_attempt)
++    assert by_id[str(third_attempt)]["retry_parent_id"] == str(second_attempt)
++
++    with connect(TEST_DSN) as connection, connection.cursor() as cur:
++        cur.execute(
++            "SELECT parent_invocation_id FROM research_invocations WHERE id=%s",
++            (second.invocation_id,),
++        )
++        assert cur.fetchone()[0] == first.invocation_id
++        cur.execute(
++            "SELECT parent_invocation_id FROM research_invocations WHERE id=%s",
++            (third.invocation_id,),
++        )
++        assert cur.fetchone()[0] == second.invocation_id
++
++
+ def test_same_snapshot_bytes_do_not_collapse_parser_document_identity(
+     tmp_path: Path,
+ ):
+diff --git a/scripts/test_documentation.py b/scripts/test_documentation.py
+index 1e0268606010751323f6bc12ca6e4f242c311d77..882b4401969421cb9437896385e365b370744733 100755
+--- a/scripts/test_documentation.py
++++ b/scripts/test_documentation.py
+@@ -435,3 +435,36 @@ def test_removed_flag_documentation_matches_parser_contract() -> None:
+     )
+     assert "`--output-dir PATH` and `--output-dir=PATH` fail" in fscrape
+     assert "before the Firecrawl adapter is" in fscrape
++
++
++def test_rc10_requires_post_merge_real_campaign_before_issue_closure() -> None:
++    gate = (
++        SKILL_ROOT / "references" / "release-candidate-gate-rc10.md"
++    ).read_text(encoding="utf-8")
++    for required in (
++        "`Refs #193`, not `Closes #193`",
++        "does not itself satisfy or close issue #193",
++        "exact resulting `main` SHA",
++        "Real release campaign",
++        "candidate SHA, dispatch SHA, workflow SHA",
++        "artifact ID",
++        "artifact digest",
++        "Close issue #193 and parent epic #183 only after",
++        "real-release-campaign-<exact-main-sha>",
++    ):
++        assert required in gate
++
++    workflow = (
++        SKILL_ROOT / ".github" / "workflows" / "release-campaign.yml"
++    ).read_text(encoding="utf-8")
++    for required in (
++        "workflow_dispatch:",
++        "candidate-sha:",
++        "required: true",
++        'test "$DISPATCH_REF" = "refs/heads/main"',
++        'test "$DISPATCH_SHA" = "$CANDIDATE_SHA"',
++        'test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"',
++        'test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"',
++        "real-release-campaign-${{ inputs.candidate-sha }}",
++    ):
++        assert required in workflow
