@@ -15,20 +15,26 @@
 ## Data flow
 
 ```text
+Authoritative preflight
+  -> validate PostgreSQL, schema head, privileges, BLOB_ROOT durability,
+     and run eligibility
+  -> fail before Firecrawl construction or network execution on any error
+
 Firecrawl provider response
-  -> authoritative preflight already completed
-  -> PostgreSQL invocation and acquisition transaction
+  -> durably install immutable payload bytes under BLOB_ROOT by digest
+  -> PostgreSQL acquisition transaction
+     -> invocation and acquisition provenance
      -> search response and stable candidates, or direct extraction attempt
      -> source -> immutable snapshot -> versioned document -> blocks -> chunks
-     -> run links, provenance, embedding manifests, and index jobs
-  -> immutable payload bytes written under BLOB_ROOT by digest
-  -> bounded stable-ID result returned to the caller
+     -> run links, embedding manifests, and durable index jobs
+  -> commit PostgreSQL metadata that references the installed digest
+  -> return bounded stable authoritative IDs only after commit
 
 Lease-safe worker
   -> claims PostgreSQL jobs with bounded leases
   -> embeds the exact chunk for one immutable index definition
   -> idempotently upserts the matching physical Qdrant collection
-  -> completes the manifest with the current lease token
+  -> completes the PostgreSQL job with the current lease token
 
 Inspection
   -> PostgreSQL lists and stable identities
@@ -53,18 +59,26 @@ Rederive parser or chunker output from retained blob bytes. Do not create a fals
 ## Transaction and failure semantics
 
 - Preflight validates schema head, writable privileges, durable blob storage, and run eligibility.
-- Search response and candidate rows commit before search success is reported.
+- Payload bytes are installed by digest before PostgreSQL commits metadata that references them.
+- Search response, candidate, provenance, corpus, manifest, and job rows commit before success is reported.
+- Stable authoritative IDs are returned only after the corresponding PostgreSQL commit succeeds.
 - Direct-scrape batches retain item-level success and failure with ordered authoritative identities.
 - Per-item savepoints may retain successful siblings, but a failed item remains explicit and causes a nonzero partial result.
 - Idempotency keys replay identical committed input and reject conflicting reuse.
 - No network or Firecrawl invocation occurs after failed preflight.
+- A failed blob write creates no authoritative PostgreSQL record.
 - A blob written before a rolled-back metadata transaction is an orphan, not a corpus record; report it for bounded cleanup.
+- Committed metadata pointing to absent or digest-mismatched bytes is corruption and must fail verification.
+
+The canonical command lifecycle and recovery sequences are defined in `authoritative-workflows.md`.
 
 ## Versioned Qdrant indexes
 
 An index definition fingerprints model, revision, vector dimension, distance metric, normalization behavior, and instruction template. Physical collections use `research_chunks_<fingerprint>` and retrieval uses `research_chunks_active`.
 
 Build replacements without modifying authoritative corpus data. Activate only after manifest completeness, point reconciliation, schema compatibility, and probe success. On alias or fingerprint mismatch, skip dense query embedding, remain lexical, and report the mismatch through `doctor`.
+
+`research-db worker --once` processes at most one bounded batch. Procedures that require complete indexing must use the canonical drain helper or a continuously running worker plus explicit PostgreSQL completion verification.
 
 ## Lease and Valkey semantics
 
