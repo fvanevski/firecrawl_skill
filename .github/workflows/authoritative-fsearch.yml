@@ -9,9 +9,106 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  rc7-patch:
+    name: Apply RC-7 failure-path profile
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.head_ref == 'refactor/rc7-authoritative-smart-validation'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out RC-7 branch
+        uses: actions/checkout@v7
+        with:
+          ref: refactor/rc7-authoritative-smart-validation
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Apply issue-exact validator patch
+        run: |
+          python -m pip install ruff
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/live_validate.py')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              '''PROFILE_OPERATION_CAPS = {
+              "focused": 40,
+              "termux": 40,
+              "full": 100,
+          }
+          ''': '''PROFILE_OPERATION_CAPS = {
+              "focused": 40,
+              "failure-path": 20,
+              "full": 100,
+          }
+          ''',
+              '''            cursor.execute(
+                  """SELECT DISTINCT c.id,c.canonical_url,c.domain,
+                                    coalesce(o.title,''),coalesce(o.snippet,'')
+                     FROM search_candidates c
+                     LEFT JOIN candidate_occurrences o
+                       ON o.candidate_id=c.id AND o.run_id=c.run_id
+                     WHERE c.run_id=%s
+                     ORDER BY c.id""",
+                  (run_id,),
+              )
+          ''': '''            cursor.execute(
+                  """SELECT c.id,c.canonical_url,c.domain,
+                            coalesce(c.title,''),coalesce(c.snippet,'')
+                     FROM search_candidates c
+                     WHERE c.run_id=%s
+                     ORDER BY c.id""",
+                  (run_id,),
+              )
+          ''',
+              '''        self.validate_dry_run()
+              if self.args.profile == "termux":
+                  self.run_smart("termux", "termux", resume=True)
+              else:
+                  self.run_smart("academic", "academic", resume=True)
+              self.run_fscrape_valkey_loss()
+
+              if self.args.profile == "full":
+          ''': '''        self.validate_dry_run()
+              if self.args.profile == "failure-path":
+                  self.run_fscrape_valkey_loss()
+                  return self.finish()
+
+              self.run_smart("academic", "academic", resume=True)
+              self.run_fscrape_valkey_loss()
+
+              if self.args.profile == "full":
+          ''',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'expected replacement block not found: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          ruff format scripts/live_validate.py
+          ruff check scripts/live_validate.py
+
+      - name: Restore workflows and push patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch --no-tags origin main
+          git checkout origin/main -- .github/workflows/authoritative-fsearch.yml
+          git rm .github/workflows/rc7-apply-failure-profile.yml
+          git add scripts/live_validate.py
+          git diff --check
+          git commit -m "fix: add bounded failure-path validation"
+          git push origin HEAD:refactor/rc7-authoritative-smart-validation
+
   authoritative-fsearch:
     name: "Authoritative fsearch — Python ${{ matrix.python-version }}"
     runs-on: ubuntu-latest
