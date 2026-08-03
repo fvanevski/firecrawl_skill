@@ -1,60 +1,86 @@
 # Research Asset Store Architecture
 
-## Authority boundaries
+## Target A authority boundaries
 
-| Component | Role | Recovery rule |
-| --- | --- | --- |
-| PostgreSQL | Sole authority for sources, snapshots, derivations, chunks, research runs, invocations, transitions, events, budgets, coverage, claims, evidence, semantic provenance, embedding manifests, and jobs | Restore first. Never infer corpus or workflow truth from Qdrant, Valkey, or scratch files. |
-| Blob root | Immutable content-addressed payload bytes referenced by PostgreSQL snapshots | Restore with PostgreSQL at one recovery boundary. Report unreferenced hashes before bounded cleanup. |
-| Qdrant | Rebuildable dense-retrieval projection | Rebuild a fingerprinted physical collection, reconcile it, then switch the active alias. |
-| Valkey | Best-effort worker wakeups and bounded transient cache | Lose or clear it safely. Workers recover PostgreSQL jobs by polling. |
-| Scratch files | Disposable acquisition diagnostics and human-readable local output | Delete freely. `_corpus.json` reports committed PostgreSQL identities but is never authority. |
+| Component | Current role | Recovery rule |
+|---|---|---|
+| PostgreSQL | Authoritative runs, invocations, transitions, events, search responses, stable candidates, extraction attempts, provenance, corpus identities, evidence, audits, and durable jobs | Restore first; never infer these records from another layer |
+| `BLOB_ROOT` | Immutable content-addressed provider payload bytes referenced by PostgreSQL snapshots | Restore at the same logical boundary as PostgreSQL and verify digests |
+| Qdrant | Rebuildable dense-retrieval projection | Build a compatible fingerprinted collection from PostgreSQL chunks, reconcile, then switch the active alias |
+| Valkey | Optional worker wakeups and bounded transient coordination | Recreate safely; workers recover from PostgreSQL polling |
+| Ephemeral files | Bounded process-local implementation details | Delete freely; never read them as workflow, replay, history, selection, or corpus state |
+
+“PostgreSQL-authoritative” describes the workflow, identity, metadata, provenance, and job boundary. It does not mean provider payload bytes are stored in PostgreSQL under Target A. `BLOB_ROOT` remains the byte store.
 
 ## Data flow
 
 ```text
-Firecrawl result
-  -> PostgreSQL invocation batch transaction
+Firecrawl provider response
+  -> authoritative preflight already completed
+  -> PostgreSQL invocation and acquisition transaction
+     -> search response and stable candidates, or direct extraction attempt
      -> source -> immutable snapshot -> versioned document -> blocks -> chunks
-     -> research run and asset links
-     -> embedding manifests and index jobs
-     -> ordered asset successes and failures
-  -> content-addressed blob bytes
-  -> optional scratch diagnostics and _corpus.json identity report
+     -> run links, provenance, embedding manifests, and index jobs
+  -> immutable payload bytes written under BLOB_ROOT by digest
+  -> bounded stable-ID result returned to the caller
 
 Lease-safe worker
-  -> claim PostgreSQL jobs with a bounded lease
-  -> embed the exact chunk for the job's index definition
-  -> idempotently upsert the definition's physical Qdrant collection
-  -> complete the exact manifest using its lease token
+  -> claims PostgreSQL jobs with bounded leases
+  -> embeds the exact chunk for one immutable index definition
+  -> idempotently upserts the matching physical Qdrant collection
+  -> completes the manifest with the current lease token
 
-Agent
-  -> corpus-overview/search-assets (compact manifests)
-  -> inspect-asset/fetch-passages (bounded expansion)
-  -> PostgreSQL retrieval and selection events
+Inspection
+  -> PostgreSQL lists and stable identities
+  -> verified bounded reads from BLOB_ROOT for retained provider payloads
+  -> PostgreSQL lexical retrieval plus compatible Qdrant projection
 ```
 
-Corpus rows, batch provenance, manifests, and indexing jobs commit together. Blob writes that precede a rolled-back transaction are reportable orphans, not corpus records. Per-asset savepoints retain successful siblings while recording individual failures; enabled persistence remains fail-closed.
-
-Workflow state follows the same authority boundary. `ResearchRunService` owns atomic compare-and-swap transitions and immutable event/transition ledgers. `WorkflowOperationService` is the wrapper boundary: it validates the run before network work, opens an authoritative invocation, advances only through permitted states, records completion or failure, and gates terminal completion on indexed PostgreSQL assets. `InvocationService` records top-level and child operations directly in PostgreSQL.
+No successful acquisition path is mediated by a local manifest or staging directory. A failed authoritative preflight occurs before Firecrawl construction or network execution.
 
 ## Identity and derivation versioning
 
-- Canonical URL defines a logical source. Serialize ingestion at the source row so concurrent identical content reuses one snapshot.
-- Content hash defines immutable snapshot bytes. Link changed content to the prior snapshot.
-- Permit multiple normalized documents for one snapshot. Identify each derivation by parser version, normalization version, and normalized-document hash.
-- Identify chunks by selected document and chunker version. Retrieval selects only configured active versions.
-- Rebuild derivations from authoritative blob bytes with `rederive`; do not create a false snapshot for a parser or chunker upgrade.
-- Link every top-level `fc_<uuid>` to a PostgreSQL invocation and every explicit `fr_<uuid>` to one PostgreSQL research run.
+- Canonical URL identifies a logical source.
+- Content digest identifies immutable snapshot bytes.
+- Multiple versioned document derivations may reference one snapshot.
+- Parser, normalizer, chunker, tokenizer, and document hashes identify derivation behavior.
+- Stable candidate IDs—not ranks—select retained search candidates.
+- Stable response IDs replay retained provider responses.
+- Every top-level operation records an `fc_<uuid>` invocation attached to an `fr_<uuid>` run.
 
-## Versioned dense indexes
+Rederive parser or chunker output from retained blob bytes. Do not create a false new snapshot for a derivation upgrade.
 
-Bind every index definition to an immutable fingerprint of embedding model, revision, dimension, distance metric, normalization behavior, and instruction-template hash. Name physical collections `research_chunks_<12-character-fingerprint>` and keep `research_chunks_active` as the stable retrieval alias. Never embed a query against an alias backed by another fingerprint: fall back to active-derivation lexical search and expose the mismatch through `doctor`.
+## Transaction and failure semantics
 
-Each embedding manifest belongs to one chunk and one index definition. Jobs reference that exact pair. Build replacements without changing live retrieval. Requeue missing points when a physical collection is deleted or damaged even if old jobs were complete. Activate only after manifests, point coverage, schema, and probe-query checks pass. Preserve old collections for explicit rollback; prune only after reviewed dry run and an exact forced target.
+- Preflight validates schema head, writable privileges, durable blob storage, and run eligibility.
+- Search response and candidate rows commit before search success is reported.
+- Direct-scrape batches retain item-level success and failure with ordered authoritative identities.
+- Per-item savepoints may retain successful siblings, but a failed item remains explicit and causes a nonzero partial result.
+- Idempotency keys replay identical committed input and reject conflicting reuse.
+- No network or Firecrawl invocation occurs after failed preflight.
+- A blob written before a rolled-back metadata transaction is an orphan, not a corpus record; report it for bounded cleanup.
 
-## Lease and failure semantics
+## Versioned Qdrant indexes
 
-Claim pending, retryable failed, and expired-running jobs with `FOR UPDATE SKIP LOCKED`. Record lease token, owner, expiration, attempt count, and timestamps. Require the current token to renew or finish a job so stale workers cannot overwrite reclaimed attempts. Move an expired final attempt to dead state and fail its manifest. Qdrant upserts remain idempotent when a worker crashes after projection but before PostgreSQL completion.
+An index definition fingerprints model, revision, vector dimension, distance metric, normalization behavior, and instruction template. Physical collections use `research_chunks_<fingerprint>` and retrieval uses `research_chunks_active`.
 
-Use Valkey only to shorten latency. Push notifications after commit and alternate finite blocking waits with PostgreSQL polling. A lost notification must never strand work. `doctor` reports worker heartbeat, pending age, stale leases, dead jobs, failed batches, active fingerprint, alias target, projection coverage, and endpoint health without mutating state.
+Build replacements without modifying authoritative corpus data. Activate only after manifest completeness, point reconciliation, schema compatibility, and probe success. On alias or fingerprint mismatch, skip dense query embedding, remain lexical, and report the mismatch through `doctor`.
+
+## Lease and Valkey semantics
+
+Workers claim jobs with `FOR UPDATE SKIP LOCKED`, lease token, owner, expiration, and attempt count. Stale workers cannot complete reclaimed work. Qdrant upserts are idempotent when a process dies after projection but before PostgreSQL completion.
+
+Valkey notifications occur after commit and may be lost. Finite waits alternate with PostgreSQL polling, so notification loss cannot strand jobs.
+
+## Future PostgreSQL payload migration
+
+A future target may move immutable payload bytes into PostgreSQL or a PostgreSQL-managed large-object design. That is outside Target A and must separately define:
+
+- schema and digest invariants;
+- transactional byte/metadata semantics;
+- database growth and vacuum behavior;
+- backup, restore, replication, and retention;
+- online migration and rollback;
+- replacement or retirement of `BLOB_ROOT`.
+
+That future target is not implemented. Current documentation, tests, and recovery procedures must not be interpreted as implementing it.
