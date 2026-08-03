@@ -65,43 +65,49 @@ rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-run-id "$RUN
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --dry-run
 ```
 
-A `fsearch_smart` exit status of `75` means the authoritative workflow reached a resumable checkpoint; it is not a generic failure. Preserve the printed `Run ID`, inspect its PostgreSQL state, and resume the same objective with that run rather than creating a replacement run. Repeat until the command reaches a non-checkpoint outcome.
+A `fsearch_smart` exit status of `75` is an intentional resumable checkpoint, not a generic failure and not permission to retry automatically. Preserve the printed `Run ID`, inspect its PostgreSQL state once, and return status `75` to the calling agent or operator. Resume only as a separate deliberate action with the same run after clearing or changing the internal stop-after-state control.
 
 ```bash
-RUN_ID=""
+# fsearch-smart-checkpoint-handler:start
+set +e
+SMART_OUTPUT="$(
+  rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" 2>&1
+)"
+SMART_STATUS=$?
+set -e
 
-while true; do
-  SMART_ARGS=("<skill-root>/scripts/fsearch_smart" "<topic>")
-  if [[ -n "$RUN_ID" ]]; then
-    SMART_ARGS+=(--research-run-id "$RUN_ID")
-  fi
+printf '%s\n' "$SMART_OUTPUT"
+RUN_ID="$(sed -n 's/^Run ID: //p' <<<"$SMART_OUTPUT" | tail -n 1)"
 
-  set +e
-  SMART_OUTPUT="$(rtk proxy "${SMART_ARGS[@]}" 2>&1)"
-  SMART_STATUS=$?
-  set -e
-
-  printf '%s\n' "$SMART_OUTPUT"
-  if [[ -z "$RUN_ID" ]]; then
-    RUN_ID="$(sed -n 's/^Run ID: //p' <<<"$SMART_OUTPUT" | tail -n 1)"
-  fi
-
-  case "$SMART_STATUS" in
-    0)
-      break
-      ;;
-    75)
-      test -n "$RUN_ID"
-      rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
-      ;;
-    *)
-      exit "$SMART_STATUS"
-      ;;
-  esac
-done
+case "$SMART_STATUS" in
+  0)
+    test -n "$RUN_ID"
+    ;;
+  75)
+    test -n "$RUN_ID"
+    rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
+    printf '%s\n' \
+      "Checkpoint reached. Resume explicitly with the same run after clearing or changing the stop-after-state control." >&2
+    exit 75
+    ;;
+  *)
+    exit "$SMART_STATUS"
+    ;;
+esac
+# fsearch-smart-checkpoint-handler:end
 ```
 
-Planning, budget, provenance, semantic artifacts, and resume checkpoints remain PostgreSQL records. Do not reconstruct a checkpoint from console output or a local file.
+When continuation is intended, perform it separately. `FIRECRAWL_SMART_STOP_AFTER_STATE` is an internal test or diagnostic control; a normal continuation must not retain the same stop condition that produced the checkpoint.
+
+```bash
+# fsearch-smart-checkpoint-resume:start
+unset FIRECRAWL_SMART_STOP_AFTER_STATE
+rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" \
+  --research-run-id "$RUN_ID"
+# fsearch-smart-checkpoint-resume:end
+```
+
+Planning, budget, provenance, semantic artifacts, and resume checkpoints remain PostgreSQL records. Do not reconstruct a checkpoint from console output or a local file, create a replacement run, or place an unbounded retry loop around a stateful command.
 
 ## Stable replay, exact search, and candidate selection
 
