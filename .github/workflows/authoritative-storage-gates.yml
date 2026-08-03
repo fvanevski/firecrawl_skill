@@ -116,6 +116,7 @@ jobs:
             -q \
             -ra \
             -p no:cacheprovider \
+            scripts/test_documentation.py \
             scripts/test_authoritative_storage_gate.py \
             scripts/test_acquisition_authority.py \
             scripts/test_authoritative_fsearch.py \
@@ -159,6 +160,7 @@ jobs:
                   "worker-recovery",
                   "explicit-export-reproducibility",
                   "zero-legacy-runtime-references",
+                  "documentation-parser-contracts",
               ],
           }
           Path("authoritative-storage-gate.json").write_text(
