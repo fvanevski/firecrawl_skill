@@ -323,16 +323,35 @@ def test_fsearch_requires_authoritative_run_before_firecrawl(fake_cli):
     assert not (Path(env["TMPDIR"]) / "firecrawl_scratch").exists()
 
 
+def test_fsearch_rejects_removed_dir_before_firecrawl(fake_cli):
+    env, tmp_path = fake_cli
+
+    result = run_script(
+        "fsearch",
+        "portable",
+        "--research-run-id",
+        "fr_" + "a" * 32,
+        "--dir",
+        "deprecated-output",
+        env=env,
+    )
+
+    assert result.returncode == 2
+    assert "--dir was removed" in result.stderr
+    assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
+    assert list(tmp_path.glob("**/_meta.json")) == []
+    assert list(tmp_path.glob("**/_search.json")) == []
+
+
 @pytest.mark.parametrize(
-    ("removed_args", "expected"),
+    ("removed_args", "removed_option"),
     [
-        (["--dir", "deprecated-output"], "--dir was removed"),
-        (["--reuse-search"], "--reuse-search was removed"),
-        (["--scrape-ranks", "1,3"], "--scrape-ranks was removed"),
+        (["--reuse-search"], "--reuse-search"),
+        (["--scrape-ranks", "1,3"], "--scrape-ranks"),
     ],
 )
-def test_fsearch_rejects_removed_scratch_options_before_firecrawl(
-    fake_cli, removed_args, expected
+def test_fsearch_rejects_unregistered_scratch_options_before_firecrawl(
+    fake_cli, removed_args, removed_option
 ):
     env, tmp_path = fake_cli
 
@@ -346,7 +365,8 @@ def test_fsearch_rejects_removed_scratch_options_before_firecrawl(
     )
 
     assert result.returncode == 2
-    assert expected in result.stderr
+    assert "unrecognized arguments" in result.stderr
+    assert removed_option in result.stderr
     assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
     assert list(tmp_path.glob("**/_meta.json")) == []
     assert list(tmp_path.glob("**/_search.json")) == []

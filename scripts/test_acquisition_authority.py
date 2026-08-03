@@ -465,6 +465,9 @@ _LITERAL_MARKERS = (
     "_search.json",
     "_meta.json",
     "_context.json",
+    "_candidates.json",
+    "_index.md",
+    "_workflow_input.json",
     "--reuse-search",
     "FIRECRAWL_RESEARCH_ACTIVE",
     "FIRECRAWL_CAPTURE_RAW",
@@ -483,6 +486,15 @@ _TOKEN_MARKERS = {
     ),
     "reuse_search": re.compile(r"(?<![A-Za-z0-9_])reuse_search(?![A-Za-z0-9_])"),
     "scrape_ranks": re.compile(r"(?<![A-Za-z0-9_])scrape_ranks(?![A-Za-z0-9_])"),
+    "legacy _raw acquisition directory": re.compile(
+        r"(?:[furbFURB]{0,2})?[\"']_raw(?:/|[\"'])"
+    ),
+    "legacy result_* acquisition artifact": re.compile(
+        r"(?:[furbFURB]{0,2})?[\"']result_(?:\{[^}]+\}|[0-9])"
+    ),
+    "legacy url_* acquisition artifact": re.compile(
+        r"(?:[furbFURB]{0,2})?[\"']url_(?:\{[^}]+\}|[0-9])"
+    ),
 }
 _PATH_MARKERS = {
     "scripts/persist_results.py": "persist_results.py",
@@ -498,18 +510,8 @@ _EXCLUDED_PARTS = {
     "generated",
 }
 
-# RC-6/RC-7-owned runtime surfaces are empty. Remaining entries are
-# intentional removed-flag compatibility errors.
-_RC7_PENDING_RUNTIME_ALLOWLIST: dict[tuple[str, str], int] = {}
-_COMPATIBILITY_ERROR_ALLOWLIST: dict[tuple[str, str], int] = {
-    ("scripts/research_store/fsearch_service.py", "--reuse-search"): 2,
-    ("scripts/research_store/fsearch_service.py", "reuse_search"): 1,
-    ("scripts/research_store/fsearch_service.py", "scrape_ranks"): 1,
-}
-_LEGACY_SURFACE_ALLOWLIST = {
-    **_RC7_PENDING_RUNTIME_ALLOWLIST,
-    **_COMPATIBILITY_ERROR_ALLOWLIST,
-}
+# RC-8 final gate: supported runtime paths contain no legacy storage surface.
+_LEGACY_SURFACE_ALLOWLIST: dict[tuple[str, str], int] = {}
 
 
 def _is_runtime_source(relative: Path) -> bool:
@@ -568,23 +570,8 @@ def test_legacy_surface_inventory_has_not_grown():
     )
 
 
-def test_rc6_runtime_inventory_is_empty_outside_declared_boundaries():
-    actual = _legacy_surface_inventory(SCRIPTS.parent)
-    assert set(actual) == set(_RC7_PENDING_RUNTIME_ALLOWLIST) | set(
-        _COMPATIBILITY_ERROR_ALLOWLIST
-    )
-    prohibited = {
-        "SCRATCH_ROOT",
-        "scratch_file",
-        "scratch_dir",
-        "FIRECRAWL_RESEARCH_ACTIVE",
-        "FIRECRAWL_CAPTURE_RAW",
-        "FIRECRAWL_RESEARCH_PERSIST",
-        "persist_results.py",
-        "import-scratch",
-        "_corpus.json",
-    }
-    assert not any(marker in prohibited for _path, marker in actual)
+def test_rc8_runtime_inventory_is_empty():
+    assert _legacy_surface_inventory(SCRIPTS.parent) == {}
 
 
 def test_fscrape_has_no_legacy_storage_markers():
@@ -639,6 +626,30 @@ def test_inventory_detects_indirect_file_handoffs_and_local_replay(tmp_path: Pat
     assert inventory[("scripts/runtime.py", "_context.json")] == 1
     assert inventory[("scripts/runtime.py", "reuse_search")] == 1
     assert inventory[("scripts/runtime.py", "scrape_ranks")] == 1
+
+
+def test_inventory_detects_remaining_legacy_artifact_family(tmp_path: Path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "runtime.py").write_text(
+        "candidate_path = '_candidates.json'\n"
+        "index_path = '_index.md'\n"
+        "workflow_input = '_workflow_input.json'\n"
+        "raw_dir = '_raw'\n"
+        "result_path = f'result_{rank}.md'\n"
+        "url_path = f'url_{rank}.txt'\n",
+        encoding="utf-8",
+    )
+
+    inventory = _legacy_surface_inventory(tmp_path)
+    assert inventory[("scripts/runtime.py", "_candidates.json")] == 1
+    assert inventory[("scripts/runtime.py", "_index.md")] == 1
+    assert inventory[("scripts/runtime.py", "_workflow_input.json")] == 1
+    assert inventory[("scripts/runtime.py", "legacy _raw acquisition directory")] == 1
+    assert (
+        inventory[("scripts/runtime.py", "legacy result_* acquisition artifact")] == 1
+    )
+    assert inventory[("scripts/runtime.py", "legacy url_* acquisition artifact")] == 1
 
 
 def test_inventory_detects_removed_persistence_switches(tmp_path: Path):

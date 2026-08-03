@@ -1,0 +1,176 @@
+name: Authoritative storage gates
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authoritative-storage-gates-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  authoritative-storage-gate:
+    name: "Authoritative storage gate — Python ${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Record and verify exact tested commit
+        id: identity
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TESTED_SHA=$(git rev-parse HEAD)
+          test "$TESTED_SHA" = "$EXPECTED_SHA"
+          echo "tested_sha=$TESTED_SHA" >> "$GITHUB_OUTPUT"
+          echo "tested_sha=$TESTED_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements-research-store.txt \
+            pytest \
+            ruff
+
+      - name: Run required quality checks
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Start disposable PostgreSQL
+        run: |
+          docker run --name pg -d \
+            -e POSTGRES_PASSWORD=postgres \
+            -p 5432:5432 \
+            postgres:16-alpine
+          for i in $(seq 1 15); do
+            PGPASSWORD=postgres psql \
+              -h 127.0.0.1 \
+              -U postgres \
+              -c "CREATE DATABASE firecrawl_rc8_test;" \
+              2>/dev/null && break
+            sleep 1
+          done
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -lqt \
+            | grep -q firecrawl_rc8_test
+
+      - name: Start disposable Qdrant
+        run: |
+          docker run --name qdrant -d -p 6333:6333 \
+            -e QDRANT__SERVICE__READ_ONLY_ACCESS=false \
+            qdrant/qdrant:v1.18.3-unprivileged
+          for i in $(seq 1 15); do
+            curl --fail --silent http://127.0.0.1:6333/readyz && break
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:6333/readyz
+
+      - name: Start disposable Valkey
+        run: |
+          docker run --name valkey -d -p 6379:6379 valkey/valkey:8-alpine
+          for i in $(seq 1 15); do
+            docker exec valkey valkey-cli ping | grep -q PONG && break
+            sleep 1
+          done
+          docker exec valkey valkey-cli ping | grep -q PONG
+
+      - name: Run authoritative storage and recovery contracts
+        env:
+          RESEARCH_STORE_TEST_DATABASE_URL: >-
+            postgresql://postgres:postgres@127.0.0.1/firecrawl_rc8_test
+          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_rc8_test
+          QDRANT_URL: http://127.0.0.1:6333
+          VALKEY_URL: redis://127.0.0.1:6379/0
+        run: |
+          python -m pytest \
+            -q \
+            -ra \
+            -p no:cacheprovider \
+            scripts/test_authoritative_storage_gate.py \
+            scripts/test_acquisition_authority.py \
+            scripts/test_authoritative_fsearch.py \
+            scripts/test_authoritative_fsearch_review.py \
+            scripts/test_direct_scrape_service.py \
+            scripts/test_authoritative_fscrape.py \
+            scripts/test_authoritative_fscrape_cli.py \
+            scripts/test_authoritative_smart_validation.py \
+            scripts/test_authoritative_live_validation_profiles.py \
+            scripts/test_database_native_inspection.py \
+            scripts/test_database_native_inspection_integration.py \
+            scripts/test_explicit_export_reproducibility.py \
+            scripts/test_index_runtime.py \
+            scripts/test_research_store_integration.py
+
+      - name: Write exact-head gate evidence
+        env:
+          TESTED_SHA: ${{ steps.identity.outputs.tested_sha }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          tested_sha = os.environ["TESTED_SHA"]
+          evidence = {
+              "schema_version": "authoritative-storage-gate-v1",
+              "status": "passed",
+              "tested_sha": tested_sha,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "python_version": os.environ["PYTHON_VERSION"],
+              "contracts": [
+                  "postgresql-authoritative-acquisition",
+                  "blob-integrity",
+                  "qdrant-rebuild",
+                  "valkey-loss-tolerance",
+                  "worker-recovery",
+                  "explicit-export-reproducibility",
+                  "zero-legacy-runtime-references",
+              ],
+          }
+          Path("authoritative-storage-gate.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload exact-head gate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: authoritative-storage-gate-${{ steps.identity.outputs.tested_sha }}-py${{ matrix.python-version }}
+          path: authoritative-storage-gate.json
+          if-no-files-found: error
+          retention-days: 90

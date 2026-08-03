@@ -30,12 +30,42 @@ from .service import dumps, json_default
 from .valkey_queue import ValkeyQueue
 
 
+def _canonical_export_json(payload: Any) -> str:
+    """Serialize an explicit export deterministically for a fixed DB state."""
+    return (
+        json.dumps(
+            payload,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+            default=json_default,
+        )
+        + "\n"
+    )
+
+
 def _export_json(path: Path, payload: Any) -> None:
-    """Write JSON atomically via temp-file rename."""
+    """Write canonical JSON atomically without leaving durable temp state."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    temporary.replace(path)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary.write(_canonical_export_json(payload))
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def parser():
@@ -2514,7 +2544,7 @@ def main(argv=None):
                 raise SystemExit("research run not found")
             internal_id = run[0]["id"]
             cur.execute(
-                "SELECT row_to_json(e) FROM retrieval_events e WHERE run_id=%s ORDER BY created_at",
+                "SELECT row_to_json(e) FROM retrieval_events e WHERE run_id=%s ORDER BY created_at,id",
                 (internal_id,),
             )
             events = [row[0] for row in cur.fetchall()]

@@ -709,8 +709,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--json", action="store_true", dest="json_output")
     parser.add_argument("--dir", help=argparse.SUPPRESS)
-    parser.add_argument("--reuse-search", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--scrape-ranks", help=argparse.SUPPRESS)
     return parser
 
 
@@ -728,14 +726,6 @@ def main(
             raise FSearchArgumentError(
                 "--dir was removed; fsearch no longer writes acquisition artifacts. "
                 "Use database-native export tooling for explicit exports."
-            )
-        if args.reuse_search:
-            raise FSearchArgumentError(
-                "--reuse-search was removed; use database-native search-response replay."
-            )
-        if args.scrape_ranks is not None:
-            raise FSearchArgumentError(
-                "--scrape-ranks was removed; select persisted candidates by candidate ID."
             )
         if not args.research_run_id:
             raise FSearchArgumentError(
