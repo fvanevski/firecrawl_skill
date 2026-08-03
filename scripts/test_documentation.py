@@ -121,9 +121,9 @@ class TestDocumentationFiles:
         assert "not implemented" in architecture
 
     def test_release_notes_define_breaking_boundary(self) -> None:
-        content = (
-            SKILL_ROOT / "references/release-notes-rc9.md"
-        ).read_text(encoding="utf-8")
+        content = (SKILL_ROOT / "references/release-notes-rc9.md").read_text(
+            encoding="utf-8"
+        )
         for required in (
             "82d3369c0be9bba381f38b598c3b05ed4b683ae6",
             "1aaa92f7c3a84ea1ed210947130b120cc814826e",
@@ -139,9 +139,9 @@ class TestDocumentationFiles:
             assert required in content
 
     def test_migration_guide_defines_import_and_rollback(self) -> None:
-        content = (
-            SKILL_ROOT / "references/migration-guide.md"
-        ).read_text(encoding="utf-8")
+        content = (SKILL_ROOT / "references/migration-guide.md").read_text(
+            encoding="utf-8"
+        )
         for required in (
             "82d3369c0be9bba381f38b598c3b05ed4b683ae6",
             "research-db import-scratch",
@@ -172,9 +172,9 @@ class TestDocumentationFiles:
             assert "frun" in content
 
     def test_operations_runbook_has_required_sections(self) -> None:
-        content = (
-            SKILL_ROOT / "references/operations-runbook.md"
-        ).read_text(encoding="utf-8")
+        content = (SKILL_ROOT / "references/operations-runbook.md").read_text(
+            encoding="utf-8"
+        )
         for section in (
             "Architecture overview",
             "Service boundaries",
@@ -195,9 +195,9 @@ class TestDocumentationFiles:
             assert section.lower() in content.lower()
 
     def test_coding_agent_guide_has_required_sections(self) -> None:
-        content = (
-            SKILL_ROOT / "references/coding-agent-guide.md"
-        ).read_text(encoding="utf-8")
+        content = (SKILL_ROOT / "references/coding-agent-guide.md").read_text(
+            encoding="utf-8"
+        )
         for section in (
             "Architecture overview",
             "Authority boundaries",
@@ -218,9 +218,9 @@ class TestDocumentationFiles:
             assert section.lower() in content.lower()
 
     def test_migration_guide_has_required_sections(self) -> None:
-        content = (
-            SKILL_ROOT / "references/migration-guide.md"
-        ).read_text(encoding="utf-8")
+        content = (SKILL_ROOT / "references/migration-guide.md").read_text(
+            encoding="utf-8"
+        )
         for section in (
             "Migration principles",
             "Pre-migration checklist",
@@ -234,9 +234,9 @@ class TestDocumentationFiles:
             assert section.lower() in content.lower()
 
     def test_operations_runbook_documents_required_config(self) -> None:
-        content = (
-            SKILL_ROOT / "references/operations-runbook.md"
-        ).read_text(encoding="utf-8")
+        content = (SKILL_ROOT / "references/operations-runbook.md").read_text(
+            encoding="utf-8"
+        )
         for variable in (
             "DATABASE_URL",
             "BLOB_ROOT",
@@ -411,9 +411,9 @@ class TestParserBackedExamples:
 
 
 def test_authoritative_fsearch_documents_low_level_exit_contract() -> None:
-    content = (
-        SKILL_ROOT / "docs" / "authoritative-fsearch.md"
-    ).read_text(encoding="utf-8")
+    content = (SKILL_ROOT / "docs" / "authoritative-fsearch.md").read_text(
+        encoding="utf-8"
+    )
     assert "research-db acquisition-search" in content
     assert "before the Firecrawl adapter is constructed or invoked" in content
     assert "`0` for persisted `succeeded` or `empty`" in content
@@ -423,15 +423,15 @@ def test_authoritative_fsearch_documents_low_level_exit_contract() -> None:
 
 
 def test_removed_flag_documentation_matches_parser_contract() -> None:
-    content = (
-        SKILL_ROOT / "docs" / "authoritative-fsearch.md"
-    ).read_text(encoding="utf-8")
+    content = (SKILL_ROOT / "docs" / "authoritative-fsearch.md").read_text(
+        encoding="utf-8"
+    )
     assert "`--dir` remains a hidden compatibility tombstone" in content
     assert "`--reuse-search` and `--scrape-ranks` are not registered" in content
     assert "standard `unrecognized arguments` diagnostic" in content
 
-    fscrape = (
-        SKILL_ROOT / "docs" / "authoritative-fscrape.md"
-    ).read_text(encoding="utf-8")
+    fscrape = (SKILL_ROOT / "docs" / "authoritative-fscrape.md").read_text(
+        encoding="utf-8"
+    )
     assert "`--output-dir PATH` and `--output-dir=PATH` fail" in fscrape
     assert "before the Firecrawl adapter is" in fscrape
