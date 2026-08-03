@@ -44,7 +44,9 @@ def _default_runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
 def _nonnegative_int(payload: dict[str, Any], field: str) -> int:
     value = payload.get(field)
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"worker result field {field!r} must be a non-negative integer")
+        raise ValueError(
+            f"worker result field {field!r} must be a non-negative integer"
+        )
     return value
 
 
@@ -82,7 +84,10 @@ def drain_index_jobs(
             failed = _nonnegative_int(payload, "failed")
             lease_lost = _nonnegative_int(payload, "lease_lost")
         except (json.JSONDecodeError, ValueError) as exc:
-            print(f"invalid worker result after batch {batch_number}: {exc}", file=sys.stderr)
+            print(
+                f"invalid worker result after batch {batch_number}: {exc}",
+                file=sys.stderr,
+            )
             return 1
 
         if completed.returncode != 0:
