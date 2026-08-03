@@ -2,8 +2,9 @@
 
 The underlying strict benchmark supports additional modes for non-release uses.
 This entry point freezes the release contract to exactly two modes, binds the
-serialized evidence to authoritative PostgreSQL records, and replaces
-workload-dependent embedding throughput with a fixed release calibration.
+serialized evidence to authoritative PostgreSQL records, replaces
+workload-dependent embedding throughput with a fixed release calibration, and
+emits self-validating PostgreSQL-derived timing diagnostics.
 """
 
 from __future__ import annotations
@@ -18,9 +19,14 @@ from release_campaign_contract import (
     repair_campaign_contract,
     validate_campaign_contract,
 )
+from release_campaign_timing import (
+    TIMING_DIAGNOSTICS_SCHEMA as _TIMING_DIAGNOSTICS_SCHEMA,
+)
+from release_campaign_timing import write_timing_diagnostics
 from research_store import strict_benchmark
 
 AUTHORITATIVE_MODES = ("autonomous_local", "deterministic_debug")
+TIMING_DIAGNOSTICS_SCHEMA = _TIMING_DIAGNOSTICS_SCHEMA
 
 
 def _load_object(path: Path) -> dict[str, Any]:
@@ -91,13 +97,25 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.get("DATABASE_URL", ""),
         )
         normalize_mode_metadata(campaign_dir)
+        timing = write_timing_diagnostics(
+            campaign_dir,
+            os.environ.get("DATABASE_URL", ""),
+        )
+        print(
+            "Timing diagnostics: "
+            f"{timing['run_count']} runs, "
+            f"{len(timing['reproducibility_failures'])} reproducibility failure(s)"
+        )
         errors = validate_campaign_contract(campaign_dir)
     except Exception as exc:  # noqa: BLE001
-        print(f"ERROR: release evidence contract correction failed: {exc}")
+        print(
+            f"ERROR: release evidence contract correction failed: {exc}",
+            file=sys.stderr,
+        )
         return 1
 
     for error in errors:
-        print(f"ERROR: {error}")
+        print(f"ERROR: {error}", file=sys.stderr)
     if reproducible and not errors:
         print("Release evidence contract correction: PASS")
         return 0

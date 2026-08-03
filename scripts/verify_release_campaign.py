@@ -270,6 +270,49 @@ def validate_reproducibility(comparison: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def validate_timing_diagnostics(
+    diagnostics: Mapping[str, Any],
+    *,
+    candidate_sha: str,
+    run_ids: Sequence[str],
+) -> list[str]:
+    """Validate durable PostgreSQL-derived timing diagnostics."""
+    errors: list[str] = []
+    if diagnostics.get("schema_version") != "release-campaign-timing-v1":
+        errors.append("timing diagnostics schema version is invalid")
+    if diagnostics.get("candidate_sha") != candidate_sha:
+        errors.append("timing diagnostics candidate mismatch")
+
+    raw_runs = diagnostics.get("runs")
+    runs = (
+        [item for item in raw_runs if isinstance(item, Mapping)]
+        if isinstance(raw_runs, list)
+        else []
+    )
+    expected_ids = set(run_ids)
+    actual_ids = {str(item.get("run_id") or "") for item in runs}
+    if actual_ids != expected_ids or len(runs) != len(expected_ids):
+        errors.append(
+            "timing diagnostics run set mismatch: "
+            f"expected {sorted(expected_ids)}, got {sorted(actual_ids)}"
+        )
+    if diagnostics.get("run_count") != len(runs):
+        errors.append("timing diagnostics run_count does not match runs")
+
+    for run in runs:
+        run_id = str(run.get("run_id") or "")
+        if run.get("state") != "completed":
+            errors.append(f"timing diagnostics run {run_id} is not completed")
+        if run.get("duration_ms") is None:
+            errors.append(f"timing diagnostics run {run_id} lacks duration")
+        if not isinstance(run.get("semantic_stage_totals"), Mapping):
+            errors.append(f"timing diagnostics run {run_id} lacks stage totals")
+
+    if not isinstance(diagnostics.get("reproducibility_failures"), list):
+        errors.append("timing diagnostics reproducibility failures are malformed")
+    return errors
+
+
 def _safe_result_dir(root: Path, entry: Mapping[str, Any], label: str) -> Path:
     result_dir = Path(str(entry.get("result_path") or ""))
     if not result_dir.is_dir():
@@ -314,7 +357,7 @@ def _database_completion(
     with psycopg.connect(database_url) as connection, connection.cursor() as cursor:
         for run_id in run_ids:
             cursor.execute(
-                """SELECT status, state, started_at, completed_at
+                """SELECT state, started_at, completed_at
                    FROM research_runs WHERE id = %s""",
                 (run_id,),
             )
@@ -322,20 +365,22 @@ def _database_completion(
             if row is None:
                 errors.append(f"research_runs row is missing for {run_id}")
                 continue
-            status = str(row[0] or "").lower()
-            state = str(row[1] or "").lower()
-            completed = row[3] is not None and "completed" in {status, state}
+            state = str(row[0] or "").lower()
+            completed = row[2] is not None and state == "completed"
             if not completed:
                 errors.append(
-                    f"run {run_id} is not completed: status={status!r}, state={state!r}"
+                    f"run {run_id} is not completed: "
+                    f"state={state!r}, completed_at={row[2]!r}"
                 )
             records[run_id] = {
-                "status": status,
+                # Retain the evidence field for schema compatibility while
+                # deriving it only from the authoritative lifecycle state.
+                "status": state,
                 "state": state,
-                "started_at": str(row[2]),
-                "completed_at": str(row[3]),
+                "started_at": str(row[1]),
+                "completed_at": str(row[2]),
                 "orchestration_outcome": "completed" if completed else "incomplete",
-                "orchestration_outcome_source": "research_runs",
+                "orchestration_outcome_source": "research_runs.state",
             }
     return records, errors
 
@@ -572,6 +617,20 @@ def verify(
             for item in validate_reproducibility(raw_reproducibility)
         )
 
+    timing_path = root / "timing-diagnostics.json"
+    if timing_path.is_file():
+        timing_diagnostics = load_object(timing_path)
+        errors.extend(
+            validate_timing_diagnostics(
+                timing_diagnostics,
+                candidate_sha=identity.candidate_sha,
+                run_ids=all_run_ids,
+            )
+        )
+    else:
+        timing_diagnostics = {}
+        errors.append("timing diagnostics artifact is missing")
+
     recovery_path = root / "recovery-report.txt"
     evidence = {
         "schema_version": "authoritative-release-evidence-v2",
@@ -613,6 +672,14 @@ def verify(
             "relative_tolerance": comparison.get("relative_tolerance"),
             "operational_ratio_limit": comparison.get("operational_ratio_limit"),
             "observations": comparison.get("observations", []),
+        },
+        "timing_diagnostics": {
+            "path": "timing-diagnostics.json" if timing_path.is_file() else None,
+            "sha256": sha256_file(timing_path) if timing_path.is_file() else None,
+            "run_count": timing_diagnostics.get("run_count"),
+            "reproducibility_failures": timing_diagnostics.get(
+                "reproducibility_failures", []
+            ),
         },
         "raw_manifest_path": "manifest.json",
         "raw_manifest_sha256": sha256_file(raw_manifest_path),
