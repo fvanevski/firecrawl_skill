@@ -3419,7 +3419,7 @@ class PostgresUnitOfWork:
                 a.snapshot_id,document_id,chunk_ids,error,a.metadata,d.document_sha256
                 FROM ingestion_batch_assets a
                 LEFT JOIN documents d ON d.id=a.document_id
-                WHERE a.batch_id=%s ORDER BY a.ordinal""",
+                WHERE a.batch_id=%s ORDER BY a.ordinal,a.id""",
                 (row[0],),
             )
             asset_keys = (

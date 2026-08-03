@@ -51,8 +51,11 @@ Supported controls include `--limit`, `--scrape-limit`, `--sources`, `--tbs`,
 `FIRECRAWL_RESEARCH_RUN_ID` and `FIRECRAWL_INVOCATION_ID` provide the two ID
 defaults.
 
-The removed `--dir`, `--reuse-search`, and `--scrape-ranks` options fail with
-migration guidance. Authoritative PostgreSQL preflight is unconditional.
+`--dir` remains a hidden compatibility tombstone and fails with targeted
+migration guidance. `--reuse-search` and `--scrape-ranks` are not registered;
+argparse rejects them with its standard `unrecognized arguments` diagnostic before
+service construction or any Firecrawl/network activity. Authoritative PostgreSQL
+preflight is unconditional for every supported invocation.
 
 JSON and console results include run and invocation IDs, search-response ID,
 stable candidate IDs, extraction invocation and outcomes, and authoritative
