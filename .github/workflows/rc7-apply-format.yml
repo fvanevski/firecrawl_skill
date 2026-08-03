@@ -1,0 +1,56 @@
+name: RC-7 apply formatting
+
+on:
+  push:
+    branches:
+      - refactor/rc7-authoritative-smart-validation
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refactor/rc7-authoritative-smart-validation
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Apply exact repository formatting and inventory update
+        run: |
+          python -m pip install ruff
+          ruff format scripts/live_validate.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/test_acquisition_authority.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''# RC-6-owned runtime surfaces are empty. Remaining entries are classified
+          # separately as RC-7 work or intentional removed-flag compatibility errors.
+          _RC7_PENDING_RUNTIME_ALLOWLIST: dict[tuple[str, str], int] = {
+              ("scripts/fsearch_smart", "_meta.json"): 1,
+              ("scripts/fsearch_smart", "firecrawl_scratch"): 1,
+              ("scripts/live_validate.py", "_meta.json"): 1,
+          }
+          '''
+          new = '''# RC-6/RC-7-owned runtime surfaces are empty. Remaining entries are
+          # intentional removed-flag compatibility errors.
+          _RC7_PENDING_RUNTIME_ALLOWLIST: dict[tuple[str, str], int] = {}
+          '''
+          if old not in text:
+              raise SystemExit('expected RC-7 allowlist block not found')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Commit branch-only correction
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/rc7-apply-format.yml
+          git add scripts/live_validate.py scripts/test_acquisition_authority.py
+          git diff --check
+          git commit -m "fix: align RC-7 validation gates"
+          git push origin HEAD:refactor/rc7-authoritative-smart-validation
