@@ -147,13 +147,22 @@ def test_existing_run_reuses_persisted_bundle_without_replanning(
         state="acquiring",
         lifecycle_revision=4,
     )
-    monkeypatch.setattr(smart, "resolved_research_environment", lambda: {"DATABASE_URL": "postgresql://test", "FIRECRAWL_RESEARCH_AUTO_ENV": "0"})
+    monkeypatch.setattr(
+        smart,
+        "resolved_research_environment",
+        lambda: {
+            "DATABASE_URL": "postgresql://test",
+            "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
+        },
+    )
     monkeypatch.setattr(
         smart,
         "prepare_run",
         lambda *_args: ("fr_" + "3" * 32, object(), object(), status),
     )
-    monkeypatch.setattr(smart_orchestrator, "load_planning_bundle", lambda *_args: bundle)
+    monkeypatch.setattr(
+        smart_orchestrator, "load_planning_bundle", lambda *_args: bundle
+    )
     monkeypatch.setattr(
         smart,
         "initialize_bundle",
@@ -178,7 +187,9 @@ def test_terminal_rerun_uses_persisted_outcome_without_planner(
     bundle = SimpleNamespace(
         spec=spec,
         budget=_budget(),
-        plan=smart.canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}]),
+        plan=smart.canonical_plan(
+            spec, [{"query": spec.objective, "facet": "objective"}]
+        ),
         spec_row_id="00000000-0000-0000-0000-000000000101",
         spec_revision=1,
         plan_row_id="00000000-0000-0000-0000-000000000201",
@@ -189,13 +200,22 @@ def test_terminal_rerun_uses_persisted_outcome_without_planner(
         state="completed",
         lifecycle_revision=9,
     )
-    monkeypatch.setattr(smart, "resolved_research_environment", lambda: {"DATABASE_URL": "postgresql://test", "FIRECRAWL_RESEARCH_AUTO_ENV": "0"})
+    monkeypatch.setattr(
+        smart,
+        "resolved_research_environment",
+        lambda: {
+            "DATABASE_URL": "postgresql://test",
+            "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
+        },
+    )
     monkeypatch.setattr(
         smart,
         "prepare_run",
         lambda *_args: ("fr_" + "4" * 32, object(), object(), status),
     )
-    monkeypatch.setattr(smart_orchestrator, "load_planning_bundle", lambda *_args: bundle)
+    monkeypatch.setattr(
+        smart_orchestrator, "load_planning_bundle", lambda *_args: bundle
+    )
     monkeypatch.setattr(
         smart,
         "initialize_bundle",
@@ -309,9 +329,7 @@ def test_live_validation_writes_final_artifacts_only_when_requested(
         destination = artifact_root / "test-campaign"
         manifest = json.loads((destination / "manifest.json").read_text())
         assert manifest["quality_metrics"][0]["chunk_count"] == 1
-        assert "Authoritative run metrics" in (
-            destination / "report.md"
-        ).read_text()
+        assert "Authoritative run metrics" in (destination / "report.md").read_text()
         assert "Artifacts:" in capsys.readouterr().out
     finally:
         campaign.close()

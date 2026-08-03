@@ -71,10 +71,14 @@ class AuthoritativeInspector:
         *,
         qdrant_url: str | None = None,
         qdrant_api_key: str | None = None,
+        blob_root: str | Path | None = None,
     ) -> None:
+        from research_store.config import StoreConfig
+
         self.database_url = database_url
         self.qdrant_url = qdrant_url
         self.qdrant_api_key = qdrant_api_key
+        self.blob_root = Path(blob_root or StoreConfig.from_env().blob_root)
 
     def _connect(self):
         import psycopg
@@ -211,9 +215,8 @@ class AuthoritativeInspector:
 
     def _blob_integrity(self, digests: list[str]) -> dict[str, Any]:
         from research_store.blob import ContentAddressedBlobStore
-        from research_store.config import StoreConfig
 
-        store = ContentAddressedBlobStore(StoreConfig.from_env().blob_root)
+        store = ContentAddressedBlobStore(self.blob_root)
         unique = sorted({digest for digest in digests if digest})
         verified = [digest for digest in unique if store.verify(digest)]
         return {
@@ -229,6 +232,8 @@ class AuthoritativeInspector:
         benchmark: dict[str, Any] | None,
         *,
         require_corpus: bool,
+        require_planning: bool = False,
+        require_terminal: bool = False,
         require_resume_history: bool = False,
     ) -> dict[str, Any]:
         run_id, state, raw_plan = self._run_row(external_run_id)
@@ -400,11 +405,19 @@ class AuthoritativeInspector:
 
         checks = {
             "persisted_run": bool(run_id),
-            "terminal_run": terminal,
-            "authoritative_spec": scalars["spec_count"] == 1,
-            "authoritative_budget": scalars["budget_count"] == 1,
-            "authoritative_plan": scalars["plan_count"] == 1,
-            "authoritative_semantic_provenance": scalars["semantic_call_count"] > 0,
+            "terminal_run": terminal if require_terminal else True,
+            "authoritative_spec": (
+                scalars["spec_count"] == 1 if require_planning else True
+            ),
+            "authoritative_budget": (
+                scalars["budget_count"] == 1 if require_planning else True
+            ),
+            "authoritative_plan": (
+                scalars["plan_count"] == 1 if require_planning else True
+            ),
+            "authoritative_semantic_provenance": (
+                scalars["semantic_call_count"] > 0 if require_planning else True
+            ),
             "authoritative_invocations": scalars["invocation_count"] > 0,
             "authoritative_search_responses": len(responses) > 0,
             "authoritative_candidates": len(candidates) > 0,
@@ -457,6 +470,8 @@ class AuthoritativeInspector:
         benchmark: dict[str, Any] | None,
         *,
         require_corpus: bool,
+        require_planning: bool = False,
+        require_terminal: bool = False,
         require_resume_history: bool = False,
         timeout_seconds: float,
     ) -> dict[str, Any]:
@@ -467,6 +482,8 @@ class AuthoritativeInspector:
                 external_run_id,
                 benchmark,
                 require_corpus=require_corpus,
+                require_planning=require_planning,
+                require_terminal=require_terminal,
                 require_resume_history=require_resume_history,
             )
             if last["checks"]["worker_completed"] and last["checks"]["qdrant_coverage"]:
@@ -476,6 +493,8 @@ class AuthoritativeInspector:
             external_run_id,
             benchmark,
             require_corpus=require_corpus,
+            require_planning=require_planning,
+            require_terminal=require_terminal,
             require_resume_history=require_resume_history,
         )
 
@@ -499,6 +518,7 @@ class Campaign:
             args.database_url,
             qdrant_url=args.qdrant_url,
             qdrant_api_key=args.qdrant_api_key,
+            blob_root=args.blob_root,
         )
         self._temporary = None
         if work_root is None:
@@ -530,6 +550,7 @@ class Campaign:
                 "FC_OPERATION_MAX": str(args.max_operations),
                 "FIRECRAWL_API_URL": args.api_url.rstrip("/"),
                 "DATABASE_URL": args.database_url,
+                "BLOB_ROOT": str(args.blob_root),
                 "TMPDIR": str(self.monitored_tmp),
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
@@ -837,6 +858,8 @@ class Campaign:
             self.run(f"smart_{name}", command, timeout=self.args.case_timeout)
         self.runs[name]["benchmark_key"] = benchmark_key
         self.runs[name]["require_corpus"] = True
+        self.runs[name]["require_planning"] = True
+        self.runs[name]["require_terminal"] = True
         self.runs[name]["require_resume_history"] = resume
         return external_id
 
@@ -928,6 +951,8 @@ class Campaign:
                     metadata["external_run_id"],
                     benchmark,
                     require_corpus=bool(metadata.get("require_corpus")),
+                    require_planning=bool(metadata.get("require_planning")),
+                    require_terminal=bool(metadata.get("require_terminal")),
                     require_resume_history=bool(metadata.get("require_resume_history")),
                     timeout_seconds=self.args.worker_timeout,
                 )
@@ -1049,6 +1074,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL", ""))
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument("--qdrant-api-key", default=os.environ.get("QDRANT_API_KEY"))
+    parser.add_argument(
+        "--blob-root",
+        default=os.environ.get("BLOB_ROOT", "data/blobs"),
+    )
     parser.add_argument("--max-operations", type=int, default=40)
     parser.add_argument("--max-adaptive-cycles", type=int, default=2)
     parser.add_argument("--case-timeout", type=int, default=1800)
