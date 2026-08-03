@@ -1,4 +1,4 @@
-name: RC7 one-time corrective formatting
+name: RC7 one-time documentation and formatting
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  correct-and-format:
+  document-and-format:
     if: github.event.pull_request.head.ref == 'refactor/rc7-authoritative-smart-validation' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
@@ -21,69 +21,94 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install ruff==0.16.1
-      - name: Apply wrapper-specific validator contracts
+      - name: Correct and extend operator documentation
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('scripts/live_validate.py')
-          text = path.read_text(encoding='utf-8')
-          replacements = [
-              (
-                  '''        qdrant_api_key: str | None = None,\n    ) -> None:\n        self.database_url = database_url\n        self.qdrant_url = qdrant_url\n        self.qdrant_api_key = qdrant_api_key\n''',
-                  '''        qdrant_api_key: str | None = None,\n        blob_root: str | Path | None = None,\n    ) -> None:\n        from research_store.config import StoreConfig\n\n        self.database_url = database_url\n        self.qdrant_url = qdrant_url\n        self.qdrant_api_key = qdrant_api_key\n        self.blob_root = Path(blob_root or StoreConfig.from_env().blob_root)\n''',
-              ),
-              (
-                  '''        from research_store.blob import ContentAddressedBlobStore\n        from research_store.config import StoreConfig\n\n        store = ContentAddressedBlobStore(StoreConfig.from_env().blob_root)\n''',
-                  '''        from research_store.blob import ContentAddressedBlobStore\n\n        store = ContentAddressedBlobStore(self.blob_root)\n''',
-              ),
-              (
-                  '''        require_corpus: bool,\n        require_resume_history: bool = False,\n    ) -> dict[str, Any]:\n''',
-                  '''        require_corpus: bool,\n        require_planning: bool = False,\n        require_terminal: bool = False,\n        require_resume_history: bool = False,\n    ) -> dict[str, Any]:\n''',
-              ),
-              (
-                  '''            "terminal_run": terminal,\n            "authoritative_spec": scalars["spec_count"] == 1,\n            "authoritative_budget": scalars["budget_count"] == 1,\n            "authoritative_plan": scalars["plan_count"] == 1,\n            "authoritative_semantic_provenance": scalars["semantic_call_count"] > 0,\n''',
-                  '''            "terminal_run": terminal if require_terminal else True,\n            "authoritative_spec": (\n                scalars["spec_count"] == 1 if require_planning else True\n            ),\n            "authoritative_budget": (\n                scalars["budget_count"] == 1 if require_planning else True\n            ),\n            "authoritative_plan": (\n                scalars["plan_count"] == 1 if require_planning else True\n            ),\n            "authoritative_semantic_provenance": (\n                scalars["semantic_call_count"] > 0 if require_planning else True\n            ),\n''',
-              ),
-              (
-                  '''        require_corpus: bool,\n        require_resume_history: bool = False,\n        timeout_seconds: float,\n''',
-                  '''        require_corpus: bool,\n        require_planning: bool = False,\n        require_terminal: bool = False,\n        require_resume_history: bool = False,\n        timeout_seconds: float,\n''',
-              ),
-              (
-                  '''                require_corpus=require_corpus,\n                require_resume_history=require_resume_history,\n''',
-                  '''                require_corpus=require_corpus,\n                require_planning=require_planning,\n                require_terminal=require_terminal,\n                require_resume_history=require_resume_history,\n''',
-              ),
-              (
-                  '''            require_corpus=require_corpus,\n            require_resume_history=require_resume_history,\n''',
-                  '''            require_corpus=require_corpus,\n            require_planning=require_planning,\n            require_terminal=require_terminal,\n            require_resume_history=require_resume_history,\n''',
-              ),
-              (
-                  '''            qdrant_url=args.qdrant_url,\n            qdrant_api_key=args.qdrant_api_key,\n        )\n''',
-                  '''            qdrant_url=args.qdrant_url,\n            qdrant_api_key=args.qdrant_api_key,\n            blob_root=args.blob_root,\n        )\n''',
-              ),
-              (
-                  '''                "DATABASE_URL": args.database_url,\n                "TMPDIR": str(self.monitored_tmp),\n''',
-                  '''                "DATABASE_URL": args.database_url,\n                "BLOB_ROOT": str(args.blob_root),\n                "TMPDIR": str(self.monitored_tmp),\n''',
-              ),
-              (
-                  '''        self.runs[name]["require_corpus"] = True\n        self.runs[name]["require_resume_history"] = resume\n''',
-                  '''        self.runs[name]["require_corpus"] = True\n        self.runs[name]["require_planning"] = True\n        self.runs[name]["require_terminal"] = True\n        self.runs[name]["require_resume_history"] = resume\n''',
-              ),
-              (
-                  '''                    require_corpus=bool(metadata.get("require_corpus")),\n                    require_resume_history=bool(metadata.get("require_resume_history")),\n''',
-                  '''                    require_corpus=bool(metadata.get("require_corpus")),\n                    require_planning=bool(metadata.get("require_planning")),\n                    require_terminal=bool(metadata.get("require_terminal")),\n                    require_resume_history=bool(metadata.get("require_resume_history")),\n''',
-              ),
-              (
-                  '''    parser.add_argument("--qdrant-api-key", default=os.environ.get("QDRANT_API_KEY"))\n    parser.add_argument("--max-operations", type=int, default=40)\n''',
-                  '''    parser.add_argument("--qdrant-api-key", default=os.environ.get("QDRANT_API_KEY"))\n    parser.add_argument(\n        "--blob-root",\n        default=os.environ.get("BLOB_ROOT", "data/blobs"),\n    )\n    parser.add_argument("--max-operations", type=int, default=40)\n''',
-              ),
-          ]
-          for old, new in replacements:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'expected one replacement, found {count}: {old[:80]!r}')
-              text = text.replace(old, new)
-          path.write_text(text, encoding='utf-8')
+          readme = Path('README.md')
+          text = readme.read_text(encoding='utf-8')
+          old = (
+              'Content-addressed blobs retain immutable payloads, Qdrant supplies a '
+              'rebuildable dense-retrieval projection, Valkey provides optional worker '
+              'wakeups, and scratch directories remain local operational diagnostics.'
+          )
+          new = (
+              'Content-addressed blobs retain immutable payloads, Qdrant supplies a '
+              'rebuildable dense-retrieval projection, and Valkey provides optional '
+              'worker wakeups. Secure temporary files may exist only for bounded '
+              'in-process operations; no scratch directory or local manifest is '
+              'workflow, replay, history, or corpus authority.'
+          )
+          if old not in text:
+              raise SystemExit('README authority sentence not found')
+          text = text.replace(old, new, 1)
+          marker = '## Authoritative live validation\n'
+          if marker not in text:
+              anchor = (
+                  'Explicit `DATABASE_URL`, Qdrant/Valkey endpoints and keys, blob root, '
+                  'and `FIRECRAWL_RESEARCH_PYTHON` take precedence over values loaded by '
+                  '`scripts/research-env`.\n\n'
+              )
+              section = '''## Authoritative live validation
+
+`scripts/live_validate.py` exercises public wrappers against disposable authoritative runs and derives its verdict from PostgreSQL records, immutable `BLOB_ROOT` payloads, exact-run index jobs, and the active Qdrant alias. An empty corpus or empty expected Qdrant set is not successful coverage. The smart-search resume case deliberately stops at a nonterminal `extracting` checkpoint and then restarts from persisted records and blob payloads.
+
+```bash
+# Principal smart-search, restart, Valkey-loss, worker, blob, and Qdrant checks.
+scripts/live_validate.py --profile focused --max-operations 40
+
+# Failure-path checks only.
+scripts/live_validate.py --profile failure-path --max-operations 20
+
+# Broader public-wrapper matrix.
+scripts/live_validate.py --profile full --max-operations 100
+
+# Opt in to final reports; report files are outputs, never runtime inputs.
+scripts/live_validate.py --profile focused --artifact-root ./validation-artifacts
+```
+
+Every Firecrawl subprocess, including transport retries, consumes one operation from a file-locked hard cap. The validator fails when a wrapper leaves entries in the monitored `TMPDIR`, when authoritative planning or corpus records are missing for a case that requires them, when blob verification fails, when exact-run jobs remain incomplete, or when Qdrant does not contain every expected chunk ID.
+
+'''
+              if anchor not in text:
+                  raise SystemExit('README validation insertion anchor not found')
+              text = text.replace(anchor, anchor + section, 1)
+          readme.write_text(text, encoding='utf-8')
+
+          skill = Path('SKILL.md')
+          text = skill.read_text(encoding='utf-8')
+          text = text.replace(
+              'while complete progress and scratch-directory output remain visible',
+              'while complete progress and bounded diagnostics remain visible',
+          )
+          row = '| `scripts/live_validate.py` | Run bounded authoritative wrapper, restart, blob, worker, Qdrant, and Valkey-loss validation | PostgreSQL/Qdrant-derived verdict and optional final report artifacts |\n'
+          anchor = '| `scripts/finspect` | List, replay, inspect, and retrieve bounded retained records | Bounded JSON/console output |\n'
+          if row not in text:
+              if anchor not in text:
+                  raise SystemExit('SKILL script-table anchor not found')
+              text = text.replace(anchor, anchor + row, 1)
+          skill.write_text(text, encoding='utf-8')
+
+          runbook = Path('references/operations-runbook.md')
+          text = runbook.read_text(encoding='utf-8')
+          marker = '## Authoritative live-validation campaigns\n'
+          if marker not in text:
+              text = text.rstrip() + '''
+
+## Authoritative live-validation campaigns
+
+Run live validation only after `research-db ingest-ready` succeeds and the configured Qdrant active alias is compatible with the current embedding fingerprint. The validator creates disposable PostgreSQL runs and never consumes report files, local manifests, or temporary paths as workflow state.
+
+```bash
+scripts/live_validate.py --profile focused --max-operations 40
+scripts/live_validate.py --profile failure-path --max-operations 20
+scripts/live_validate.py --profile full --max-operations 100
+```
+
+Use `--blob-root` when validation must inspect a nondefault immutable payload store. Use `--artifact-root` only to export the final `manifest.json` and `report.md`; those files are operator outputs and are never replay inputs. Each Firecrawl process attempt consumes the hard operation budget. A campaign fails closed on retained `TMPDIR` entries, missing smart-planning provenance, absent required corpus identities, invalid blob digests, incomplete exact-run index jobs, incompatible Qdrant alias/schema, incomplete Qdrant point coverage, or failure to observe the persisted nonterminal checkpoint in the restart case.
+'''
+          runbook.write_text(text + '\n', encoding='utf-8')
           PY
       - name: Format and validate
         run: |
@@ -100,7 +125,7 @@ jobs:
             scripts/test_authoritative_smart_validation.py \
             scripts/test_authoritative_live_validation_profiles.py
           git diff --check
-      - name: Commit corrections
+      - name: Commit documentation and formatting
         run: |
           if git diff --quiet; then
             exit 0
@@ -108,10 +133,13 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add \
+            README.md \
+            SKILL.md \
+            references/operations-runbook.md \
             scripts/fsearch_smart \
             scripts/live_validate.py \
             scripts/research_store/smart_orchestrator.py \
             scripts/test_authoritative_smart_validation.py \
             scripts/test_authoritative_live_validation_profiles.py
-          git commit -m 'fix(rc7): finalize wrapper-specific validator contracts'
+          git commit -m 'docs(rc7): document authoritative smart validation and recovery'
           git push origin HEAD:refactor/rc7-authoritative-smart-validation
