@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-# fsearch_smart — coverage-led PostgreSQL-authoritative research orchestrator
-#
-# Dry-run is deterministic and side-effect free. Normal execution resolves the
-# authoritative run first, persists planning through PostgreSQL, and resumes
-# exclusively from PostgreSQL records and immutable BLOB_ROOT payloads.
+"""PostgreSQL-authoritative coverage-led smart search."""
 
 from __future__ import annotations
 
@@ -15,6 +11,7 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 SCRIPT_DIR = os.environ.get("FIRECRAWL_SKILL_SCRIPT_DIR") or os.path.dirname(
     os.path.realpath(__file__)
@@ -27,15 +24,10 @@ from invocation_id import resolve_invocation_id
 from research_domain import load_model, serialize_model
 from research_domain.models import ResearchSpec
 
-CYAN = "\033[1;36m"
-RED = "\033[1;31m"
-BOLD = "\033[1m"
-RESET = "\033[0m"
 CHECKPOINT_EXIT = 75
 
 
 def resolved_research_environment() -> dict[str, str]:
-    """Resolve the Bash environment adapter without printing credentials."""
     environment = os.environ.copy()
     if environment.get("FIRECRAWL_RESEARCH_AUTO_ENV", "1") != "1":
         return environment
@@ -57,7 +49,6 @@ def resolved_research_environment() -> dict[str, str]:
 
 @contextmanager
 def applied_environment(environment: dict[str, str]):
-    """Apply the resolved adapter environment for in-process store clients."""
     previous = os.environ.copy()
     os.environ.clear()
     os.environ.update(environment)
@@ -69,41 +60,16 @@ def applied_environment(environment: dict[str, str]):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "fsearch_smart — coverage-led research acquisition through the "
-            "PostgreSQL-authoritative ResearchOrchestrator"
-        ),
-        formatter_class=argparse.RawTextHelpFormatter,
-    )
-    parser.add_argument("topic", help="The search topic or research objective")
-    parser.add_argument(
-        "--research-spec",
-        help="Validated research-spec-v1 JSON file for a new run",
-    )
-    parser.add_argument(
-        "--invocation-id",
-        help="Reuse an existing fc_<uuid> ID instead of generating one",
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("topic")
+    parser.add_argument("--research-spec")
+    parser.add_argument("--invocation-id")
     parser.add_argument(
         "--research-run-id",
         default=os.environ.get("FIRECRAWL_RESEARCH_RUN_ID", ""),
-        help="Link this operation to an explicit fr_<uuid> research run",
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print a deterministic plan without persistence or external calls",
-    )
-    parser.add_argument(
-        "--max-adaptive-cycles",
-        type=int,
-        default=None,
-        help=(
-            "Tighten the persisted policy-authorized adaptive-cycle cap; "
-            "values above the authoritative cap are rejected"
-        ),
-    )
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--max-adaptive-cycles", type=int)
     parser.add_argument(
         "--stop-after-state",
         choices=(
@@ -123,19 +89,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_spec(path: str | None, topic: str) -> tuple[ResearchSpec, str]:
-    """Load an explicit ResearchSpec or create the conservative fallback."""
     if path:
-        spec = load_model(json.loads(Path(path).read_text(encoding="utf-8")))
-        if not isinstance(spec, ResearchSpec):
+        value = load_model(json.loads(Path(path).read_text(encoding="utf-8")))
+        if not isinstance(value, ResearchSpec):
             raise ValueError("--research-spec must contain research-spec-v1")
-        return spec, "explicit"
-    return conservative_research_spec(topic, "general"), (
-        "deterministic conservative fallback"
-    )
+        return value, "explicit"
+    return conservative_research_spec(topic, "general"), "conservative fallback"
 
 
-def evaluate_budget(spec: ResearchSpec, *, run_revision: int) -> dict[str, Any]:
-    """Evaluate the versioned policy and fail closed on policy errors."""
+def evaluate_budget(spec: ResearchSpec, run_revision: int) -> dict[str, Any]:
     return DEFAULT_POLICY.evaluate(
         spec,
         spec_revision=1,
@@ -144,44 +106,31 @@ def evaluate_budget(spec: ResearchSpec, *, run_revision: int) -> dict[str, Any]:
     ).to_dict()
 
 
-def deterministic_plan(
-    topic: str,
-) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Return the side-effect-free dry-run plan."""
-    research_brief = workflow.conservative_brief(topic, "general")
-    search_plan = [
-        {
-            "query": topic,
-            "facet": "degraded_exact_objective",
-            "subquestion": topic,
-            "intended_source_class": "unspecified",
-            "expected_organizations": [],
-            "freshness_requirement": research_brief.get("time_window", "as stated"),
-            "domain_neutral": True,
-            "expected_contribution": "direct results for the exact objective",
-        }
-    ]
+def deterministic_queries(topic: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     return (
-        search_plan,
+        [
+            {
+                "query": topic,
+                "facet": "exact_objective",
+                "intended_source_class": "unspecified",
+                "expected_organizations": [],
+                "expected_contribution": "direct evidence for the stated objective",
+            }
+        ],
         {"status": "degraded", "fallback": "exact_objective_only"},
-        research_brief,
-        {"status": "not_run", "provider": "deterministic"},
     )
 
 
-def generate_search_plan(
+def generate_queries(
     topic: str,
-    *,
     max_queries: int,
     semantic_persistence: Any,
     semantic_context: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Generate a bounded plan with durable semantic-call provenance."""
-    research_brief = workflow.conservative_brief(topic, "general")
-    brief_provenance = {"status": "not_run", "provider": "deterministic"}
-    search_plan, planner_provenance = workflow.plan_queries(
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    brief = workflow.conservative_brief(topic, "general")
+    queries, provenance = workflow.plan_queries(
         topic,
-        research_brief,
+        brief,
         max_queries,
         "local",
         None,
@@ -190,224 +139,211 @@ def generate_search_plan(
         semantic_persistence=semantic_persistence,
         semantic_context=semantic_context,
     )
-    if search_plan:
-        return search_plan, planner_provenance, research_brief, brief_provenance
-
-    fallback, fallback_provenance, research_brief, brief_provenance = (
-        deterministic_plan(topic)
-    )
-    return (
-        fallback,
-        {**planner_provenance, **fallback_provenance},
-        research_brief,
-        brief_provenance,
-    )
+    if queries:
+        return queries, provenance
+    fallback, fallback_provenance = deterministic_queries(topic)
+    return fallback, {**provenance, **fallback_provenance}
 
 
-def resolve_max_adaptive_cycles(
+def canonical_plan(spec: ResearchSpec, queries: list[dict[str, Any]]) -> dict[str, Any]:
+    question_id = spec.questions[0].question_id
+    freshness = serialize_model(spec.time_window)
+    normalized = []
+    for index, item in enumerate(queries):
+        text = " ".join(str(item.get("query", "")).split())
+        if not text:
+            continue
+        source_class = str(item.get("intended_source_class") or "unspecified")
+        normalized.append(
+            {
+                "query_id": str(
+                    uuid5(NAMESPACE_URL, f"{spec.research_spec_id}:{index}:{text}")
+                ),
+                "query": text,
+                "facet": str(item.get("facet") or "objective"),
+                "target_question_ids": [str(question_id)],
+                "target_claim_ids": [],
+                "intended_source_classes": [source_class],
+                "expected_organizations": list(
+                    item.get("expected_organizations") or []
+                ),
+                "freshness_requirement": freshness,
+                "expected_contribution": str(
+                    item.get("expected_contribution") or "objective coverage"
+                ),
+                "domain_restrictions": [],
+                "negative_terms": [],
+                "priority": index + 1,
+            }
+        )
+    if not normalized:
+        raise ValueError("planner produced no usable queries")
+    return {
+        "schema_version": "search-plan-v1",
+        "research_spec_id": str(spec.research_spec_id),
+        "revision": 1,
+        "queries": normalized,
+    }
+
+
+def resolve_cycles(
     requested: int | None,
-    budget_snapshot: dict[str, Any],
+    budget: dict[str, Any],
     parser: argparse.ArgumentParser,
 ) -> int:
-    """Resolve a caller ceiling against the immutable effective cap."""
-    policy_cap = int(
-        budget_snapshot.get("effective_caps", {}).get("max_adaptive_cycles", 0)
-    )
-    if policy_cap < 1:
-        parser.error("authoritative budget has no usable adaptive-cycle allowance")
+    cap = int(budget.get("effective_caps", {}).get("max_adaptive_cycles", 0))
+    if cap < 1:
+        parser.error("authoritative budget has no adaptive-cycle allowance")
     if requested is None:
-        return policy_cap
-    if requested < 1:
-        parser.error("--max-adaptive-cycles must be at least 1")
-    if requested > policy_cap:
-        parser.error(
-            "--max-adaptive-cycles cannot exceed the authoritative policy cap "
-            f"({policy_cap})"
-        )
+        return cap
+    if requested < 1 or requested > cap:
+        parser.error(f"--max-adaptive-cycles must be between 1 and {cap}")
     return requested
 
 
-def ensure_research_run(run_id: str, topic: str, research_env: dict[str, str]) -> str:
-    """Return the explicit run or create one through the authoritative CLI."""
+def ensure_run(run_id: str, topic: str, environment: dict[str, str]) -> str:
     if run_id:
         return run_id
     result = subprocess.run(
         [os.path.join(SCRIPT_DIR, "frun"), "start", topic],
-        env=research_env,
+        env=environment,
         check=False,
         capture_output=True,
         text=True,
     )
     if result.returncode:
-        raise RuntimeError(
-            "failed to create research run: "
-            + (result.stderr.strip() or result.stdout.strip())
-        )
+        raise RuntimeError(result.stderr.strip() or "failed to create research run")
     return result.stdout.strip()
 
 
-def prepare_authoritative_run(
-    run_id: str,
-    topic: str,
-    research_env: dict[str, str],
-):
-    """Resolve the PostgreSQL run and preflight any network-capable state."""
-    if not research_env.get("DATABASE_URL"):
-        raise RuntimeError(
-            "fsearch_smart requires the authoritative PostgreSQL store; "
-            "set DATABASE_URL"
-        )
-
+def prepare_run(run_id: str, topic: str, environment: dict[str, str]):
+    if not environment.get("DATABASE_URL"):
+        raise RuntimeError("DATABASE_URL is required")
     ready = subprocess.run(
         [os.path.join(SCRIPT_DIR, "research-db"), "ingest-ready"],
-        env=research_env,
+        env=environment,
         check=False,
         capture_output=True,
         text=True,
     )
     if ready.returncode:
-        raise RuntimeError(
-            "authoritative database is not ready: "
-            + (ready.stderr.strip() or ready.stdout.strip())
-        )
-
-    resolved_run_id = ensure_research_run(run_id, topic, research_env)
+        raise RuntimeError(ready.stderr.strip() or "authoritative store is not ready")
 
     from research_store.acquisition_authority import require_authoritative_acquisition
     from research_store.config import StoreConfig
     from research_store.container import build_run_service
     from research_store.smart_orchestrator import NETWORK_ENTRY_STATES
 
+    external_id = ensure_run(run_id, topic, environment)
     config = StoreConfig.from_env()
     config.require_database()
-    run_service = build_run_service(config)
-    status = run_service.status(external_id=resolved_run_id)
+    service = build_run_service(config)
+    status = service.status(external_id=external_id)
     if status.state in NETWORK_ENTRY_STATES:
         require_authoritative_acquisition(run_id=status.id, config=config)
-    return resolved_run_id, config, run_service, status
+    return external_id, config, service, status
 
 
-def build_plan_payload(
-    spec: ResearchSpec,
-    queries: list[dict[str, Any]],
-    *,
-    planner_provenance: dict[str, Any],
-    research_brief: dict[str, Any],
-    brief_provenance: dict[str, Any],
-) -> dict[str, Any]:
-    """Build the complete PostgreSQL search-plan payload."""
-    return {
-        "schema_version": "search-plan-v1",
-        "research_spec_id": str(spec.research_spec_id),
-        "revision": 1,
-        "queries": queries,
-        "research_brief": research_brief,
-        "planner_provenance": planner_provenance,
-        "brief_provenance": brief_provenance,
-    }
-
-
-def initialize_planning_bundle(
-    *,
+def persist_provenance(
     run_service: Any,
-    run_status: Any,
+    run_id: Any,
+    planner_provenance: dict[str, Any],
+    invocation_id: str,
+) -> None:
+    with run_service.uow_factory() as uow:
+        uow.runs.append_event(
+            run_id,
+            "planning.provenance_recorded",
+            "orchestrator",
+            f"smart:planning-provenance:{run_id}:r1",
+            actor_identifier="fsearch_smart",
+            payload={
+                "planner": planner_provenance,
+                "external_invocation_id": invocation_id,
+            },
+        )
+        uow.commit()
+
+
+def initialize_bundle(
+    run_service: Any,
+    status: Any,
     topic: str,
     spec_path: str | None,
     invocation_id: str,
 ):
-    """Generate and atomically persist initial spec, budget, and plan."""
     from research_store.semantic_service import SemanticCallService
     from research_store.smart_orchestrator import persist_planning_bundle
 
-    spec, spec_provenance = load_spec(spec_path, topic)
-    budget = evaluate_budget(spec, run_revision=run_status.lifecycle_revision)
-    semantic_context = {
-        "run_id": str(run_status.id),
-        "run_revision": run_status.lifecycle_revision,
-        "stage": "planning",
-        "schema_name": "research-query-plan-v1",
-        "schema_version": 1,
-        "artifact_type": "search_plan",
-        "idempotency_key": f"smart:planner:{run_status.id}:r1",
-        "policy_version": budget["policy_version"],
-    }
+    spec, provenance = load_spec(spec_path, topic)
+    budget = evaluate_budget(spec, status.lifecycle_revision)
     semantic = SemanticCallService(run_service.uow_factory)
-    queries, planner_provenance, research_brief, brief_provenance = (
-        generate_search_plan(
-            topic,
-            max_queries=int(budget["effective_caps"]["max_search_branches"]),
-            semantic_persistence=semantic,
-            semantic_context=semantic_context,
-        )
+    queries, planner_provenance = generate_queries(
+        topic,
+        int(budget["effective_caps"]["max_search_branches"]),
+        semantic,
+        {
+            "run_id": str(status.id),
+            "run_revision": status.lifecycle_revision,
+            "stage": "planning",
+            "schema_name": "research-query-plan-v1",
+            "schema_version": 1,
+            "artifact_type": "search_plan",
+            "idempotency_key": f"smart:planner:{status.id}:r1",
+            "policy_version": budget["policy_version"],
+        },
     )
-    plan = build_plan_payload(
-        spec,
-        queries,
-        planner_provenance=planner_provenance,
-        research_brief=research_brief,
-        brief_provenance=brief_provenance,
-    )
-    plan["invocation_id"] = invocation_id
     bundle = persist_planning_bundle(
         run_service,
-        run_status.id,
+        status.id,
         spec=spec,
         budget=budget,
-        plan=plan,
-        spec_revision=1,
-        run_revision=run_status.lifecycle_revision,
+        plan=canonical_plan(spec, queries),
+        run_revision=status.lifecycle_revision,
     )
-    return bundle, spec_provenance
+    persist_provenance(run_service, status.id, planner_provenance, invocation_id)
+    return bundle, provenance
 
 
-def execute_orchestrator(
-    run_id: str,
+def execute(
+    external_id: str,
+    config: Any,
     bundle: Any,
-    max_adaptive_cycles: int,
-    store_config: Any,
-    *,
-    stop_after_state: str | None = None,
+    cycles: int,
+    stop_after_state: str | None,
 ):
-    """Execute or resume from the state committed in PostgreSQL."""
     from research_store.orchestrator import OrchestratorConfig
     from research_store.smart_orchestrator import ResumableResearchOrchestrator
 
-    orchestrator_config = OrchestratorConfig(
-        execution_mode="autonomous_local",
-        budget_policy_version=bundle.budget["policy_version"],
-        max_adaptive_cycles=max_adaptive_cycles,
-    )
     orchestrator = ResumableResearchOrchestrator.build(
-        store_config,
-        orchestrator_config=orchestrator_config,
+        config,
+        orchestrator_config=OrchestratorConfig(
+            execution_mode="autonomous_local",
+            budget_policy_version=bundle.budget["policy_version"],
+            max_adaptive_cycles=cycles,
+        ),
     )
     return orchestrator.run_from_external_id(
-        run_id,
+        external_id,
         spec=serialize_model(bundle.spec),
         search_plan=bundle.plan,
-        max_adaptive_cycles=max_adaptive_cycles,
+        max_adaptive_cycles=cycles,
         context={
-            "spec_id": str(bundle.spec_row_id),
-            "spec_revision": bundle.spec_revision,
-            "search_plan_id": str(bundle.plan_row_id),
-            "search_plan_revision": bundle.plan_revision,
-            "authoritative_budget": bundle.budget,
-            "_stop_after_state": stop_after_state,
+            ContextKey: value
+            for ContextKey, value in {
+                "spec_id": str(bundle.spec_row_id),
+                "spec_revision": bundle.spec_revision,
+                "search_plan_id": str(bundle.plan_row_id),
+                "search_plan_revision": bundle.plan_revision,
+                "authoritative_budget": bundle.budget,
+                "_stop_after_state": stop_after_state,
+            }.items()
         },
     )
 
 
-def dry_run_payload(
-    *,
-    topic: str,
-    invocation_id: str,
-    spec: ResearchSpec,
-    budget: dict[str, Any],
-    max_adaptive_cycles: int,
-) -> dict[str, Any]:
-    queries, planner_provenance, research_brief, brief_provenance = (
-        deterministic_plan(topic)
-    )
+def dry_run(topic: str, invocation_id: str, spec: ResearchSpec, budget: dict[str, Any]):
+    queries, provenance = deterministic_queries(topic)
     return {
         "schema_version": "authoritative-smart-search-plan-v1",
         "mode": "dry_run",
@@ -416,13 +352,8 @@ def dry_run_payload(
         "research_spec": serialize_model(spec),
         "budget_snapshot": budget,
         "planner": "orchestrator",
-        "planner_provenance": planner_provenance,
-        "research_brief": research_brief,
-        "brief_provenance": brief_provenance,
-        "strategy": {
-            "acquisition_mode": "coverage_led_orchestrator",
-            "max_adaptive_cycles": max_adaptive_cycles,
-        },
+        "planner_provenance": provenance,
+        "strategy": {"acquisition_mode": "coverage_led_orchestrator"},
         "queries": queries,
     }
 
@@ -430,131 +361,59 @@ def dry_run_payload(
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    topic = args.topic
-
     try:
         invocation_id = resolve_invocation_id(args.invocation_id)
     except ValueError as exc:
         parser.error(str(exc))
 
-    # Dry-run deliberately resolves before environment sourcing, subprocesses,
-    # database access, model calls, Qdrant, Valkey, or Firecrawl construction.
     if args.dry_run:
         try:
-            spec, _provenance = load_spec(args.research_spec, topic)
-            budget = evaluate_budget(spec, run_revision=0)
+            spec, _ = load_spec(args.research_spec, args.topic)
+            budget = evaluate_budget(spec, 0)
+            cycles = resolve_cycles(args.max_adaptive_cycles, budget, parser)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            parser.error(f"invalid dry-run planning input: {exc}")
-        max_cycles = resolve_max_adaptive_cycles(
-            args.max_adaptive_cycles, budget, parser
-        )
-        print(
-            json.dumps(
-                dry_run_payload(
-                    topic=topic,
-                    invocation_id=invocation_id,
-                    spec=spec,
-                    budget=budget,
-                    max_adaptive_cycles=max_cycles,
-                ),
-                indent=2,
-                sort_keys=True,
-            )
-        )
+            parser.error(str(exc))
+        payload = dry_run(args.topic, invocation_id, spec, budget)
+        payload["strategy"]["max_adaptive_cycles"] = cycles
+        print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
     try:
-        research_env = resolved_research_environment()
-    except (OSError, subprocess.SubprocessError) as exc:
-        parser.error(f"failed to resolve research environment: {exc}")
-
-    try:
-        with applied_environment(research_env):
-            run_id, store_config, run_service, run_status = prepare_authoritative_run(
-                args.research_run_id or "", topic, research_env
+        environment = resolved_research_environment()
+        with applied_environment(environment):
+            external_id, config, service, status = prepare_run(
+                args.research_run_id, args.topic, environment
             )
+            from research_store.smart_orchestrator import load_planning_bundle
 
-            from research_store.smart_orchestrator import (
-                SmartResumeError,
-                TERMINAL_STATES,
-                load_planning_bundle,
-            )
-
-            if run_status.state in TERMINAL_STATES:
-                if args.research_spec:
-                    parser.error("--research-spec cannot replace a terminal run's records")
-                print(f"{CYAN}=== Smart Search Orchestrator ==={RESET}")
-                print(f"{BOLD}Run ID:{RESET}      {run_id}")
-                print(f"{BOLD}Run state:{RESET}   {run_status.state}")
-                print("Orchestrator outcome: resumed")
-                print(f"Final state: {run_status.state}")
-                print("Wave count: 0")
-                print("Successful URLs: 0")
-                return 0
-
-            try:
-                bundle = load_planning_bundle(run_service, run_status.id)
-            except SmartResumeError:
-                raise
-
-            spec_provenance = "persisted authoritative records"
+            bundle = load_planning_bundle(service, status.id)
+            source = "persisted"
             if bundle is None:
-                if run_status.state not in {"created", "planning"}:
-                    raise SmartResumeError(
-                        f"run in {run_status.state} has no complete persisted planning tuple"
+                if status.state not in {"created", "planning"}:
+                    raise RuntimeError(
+                        f"run in {status.state} has no complete planning tuple"
                     )
-                bundle, spec_provenance = initialize_planning_bundle(
-                    run_service=run_service,
-                    run_status=run_status,
-                    topic=topic,
-                    spec_path=args.research_spec,
-                    invocation_id=invocation_id,
+                bundle, source = initialize_bundle(
+                    service,
+                    status,
+                    args.topic,
+                    args.research_spec,
+                    invocation_id,
                 )
             elif args.research_spec:
-                supplied, _ = load_spec(args.research_spec, topic)
+                supplied, _ = load_spec(args.research_spec, args.topic)
                 if serialize_model(supplied) != serialize_model(bundle.spec):
-                    parser.error(
-                        "--research-spec conflicts with the authoritative persisted spec"
-                    )
-
-            max_cycles = resolve_max_adaptive_cycles(
-                args.max_adaptive_cycles, bundle.budget, parser
+                    parser.error("--research-spec conflicts with persisted records")
+            cycles = resolve_cycles(args.max_adaptive_cycles, bundle.budget, parser)
+            result = execute(
+                external_id, config, bundle, cycles, args.stop_after_state
             )
-
-            print(f"{CYAN}=== Smart Search Orchestrator ==={RESET}")
-            print(f"{BOLD}Topic:{RESET}       {bundle.spec.objective}")
-            print(f"{BOLD}Invocation:{RESET}  {invocation_id}")
-            print(f"{BOLD}Run ID:{RESET}      {run_id}")
-            print(f"{BOLD}Run state:{RESET}   {run_status.state}")
-            print(
-                f"{BOLD}Budget:{RESET}      "
-                f"{bundle.budget.get('policy_version', 'unknown')} / "
-                f"{bundle.budget.get('selected_tier', 'unknown')} "
-                f"({spec_provenance})"
-            )
-            print(f"{BOLD}Strategy:{RESET}    coverage-led resumable orchestrator")
-            print()
-            print(f"{BOLD}Authoritative Search Plan:{RESET}")
-            for index, entry in enumerate(bundle.plan.get("queries", []), 1):
-                print(
-                    f"  {index}. {CYAN}{entry.get('query', '')}{RESET} "
-                    f"[{entry.get('facet', '')}]"
-                )
-            print()
-
-            result = execute_orchestrator(
-                run_id,
-                bundle,
-                max_cycles,
-                store_config,
-                stop_after_state=args.stop_after_state,
-            )
-    except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
-    except Exception as exc:
-        print(f"{RED}Orchestrator failed: {exc}{RESET}", file=sys.stderr)
-        raise
 
+    print(f"Topic: {bundle.spec.objective}")
+    print(f"Run ID: {external_id}")
+    print(f"Planning source: {source}")
     print(f"Orchestrator outcome: {result.outcome}")
     print(f"Final state: {result.final_state}")
     print(f"Wave count: {result.wave_count}")
@@ -562,7 +421,7 @@ def main(argv=None) -> int:
     if result.outcome == "checkpoint":
         return CHECKPOINT_EXIT
     if result.error:
-        print(f"{RED}Error: {result.error}{RESET}", file=sys.stderr)
+        print(f"Error: {result.error}", file=sys.stderr)
         return 1
     return 0
 
