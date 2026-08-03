@@ -1,16 +1,16 @@
 name: RC7 one-time corrective formatting
 
 on:
-  push:
+  pull_request:
     branches:
-      - refactor/rc7-authoritative-smart-validation
+      - main
 
 permissions:
   contents: write
 
 jobs:
   correct-and-format:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.head.ref == 'refactor/rc7-authoritative-smart-validation' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -28,7 +28,6 @@ jobs:
 
           path = Path('scripts/live_validate.py')
           text = path.read_text(encoding='utf-8')
-
           replacements = [
               (
                   '''        qdrant_api_key: str | None = None,\n    ) -> None:\n        self.database_url = database_url\n        self.qdrant_url = qdrant_url\n        self.qdrant_api_key = qdrant_api_key\n''',
@@ -79,13 +78,11 @@ jobs:
                   '''    parser.add_argument("--qdrant-api-key", default=os.environ.get("QDRANT_API_KEY"))\n    parser.add_argument(\n        "--blob-root",\n        default=os.environ.get("BLOB_ROOT", "data/blobs"),\n    )\n    parser.add_argument("--max-operations", type=int, default=40)\n''',
               ),
           ]
-
           for old, new in replacements:
               count = text.count(old)
               if count != 1:
                   raise SystemExit(f'expected one replacement, found {count}: {old[:80]!r}')
               text = text.replace(old, new)
-
           path.write_text(text, encoding='utf-8')
           PY
       - name: Format and validate
