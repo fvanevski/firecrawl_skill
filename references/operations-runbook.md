@@ -2,7 +2,7 @@
 
 # Operations Runbook
 
-Complete runbook for deploying, operating, debugging, benchmarking, and recovering the Firecrawl Research Skill. PostgreSQL is the sole workflow and corpus authority. Blob storage holds immutable payload bytes, Qdrant is a rebuildable retrieval projection, Valkey is transient coordination, and scratch files are disposable diagnostics.
+Operational procedures for the PostgreSQL-authoritative Firecrawl Research Skill.
 
 ## Table of contents
 
@@ -22,30 +22,19 @@ Complete runbook for deploying, operating, debugging, benchmarking, and recoveri
 14. [Destructive commands](#14-destructive-commands)
 15. [Recovery drill checklist](#15-recovery-drill-checklist)
 
----
-
 ## 1. Architecture overview
 
-| Layer | Component | Role | Recovery rule |
-| --- | --- | --- | --- |
-| **Authoritative state** | PostgreSQL | Runs, invocations, events, corpus, budgets, evidence, audits, jobs | Restore first; never infer state from another layer |
-| **Immutable payloads** | Content-addressed blob root | Raw source bytes referenced by snapshots | Restore with PostgreSQL at the same boundary |
-| **Retrieval projection** | Qdrant | Fingerprinted dense-vector collections | Rebuild from PostgreSQL chunks |
-| **Transient coordination** | Valkey | Wakeups and bounded cache | Loss is safe; workers poll PostgreSQL |
-| **Diagnostics** | Scratch directories | Human-readable acquisition output and identity reports | Delete freely; never read as authority |
+The deployed release implements Target A.
 
-Governing rules:
+| Layer | Component | Contract | Recovery |
+|---|---|---|---|
+| Authoritative metadata and workflow | PostgreSQL | Runs, invocations, transitions, provenance, corpus identities, evidence, audits, jobs | Restore first |
+| Immutable payload bytes | `BLOB_ROOT` | Content-addressed provider bytes referenced by PostgreSQL | Restore with the matching PostgreSQL boundary |
+| Dense retrieval | Qdrant | Fingerprinted rebuildable projection behind `research_chunks_active` | Rebuild from PostgreSQL chunks |
+| Coordination | Valkey | Optional wakeups and bounded transient state | Recreate; workers poll PostgreSQL |
+| Process-local storage | Secure ephemeral files | Bounded implementation details only | Delete; never use as authority |
 
-1. PostgreSQL is the only workflow and metadata authority.
-2. Blob bytes are immutable and content-addressed.
-3. Qdrant is rebuilt, reconciled, and switched through a stable alias.
-4. Valkey never owns durable work.
-5. Scratch output is diagnostic only.
-6. Run transitions are compare-and-swap mutations with immutable ledgers.
-7. Wrappers validate the run before network acquisition when persistence is enabled.
-8. Enabled persistence is fail-closed.
-9. Model artifacts are schema-validated before acceptance.
-10. No remote fallback occurs without explicit configuration.
+Target A deliberately does not store provider payload bytes in PostgreSQL. A future PostgreSQL-payload design requires a separate schema, migration, capacity, backup, and rollback plan.
 
 ## 2. Service boundaries
 
@@ -53,59 +42,50 @@ Governing rules:
 
 Authoritative for:
 
-- `research_runs`, transitions, events, and invocations;
-- sources, snapshots, documents, blocks, chunks, and run-asset links;
-- ResearchSpec, budgets, search plans, candidates, coverage, claims, and evidence;
-- semantic calls, artifacts, audits, terminal decisions, telemetry, and cache metadata;
+- `research_runs`, lifecycle revisions, transitions, events, and invocations;
+- search responses, stable candidates, extraction attempts, sources, snapshots, documents, derivations, chunks, and run-asset links;
+- research specifications, budgets, coverage, claims, evidence, semantic provenance, audits, and terminal decisions;
 - index definitions, embedding manifests, jobs, leases, and worker heartbeats.
 
-Never hand-edit append-only ledgers. Use service commands with the current lifecycle revision and a stable idempotency key.
+Never hand-edit append-only ledgers. Use service commands with current revisions and stable idempotency keys.
 
-### Blob root
+### `BLOB_ROOT`
 
-The blob root contains immutable payload bytes identified by SHA-256. PostgreSQL snapshot rows reference these hashes. A file without a row is an orphan; a row without a valid file is corruption. Run `verify-blobs` and `doctor` after restore.
+Stores immutable payload bytes by digest. PostgreSQL snapshot rows carry the digest and byte length. A referenced missing or invalid blob is corruption; an unreferenced blob is a reportable orphan. Verify after backup, restore, and migration.
 
 ### Qdrant
 
-Qdrant contains only the dense-retrieval projection. Physical collections are fingerprinted; `research_chunks_active` is the stable query alias. Collection contents cannot recreate run, corpus, or provenance state.
+Contains only dense vectors and payload necessary for retrieval projection. The active alias must target the exact configured embedding fingerprint and compatible schema. Qdrant cannot recreate workflow, provenance, or provider bytes.
 
 ### Valkey
 
-Valkey provides wakeups and bounded cache entries. Workers also poll PostgreSQL, so lost messages do not strand jobs. Clearing Valkey must not alter run or corpus truth.
+Provides wakeups and bounded transient coordination. Loss may increase latency but cannot lose durable work.
 
-### Local model endpoints
+### Firecrawl and model endpoints
 
-Embedding and reranking endpoints must match the configured identity and dimension. Generative endpoints are used only in explicit semantic stages. Endpoint unavailability remains visible; it is not silently replaced.
+A supported acquisition validates PostgreSQL, schema, privileges, blob durability, and run eligibility before constructing or invoking Firecrawl. Endpoint failures are explicit. No remote or non-persistent fallback is permitted.
 
 ## 3. Execution modes
 
-### `agent_led`
+- `agent_led`: the host agent supplies semantic decisions; deterministic services validate and persist them.
+- `autonomous_local`: configured local models produce versioned semantic artifacts.
+- `deterministic_debug`: fixtures replace semantic calls for reproducible tests.
 
-A host agent supplies semantic artifacts. The system validates and persists them but does not claim a local model call occurred.
-
-### `autonomous_local`
-
-The configured local model is semantic authority. Model, revision, prompt version, request hash, response metadata, and validated artifacts are persisted.
-
-### `deterministic_debug`
-
-Fixtures drive semantic decisions without network model calls. This mode is for reproducible tests and diagnostics, not production evidence claims.
-
-Change mode only through `run-mode-change`, with current revision, requester, approver, and reason.
+All normal modes share the same authoritative persistence boundary. `fsearch_smart --dry-run` is planning-only and performs no database or network writes.
 
 ## 4. Deployment
 
 ### 4.1 Prerequisites
 
 - PostgreSQL 16 or compatible current server;
+- writable durable `BLOB_ROOT`;
 - Qdrant compatible with the pinned client;
-- Valkey with authenticated access;
-- Python environment from `requirements-research-store.txt`;
-- Firecrawl Node CLI for `fsearch` and `fscrape`;
-- configured embedding and reranker endpoints;
-- shared Docker network `agent-search` for the supplied container layouts.
+- optional Valkey;
+- Python dependencies from `requirements-research-store.txt`;
+- Firecrawl Node CLI on `PATH`;
+- configured embedding and reranking endpoints.
 
-### 4.2 Environment setup
+### 4.2 Environment
 
 ```bash
 cd "<skill-root>"
@@ -113,30 +93,22 @@ export FIRECRAWL_RESEARCH_PYTHON="<skill-root>/.venv-research-store/bin/python"
 source scripts/research-env
 ```
 
-Explicit environment variables take precedence over the repository-root `.env`. Never print resolved secrets.
+Explicit environment variables override repository defaults. Never print secrets.
 
-### 4.3 Clean database initialization
+### 4.3 Initialize
 
-This PostgreSQL-only baseline intentionally requires a clean store. Existing databases from an earlier schema line are not upgraded.
+The current clean schema head is `0038_postgres_authority`.
 
 ```bash
-scripts/reset-firecrawl-research
+scripts/research-db migrate
 scripts/research-db status
 scripts/research-db ingest-ready
 scripts/research-db doctor
 ```
 
-Expected schema head:
-
-```text
-0038_postgres_authority
-```
-
-The reset command is destructive and must display guarded PostgreSQL, Qdrant, Valkey, and blob targets before deletion.
+A database from an unsupported older lineage must be handled according to `migration-guide.md`; do not manually stamp it.
 
 ### 4.4 Worker service
-
-Production should run the persistent index worker through `firecrawl-research-indexer.service`.
 
 ```bash
 systemctl --user daemon-reload
@@ -144,7 +116,7 @@ systemctl --user enable --now firecrawl-research-indexer.service
 systemctl --user --no-pager --full status firecrawl-research-indexer.service
 ```
 
-Equivalent foreground command:
+Foreground equivalent:
 
 ```bash
 scripts/research-db worker \
@@ -154,93 +126,90 @@ scripts/research-db worker \
   --max-attempts 5
 ```
 
-### 4.5 Persistence modes
+### 4.5 Acquisition smoke test
 
-| Mode | Behavior |
-| --- | --- |
-| `on` | Requires a healthy store and a valid research run before persistent acquisition; fails closed |
-| `auto` | Persists when `DATABASE_URL` resolves; otherwise permits scratch-only acquisition |
-| `off` | Produces scratch output only; no database, blob, job, or Qdrant writes |
+```bash
+RUN_ID="$(scripts/frun start 'Deployment smoke test')"
 
-Supported acquisition is fail-closed and requires `DATABASE_URL`, durable blob storage, and a valid research run before provider execution.
+scripts/fscrape 'https://example.com' \
+  --research-run-id "$RUN_ID" \
+  --json
+
+scripts/research-db doctor
+scripts/frun finish "$RUN_ID" --outcome satisfied
+scripts/frun status "$RUN_ID"
+```
+
+Any failed authoritative preflight must occur before Firecrawl or network invocation.
 
 ## 5. Configuration variables
 
-### 5.1 Core persistence
+### 5.1 Core
 
 | Variable | Purpose |
-| --- | --- |
+|---|---|
 | `FIRECRAWL_RESEARCH_PYTHON` | Python executable used by `research-db` |
-| `DATABASE_URL` | PostgreSQL connection URL |
-| `BLOB_ROOT` | Content-addressed blob directory |
-| `FIRECRAWL_RESEARCH_RUN_ID` | Default PostgreSQL `fr_<uuid>` for wrappers |
+| `DATABASE_URL` | Authoritative PostgreSQL connection |
+| `BLOB_ROOT` | Immutable content-addressed payload root |
+| `FIRECRAWL_RESEARCH_RUN_ID` | Default `fr_<uuid>` for acquisition wrappers |
+| `FIRECRAWL_INVOCATION_ID` | Deliberate retry invocation default |
+| `FIRECRAWL_API_URL` | Firecrawl endpoint |
+| `FIRECRAWL_API_KEY` | Firecrawl credential |
 
-### 5.2 Vector retrieval
+### 5.2 Qdrant and models
 
 | Variable | Purpose |
-| --- | --- |
+|---|---|
 | `QDRANT_URL` | Qdrant endpoint |
 | `QDRANT_API_KEY` | Qdrant credential |
-| `QDRANT_ALIAS` | Stable active alias, normally `research_chunks_active` |
+| `QDRANT_ALIAS` | Stable active alias |
 | `EMBEDDING_URL` | OpenAI-compatible embedding endpoint |
-| `EMBEDDING_API_KEY` | Embedding endpoint credential |
-| `EMBEDDING_MODEL` | Model name sent to the endpoint |
-| `EMBEDDING_REVISION` | Immutable model/revision identity |
+| `EMBEDDING_API_KEY` | Embedding credential |
+| `EMBEDDING_MODEL` | Embedding model identity |
+| `EMBEDDING_REVISION` | Immutable embedding revision |
 | `EMBEDDING_DIMENSION` | Expected vector dimension |
-| `RERANKER_URL` | Reranker endpoint |
-| `RERANKER_API_KEY` | Reranker credential |
-| `RERANKER_MODEL` | Reranker model identity |
-| `RERANKER_CANDIDATE_LIMIT` | Maximum reranking candidate count |
+| `RERANKER_URL` | Reranking endpoint |
+| `RERANKER_API_KEY` | Reranking credential |
+| `RERANKER_MODEL` | Reranker identity |
+| `FIRECRAWL_LLM_LOCAL_BASE_URL` | Local generative endpoint |
+| `FIRECRAWL_LLM_LOCAL_MODEL` | Local model identity |
+| `FIRECRAWL_AUDIT_AUTO_SEMANTIC` | Automatic semantic audit control |
 
-### 5.3 Transient coordination
-
-| Variable | Purpose |
-| --- | --- |
-| `VALKEY_URL` | Authenticated Valkey URL |
-
-### 5.4 Model endpoints
+### 5.3 Coordination and derivations
 
 | Variable | Purpose |
-| --- | --- |
-| `FIRECRAWL_LLM_LOCAL_BASE_URL` | Local OpenAI-compatible generative endpoint |
-| `FIRECRAWL_LLM_LOCAL_MODEL` | Local model name |
-| `FIRECRAWL_AUDIT_AUTO_SEMANTIC` | Enable automatic semantic audit stages |
-
-### 5.5 Derivation versions
-
-| Variable | Purpose |
-| --- | --- |
+|---|---|
+| `VALKEY_URL` | Optional Valkey endpoint |
 | `PARSER_VERSION` | Active parser identity |
-| `NORMALIZATION_VERSION` | Active normalization identity |
+| `NORMALIZATION_VERSION` | Active normalizer identity |
 | `CHUNKER_VERSION` | Active chunker identity |
-| `TOKENIZER_NAME` | Tokenizer used for bounded passages and budgets |
+| `TOKENIZER_NAME` | Tokenizer for bounded passages and budgets |
 
 ## 6. Backup and restore
 
-### 6.1 Backup procedure
+### 6.1 Backup
 
-Capture PostgreSQL and blobs at one recovery boundary:
+Stop writers or establish an equivalent consistent boundary.
 
 ```bash
 systemctl --user stop firecrawl-research-indexer.service
 pg_dump --format=custom --file=research.pg.dump "$DATABASE_URL"
 find "$BLOB_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > blob-inventory.sha256
 scripts/research-db status > status.json
-scripts/research-db doctor > doctor.json
 scripts/research-db index-list > indexes.json
 systemctl --user start firecrawl-research-indexer.service
 ```
 
-Qdrant snapshots are optional acceleration, not authority. Valkey does not require backup.
+PostgreSQL and `BLOB_ROOT` must be restored from the same logical boundary. Qdrant snapshots are optional acceleration. Valkey does not require backup.
 
-### 6.2 Restore procedure
+### 6.2 Restore
 
-1. Stop writers and the index worker.
+1. Stop writers and workers.
 2. Restore PostgreSQL.
-3. Restore the matching blob root.
-4. Verify hashes and schema.
-5. Rebuild the current Qdrant collection.
-6. Drain jobs, reconcile points, activate the index.
+3. Restore the matching `BLOB_ROOT`.
+4. Verify schema and blobs.
+5. Rebuild and reconcile Qdrant.
+6. Activate only a complete compatible index.
 7. Restart the worker and run `doctor`.
 
 ```bash
@@ -253,83 +222,45 @@ scripts/research-db index-activate '<index-id>'
 scripts/research-db doctor
 ```
 
-### 6.3 Failed rollout rollback
-
-Restore PostgreSQL and blobs from the captured boundary, then rebuild or switch Qdrant. Do not attempt to reconstruct database state from scratch output or vectors.
-
 ## 7. Qdrant rebuild
-
-### 7.1 Build a new index
 
 ```bash
 scripts/research-db index-list
 scripts/research-db index-build --current-config --all
 scripts/research-db worker --once --batch-size 64
-```
-
-### 7.2 Verify before activation
-
-```bash
 scripts/research-db reconcile-qdrant
 scripts/research-db doctor
-```
-
-Activation requires compatible schema, complete manifests, zero missing/orphaned points, and a successful probe.
-
-### 7.3 Activate
-
-```bash
 scripts/research-db index-activate '<index-id>'
 ```
 
-### 7.4 Rollback
+Activation requires complete manifests, compatible schema, zero missing or orphaned expected points, and a successful probe. Preserve the prior collection for rollback.
 
 ```bash
 scripts/research-db index-rollback '<prior-index-id>'
-```
-
-### 7.5 Prune old collections
-
-```bash
 scripts/research-db index-prune --dry-run
-scripts/research-db index-prune --dry-run --keep-last 2
-scripts/research-db index-prune --force --index-id '<exact-index-id>'
 ```
 
-Never prune the active index. Review the dry run and specify an exact target.
-
-### 7.6 Interrupted cutover recovery
-
-Read `index-list`, `reconcile-qdrant`, and `doctor`. Retry activation with the same target. If the alias points to a verified prior collection, retain it until the new activation finalizes.
+Never prune the active or only verified rollback index.
 
 ## 8. Valkey loss handling
 
-### 8.1 Why it is safe
-
-Job and run truth lives in PostgreSQL. The worker alternates bounded Valkey waits with PostgreSQL polling.
-
-### 8.2 Recovery
+Job truth remains in PostgreSQL. Recreate or restart Valkey, then restart the worker.
 
 ```bash
-# Restart or recreate Valkey, then verify:
 scripts/research-db doctor
 systemctl --user restart firecrawl-research-indexer.service
 ```
 
-No database repair is required solely because Valkey was lost.
-
-### 8.3 When to investigate
-
-Investigate repeated authentication errors, cache poisoning, unbounded memory growth, or worker latency that persists despite healthy PostgreSQL polling.
+No corpus, workflow, or job repair is required solely because Valkey was lost.
 
 ## 9. Endpoint restart
 
-### 9.1 Embedding or reranker restart
+For embedding or reranking outages:
 
-1. Stop the worker if the endpoint will be unavailable for an extended interval.
-2. Restart the endpoint with the same model identity.
-3. Verify `endpoint-health` and `doctor`.
-4. Restart the worker and allow retryable jobs to drain.
+1. stop the worker for an extended outage;
+2. restart the endpoint with the same model identity;
+3. run `endpoint-health`, `resource-status`, and `doctor`;
+4. restart the worker and drain retryable jobs.
 
 ```bash
 scripts/research-db endpoint-health
@@ -337,240 +268,160 @@ scripts/research-db resource-status
 scripts/research-db doctor
 ```
 
-A model/revision/dimension change requires a new index definition and collection.
+A model revision or vector-dimension change requires a new index definition and collection.
 
-### 9.2 Qdrant restart
-
-Restart Qdrant, then run `reconcile-qdrant`. Rebuild if the collection or points are missing.
-
-### 9.3 PostgreSQL restart
-
-Stop writers, restart PostgreSQL, verify `status` and `ingest-ready`, then restart the worker. Stale leases are reclaimed through normal lease policy.
-
-### 9.4 Complete endpoint outage
-
-Recover PostgreSQL first, then blobs, Qdrant, Valkey, and model endpoints. Resume work only after `doctor` reports a current schema and healthy authority boundary.
+For PostgreSQL restart, stop writers, restart PostgreSQL, verify `status` and `ingest-ready`, then restart the worker. For Qdrant restart, reconcile and rebuild if needed.
 
 ## 10. Interrupted-run recovery
 
-### 10.1 State machine basics
-
-Normal successful path:
-
-```text
-created -> planning -> corpus_review -> acquiring
--> extracting -> indexing -> coverage_review
--> synthesizing -> validating -> completed
-```
-
-`WorkflowOperationService` advances acquisition boundaries idempotently. `frun finish` performs the final indexed-asset check and permitted terminal progression.
-
-### 10.2 Diagnose
-
 ```bash
 scripts/research-db run-status 'fr_<uuid>'
+scripts/finspect invocations --run 'fr_<uuid>'
 scripts/research-db doctor
 ```
 
-Record the current state and lifecycle revision before acting.
+Retry uncertain identical input with its original idempotency key and invocation identity. A stale lifecycle revision requires a fresh status read before any new mutation. Do not delete failed calls or edit ledger rows.
 
-### 10.3 Forward repair
-
-Retry an uncertain command with the same idempotency key. If the revision changed, inspect status before issuing a genuinely new command.
-
-```bash
-scripts/research-db run-transition 'fr_<uuid>' planning \
-  --expected-revision 0 \
-  --idempotency-key 'stable-command-id'
-```
-
-### 10.4 Reopen a terminal run
+Reopen terminal work explicitly:
 
 ```bash
 scripts/frun reopen 'fr_<uuid>' --reason 'additional evidence required'
 ```
 
-Reopen records a new revision and invalidates stale semantic artifacts without deleting provenance.
-
-### 10.5 Cancel a run
+Cancel explicitly:
 
 ```bash
 scripts/frun cancel 'fr_<uuid>' --reason 'operator request'
 ```
 
-### 10.6 Semantic call recovery
-
-Do not delete a failed or interrupted call. Finalize it as failed or retry the stage with the documented idempotency key and current revision.
-
 ## 11. PostgreSQL workflow recovery
 
-### 11.1 Wrapper preflight
+`fsearch`, `fscrape`, `fsearch_smart`, and `finspect scrape-candidates` record invocation state directly through PostgreSQL services. Successful completion is determined from committed authoritative records; no file-mediated completion handoff exists.
 
-Persistent wrappers require an existing nonterminal run. They call the internal boundary before network work:
-
-```bash
-scripts/research-db run-operation-start \
-  'fr_<uuid>' 'fc_<uuid>' extraction.batch \
-  --input-json '{"urls":["https://example.com"]}'
-```
-
-Normal operators use `fscrape` or `fsearch`; the internal command exists for testing and recovery.
-
-### 11.2 Wrapper completion
-
-After corpus persistence, wrappers report the `_corpus.json` diagnostic manifest to the boundary:
+Diagnose:
 
 ```bash
-scripts/research-db run-operation-finish \
-  'fr_<uuid>' 'fc_<uuid>' \
-  --status complete \
-  --corpus-manifest '/tmp/firecrawl_scratch/fc_<uuid>/scrape/_corpus.json'
+scripts/research-db run-status 'fr_<uuid>'
+scripts/finspect attempts --run 'fr_<uuid>'
+scripts/research-db verify-blobs
+scripts/research-db doctor
 ```
 
-The manifest supplies committed identities only. PostgreSQL remains the source of truth.
+Replay retained search results without provider execution:
 
-### 11.3 Failed operation
+```bash
+scripts/finspect search-responses --run 'fr_<uuid>'
+scripts/finspect replay-search '<search-response-uuid>'
+```
 
-A wrapper trap records failure against the existing invocation. Retry the operation with a new external invocation ID; do not reuse a terminal invocation ID for different input.
+Select stable candidates:
 
-### 11.4 Explicit JSON exports
+```bash
+scripts/finspect scrape-candidates '<candidate-uuid>' \
+  --idempotency-key '<stable-key>'
+```
+
+Explicit exports are presentation outputs only:
 
 ```bash
 scripts/research-db export-invocation 'fc_<uuid>' --output invocation.json
 scripts/research-db export-run 'fr_<uuid>' --output run.json
 ```
 
-These are explicit one-time operations. JSON output is not consumed as workflow authority.
-
 ## 12. Benchmarking
-
-### 12.1 Run a benchmark campaign
 
 ```bash
 scripts/research-db benchmark run \
   --dataset tests/fixtures/benchmark/benchmark-v2.json \
   --output benchmark-results.json
-```
 
-Exit code `0` means `go` or `go_with_conditions`; exit code `2` means `no_go`. Read the JSON outcome.
-
-### 12.2 View results
-
-```bash
 scripts/research-db benchmark results --results-path benchmark-results.json
-```
 
-### 12.3 Generate a report
-
-```bash
 scripts/research-db benchmark report \
   --results-path benchmark-results.json \
   --output benchmark-report.md
 ```
 
-### 12.4 Benchmark requirements
-
-Use fixed versioned inputs, explicit execution mode, measured telemetry, and retained environment metadata. Never label placeholder or simulated metrics as production evidence.
+Use versioned inputs, explicit execution mode, measured telemetry, and retained environment metadata. Do not label simulated metrics as production evidence.
 
 ## 13. Release evidence
 
-### 13.1 Manifest contents
+CI must test the exact candidate SHA and record:
 
-Exact-head evidence binds candidate SHA, workflow run, required job conclusions, environment identity, artifact digest, and source state.
-
-### 13.2 Required CI jobs
-
-- release invariants on Python 3.11 and 3.12;
-- full tests on Python 3.11 and 3.12;
-- strict campaign contract tests;
 - Ruff lint and formatting;
-- exact-head evidence generation for release candidates.
+- Python 3.11 and 3.12 results;
+- documentation/parser contracts;
+- disposable PostgreSQL, Qdrant, Valkey, worker, and recovery contracts;
+- exact-head evidence artifact and digest.
 
-### 13.3 Candidate discipline
-
-Any code or configuration change after validation invalidates the evidence. Generate evidence only from the exact candidate SHA and never move an approved release tag.
-
-### 13.4 Artifact store
-
-Retain the evidence manifest and workflow artifact digest. Do not substitute local unrecorded output for the CI artifact.
+Any code or configuration change invalidates earlier evidence.
 
 ## 14. Destructive commands
 
-### 14.1 `reset-firecrawl-research`
+### `reset-firecrawl-research`
 
-| Field | Requirement |
-| --- | --- |
-| Scope | PostgreSQL volume, Valkey volume, Qdrant data/snapshots, blob corpus |
-| Guard | Clean `main`, exact path validation, stopped workers, typed `RESET` unless `--yes` |
-| Recovery | None without an external backup |
-| Use | Clean initialization only; never routine repair |
+Destroys configured PostgreSQL, Qdrant, Valkey, and blob data. Use only after reviewing exact targets and backups.
 
-### 14.2 `index-prune --force`
+### `index-prune --force`
 
-Review `--dry-run`, confirm the exact inactive index ID, retain rollback coverage, then force only that target.
+Review `--dry-run`, identify one exact inactive target, and preserve rollback coverage.
 
-### 14.3 Blob deletion
+### Blob deletion
 
-`verify-blobs` is read-only. Do not manually delete referenced hashes. Orphan cleanup must be separately bounded, reviewed, and performed only after a matching PostgreSQL backup.
+`verify-blobs` is read-only. Never manually delete a referenced digest. Orphan cleanup requires a reviewed bounded procedure and matching PostgreSQL backup.
 
-### 14.4 Manual database editing
-
-Direct updates or deletes to runs, transitions, events, invocations, manifests, or jobs are unsupported. Repair through service commands or restore from backup.
-
-### 14.5 General safeguards
+### General safeguards
 
 1. Stop writers and workers.
-2. Verify exact target identifiers and resolved paths.
-3. Capture PostgreSQL/blob recovery state when data has value.
-4. Use dry-run modes where available.
-5. Record command, actor, time, and result.
-6. Run `doctor` after completion.
+2. Resolve exact targets.
+3. Capture PostgreSQL and blob recovery state.
+4. Use dry-run where available.
+5. Record actor, command, time, and result.
+6. Run `doctor`.
 
 ## 15. Recovery drill checklist
 
-### 15.1 Full disaster recovery
+### Full disaster recovery
 
-- Restore PostgreSQL and matching blobs.
+- Restore matching PostgreSQL and `BLOB_ROOT`.
 - Verify schema and hashes.
-- Rebuild Qdrant.
+- Rebuild and activate Qdrant.
 - Recreate Valkey.
-- Start worker and prove zero missing/orphaned points.
-- Retrieve a known passage and resolve its provenance.
+- Start the worker.
+- Retrieve a known bounded passage and resolve provenance.
 
-### 15.2 Index cutover recovery
+### Index cutover recovery
 
 - Build a second fingerprinted collection.
-- Interrupt activation at a controlled point.
+- Interrupt before activation.
 - Reconcile alias state.
-- Finalize or roll back.
-- Prove retrieval remains compatible.
+- Complete or roll back.
+- Prove compatible retrieval.
 
-### 15.3 Run recovery drill
+### Run recovery drill
 
-- Interrupt a wrapper after invocation start.
-- Verify the failure record.
-- Retry with a new invocation ID.
+- Interrupt after authoritative invocation start.
+- Verify the persisted nonterminal state.
+- Retry identical input with the same idempotency key or close the failed attempt and create a new operation.
 - Complete indexing and finish the run.
-- Confirm immutable revisions and events.
 
-### 15.4 Endpoint failure drill
+### Endpoint failure drill
 
-- Stop embedding or reranker endpoint.
-- Verify explicit degraded/failure status.
+- Stop an endpoint.
+- Verify explicit failure or degradation.
 - Restart with the same identity.
 - Drain retryable work.
 - Confirm no silent fallback.
 
-The standalone checklist in `recovery-drill-checklist.md` provides the evidence fields and sign-off format.
+See `recovery-drill-checklist.md` for evidence fields and `release-notes-rc9.md` for the compatibility and rollback boundary.
 
-## Authoritative live-validation campaigns
-
-Run live validation only after `research-db ingest-ready` succeeds and the configured Qdrant active alias matches the current embedding fingerprint. The validator creates disposable PostgreSQL runs and never consumes reports, manifests, or temporary paths as workflow state.
+## Authoritative live validation
 
 ```bash
 scripts/live_validate.py --profile focused --max-operations 40
 scripts/live_validate.py --profile failure-path --max-operations 20
 scripts/live_validate.py --profile full --max-operations 100
+scripts/live_validate.py --profile focused --max-operations 40 --artifact-root ./validation-artifacts
 ```
 
-Use `--blob-root` for a nondefault immutable payload store. Use `--artifact-root` only to export the final `manifest.json` and `report.md`. Each Firecrawl process attempt consumes the hard operation budget. A campaign fails closed on retained `TMPDIR` entries, missing required smart-planning provenance or corpus identities, invalid blob digests, incomplete exact-run index jobs, incompatible Qdrant alias/schema, incomplete point coverage, or failure to observe the persisted nonterminal restart checkpoint.
+Without `--artifact-root`, the versioned report is emitted to stdout. With it, only the final report and manifest are exported. They are never runtime inputs. The validator fails on provider activity after failed preflight, retained acquisition artifacts in monitored temporary storage, invalid blobs, incomplete run-scoped jobs, incompatible Qdrant state, or incomplete expected point coverage.
