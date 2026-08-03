@@ -1,4 +1,4 @@
-name: RC7 one-time formatting
+name: RC7 one-time corrective formatting
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  format:
+  correct-and-format:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
@@ -21,17 +21,100 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install ruff==0.16.1
-      - name: Format changed Python sources
+      - name: Apply wrapper-specific validator contracts
         run: |
-          ruff format scripts/fsearch_smart scripts/live_validate.py scripts/research_store/smart_orchestrator.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/live_validate.py')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  '''        qdrant_api_key: str | None = None,\n    ) -> None:\n        self.database_url = database_url\n        self.qdrant_url = qdrant_url\n        self.qdrant_api_key = qdrant_api_key\n''',
+                  '''        qdrant_api_key: str | None = None,\n        blob_root: str | Path | None = None,\n    ) -> None:\n        from research_store.config import StoreConfig\n\n        self.database_url = database_url\n        self.qdrant_url = qdrant_url\n        self.qdrant_api_key = qdrant_api_key\n        self.blob_root = Path(blob_root or StoreConfig.from_env().blob_root)\n''',
+              ),
+              (
+                  '''        from research_store.blob import ContentAddressedBlobStore\n        from research_store.config import StoreConfig\n\n        store = ContentAddressedBlobStore(StoreConfig.from_env().blob_root)\n''',
+                  '''        from research_store.blob import ContentAddressedBlobStore\n\n        store = ContentAddressedBlobStore(self.blob_root)\n''',
+              ),
+              (
+                  '''        require_corpus: bool,\n        require_resume_history: bool = False,\n    ) -> dict[str, Any]:\n''',
+                  '''        require_corpus: bool,\n        require_planning: bool = False,\n        require_terminal: bool = False,\n        require_resume_history: bool = False,\n    ) -> dict[str, Any]:\n''',
+              ),
+              (
+                  '''            "terminal_run": terminal,\n            "authoritative_spec": scalars["spec_count"] == 1,\n            "authoritative_budget": scalars["budget_count"] == 1,\n            "authoritative_plan": scalars["plan_count"] == 1,\n            "authoritative_semantic_provenance": scalars["semantic_call_count"] > 0,\n''',
+                  '''            "terminal_run": terminal if require_terminal else True,\n            "authoritative_spec": (\n                scalars["spec_count"] == 1 if require_planning else True\n            ),\n            "authoritative_budget": (\n                scalars["budget_count"] == 1 if require_planning else True\n            ),\n            "authoritative_plan": (\n                scalars["plan_count"] == 1 if require_planning else True\n            ),\n            "authoritative_semantic_provenance": (\n                scalars["semantic_call_count"] > 0 if require_planning else True\n            ),\n''',
+              ),
+              (
+                  '''        require_corpus: bool,\n        require_resume_history: bool = False,\n        timeout_seconds: float,\n''',
+                  '''        require_corpus: bool,\n        require_planning: bool = False,\n        require_terminal: bool = False,\n        require_resume_history: bool = False,\n        timeout_seconds: float,\n''',
+              ),
+              (
+                  '''                require_corpus=require_corpus,\n                require_resume_history=require_resume_history,\n''',
+                  '''                require_corpus=require_corpus,\n                require_planning=require_planning,\n                require_terminal=require_terminal,\n                require_resume_history=require_resume_history,\n''',
+              ),
+              (
+                  '''            require_corpus=require_corpus,\n            require_resume_history=require_resume_history,\n''',
+                  '''            require_corpus=require_corpus,\n            require_planning=require_planning,\n            require_terminal=require_terminal,\n            require_resume_history=require_resume_history,\n''',
+              ),
+              (
+                  '''            qdrant_url=args.qdrant_url,\n            qdrant_api_key=args.qdrant_api_key,\n        )\n''',
+                  '''            qdrant_url=args.qdrant_url,\n            qdrant_api_key=args.qdrant_api_key,\n            blob_root=args.blob_root,\n        )\n''',
+              ),
+              (
+                  '''                "DATABASE_URL": args.database_url,\n                "TMPDIR": str(self.monitored_tmp),\n''',
+                  '''                "DATABASE_URL": args.database_url,\n                "BLOB_ROOT": str(args.blob_root),\n                "TMPDIR": str(self.monitored_tmp),\n''',
+              ),
+              (
+                  '''        self.runs[name]["require_corpus"] = True\n        self.runs[name]["require_resume_history"] = resume\n''',
+                  '''        self.runs[name]["require_corpus"] = True\n        self.runs[name]["require_planning"] = True\n        self.runs[name]["require_terminal"] = True\n        self.runs[name]["require_resume_history"] = resume\n''',
+              ),
+              (
+                  '''                    require_corpus=bool(metadata.get("require_corpus")),\n                    require_resume_history=bool(metadata.get("require_resume_history")),\n''',
+                  '''                    require_corpus=bool(metadata.get("require_corpus")),\n                    require_planning=bool(metadata.get("require_planning")),\n                    require_terminal=bool(metadata.get("require_terminal")),\n                    require_resume_history=bool(metadata.get("require_resume_history")),\n''',
+              ),
+              (
+                  '''    parser.add_argument("--qdrant-api-key", default=os.environ.get("QDRANT_API_KEY"))\n    parser.add_argument("--max-operations", type=int, default=40)\n''',
+                  '''    parser.add_argument("--qdrant-api-key", default=os.environ.get("QDRANT_API_KEY"))\n    parser.add_argument(\n        "--blob-root",\n        default=os.environ.get("BLOB_ROOT", "data/blobs"),\n    )\n    parser.add_argument("--max-operations", type=int, default=40)\n''',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one replacement, found {count}: {old[:80]!r}')
+              text = text.replace(old, new)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Format and validate
+        run: |
+          ruff format \
+            scripts/fsearch_smart \
+            scripts/live_validate.py \
+            scripts/research_store/smart_orchestrator.py \
+            scripts/test_authoritative_smart_validation.py \
+            scripts/test_authoritative_live_validation_profiles.py
+          ruff check \
+            scripts/fsearch_smart \
+            scripts/live_validate.py \
+            scripts/research_store/smart_orchestrator.py \
+            scripts/test_authoritative_smart_validation.py \
+            scripts/test_authoritative_live_validation_profiles.py
           git diff --check
-      - name: Commit formatting
+      - name: Commit corrections
         run: |
           if git diff --quiet; then
             exit 0
           fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/fsearch_smart scripts/live_validate.py scripts/research_store/smart_orchestrator.py
-          git commit -m 'style(rc7): apply canonical Ruff formatting'
+          git add \
+            scripts/fsearch_smart \
+            scripts/live_validate.py \
+            scripts/research_store/smart_orchestrator.py \
+            scripts/test_authoritative_smart_validation.py \
+            scripts/test_authoritative_live_validation_profiles.py
+          git commit -m 'fix(rc7): finalize wrapper-specific validator contracts'
           git push origin HEAD:refactor/rc7-authoritative-smart-validation
