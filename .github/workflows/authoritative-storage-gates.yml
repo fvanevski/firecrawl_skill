@@ -117,6 +117,7 @@ jobs:
             -ra \
             -p no:cacheprovider \
             scripts/test_documentation.py \
+            scripts/test_pytest_skip_verifier.py \
             scripts/test_documented_workflows.py \
             scripts/test_documented_blob_transaction.py \
             scripts/test_authoritative_storage_gate.py \
