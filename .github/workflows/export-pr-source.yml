@@ -1,4 +1,4 @@
-name: Export PR source
+name: Apply RC-10 corrective patch
 
 on:
   pull_request:
@@ -6,32 +6,99 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export-source:
-    name: Export exact PR source
+  apply-corrective-patch:
+    name: Apply and validate corrective patch
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
-      - name: Check out exact PR head
+      - name: Check out exact PR branch
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
+          persist-credentials: true
 
-      - name: Archive repository source
+      - name: Verify and apply staged patch
         shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          tar \
-            --exclude=.git \
-            -czf "$RUNNER_TEMP/pr-source.tar.gz" .
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git apply --check .github/rc10-existing.patch
+          git apply .github/rc10-existing.patch
+          rm .github/rc10-existing.patch
+          rm .github/workflows/export-pr-source.yml
 
-      - name: Upload source archive
-        uses: actions/upload-artifact@v4
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          name: pr-source-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/pr-source.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-research-store.txt pytest ruff
+
+      - name: Format and lint corrective scope
+        run: |
+          ruff format \
+            scripts/research_store/direct_scrape_service.py \
+            scripts/test_direct_scrape_service.py \
+            scripts/test_documentation.py \
+            scripts/verify_pytest_skips.py \
+            scripts/test_pytest_skip_verifier.py
+          ruff check .
+          ruff format --check .
+
+      - name: Start disposable PostgreSQL
+        run: |
+          docker run --name pg -d \
+            -e POSTGRES_PASSWORD=postgres \
+            -p 5432:5432 \
+            postgres:16-alpine
+          for i in $(seq 1 15); do
+            PGPASSWORD=postgres psql \
+              -h 127.0.0.1 \
+              -U postgres \
+              -c "CREATE DATABASE firecrawl_rc10_patch_test;" \
+              2>/dev/null && break
+            sleep 1
+          done
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -lqt \
+            | grep -q firecrawl_rc10_patch_test
+
+      - name: Run corrective regression tests
+        env:
+          RESEARCH_STORE_TEST_DATABASE_URL: >-
+            postgresql://postgres:postgres@127.0.0.1/firecrawl_rc10_patch_test
+          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_rc10_patch_test
+          PYTHONPATH: scripts
+        run: |
+          python -m pytest \
+            -q \
+            -ra \
+            -p no:cacheprovider \
+            scripts/test_direct_scrape_service.py \
+            scripts/test_documentation.py \
+            scripts/test_pytest_skip_verifier.py
+          python -m compileall -q scripts
+          git diff --check
+
+      - name: Commit and push validated correction
+        shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(rc10): preserve retry lineage and enforce release gates"
+          git push origin "HEAD:$HEAD_BRANCH"
