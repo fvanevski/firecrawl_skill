@@ -137,7 +137,7 @@ def test_documented_checkpoint_handler_is_one_shot_and_returns_75(
 ) -> None:
     block = _marked_shell("fsearch-smart-checkpoint-handler")
     assert "while true" not in block
-    assert 'exit 75' in block
+    assert "exit 75" in block
 
     binary_dir, call_log = _write_fake_rtk(tmp_path)
     result = _run_documented_shell(
