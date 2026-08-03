@@ -1,146 +1,138 @@
 # Recovery Drill Checklist
 
-Periodic checklist for verifying that recovery procedures work end-to-end.
-Run these drills quarterly or after any infrastructure change.
+Run these drills quarterly, after infrastructure changes, and before a release that changes persistence or recovery contracts. Record the exact candidate SHA and environment.
 
 ## Prerequisites
 
-- [ ] Access to the production or staging PostgreSQL instance
-- [ ] Access to the blob root directory
-- [ ] Access to the Qdrant instance
-- [ ] Access to the Valkey instance (optional — loss is safe)
-- [ ] Local model endpoints available (LLM, embedding, reranker)
-- [ ] `DATABASE_URL` and `BLOB_ROOT` configured
-- [ ] Worker service accessible (`systemctl --user`)
-
----
+- [ ] Disposable or approved staging PostgreSQL
+- [ ] Matching `BLOB_ROOT`
+- [ ] Qdrant
+- [ ] Optional Valkey
+- [ ] Embedding and reranking endpoints
+- [ ] Firecrawl endpoint and credentials
+- [ ] Worker service access
+- [ ] Current backup and rollback plan
 
 ## Drill 1: Full Disaster Recovery
 
-**Objective:** Verify that the system can be fully restored from backup after complete data loss.
+**Objective:** restore the Target A authority boundary after complete service loss.
 
-**Duration estimate:** 30–60 minutes
+| Step | Action | Command / evidence | Status |
+|---|---|---|---|
+| 1 | Stop writers and worker | `systemctl --user stop firecrawl-research-indexer.service` | [ ] |
+| 2 | Capture PostgreSQL | `pg_dump --format=custom --file=/tmp/research-drill.dump "$DATABASE_URL"` | [ ] |
+| 3 | Capture blob inventory | `find "$BLOB_ROOT" -type f -print0 \| sort -z \| xargs -0 sha256sum > /tmp/blob-inventory.sha256` | [ ] |
+| 4 | Record projection | `rtk proxy "<skill-root>/scripts/research-db" index-list` | [ ] |
+| 5 | Simulate approved loss | disposable services only | [ ] |
+| 6 | Restore PostgreSQL and matching blob root | backup procedure | [ ] |
+| 7 | Verify bytes and schema | `rtk proxy "<skill-root>/scripts/research-db" verify-blobs` and `status` | [ ] |
+| 8 | Build projection | `rtk proxy "<skill-root>/scripts/research-db" index-build --current-config --all` | [ ] |
+| 9 | Drain worker | `rtk proxy "<skill-root>/scripts/research-db" worker --once --batch-size 64` | [ ] |
+| 10 | Reconcile and activate | `reconcile-qdrant`, then `index-activate "<index-id>"` | [ ] |
+| 11 | Recreate Valkey and worker | service procedure | [ ] |
+| 12 | Verify health | `rtk proxy "<skill-root>/scripts/research-db" doctor` | [ ] |
+| 13 | Start a run | `RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start 'Recovery drill acquisition')"` | [ ] |
+| 14 | Test acquisition | `rtk proxy "<skill-root>/scripts/fsearch" "test query" --research-run-id "$RUN_ID" --limit 5 --scrape-limit 2` | [ ] |
+| 15 | Resolve provenance | inspect stable response, candidate, snapshot, document, chunk, blob, and job IDs | [ ] |
 
-| Step | Action | Command / Procedure | Status |
-|------|--------|---------------------|--------|
-| 1 | Capture a consistent backup | `pg_dump --format=custom --file=/tmp/pre-drill-backup.dump "$DATABASE_URL"` | [ ] |
-| 2 | Capture blob inventory | `find "$BLOB_ROOT" -type f -exec sha256sum {} + > /tmp/blob-inventory.txt` | [ ] |
-| 3 | Record Qdrant state | `rtk proxy "<skill-root>/scripts/research-db" index-list` | [ ] |
-| 4 | Stop all services | `systemctl --user stop firecrawl-research-indexer.service` | [ ] |
-| 5 | Simulate data loss | Drop the database or rename blob root | [ ] |
-| 6 | Restore PostgreSQL | `pg_restore --dbname="$DATABASE_URL" --clean --if-exists /tmp/pre-drill-backup.dump` | [ ] |
-| 7 | Restore blob root | Restore from backup or recreate from source | [ ] |
-| 8 | Verify blob integrity | `rtk proxy "<skill-root>/scripts/research-db" verify-blobs` | [ ] |
-| 9 | Rebuild the index | `rtk proxy "<skill-root>/scripts/research-db" index-build --current-config --all` | [ ] |
-| 10 | Drain the worker | `rtk proxy "<skill-root>/scripts/research-db" worker --once --batch-size 64` | [ ] |
-| 11 | Reconcile Qdrant | `rtk proxy "<skill-root>/scripts/research-db" reconcile-qdrant` | [ ] |
-| 12 | Activate the index | `rtk proxy "<skill-root>/scripts/research-db" index-activate "<index-id>"` | [ ] |
-| 13 | Verify with doctor | `rtk proxy "<skill-root>/scripts/research-db" doctor` — all components healthy | [ ] |
-| 14 | Restart the worker | `systemctl --user start firecrawl-research-indexer.service` | [ ] |
-| 15 | Run a test acquisition | `rtk proxy "<skill-root>/scripts/fsearch" "test query" --limit 5 --scrape-limit 2` | [ ] |
-| 16 | Verify end-to-end provenance | Check that the test acquisition appears in PostgreSQL, blob, and Qdrant | [ ] |
-
----
+Pass only when the restored PostgreSQL records resolve to matching verified blob bytes and compatible Qdrant points.
 
 ## Drill 2: Index Cutover Recovery
 
-**Objective:** Verify that an interrupted index cutover can be completed or rolled back.
+**Objective:** prove interrupted projection replacement can complete or roll back without modifying authoritative corpus data.
 
-**Duration estimate:** 10–15 minutes
-
-| Step | Action | Command / Procedure | Status |
-|------|--------|---------------------|--------|
-| 1 | Build a new index | `rtk proxy "<skill-root>/scripts/research-db" index-build --current-config --all` | [ ] |
-| 2 | Simulate interruption | Stop worker mid-activation (kill the worker process) | [ ] |
-| 3 | Check interrupted state | `rtk proxy "<skill-root>/scripts/research-db" index-list` — verify prepared/switched state | [ ] |
-| 4 | Complete the activation | `rtk proxy "<skill-root>/scripts/research-db" index-activate "<index-id>"` | [ ] |
-| 5 | Verify active alias | `rtk proxy "<skill-root>/scripts/research-db" doctor` — active fingerprint matches | [ ] |
-
-**Alternative path (rollback instead of complete):**
-
-| Step | Action | Command / Procedure | Status |
-|------|--------|---------------------|--------|
-| 4b | Rollback to prior index | `rtk proxy "<skill-root>/scripts/research-db" index-rollback "<prior-index-id>"` | [ ] |
-| 5b | Verify prior alias | `rtk proxy "<skill-root>/scripts/research-db" doctor` — prior fingerprint active | [ ] |
-
----
+| Step | Action | Command / evidence | Status |
+|---|---|---|---|
+| 1 | Record active index | `index-list` and `doctor` | [ ] |
+| 2 | Build replacement | `index-build --current-config --all` | [ ] |
+| 3 | Interrupt before activation | controlled staging interruption | [ ] |
+| 4 | Reconcile | `reconcile-qdrant` | [ ] |
+| 5 | Complete activation | `index-activate "<index-id>"` | [ ] |
+| 6 | Verify retrieval | active fingerprint and bounded known passage | [ ] |
+| 7 | Roll back | `index-rollback "<prior-index-id>"` | [ ] |
+| 8 | Verify prior alias | `doctor` | [ ] |
 
 ## Drill 3: Run Recovery
 
-**Objective:** Verify that an interrupted research run can be recovered.
+**Objective:** recover an interrupted authoritative operation without duplicate provider work or ledger edits.
 
-**Duration estimate:** 5–10 minutes
+| Step | Action | Command / evidence | Status |
+|---|---|---|---|
+| 1 | Start run | `RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start 'Run recovery drill')"` | [ ] |
+| 2 | Start acquisition with stable key | `fsearch ... --research-run-id "$RUN_ID" --idempotency-key drill-key --invocation-id fc_<uuid>` | [ ] |
+| 3 | Interrupt after provider response at a controlled test hook | disposable environment | [ ] |
+| 4 | Inspect run and invocation | `run-status`, `finspect invocations --run "$RUN_ID"` | [ ] |
+| 5 | Repeat identical input and identity | same idempotency key and invocation ID | [ ] |
+| 6 | Verify replay | no duplicate Firecrawl invocation; same authoritative IDs | [ ] |
+| 7 | Drain jobs and finish | `worker --once`, `doctor`, `frun finish` | [ ] |
 
-| Step | Action | Command / Procedure | Status |
-|------|--------|---------------------|--------|
-| 1 | Start a test run | `RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start 'Test recovery')"` | [ ] |
-| 2 | Start an authoritative operation | `INVOCATION_ID="fc_$(python -c 'import uuid; print(uuid.uuid4().hex)')"; printf '{"query":"recovery drill"}\n' > /tmp/recovery-input.json; rtk proxy "<skill-root>/scripts/research-db" run-operation-start "$RUN_ID" "$INVOCATION_ID" fsearch --input-file /tmp/recovery-input.json` | [ ] |
-| 3 | Simulate interruption | Stop the wrapper after the operation-start commit but before operation-finish | [ ] |
-| 4 | Check interrupted state | `rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"` and verify the run remains nonterminal | [ ] |
-| 5 | Close the abandoned invocation | `rtk proxy "<skill-root>/scripts/research-db" run-operation-finish "$RUN_ID" "$INVOCATION_ID" --status failed --error "recovery drill interruption"` | [ ] |
-| 6 | Resume with a new invocation | Run `fsearch` or `fscrape` normally with `--research-run-id "$RUN_ID"`, then finish after indexing completes | [ ] |
-
----
+Repeat with a failed preflight and prove the Firecrawl invocation count remains zero.
 
 ## Drill 4: Endpoint Failure
 
-**Objective:** Verify that endpoint failures are recorded and recoverable.
+**Objective:** verify endpoint failures remain explicit and recoverable.
 
-**Duration estimate:** 10–15 minutes
+| Step | Action | Command / evidence | Status |
+|---|---|---|---|
+| 1 | Stop embedding or reranking endpoint | controlled staging outage | [ ] |
+| 2 | Observe failure | `endpoint-health`, `resource-status`, `doctor` | [ ] |
+| 3 | Verify no silent substitute | recorded degraded or failed status | [ ] |
+| 4 | Restart with identical model identity | service procedure | [ ] |
+| 5 | Drain jobs | `worker --once --batch-size 32` | [ ] |
+| 6 | Verify completion | `doctor` and run status | [ ] |
 
-| Step | Action | Command / Procedure | Status |
-|------|--------|---------------------|--------|
-| 1 | Stop the local LLM endpoint | Kill the vLLM or LiteLLM process | [ ] |
-| 2 | Start an autonomous_local run | `RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start 'Endpoint failure test')"` then `fsearch_smart "test" --research-run-id "$RUN_ID"` | [ ] |
-| 3 | Verify failure is recorded | Check `doctor` and run-status for recorded failures | [ ] |
-| 4 | Restart the endpoint | Start the vLLM or LiteLLM process | [ ] |
-| 5 | Verify worker retries | `rtk proxy "<skill-root>/scripts/research-db" worker --once --batch-size 32` | [ ] |
-| 6 | Verify completion | `rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"` | [ ] |
+## Drill 5: Valkey Loss
 
----
+**Objective:** prove durable jobs continue from PostgreSQL polling.
 
-## Drill 5: Migration Upgrade
+| Step | Action | Command / evidence | Status |
+|---|---|---|---|
+| 1 | Queue authoritative index work | bounded test acquisition | [ ] |
+| 2 | Stop Valkey before notification consumption | controlled outage | [ ] |
+| 3 | Keep worker polling PostgreSQL | worker log and job state | [ ] |
+| 4 | Verify completion | manifests and Qdrant points complete | [ ] |
+| 5 | Restart Valkey | service procedure | [ ] |
+| 6 | Verify no data repair | `doctor` | [ ] |
 
-**Objective:** Verify that migrations upgrade cleanly on a populated database.
+## Drill 6: Migration Upgrade
 
-**Duration estimate:** 15–30 minutes
+**Objective:** validate the current supported migration and legacy-tree boundary.
 
-| Step | Action | Command / Procedure | Status |
-|------|--------|---------------------|--------|
-| 1 | Create a disposable database | `createdb firecrawl_drill_migration` | [ ] |
-| 2 | Set DATABASE_URL | `export DATABASE_URL='postgresql://...@localhost/firecrawl_drill_migration'` | [ ] |
-| 3 | Restore PostgreSQL and blob backups | Use the tested backup/restore procedure; old filesystem trees require the last pre-removal release or an external one-shot migration tool | [ ] |
-| 4 | Run migrations | `rtk proxy "<skill-root>/scripts/research-db" migrate` | [ ] |
-| 5 | Verify schema | `rtk proxy "<skill-root>/scripts/research-db" status` — current = head | [ ] |
-| 6 | Verify corpus data | `rtk proxy "<skill-root>/scripts/research-db" corpus-overview` — data preserved | [ ] |
-| 7 | Verify blob integrity | `rtk proxy "<skill-root>/scripts/research-db" verify-blobs` — all hashes valid | [ ] |
-| 8 | Run integration tests | `pytest -q -p no:cacheprovider "<skill-root>/scripts/test_research_store_integration.py"` | [ ] |
+1. For a current supported PostgreSQL database, back up PostgreSQL and `BLOB_ROOT`, then run `migrate`, `status`, `ingest-ready`, and `doctor`.
+2. For an unimported legacy acquisition tree, use the exact compatibility revision documented in `migration-guide.md` before deploying the current release.
+3. Verify stable imported source, snapshot, document, and chunk identities and matching blobs.
+4. Deploy the current candidate and rerun health checks.
+5. Exercise `finspect` history, replay, candidate selection, and bounded passages.
+6. Restore the pre-upgrade backup in a disposable environment and prove the rollback procedure.
 
----
+Do not claim an in-place upgrade for an unsupported older database lineage.
 
-## Post-Drill Report
+## Post-drill report
 
-After each drill, record:
+Record:
 
-- Date and time
-- Drill number(s) performed
-- Duration
-- Any failures or anomalies
-- Remediation actions taken
-- Follow-up items
+- date, operator, environment, and exact commit SHA;
+- drill steps and commands;
+- PostgreSQL and blob backup identifiers;
+- active and rollback Qdrant fingerprints;
+- Valkey and worker observations;
+- provider invocation counts for failed preflight and retry cases;
+- failures, remediation, residual risk, and sign-off.
 
-```
+```text
 Drill Report
 ============
-Date: YYYY-MM-DD
-Drills: 1, 2, 3, 4, 5
-Duration: XX minutes
-Failures: None / List failures
-Anomalies: List any unexpected behavior
-Remediation: List actions taken
-Follow-up: List items requiring attention
+Date:
+Candidate SHA:
+Environment:
+Drills:
+PostgreSQL backup:
+Blob backup:
+Active index:
+Rollback index:
+Results:
+Failures:
+Remediation:
+Residual risk:
+Approver:
 ```
-
----
-
-*This checklist is derived from `references/operations-runbook.md` Section 14. Update it when new failure modes are discovered or new procedures are validated.*
