@@ -192,11 +192,10 @@ jobs:
                       "```",
                       "",
                       "Use `--blob-root` for a nondefault immutable payload store. Use `--artifact-root` only to export the final `manifest.json` and `report.md`. Each Firecrawl process attempt consumes the hard operation budget. A campaign fails closed on retained `TMPDIR` entries, missing required smart-planning provenance or corpus identities, invalid blob digests, incomplete exact-run index jobs, incompatible Qdrant alias/schema, incomplete point coverage, or failure to observe the persisted nonterminal restart checkpoint.",
-                      "",
                   )
               )
               text = text.rstrip() + section
-          runbook.write_text(text + "\n", encoding="utf-8")
+          runbook.write_text(text.rstrip() + "\n", encoding="utf-8")
 
           test_path = Path("scripts/test_authoritative_smart_validation.py")
           text = test_path.read_text(encoding="utf-8")
