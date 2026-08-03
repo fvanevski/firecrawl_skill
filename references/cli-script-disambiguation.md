@@ -4,15 +4,15 @@
 
 | Interface | Package | Primary Use | Install Method |
 |-----------|---------|-------------|----------------|
-| **Node.js CLI** | `firecrawl-cli` (npm) | Scratch-file workflow (`fsearch`, `fscrape`, `fread`), search, scrape, crawl, map, parse | Install in the active Node/npm environment with `rtk proxy npm install -g firecrawl-cli` |
+| **Node.js CLI** | `firecrawl-cli` (npm) | Authoritative wrapper transport (`fsearch`, `fscrape`), search, scrape, crawl, map, parse | Install in the active Node/npm environment with `rtk proxy npm install -g firecrawl-cli` |
 | **Python SDK** | `firecrawl-py` (PyPI) | Programmatic REST API calls from Python scripts | `pip install firecrawl-py` |
 | **MCP Tools** | Firecrawl MCP server | Tool calls exposed by the host agent, such as search and scrape tools | Host-agent MCP configuration |
 
 ## Which Firecrawl Binary Do Scripts Use?
 
-Launch `fsearch`/`fscrape`/`fread` through `rtk proxy`. Inside the wrappers, the scripts invoke `firecrawl` directly from `PATH` (no nested RTK, no `npx`, no `firecrawl-py`, no `python -m firecrawl`). This should resolve to the **Node.js CLI** installed for the current agent environment.
+Launch `fsearch` and `fscrape` through `rtk proxy`. Inside the wrappers, the scripts invoke `firecrawl` directly from `PATH` (no nested RTK, no `npx`, no `firecrawl-py`, no `python -m firecrawl`). This should resolve to the **Node.js CLI** installed for the current agent environment.
 
-The Python SDK (`firecrawl-py` v4.28.2) is installed as a separate package and is **not** used by these scripts. The Python SDK is the Firecrawl REST API client — it's used when you want structured programmatic access (e.g. in an `execute_code` block), not for the scratch-file workflow.
+The Python SDK (`firecrawl-py` v4.28.2) is installed as a separate package and is **not** used by these scripts. The Python SDK is the Firecrawl REST API client — it is used when you want structured programmatic access (for example, in an `execute_code` block), not by the bundled wrappers.
 
 ## Key Differences
 
@@ -44,4 +44,4 @@ All three interfaces share the same primary auth:
 | `FIRECRAWL_RESEARCH_RUN_ID` | Skill wrappers (explicit PostgreSQL `fr_<uuid>` run linkage) |
 | `FIRECRAWL_SEARCH_RETRIES` | `fsearch` (transient acquisition retry count; default `2`) |
 
-Set `FIRECRAWL_RESEARCH_PERSIST=off` for scratch-only acquisition. The MCP tools get auth from the MCP server's own config.
+The bundled acquisition wrappers require authoritative PostgreSQL preflight. MCP tools get auth from the MCP server's own config and must not be treated as persisted acquisition unless their output is ingested through the authoritative service.

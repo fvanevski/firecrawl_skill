@@ -29,8 +29,6 @@ from .retrieval import CohereCompatibleReranker
 from .service import dumps, json_default
 from .valkey_queue import ValkeyQueue
 
-_KNOWN_PREFIXES = ("result_", "url_")
-
 
 def _export_json(path: Path, payload: Any) -> None:
     """Write JSON atomically via temp-file rename."""
@@ -38,95 +36,6 @@ def _export_json(path: Path, payload: Any) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     temporary.replace(path)
-
-
-def _iter_scratch_assets(root: Path):
-    for meta_path in sorted(root.rglob("_meta.json")):
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        for item in meta.get("results", []):
-            if item.get("status") != "ok" or not item.get("url"):
-                continue
-            raw = item.get("scratch_file", "")
-            path = (
-                Path(raw)
-                if raw
-                else meta_path.parent / f"result_{item.get('index', 0):03d}.md"
-            )
-            if not path.is_absolute():
-                path = meta_path.parent / path
-            try:
-                path.resolve().relative_to(root.resolve())
-            except ValueError:
-                path = meta_path.parent / Path(raw).name
-            if path.name.startswith(_KNOWN_PREFIXES) and path.is_file():
-                yield (
-                    path,
-                    {
-                        **item,
-                        "invocation_id": meta.get("invocation_id"),
-                        "operation": meta.get("operation"),
-                    },
-                )
-
-
-def _import_scratch(root: Path, service, dry_run: bool = False) -> dict:
-    report = {
-        "version": 1,
-        "root": str(root),
-        "dry_run": dry_run,
-        "scanned": 0,
-        "imported": 0,
-        "reused": 0,
-        "failed": 0,
-        "items": [],
-    }
-    for path, item in _iter_scratch_assets(root):
-        report["scanned"] += 1
-        entry = {
-            "original_path": str(path),
-            "url": item["url"],
-            "status": "would_import" if dry_run else "pending",
-        }
-        try:
-            content = path.read_bytes()
-            entry["byte_length"] = len(content)
-            if not dry_run:
-                result = service.ingest(
-                    IngestRequest(
-                        requested_url=item["url"],
-                        content=content,
-                        mime_type="application/json"
-                        if path.suffix == ".json"
-                        else "text/markdown",
-                        title=item.get("title"),
-                        metadata={
-                            "migration": {
-                                "original_path": str(path),
-                                "invocation_id": item.get("invocation_id"),
-                                "operation": item.get("operation"),
-                            }
-                        },
-                    )
-                )
-                entry.update(
-                    {
-                        "status": "reused" if result.reused_snapshot else "imported",
-                        "source_id": str(result.source_id),
-                        "snapshot_id": str(result.snapshot_id),
-                        "document_id": str(result.document_id),
-                        "content_sha256": result.content_sha256,
-                    }
-                )
-                report[entry["status"]] += 1
-        except Exception as exc:  # noqa: BLE001
-            entry.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
-            report["failed"] += 1
-        report["items"].append(entry)
-    report["completed_at"] = datetime.now(timezone.utc).isoformat()
-    return report
 
 
 def parser():
@@ -224,10 +133,6 @@ def parser():
     # ------------------------------------------------------------------
     sub.add_parser("parser-info", help="Show parser registry information")
 
-    imp = sub.add_parser("import-scratch")
-    imp.add_argument("path", nargs="?")
-    imp.add_argument("--dry-run", action="store_true")
-    imp.add_argument("--report")
     ingest = sub.add_parser("ingest-result")
     ingest.add_argument("--url", required=True)
     ingest.add_argument("--file", required=True)
@@ -542,7 +447,6 @@ def parser():
     acq_search.add_argument("--plan-id")
     acq_search.add_argument("--plan-query-id")
     acq_search.add_argument("--idempotency-key")
-    acq_search.add_argument("--scratch-dir")
 
     acq_recon = sub.add_parser("acquisition-reconcile")
     acq_recon.add_argument("external_id")
@@ -2410,15 +2314,6 @@ def main(argv=None):
         }
         print(dumps(info))
         return 0
-    if args.command == "import-scratch":
-        root = Path(args.path) if args.path else config.scratch_root
-        report = _import_scratch(
-            root, None if args.dry_run else build_service(config), args.dry_run
-        )
-        if args.report:
-            _export_json(Path(args.report), report)
-        print(dumps(report))
-        return 1 if report["failed"] else 0
     if args.command == "ingest-result":
         path = Path(args.file)
         result = build_service(config).ingest(
@@ -2989,24 +2884,64 @@ def main(argv=None):
         print(dumps({"duplicate_group_id": res_group_id}))
         return 0
     if args.command == "acquisition-search":
+        from .acquisition_authority import (
+            AcquisitionPreflightError,
+            require_authoritative_acquisition,
+        )
+        from .acquisition_service import AcquisitionIdempotencyConflictError
         from .container import build_acquisition_service
 
-        run_svc = build_run_service(config)
-        status = run_svc.status(external_id=args.external_id)
-        acq_svc = build_acquisition_service(config)
-        result = acq_svc.execute_search(
-            status.id,
-            args.query_text,
-            backend=args.backend,
-            plan_id=UUID(args.plan_id) if args.plan_id else None,
-            plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
-            idempotency_key=args.idempotency_key,
-            limit=args.limit,
-            sources=args.sources,
-            tbs=args.tbs,
-            scratch_dir=args.scratch_dir,
-            export_scratch=bool(args.scratch_dir),
-        )
+        try:
+            config.require_database()
+            run_svc = build_run_service(config)
+            status = run_svc.status(external_id=args.external_id)
+            context = require_authoritative_acquisition(
+                run_id=status.id,
+                config=config,
+            )
+            acq_svc = build_acquisition_service(config)
+        except (AcquisitionPreflightError, KeyError, RuntimeError, ValueError) as exc:
+            print(
+                dumps(
+                    {
+                        "schema_version": "authoritative-acquisition-error-v1",
+                        "status": "failed",
+                        "failure_stage": "preflight",
+                        "error": str(exc)[:500],
+                    }
+                ),
+                file=sys.stderr,
+            )
+            return 2
+
+        try:
+            result = acq_svc.execute_search(
+                status.id,
+                args.query_text,
+                backend=args.backend,
+                plan_id=UUID(args.plan_id) if args.plan_id else None,
+                plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
+                idempotency_key=args.idempotency_key,
+                limit=args.limit,
+                sources=args.sources,
+                tbs=args.tbs,
+                authority_context=context,
+                replay_existing=True,
+            )
+        except AcquisitionIdempotencyConflictError as exc:
+            print(
+                dumps(
+                    {
+                        "schema_version": "authoritative-acquisition-error-v1",
+                        "status": "failed",
+                        "failure_stage": "idempotency",
+                        "error": str(exc)[:500],
+                    }
+                ),
+                file=sys.stderr,
+            )
+            return 3
+
         print(
             dumps(
                 {
@@ -3017,13 +2952,12 @@ def main(argv=None):
                     "status": result.status,
                     "candidate_count": result.candidate_count,
                     "postgres_committed": result.postgres_committed,
-                    "scratch_exported": result.scratch_exported,
                     "event_id": str(result.event_id) if result.event_id else None,
-                    "scratch_error": result.scratch_error,
+                    "replayed": result.replayed,
                 }
             )
         )
-        return 0
+        return 0 if result.status in {"succeeded", "empty"} else 1
     if args.command == "acquisition-reconcile":
         from .container import build_acquisition_service
 

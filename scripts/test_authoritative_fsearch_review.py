@@ -292,8 +292,7 @@ def test_retry_after_outer_completion_crash_replays_committed_search(tmp_path):
         assert cursor.fetchone()[0] == "complete"
 
 
-def test_fsearch_uses_stable_candidate_id_not_occurrence_id(monkeypatch):
-    monkeypatch.setenv("FIRECRAWL_RESEARCH_PERSIST", "on")
+def test_fsearch_uses_stable_candidate_id_not_occurrence_id():
     run_id = uuid4()
     occurrence_id = uuid4()
     candidate_id = uuid4()
@@ -315,7 +314,6 @@ def test_fsearch_uses_stable_candidate_id_not_occurrence_id(monkeypatch):
             }
         ],
         postgres_committed=True,
-        scratch_exported=False,
     )
 
     class Direct:
@@ -516,7 +514,6 @@ raise SystemExit(2)
             "BLOB_ROOT": str(config.blob_root),
             "TMPDIR": str(tmp_path / "tmp"),
             "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
-            "FIRECRAWL_RESEARCH_PERSIST": "on",
             "FIRECRAWL_RESEARCH_PYTHON": sys.executable,
             "PYTHONDONTWRITEBYTECODE": "1",
         }

@@ -73,7 +73,7 @@ scripts/
 ├── fsearch_smart           # Research orchestrator
 ├── fsearch                 # Single-query search
 ├── fscrape                 # URL scrape
-├── fread                   # Scratch file inspector
+├── finspect                # Database-native history, replay, and bounded inspection
 ├── frun                    # Research run lifecycle
 ├── research-db             # Database operations CLI
 ├── budget_policy.py        # Budget policy engine
@@ -637,7 +637,6 @@ Key variables for coding agents:
 
 | Variable                        | Default                              | Effect                |
 | ------------------------------- | ------------------------------------ | --------------------- |
-| `FIRECRAWL_RESEARCH_PERSIST`    | `auto`                               | Persistence mode      |
 | `DATABASE_URL`                  | Derived                              | PostgreSQL connection |
 | `BLOB_ROOT`                     | `$HOME/.local/share/firecrawl/blobs` | Blob storage root     |
 | `QDRANT_URL`                    | `http://127.0.0.1:6333`              | Qdrant endpoint       |

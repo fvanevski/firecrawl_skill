@@ -109,7 +109,6 @@ Change mode only through `run-mode-change`, with current revision, requester, ap
 
 ```bash
 cd "<skill-root>"
-export FIRECRAWL_RESEARCH_PERSIST=on
 export FIRECRAWL_RESEARCH_PYTHON="<skill-root>/.venv-research-store/bin/python"
 source scripts/research-env
 ```
@@ -163,12 +162,7 @@ scripts/research-db worker \
 | `auto` | Persists when `DATABASE_URL` resolves; otherwise permits scratch-only acquisition |
 | `off` | Produces scratch output only; no database, blob, job, or Qdrant writes |
 
-Private scratch-only acquisition:
-
-```bash
-FIRECRAWL_RESEARCH_PERSIST=off \
-  scripts/fscrape 'https://example.com/private'
-```
+Supported acquisition is fail-closed and requires `DATABASE_URL`, durable blob storage, and a valid research run before provider execution.
 
 ## 5. Configuration variables
 
@@ -176,7 +170,6 @@ FIRECRAWL_RESEARCH_PERSIST=off \
 
 | Variable | Purpose |
 | --- | --- |
-| `FIRECRAWL_RESEARCH_PERSIST` | `on`, `auto`, or `off` persistence policy |
 | `FIRECRAWL_RESEARCH_PYTHON` | Python executable used by `research-db` |
 | `DATABASE_URL` | PostgreSQL connection URL |
 | `BLOB_ROOT` | Content-addressed blob directory |
@@ -440,11 +433,9 @@ The manifest supplies committed identities only. PostgreSQL remains the source o
 
 A wrapper trap records failure against the existing invocation. Retry the operation with a new external invocation ID; do not reuse a terminal invocation ID for different input.
 
-### 11.4 Scratch import and JSON diagnostics
+### 11.4 Explicit JSON exports
 
 ```bash
-scripts/research-db import-scratch '/tmp/firecrawl_scratch/fc_<uuid>' --dry-run
-scripts/research-db import-scratch '/tmp/firecrawl_scratch/fc_<uuid>'
 scripts/research-db export-invocation 'fc_<uuid>' --output invocation.json
 scripts/research-db export-run 'fr_<uuid>' --output run.json
 ```

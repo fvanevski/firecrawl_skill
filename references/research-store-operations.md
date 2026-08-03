@@ -9,7 +9,6 @@ This document is a compact operator reference. `operations-runbook.md` is the co
 Preserve explicit caller values. `scripts/research-env` fills only unset variables from the repository-root `.env` and container secret adapters.
 
 ```bash
-export FIRECRAWL_RESEARCH_PERSIST=on
 export FIRECRAWL_RESEARCH_PYTHON="$HOME/.codex/skills/firecrawl/.venv-research-store/bin/python"
 source scripts/research-env
 ```
@@ -20,12 +19,7 @@ Modes:
 - `auto`: persist when `DATABASE_URL` resolves; otherwise allow scratch-only acquisition.
 - `off`: create scratch diagnostics only; no PostgreSQL, blob, index-job, or Qdrant mutation.
 
-Private scratch-only acquisition requires only:
-
-```bash
-FIRECRAWL_RESEARCH_PERSIST=off \
-  rtk proxy scripts/fscrape 'https://example.com/private'
-```
+Supported acquisition requires a writable PostgreSQL store, durable `BLOB_ROOT`, and a valid research run. Preflight completes before any Firecrawl request.
 
 Never print or commit database URLs, API keys, or container secret contents.
 
@@ -80,11 +74,9 @@ scripts/research-db index-prune --dry-run
 
 Qdrant is a projection. Rebuild it from PostgreSQL chunks; never restore workflow truth from vectors.
 
-## Ingest, rederive, and export diagnostics
+## Rederive and export retained records
 
 ```bash
-scripts/research-db import-scratch '<scratch-dir>' --dry-run
-scripts/research-db import-scratch '<scratch-dir>'
 scripts/research-db rederive --snapshot '<snapshot-id>'
 scripts/research-db export-invocation 'fc_<uuid>' --output invocation.json
 scripts/research-db export-run 'fr_<uuid>' --output run.json

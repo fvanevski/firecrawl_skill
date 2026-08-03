@@ -318,26 +318,6 @@ def test_partial_cli_result_is_authoritative_and_nonzero(capsys):
     ]
 
 
-def test_persistence_off_is_rejected(monkeypatch: pytest.MonkeyPatch, capsys):
-    monkeypatch.setenv("FIRECRAWL_RESEARCH_PERSIST", "off")
-    factory = mock.Mock()
-
-    code = main(
-        [
-            "https://example.com",
-            "--research-run-id",
-            RUN_ID,
-            "--json",
-        ],
-        service_factory=factory,
-    )
-
-    assert code == 2
-    factory.assert_not_called()
-    payload = json.loads(capsys.readouterr().out)
-    assert "PostgreSQL-authoritative" in payload["error"]
-
-
 def test_public_launcher_is_thin_and_has_no_legacy_storage_markers():
     launcher = (SCRIPTS / "fscrape").read_text(encoding="utf-8")
 

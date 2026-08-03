@@ -27,7 +27,7 @@ The persistence stack has one authority boundary:
 - **Blob store:** immutable payload bytes referenced by PostgreSQL.
 - **Qdrant:** rebuildable vector projection selected through `research_chunks_active`.
 - **Valkey:** optional wakeups and transient coordination; never authoritative.
-- **Scratch files:** disposable local diagnostics and readable acquisition output; never read to determine workflow state.
+- **Ephemeral files:** ordinary secure temporary files may be used during processing, but never as workflow, replay, history, or corpus authority.
 
 No filesystem workflow database or adapter mode exists. Wrappers read and write workflow state only through PostgreSQL services.
 
@@ -37,7 +37,6 @@ Resolve `<skill-root>` to the directory containing `SKILL.md`.
 
 ```bash
 cd "<skill-root>"
-export FIRECRAWL_RESEARCH_PERSIST=on
 source scripts/research-env
 
 scripts/research-db status
@@ -68,26 +67,13 @@ scripts/fscrape \
 scripts/fsearch_smart '<research objective>' --research-run-id "$RUN_ID"
 ```
 
-Wrappers write `firecrawl_scratch/fc_<uuid>/...` diagnostics. With persistence enabled, they also create PostgreSQL invocation records, commit an ingestion batch, write `_corpus.json` with stable identities, and advance the run only through permitted lifecycle transitions.
+Supported acquisition wrappers create PostgreSQL invocation records, retain immutable payload bytes under `BLOB_ROOT`, commit ingestion batches, and advance the run only through permitted lifecycle transitions. They report stable authoritative identifiers rather than storage paths.
 
-## Persistence modes
+## Authoritative acquisition
 
-Set `FIRECRAWL_RESEARCH_PERSIST=auto|on|off`:
+Supported `fsearch` and `fscrape` commands require `DATABASE_URL` to identify a writable PostgreSQL store and require a valid `fr_<uuid>` research run before any Firecrawl request starts. Successful acquisition always persists authoritative metadata and immutable payload bytes under `BLOB_ROOT`; there is no scratch-only success mode.
 
-- `auto` persists when `DATABASE_URL` resolves; otherwise lower-level wrappers remain scratch-only.
-- `on` requires a healthy authoritative store and fails before acquisition when the store or run binding is invalid.
-- `off` disables PostgreSQL and raw-blob persistence for `fsearch` and `fscrape`.
-
-`frun` and normal `fsearch_smart` execution require PostgreSQL. `fsearch_smart --dry-run` may generate a deterministic plan without persistence.
-
-Private scratch-only acquisition:
-
-```bash
-FIRECRAWL_RESEARCH_PERSIST=off \
-  scripts/fscrape 'https://example.com/private'
-```
-
-Enabled persistence is fail-closed. A successful Firecrawl response is not reported as a successful persistent operation unless PostgreSQL, blob, and ingestion writes commit.
+`fsearch_smart --dry-run` may generate a deterministic plan without database or network writes. Normal smart-search execution remains PostgreSQL-authoritative.
 
 Explicit `DATABASE_URL`, Qdrant/Valkey endpoints and keys, blob root, and `FIRECRAWL_RESEARCH_PYTHON` take precedence over values loaded by `scripts/research-env`.
 
@@ -207,9 +193,9 @@ scripts/research-db index-activate '<index-id>'
 scripts/research-db index-rollback '<prior-index-id>'
 scripts/research-db index-prune --dry-run
 
-# Rebuild parser/chunker derivations or import diagnostic scratch assets
+# Rebuild parser/chunker derivations or export retained records
 scripts/research-db rederive --snapshot '<snapshot-id>'
-scripts/research-db import-scratch '<scratch-dir>' --dry-run
+scripts/research-db export-run '<run-id>' --output run.json
 ```
 
 Physical Qdrant collections use `research_chunks_<12-character-fingerprint>`. Retrieval uses `research_chunks_active`. Dense retrieval is enabled only when the alias and schema match the configured embedding fingerprint; otherwise retrieval remains lexical and `doctor` reports the mismatch.

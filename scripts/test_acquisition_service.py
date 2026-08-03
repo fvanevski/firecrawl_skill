@@ -179,27 +179,17 @@ def test_acquisition_service_normal_flow(tmp_path, prepared_database):
     mock_adapter = MockSuccessSearchAdapter()
     acq_svc = build_acquisition_service(config, search_adapter=mock_adapter)
 
-    scratch_dir = tmp_path / "scratch_1"
     res = acq_svc.execute_search(
         run_id,
         "machine learning tutorials",
-        scratch_dir=scratch_dir,
-        export_scratch=True,
     )
 
     assert res.postgres_committed is True
-    assert res.scratch_exported is True
     assert res.status == "succeeded"
     assert res.candidate_count == 2
     assert res.event_id is not None
-    assert res.scratch_error is None
-
-    # Verify scratch files
-    assert (scratch_dir / "_search.json").is_file()
-    assert (scratch_dir / "_meta.json").is_file()
-    meta_json = json.loads((scratch_dir / "_meta.json").read_text(encoding="utf-8"))
-    assert meta_json["candidate_count"] == 2
-    assert meta_json["query"] == "machine learning tutorials"
+    assert not hasattr(res, "scratch_exported")
+    assert not hasattr(res, "scratch_error")
 
     # Verify DB records via run service
     stored_resp = run_svc.get_search_response(res.search_response_id)
@@ -209,48 +199,6 @@ def test_acquisition_service_normal_flow(tmp_path, prepared_database):
 
     cands = run_svc.list_candidates(run_id)
     assert len(cands) == 2
-
-
-@pytest.mark.skipif(
-    not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
-)
-def test_acquisition_service_scratch_export_failure(tmp_path, prepared_database):
-    """Scratch write failure must NOT rollback or erase committed PostgreSQL search state."""
-    migrate(TEST_DSN)
-    config = replace(
-        StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
-    )
-    run_svc = build_run_service(config)
-
-    ext_id = f"run-acq-scratch-fail-{uuid4()}"
-    run_svc.create(objective="test scratch export failure", external_id=ext_id)
-    status = run_svc.status(external_id=ext_id)
-    run_id = status.id
-
-    mock_adapter = MockSuccessSearchAdapter()
-    acq_svc = build_acquisition_service(config, search_adapter=mock_adapter)
-
-    # Use a file as scratch_dir to force mkdir/write failure
-    invalid_scratch_dir = tmp_path / "blocker_file"
-    invalid_scratch_dir.write_text("i am a file not a directory")
-
-    res = acq_svc.execute_search(
-        run_id,
-        "deep learning papers",
-        scratch_dir=invalid_scratch_dir,
-        export_scratch=True,
-    )
-
-    # PostgreSQL commit must still be successful!
-    assert res.postgres_committed is True
-    assert res.scratch_exported is False
-    assert res.scratch_error is not None
-    assert res.status == "succeeded"
-
-    # Verify that search response and candidates exist in DB despite scratch failure
-    stored_resp = run_svc.get_search_response(res.search_response_id)
-    assert stored_resp["query_text"] == "deep learning papers"
-    assert stored_resp["status"] == "succeeded"
 
 
 @pytest.mark.skipif(
@@ -288,12 +236,45 @@ def test_acquisition_service_idempotent_retry(tmp_path, prepared_database):
     assert res1.search_response_id == res2.search_response_id
     assert res1.postgres_committed is True
     assert res2.postgres_committed is True
+    assert res2.replayed is True
+    assert mock_adapter.call_count == 1
 
     responses = run_svc.list_search_responses(run_id)
     assert len(responses) == 1
 
     cands = run_svc.list_candidates(run_id)
     assert len(cands) == 2
+
+
+@pytest.mark.skipif(
+    not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
+)
+def test_acquisition_service_conflicting_retry_fails_before_provider(
+    tmp_path, prepared_database
+):
+    from research_store.acquisition_service import AcquisitionIdempotencyConflictError
+
+    migrate(TEST_DSN)
+    config = replace(
+        StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+    )
+    run_svc = build_run_service(config)
+    ext_id = f"run-acq-conflict-{uuid4()}"
+    run_svc.create(objective="test search idempotency conflict", external_id=ext_id)
+    run_id = run_svc.status(external_id=ext_id).id
+    adapter = MockSuccessSearchAdapter()
+    service = build_acquisition_service(config, search_adapter=adapter)
+    key = f"key-{uuid4()}"
+
+    service.execute_search(run_id, "first request", idempotency_key=key)
+    with pytest.raises(
+        AcquisitionIdempotencyConflictError,
+        match="another request",
+    ):
+        service.execute_search(run_id, "different request", idempotency_key=key)
+
+    assert adapter.call_count == 1
+    assert len(run_svc.list_search_responses(run_id)) == 1
 
 
 @pytest.mark.skipif(

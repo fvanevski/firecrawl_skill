@@ -276,7 +276,6 @@ fi
   die "research virtualenv Python is missing or not executable"
 
 export FIRECRAWL_RESEARCH_PYTHON="$SKILL_ROOT/.venv-research-store/bin/python"
-export FIRECRAWL_RESEARCH_PERSIST=on
 export RESEARCH_POSTGRES_DIR="$PG_DIR"
 export RESEARCH_QDRANT_DIR="$QDRANT_DIR"
 export RESEARCH_VALKEY_DIR="$VALKEY_DIR"

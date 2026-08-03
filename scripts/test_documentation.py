@@ -67,9 +67,7 @@ OPERATIONS_RUNBOOK_COMMANDS = [
     ("index-prune", ["--force", "--index-id", "test-id"]),
     ("reindex", ["--all"]),
     ("reconcile-qdrant", []),
-    # Scratch diagnostics and derivations
-    ("import-scratch", ["--dry-run", "/tmp/test-scratch"]),
-    ("import-scratch", ["/tmp/test-scratch"]),
+    # Derivations and explicit exports
     ("rederive", ["--all"]),
     ("rederive", ["--snapshot", "test-snapshot-id"]),
     ("rederive-v2", ["--all"]),
@@ -338,7 +336,6 @@ class TestDocumentationFiles:
         content = runbook.read_text(encoding="utf-8")
 
         required_vars = [
-            "FIRECRAWL_RESEARCH_PERSIST",
             "DATABASE_URL",
             "BLOB_ROOT",
             "QDRANT_URL",
@@ -390,6 +387,26 @@ class TestDocumentationFiles:
                     f"Removed runtime identifier {token!r} found in {rel_path}"
                 )
 
+    def test_removed_scratch_interfaces_are_not_documented(self) -> None:
+        removed = (
+            "persist_results.py",
+            "scripts/fread",
+            "import-scratch",
+            "FIRECRAWL_RESEARCH_PERSIST",
+            "SCRATCH_ROOT",
+        )
+        documentation = [SKILL_ROOT / "README.md", SKILL_ROOT / "SKILL.md"]
+        documentation.extend((SKILL_ROOT / "docs").glob("*.md"))
+        documentation.extend((SKILL_ROOT / "references").glob("*.md"))
+
+        for path in documentation:
+            content = path.read_text(encoding="utf-8")
+            for marker in removed:
+                assert marker not in content, (
+                    f"removed interface {marker!r} remains documented in "
+                    f"{path.relative_to(SKILL_ROOT)}"
+                )
+
     def test_recovery_drill_checklist_exists(self) -> None:
         """Recovery drill checklist must be present in operations runbook."""
         runbook = SKILL_ROOT / "references/operations-runbook.md"
@@ -431,3 +448,15 @@ class TestDocumentationFiles:
             assert drill in content, (
                 f"Drill '{drill}' not found in recovery-drill-checklist.md"
             )
+
+
+def test_authoritative_fsearch_documents_low_level_acquisition_exit_contract():
+    content = (SKILL_ROOT / "docs" / "authoritative-fsearch.md").read_text(
+        encoding="utf-8"
+    )
+    assert "research-db acquisition-search" in content
+    assert "before the Firecrawl adapter is constructed or invoked" in content
+    assert "`0` for persisted `succeeded` or `empty`" in content
+    assert "`2` for authoritative preflight failure" in content
+    assert "`3`" in content
+    assert "idempotency-key conflict" in content

@@ -7,22 +7,10 @@ if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env
   source "$SCRIPT_DIR/research-env"
 fi
 
-case "${FIRECRAWL_RESEARCH_PERSIST:-auto}" in
-  on|auto)
-    [[ -n "${DATABASE_URL:-}" ]] || {
-      echo "ERROR: frun requires the authoritative PostgreSQL store" >&2
-      exit 1
-    }
-    ;;
-  off)
-    echo "ERROR: frun is unavailable when FIRECRAWL_RESEARCH_PERSIST=off" >&2
-    exit 1
-    ;;
-  *)
-    echo "ERROR: FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off" >&2
-    exit 2
-    ;;
-esac
+[[ -n "${DATABASE_URL:-}" ]] || {
+  echo "ERROR: frun requires the authoritative PostgreSQL store" >&2
+  exit 1
+}
 
 "$SCRIPT_DIR/research-db" ingest-ready >/dev/null
 

@@ -80,7 +80,6 @@ def main(
             raise FScrapeArgumentError(
                 "--research-run-id or FIRECRAWL_RESEARCH_RUN_ID is required"
             )
-        require_persistence_mode()
         request = FScrapeRequest(
             urls=tuple(args.urls),
             research_run_id=args.research_run_id,
@@ -128,21 +127,6 @@ def load_schema(
         raise FScrapeArgumentError("JSON schema must be an object")
     validate_schema(schema)
     return schema
-
-
-def require_persistence_mode() -> None:
-    mode = os.environ.get("FIRECRAWL_RESEARCH_PERSIST", "on").strip().lower()
-    if mode == "off":
-        raise FScrapeError(
-            "preflight",
-            "FIRECRAWL_RESEARCH_PERSIST=off was removed; fscrape now requires "
-            "PostgreSQL-authoritative persistence and a valid fr_<uuid> run binding.",
-        )
-    if mode not in {"", "auto", "on"}:
-        raise FScrapeError(
-            "preflight",
-            "FIRECRAWL_RESEARCH_PERSIST must be auto or on; off is unsupported",
-        )
 
 
 def emit_result(result: FScrapeResult, json_output: bool) -> None:

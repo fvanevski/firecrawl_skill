@@ -12,6 +12,7 @@ from uuid import UUID
 
 from .acquisition_authority import (
     ACQUISITION_ENTRY_STATES,
+    AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
 )
 from .blob import ContentAddressedBlobStore
@@ -247,9 +248,7 @@ class AcquisitionResult:
     candidate_count: int
     candidates: list[dict[str, Any]]
     postgres_committed: bool
-    scratch_exported: bool
     event_id: UUID | None = None
-    scratch_error: str | None = None
     search_response: dict[str, Any] = field(default_factory=dict)
     replayed: bool = False
 
@@ -262,10 +261,16 @@ class AcquisitionService:
         uow_factory: Callable,
         blob_store: Any | None = None,
         search_adapter: SearchAdapter | None = None,
+        *,
+        config: Any | None = None,
+        authority_preflight: Callable[..., AuthoritativeAcquisitionContext]
+        | None = None,
     ):
         self.uow_factory = uow_factory
         self.blob_store = blob_store
         self.search_adapter = search_adapter or FirecrawlSearchAdapter()
+        self.config = config
+        self.authority_preflight = authority_preflight
 
     def execute_search(
         self,
@@ -279,11 +284,9 @@ class AcquisitionService:
         limit: int = 20,
         sources: str = "web",
         tbs: str | None = None,
-        scratch_dir: Path | str | None = None,
-        export_scratch: bool = True,
         metadata: dict[str, Any] | None = None,
         authority_context: AuthoritativeAcquisitionContext | None = None,
-        replay_existing: bool = False,
+        replay_existing: bool = True,
     ) -> AcquisitionResult:
         run_id = UUID(str(run_id))
         if plan_id is not None:
@@ -293,6 +296,7 @@ class AcquisitionService:
         if not query_text.strip():
             raise ValueError("query_text must be non-empty")
 
+        authority_context = self._resolve_authority_context(run_id, authority_context)
         key = idempotency_key or f"search:{run_id}:{plan_query_id or query_text}"
         request_envelope = {
             "schema_version": "authoritative-search-request-v1",
@@ -385,21 +389,6 @@ class AcquisitionService:
                 uow.commit()
                 postgres_committed = True
 
-        scratch_exported = False
-        scratch_err = None
-        if export_scratch and scratch_dir:
-            try:
-                self._export_scratch_artifacts(
-                    Path(scratch_dir),
-                    query_text,
-                    adapter_result.raw_payload,
-                    candidates,
-                    resp_data,
-                )
-                scratch_exported = True
-            except Exception as exc:  # noqa: BLE001
-                scratch_err = f"{type(exc).__name__}: {exc}"
-
         return AcquisitionResult(
             search_response_id=resp_data["id"],
             run_id=run_id,
@@ -409,9 +398,7 @@ class AcquisitionService:
             candidate_count=len(candidates),
             candidates=candidates,
             postgres_committed=postgres_committed,
-            scratch_exported=scratch_exported,
             event_id=event_id,
-            scratch_error=scratch_err,
             search_response=resp_data,
             replayed=False,
         )
@@ -523,19 +510,33 @@ class AcquisitionService:
             candidate_count=len(candidates),
             candidates=candidates,
             postgres_committed=True,
-            scratch_exported=False,
             search_response=response,
             replayed=True,
         )
 
+    def _resolve_authority_context(
+        self,
+        run_id: UUID,
+        context: AuthoritativeAcquisitionContext | None,
+    ) -> AuthoritativeAcquisitionContext:
+        if context is None:
+            if self.authority_preflight is None or self.config is None:
+                raise AcquisitionPreflightError(
+                    "authoritative acquisition preflight is required before provider execution"
+                )
+            context = self.authority_preflight(run_id=run_id, config=self.config)
+        if context.run_id != run_id or context.lifecycle_revision is None:
+            raise AcquisitionPreflightError(
+                "authoritative acquisition requires a matching run-bound preflight context"
+            )
+        return context
+
     @staticmethod
     def _revalidate_authority(
         uow: Any,
-        context: AuthoritativeAcquisitionContext | None,
+        context: AuthoritativeAcquisitionContext,
         run_id: UUID,
     ) -> None:
-        if context is None:
-            return
         if context.run_id != run_id or context.lifecycle_revision is None:
             raise AcquisitionAuthorityChangedError(
                 "authoritative search requires the matching run-bound preflight context"
@@ -591,35 +592,3 @@ class AcquisitionService:
                     )
             uow.commit()
         return reconciled
-
-    def _export_scratch_artifacts(
-        self,
-        target_dir: Path,
-        query_text: str,
-        raw_payload: bytes,
-        candidates: list[dict[str, Any]],
-        resp_data: dict[str, Any],
-    ) -> None:
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        search_json_path = target_dir / "_search.json"
-        search_json_path.write_bytes(raw_payload)
-
-        created_at_val = resp_data.get("created_at")
-        created_at_str = (
-            created_at_val.isoformat()
-            if hasattr(created_at_val, "isoformat")
-            else str(created_at_val)
-        )
-
-        meta_json_path = target_dir / "_meta.json"
-        meta_content = {
-            "query": query_text,
-            "search_response_id": str(resp_data["id"]),
-            "run_id": str(resp_data["run_id"]),
-            "backend": resp_data["backend"],
-            "status": resp_data["status"],
-            "candidate_count": len(candidates),
-            "created_at": created_at_str,
-        }
-        meta_json_path.write_text(json.dumps(meta_content, indent=2), encoding="utf-8")

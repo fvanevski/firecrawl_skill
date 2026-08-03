@@ -304,15 +304,11 @@ def main(argv=None) -> int:
 
     # Resolve research environment.
     research_env = resolved_research_environment()
-    persistence_mode = research_env.get("FIRECRAWL_RESEARCH_PERSIST", "auto")
-    if persistence_mode not in {"auto", "on", "off"}:
-        parser.error("FIRECRAWL_RESEARCH_PERSIST must be auto, on, or off")
-
     if not args.dry_run:
-        if persistence_mode == "off" or not research_env.get("DATABASE_URL"):
+        if not research_env.get("DATABASE_URL"):
             parser.error(
                 "fsearch_smart requires the authoritative PostgreSQL store; "
-                "set FIRECRAWL_RESEARCH_PERSIST=on and DATABASE_URL"
+                "set DATABASE_URL"
             )
         ready = subprocess.run(
             [os.path.join(SCRIPT_DIR, "research-db"), "ingest-ready"],

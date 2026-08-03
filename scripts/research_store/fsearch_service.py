@@ -405,7 +405,6 @@ class FSearchService:
         self.profiles = profiles
 
     def execute(self, request: FSearchRequest) -> FSearchResult:
-        _require_persistence_mode()
         run_status = self._resolve_run(request.research_run_id)
         try:
             context = self.preflight(run_id=run_status.id, config=self.config)
@@ -444,8 +443,6 @@ class FSearchService:
                 limit=request.limit,
                 sources=request.sources,
                 tbs=request.tbs,
-                scratch_dir=None,
-                export_scratch=False,
                 authority_context=context,
                 replay_existing=True,
                 metadata={
@@ -744,7 +741,6 @@ def main(
             raise FSearchArgumentError(
                 "--research-run-id or FIRECRAWL_RESEARCH_RUN_ID is required"
             )
-        _require_persistence_mode()
         request = FSearchRequest(
             query=args.query,
             research_run_id=args.research_run_id,
@@ -824,21 +820,6 @@ def _exit_code(stage: str) -> int:
         "ingestion": 6,
         "indexing": 7,
     }[stage]
-
-
-def _require_persistence_mode() -> None:
-    mode = os.environ.get("FIRECRAWL_RESEARCH_PERSIST", "on").strip().lower()
-    if mode == "off":
-        raise FSearchError(
-            "preflight",
-            "FIRECRAWL_RESEARCH_PERSIST=off was removed; fsearch now requires "
-            "PostgreSQL-authoritative persistence and a valid fr_<uuid> run binding.",
-        )
-    if mode not in {"", "auto", "on"}:
-        raise FSearchError(
-            "preflight",
-            "FIRECRAWL_RESEARCH_PERSIST must be auto or on; off is no longer supported",
-        )
 
 
 def _ordered_candidates(

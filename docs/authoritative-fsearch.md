@@ -52,7 +52,7 @@ Supported controls include `--limit`, `--scrape-limit`, `--sources`, `--tbs`,
 defaults.
 
 The removed `--dir`, `--reuse-search`, and `--scrape-ranks` options fail with
-migration guidance. `FIRECRAWL_RESEARCH_PERSIST=off` is rejected.
+migration guidance. Authoritative PostgreSQL preflight is unconditional.
 
 JSON and console results include run and invocation IDs, search-response ID,
 stable candidate IDs, extraction invocation and outcomes, and authoritative
@@ -73,3 +73,15 @@ Exit codes are stable by failure stage:
 
 A nonzero result may contain a bounded authoritative partial result when the
 search committed before a later extraction failure.
+
+## Low-level `research-db acquisition-search` contract
+
+`research-db acquisition-search` uses the same run-bound authoritative preflight as
+`fsearch`. Schema-head, writable-role, durable `BLOB_ROOT`, and acquisition-eligible
+run checks complete before the Firecrawl adapter is constructed or invoked. Repeating
+an idempotency key replays the committed response before any provider call.
+
+Exit codes are stable: `0` for persisted `succeeded` or `empty` results, `1` for a
+persisted provider or parse failure, `2` for authoritative preflight failure, and `3`
+for idempotency-key conflict. Success and persisted-provider-failure output is bounded
+JSON on stdout; preflight and idempotency errors are bounded JSON on stderr.

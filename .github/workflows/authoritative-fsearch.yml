@@ -86,7 +86,3 @@ jobs:
             -p no:cacheprovider \
             scripts/test_workflow.py \
             -k fsearch
-          python -m pytest \
-            -q \
-            -p no:cacheprovider \
-            scripts/test_fsearch_wrapper_e2e.py

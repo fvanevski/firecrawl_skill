@@ -106,7 +106,6 @@ def _acquisition_result(
         candidate_count=len(values),
         candidates=values,
         postgres_committed=committed,
-        scratch_exported=False,
         search_response={"error_message": "provider diagnostic"},
     )
 
@@ -209,8 +208,8 @@ def test_preflight_precedes_transport_and_selected_scrape_uses_candidate_ids(
         "direct_factory",
         "extract",
     ]
-    assert acquisition.calls[0]["export_scratch"] is False
-    assert acquisition.calls[0]["scratch_dir"] is None
+    assert "export_scratch" not in acquisition.calls[0]
+    assert "scratch_dir" not in acquisition.calls[0]
     assert direct.requests[0].candidate_id == candidate_ids[0]
     assert direct.requests[0].url is None
     assert direct.requests[0].format == "json"
@@ -453,27 +452,6 @@ def test_removed_file_and_rank_flags_fail_before_service_construction(
 
     assert code == 2
     assert constructed is False
-
-
-def test_persistence_off_fails_before_service_construction(monkeypatch, capsys):
-    monkeypatch.setenv("FIRECRAWL_RESEARCH_PERSIST", "off")
-    constructed = False
-
-    def factory():
-        nonlocal constructed
-        constructed = True
-        raise AssertionError("service must not be constructed")
-
-    code = main(
-        ["test query", "--research-run-id", RUN_EXTERNAL_ID, "--json"],
-        service_factory=factory,
-    )
-
-    assert code == 2
-    assert constructed is False
-    output = json.loads(capsys.readouterr().out)
-    assert output["failure_stage"] == "preflight"
-    assert "was removed" in output["error"]
 
 
 @pytest.fixture(scope="session")
