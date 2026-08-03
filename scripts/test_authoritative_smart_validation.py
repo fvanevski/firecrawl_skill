@@ -69,6 +69,7 @@ def test_smart_dry_run_is_stdout_only_and_has_no_external_calls(
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_version"] == "authoritative-smart-search-plan-v1"
     assert payload["mode"] == "dry_run"
+    assert payload["strategy"]["acquisition_mode"] == "coverage_led_orchestrator"
     assert payload["queries"][0]["query"] == "bounded authoritative dry-run"
     assert list(monitored.rglob("*")) == []
 
