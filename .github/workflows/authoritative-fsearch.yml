@@ -34,64 +34,84 @@ jobs:
         run: |
           python -m pip install ruff
           python - <<'PY'
+          import re
           from pathlib import Path
 
           path = Path('scripts/live_validate.py')
           text = path.read_text(encoding='utf-8')
-          replacements = {
-              '''PROFILE_OPERATION_CAPS = {
+
+          old_profiles = '''PROFILE_OPERATION_CAPS = {
               "focused": 40,
               "termux": 40,
               "full": 100,
           }
-          ''': '''PROFILE_OPERATION_CAPS = {
+          '''
+          new_profiles = '''PROFILE_OPERATION_CAPS = {
               "focused": 40,
               "failure-path": 20,
               "full": 100,
           }
-          ''',
-              '''            cursor.execute(
-                  """SELECT DISTINCT c.id,c.canonical_url,c.domain,
-                                    coalesce(o.title,''),coalesce(o.snippet,'')
-                     FROM search_candidates c
-                     LEFT JOIN candidate_occurrences o
-                       ON o.candidate_id=c.id AND o.run_id=c.run_id
-                     WHERE c.run_id=%s
-                     ORDER BY c.id""",
-                  (run_id,),
-              )
-          ''': '''            cursor.execute(
-                  """SELECT c.id,c.canonical_url,c.domain,
-                            coalesce(c.title,''),coalesce(c.snippet,'')
-                     FROM search_candidates c
-                     WHERE c.run_id=%s
-                     ORDER BY c.id""",
-                  (run_id,),
-              )
-          ''',
-              '''        self.validate_dry_run()
-              if self.args.profile == "termux":
-                  self.run_smart("termux", "termux", resume=True)
-              else:
-                  self.run_smart("academic", "academic", resume=True)
+          '''
+          if old_profiles not in text:
+              raise SystemExit('expected profile block not found')
+          text = text.replace(old_profiles, new_profiles, 1)
+
+          candidate_pattern = re.compile(
+              r'''            cursor\.execute\(\n'''
+              r'''\s+"""SELECT DISTINCT c\.id,c\.canonical_url,c\.domain,\n'''
+              r'''\s+coalesce\(o\.title,''\),coalesce\(o\.snippet,''\)\n'''
+              r'''\s+FROM search_candidates c\n'''
+              r'''\s+LEFT JOIN candidate_occurrences o\n'''
+              r'''\s+ON o\.candidate_id=c\.id AND o\.run_id=c\.run_id\n'''
+              r'''\s+WHERE c\.run_id=%s\n'''
+              r'''\s+ORDER BY c\.id""",\n'''
+              r'''\s+\(run_id,\),\n'''
+              r'''\s+\)\n'''
+          )
+          candidate_replacement = '''            cursor.execute(
+              """SELECT c.id,c.canonical_url,c.domain,
+                        coalesce(c.title,''),coalesce(c.snippet,'')
+                 FROM search_candidates c
+                 WHERE c.run_id=%s
+                 ORDER BY c.id""",
+              (run_id,),
+          )
+          '''
+          text, candidate_count = candidate_pattern.subn(
+              candidate_replacement,
+              text,
+              count=1,
+          )
+          if candidate_count != 1:
+              raise SystemExit(f'candidate query replacements: {candidate_count}')
+
+          execute_pattern = re.compile(
+              r'''        self\.validate_dry_run\(\)\n'''
+              r'''        if self\.args\.profile == "termux":\n'''
+              r'''            self\.run_smart\("termux", "termux", resume=True\)\n'''
+              r'''        else:\n'''
+              r'''            self\.run_smart\("academic", "academic", resume=True\)\n'''
+              r'''        self\.run_fscrape_valkey_loss\(\)\n\n'''
+              r'''        if self\.args\.profile == "full":\n'''
+          )
+          execute_replacement = '''        self.validate_dry_run()
+          if self.args.profile == "failure-path":
               self.run_fscrape_valkey_loss()
+              return self.finish()
 
-              if self.args.profile == "full":
-          ''': '''        self.validate_dry_run()
-              if self.args.profile == "failure-path":
-                  self.run_fscrape_valkey_loss()
-                  return self.finish()
+          self.run_smart("academic", "academic", resume=True)
+          self.run_fscrape_valkey_loss()
 
-              self.run_smart("academic", "academic", resume=True)
-              self.run_fscrape_valkey_loss()
+          if self.args.profile == "full":
+          '''
+          text, execute_count = execute_pattern.subn(
+              execute_replacement,
+              text,
+              count=1,
+          )
+          if execute_count != 1:
+              raise SystemExit(f'execute replacements: {execute_count}')
 
-              if self.args.profile == "full":
-          ''',
-          }
-          for old, new in replacements.items():
-              if old not in text:
-                  raise SystemExit(f'expected replacement block not found: {old[:80]!r}')
-              text = text.replace(old, new, 1)
           path.write_text(text, encoding='utf-8')
           PY
           ruff format scripts/live_validate.py
