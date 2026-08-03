@@ -1,6 +1,6 @@
 # RC-9 Release Notes: PostgreSQL-Authoritative Runtime
 
-Parent epic: #183  
+Parent epic: #183
 Release issue: #192
 
 ## Summary
