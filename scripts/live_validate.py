@@ -44,7 +44,7 @@ BENCHMARKS = {
 }
 PROFILE_OPERATION_CAPS = {
     "focused": 40,
-    "termux": 40,
+    "failure-path": 20,
     "full": 100,
 }
 _MAX_OUTPUT_CHARS = 4_000
@@ -236,11 +236,9 @@ class AuthoritativeInspector:
             queries = planned_queries or response_queries
 
             cursor.execute(
-                """SELECT DISTINCT c.id,c.canonical_url,c.domain,
-                                  coalesce(o.title,''),coalesce(o.snippet,'')
+                """SELECT c.id,c.canonical_url,c.domain,
+                          coalesce(c.title,''),coalesce(c.snippet,'')
                    FROM search_candidates c
-                   LEFT JOIN candidate_occurrences o
-                     ON o.candidate_id=c.id AND o.run_id=c.run_id
                    WHERE c.run_id=%s
                    ORDER BY c.id""",
                 (run_id,),
@@ -913,10 +911,11 @@ class Campaign:
             return self.finish(exit_override=2)
 
         self.validate_dry_run()
-        if self.args.profile == "termux":
-            self.run_smart("termux", "termux", resume=True)
-        else:
-            self.run_smart("academic", "academic", resume=True)
+        if self.args.profile == "failure-path":
+            self.run_fscrape_valkey_loss()
+            return self.finish()
+
+        self.run_smart("academic", "academic", resume=True)
         self.run_fscrape_valkey_loss()
 
         if self.args.profile == "full":
