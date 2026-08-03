@@ -298,10 +298,13 @@ def test_skill_describes_verify_as_blob_integrity_reporting_only() -> None:
     ):
         assert required in section
 
-    assert "authoritative completion verification" not in content.split(
-        "Use the run wrapper",
-        1,
-    )[0]
+    assert (
+        "authoritative completion verification"
+        not in content.split(
+            "Use the run wrapper",
+            1,
+        )[0]
+    )
     assert "`frun verify` checks committed run evidence" not in content
     assert "verify or audit research runs" not in content
 
