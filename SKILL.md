@@ -1,6 +1,6 @@
 ---
 name: firecrawl
-description: "Acquire, retain, retrieve, and audit web research with Firecrawl. Use when Codex needs to search or scrape the web, inspect the PostgreSQL-authoritative corpus, replay retained responses, select stable candidates, retrieve bounded passages, diagnose ingestion or indexing, verify or audit research runs, or recover research provenance."
+description: "Acquire, retain, retrieve, and inspect web research with Firecrawl. Use when Codex needs to search or scrape the web, inspect the PostgreSQL-authoritative corpus, replay retained responses, select stable candidates, retrieve bounded passages, diagnose ingestion or indexing, report invocation-output blob integrity, schedule or inspect audit assessment records, compare research runs, or recover research provenance."
 ---
 
 <!-- @format -->
@@ -14,8 +14,8 @@ PostgreSQL is authoritative for workflow, acquisition provenance, corpus identit
 1. Search retained material first with `corpus-overview`, `search-assets`, and bounded `fetch-passages`.
 2. Use `finspect` for run history, retained-response replay, candidate selection, attempts, exact lexical or pattern search, and bounded inspection.
 3. Acquire new evidence with `fsearch_smart`, `fsearch`, or `fscrape` only when retained evidence is absent, stale, incomplete, or the task explicitly requires current acquisition.
-4. Inspect the authoritative run and invocation before retrying. Distinguish provider, parsing, ingestion, indexing, retrieval, verification, and audit failures.
-5. Never infer success or current state from a local path, presentation export, Qdrant point, or Valkey message.
+4. Inspect the authoritative run and invocation before retrying. Distinguish provider, parsing, ingestion, indexing, retrieval, blob-integrity reporting, audit scheduling or status, and comparison failures.
+5. Never infer success or current state from a local path, presentation export, Qdrant point, Valkey message, zero-total blob report, or partial audit assessment.
 
 Resolve `<skill-root>` to the directory containing this file and keep `rtk proxy` at the outer agent-visible boundary. The shell entry points automatically source `scripts/research-env` when it is readable unless `FIRECRAWL_RESEARCH_AUTO_ENV=0` is set deliberately.
 
@@ -47,7 +47,7 @@ A normal top-level operation receives a new `fc_<uuid>`. Use `--invocation-id` a
 
 `research-db worker --once` processes at most one bounded batch. `drain_index_jobs.py` repeats bounded batches until PostgreSQL reports `claimed=0` and returns nonzero for invalid output, worker failure, failed jobs, lease loss, or an exceeded bound. Do not start another acquisition on the same run while indexing is unfinished.
 
-To add a direct scrape to the same run, first drain and verify the prior work, then drain again after the scrape:
+To add a direct scrape to the same run, first drain and inspect the prior work, then drain again after the scrape:
 
 ```bash
 rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
@@ -203,9 +203,9 @@ rtk proxy "<skill-root>/scripts/frun" status "$RUN_ID"
 
 Retry an uncertain command with its original idempotency key. After a stale revision, inspect `run-status` before deciding whether a new command is valid. Reopen terminal runs explicitly.
 
-## Verification, audit, and comparison
+## Blob-integrity reporting, audit scheduling, and comparison
 
-Use the run lifecycle wrapper for authoritative completion verification, persisted audits, audit status, and cross-run comparison:
+Use the run wrapper for invocation-output blob-integrity reports, scheduling or inspecting audit assessment records, and cross-run comparison:
 
 ```bash
 rtk proxy "<skill-root>/scripts/frun" verify "$RUN_ID"
@@ -214,7 +214,9 @@ rtk proxy "<skill-root>/scripts/frun" audit-status "$RUN_ID"
 rtk proxy "<skill-root>/scripts/frun" compare "$RUN_ID" "<other-run-id>"
 ```
 
-`frun verify` checks committed run evidence. `frun audit` persists an audit through the configured semantic authority and deterministic validation path; it is not a substitute for verification. Inspect a nonzero result and the authoritative audit status before retrying. Never print resolved model or provider secrets.
+`frun verify` scans invocation output `results` for `snapshot` or `artifacts` values containing blob `path` and `sha256` pairs, then reports availability, hash mismatches, and file-based unverified references. It does not validate terminal state, claims, evidence packets, synthesis, declared outcome, or run completion. A report with `total: 0` and exit status `0` means that no verifiable path/hash pairs were found; it is not evidence that the run completed or passed. Inspect `frun status` and the relevant evidence or terminal-decision records separately.
+
+`frun audit` currently schedules and persists an audit assessment identity with status `partial`. It does not invoke a semantic provider or execute deterministic audit-stage validation. `frun audit-status` reports the latest stored assessment, which may therefore be only a scheduled partial record rather than a completed semantic evaluation. Provider, model, and stage choices label the scheduled record; accepted controls such as force, call limits, input-token limits, and fallback settings are not evidence that evaluation occurred and are not consumed by the current scheduling path. Do not present either command as authoritative completion verification or completed semantic-audit assurance.
 
 ## Qdrant and Valkey recovery
 
