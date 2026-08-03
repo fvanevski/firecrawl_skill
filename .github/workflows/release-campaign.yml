@@ -107,7 +107,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/verify_release_campaign.py \
+          python scripts/verify_release_campaign_strict.py \
             --campaign-dir "$CAMPAIGN_DIR" \
             --database-url "$DATABASE_URL" \
             --candidate-sha "$CANDIDATE_SHA" \
@@ -146,9 +146,13 @@ jobs:
 
       - name: Enforce authoritative gate
         if: always()
+        env:
+          PYTHONPATH: scripts
         shell: bash
         run: |
           set -euo pipefail
-          test "${{ steps.execute.outcome }}" = "success"
-          test "${{ steps.verify.outcome }}" = "success"
-          test "${{ steps.upload.outcome }}" = "success"
+          python scripts/enforce_release_campaign_outcomes.py \
+            --execute "${{ steps.execute.outcome }}" \
+            --verify "${{ steps.verify.outcome }}" \
+            --upload "${{ steps.upload.outcome }}" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
