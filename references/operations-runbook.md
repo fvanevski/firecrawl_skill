@@ -562,3 +562,15 @@ Direct updates or deletes to runs, transitions, events, invocations, manifests, 
 - Confirm no silent fallback.
 
 The standalone checklist in `recovery-drill-checklist.md` provides the evidence fields and sign-off format.
+
+## Authoritative live-validation campaigns
+
+Run live validation only after `research-db ingest-ready` succeeds and the configured Qdrant active alias matches the current embedding fingerprint. The validator creates disposable PostgreSQL runs and never consumes reports, manifests, or temporary paths as workflow state.
+
+```bash
+scripts/live_validate.py --profile focused --max-operations 40
+scripts/live_validate.py --profile failure-path --max-operations 20
+scripts/live_validate.py --profile full --max-operations 100
+```
+
+Use `--blob-root` for a nondefault immutable payload store. Use `--artifact-root` only to export the final `manifest.json` and `report.md`. Each Firecrawl process attempt consumes the hard operation budget. A campaign fails closed on retained `TMPDIR` entries, missing required smart-planning provenance or corpus identities, invalid blob digests, incomplete exact-run index jobs, incompatible Qdrant alias/schema, incomplete point coverage, or failure to observe the persisted nonterminal restart checkpoint.
