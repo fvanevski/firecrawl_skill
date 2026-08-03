@@ -2,7 +2,7 @@
 
 # Firecrawl Research Skill
 
-This Codex skill combines Firecrawl web acquisition with a persistent, auditable research corpus. PostgreSQL is the sole authority for workflow state, invocation state, provenance, claims, evidence, audits, and corpus identities. Content-addressed blobs retain immutable payloads, Qdrant supplies a rebuildable dense-retrieval projection, Valkey provides optional worker wakeups, and scratch directories remain local operational diagnostics.
+This Codex skill combines Firecrawl web acquisition with a persistent, auditable research corpus. PostgreSQL is the sole authority for workflow state, invocation state, provenance, claims, evidence, audits, and corpus identities. Content-addressed blobs retain immutable payloads, Qdrant supplies a rebuildable dense-retrieval projection, and Valkey provides optional worker wakeups. Secure temporary files may exist only for bounded in-process operations; no scratch directory or local manifest is workflow, replay, history, or corpus authority.
 
 `README.md` is the GitHub-facing overview. Agent instructions are canonical in `SKILL.md`; architecture and operator procedures are canonical in `references/`.
 
@@ -76,6 +76,19 @@ Supported `fsearch` and `fscrape` commands require `DATABASE_URL` to identify a 
 `fsearch_smart --dry-run` may generate a deterministic plan without database or network writes. Normal smart-search execution remains PostgreSQL-authoritative.
 
 Explicit `DATABASE_URL`, Qdrant/Valkey endpoints and keys, blob root, and `FIRECRAWL_RESEARCH_PYTHON` take precedence over values loaded by `scripts/research-env`.
+
+## Authoritative live validation
+
+`scripts/live_validate.py` exercises public wrappers against disposable authoritative runs and derives its verdict from PostgreSQL records, immutable `BLOB_ROOT` payloads, exact-run index jobs, and the active Qdrant alias. An empty corpus or empty expected Qdrant set is not successful coverage. The smart-search resume case deliberately stops at a nonterminal `extracting` checkpoint and then restarts from persisted records and blob payloads.
+
+```bash
+scripts/live_validate.py --profile focused --max-operations 40
+scripts/live_validate.py --profile failure-path --max-operations 20
+scripts/live_validate.py --profile full --max-operations 100
+scripts/live_validate.py --profile focused --artifact-root ./validation-artifacts
+```
+
+Every Firecrawl subprocess, including transport retries, consumes one operation from a file-locked hard cap. The validator fails on retained monitored-`TMPDIR` entries, missing required authoritative planning or corpus records, invalid blobs, incomplete exact-run jobs, or incomplete Qdrant chunk coverage. Final report files are opt-in outputs and are never runtime inputs.
 
 ## Clean datastore initialization
 

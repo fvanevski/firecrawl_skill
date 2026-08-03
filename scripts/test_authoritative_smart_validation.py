@@ -260,6 +260,7 @@ def _validation_args(*, artifact_root=None):
         database_url="postgresql://research@test/research",
         qdrant_url="http://qdrant.test:6333",
         qdrant_api_key="",
+        blob_root="/tmp/test-authoritative-blobs",
         max_operations=10,
         api_url="http://firecrawl.test:3002",
         max_adaptive_cycles=1,

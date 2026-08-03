@@ -26,7 +26,7 @@ rtk proxy "<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --m
 
 ## Resource Layout
 
-Resolve paths relative to this skill root. Do not assume the skill lives under a specific home directory or that the current working directory is the skill directory. Launch every bundled wrapper through `rtk proxy` so Codex hook enforcement is satisfied while complete progress and scratch-directory output remain visible. Replace `<skill-root>` with the directory containing this `SKILL.md`.
+Resolve paths relative to this skill root. Do not assume the skill lives under a specific home directory or that the current working directory is the skill directory. Launch every bundled wrapper through `rtk proxy` so Codex hook enforcement is satisfied while complete progress and bounded diagnostics remain visible. Replace `<skill-root>` with the directory containing this `SKILL.md`.
 
 ```bash
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>"
@@ -109,6 +109,7 @@ For operations, deployment, backup/restore, Qdrant rebuild, Valkey loss, endpoin
 | `scripts/fsearch` | Search Firecrawl, persist all candidates, and scrape a bounded subset | Stable response, candidate, extraction, corpus, batch, and job IDs |
 | `scripts/fscrape` | Scrape arbitrary URLs through the direct authoritative service | Stable snapshot, document, derivation, chunk, batch, and job IDs |
 | `scripts/finspect` | List, replay, inspect, and retrieve bounded retained records | Bounded JSON/console output |
+| `scripts/live_validate.py` | Run bounded authoritative wrapper, restart, blob, worker, Qdrant, and Valkey-loss validation | PostgreSQL/Qdrant-derived verdict and optional final report artifacts |
 | `scripts/research-db` | Migrate, inspect, retrieve, rederive, index, reconcile, export, and diagnose the authoritative corpus | JSON manifests and bounded passages |
 
 ## Procedure
