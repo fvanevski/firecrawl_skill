@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Drain durable PostgreSQL index jobs through bounded worker batches."""
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _default_runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(
         list(argv),
         check=False,
         capture_output=True,
@@ -79,11 +78,11 @@ def drain_index_jobs(
         try:
             payload = json.loads(completed.stdout)
             if not isinstance(payload, dict):
-                raise ValueError("worker result must be a JSON object")
+                raise TypeError("worker result must be a JSON object")
             claimed = _nonnegative_int(payload, "claimed")
             failed = _nonnegative_int(payload, "failed")
             lease_lost = _nonnegative_int(payload, "lease_lost")
-        except (json.JSONDecodeError, ValueError) as exc:
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
             print(
                 f"invalid worker result after batch {batch_number}: {exc}",
                 file=sys.stderr,
