@@ -118,6 +118,7 @@ jobs:
             -p no:cacheprovider \
             scripts/test_documentation.py \
             scripts/test_documented_workflows.py \
+            scripts/test_documented_blob_transaction.py \
             scripts/test_authoritative_storage_gate.py \
             scripts/test_acquisition_authority.py \
             scripts/test_authoritative_fsearch.py \
