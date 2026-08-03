@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Verify that every pytest skip is explicit, classified, and expected."""
 
 from __future__ import annotations
@@ -61,11 +60,11 @@ def verify(
 
     entries = allowlist.get("entries")
     if not isinstance(entries, list):
-        raise ValueError("pytest skip allowlist entries must be a list")
+        raise TypeError("pytest skip allowlist entries must be a list")
     expected: dict[str, dict[str, str]] = {}
     for entry in entries:
         if not isinstance(entry, dict):
-            raise ValueError("pytest skip allowlist entry must be an object")
+            raise TypeError("pytest skip allowlist entry must be an object")
         node_id = str(entry.get("node_id") or "")
         reason_contains = str(entry.get("reason_contains") or "")
         classification = str(entry.get("classification") or "")
@@ -143,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         result = verify(args.junitxml, args.allowlist, args.output)
-    except (OSError, ET.ParseError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ET.ParseError, TypeError, ValueError, json.JSONDecodeError) as exc:
         print(f"pytest skip verification failed: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))
