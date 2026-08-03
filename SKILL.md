@@ -39,14 +39,23 @@ rtk proxy "<skill-root>/scripts/fsearch" "<query>" \
   --scrape-limit 5 \
   --sources web,news
 
-rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/article" \
-  --research-run-id "$RUN_ID"
-
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
 rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
-rtk proxy "<skill-root>/scripts/research-db" doctor
 ```
 
 A normal top-level operation receives a new `fc_<uuid>`. Use `--invocation-id` and the same idempotency key only for a deliberate retry of uncertain identical input. Conflicting key reuse fails closed.
+
+`research-db worker --once` processes at most one bounded batch. `drain_index_jobs.py` repeats bounded batches until PostgreSQL reports `claimed=0` and returns nonzero for invalid output, worker failure, failed jobs, lease loss, or an exceeded bound. Do not start another acquisition on the same run while indexing is unfinished.
+
+To add a direct scrape to the same run, first drain and verify the prior work, then drain again after the scrape:
+
+```bash
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
+rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/article" \
+  --research-run-id "$RUN_ID"
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
+rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
+```
 
 `fsearch_smart` creates an authoritative run when one is not supplied. `--dry-run` is the only non-persistent execution surface and performs no database or network writes.
 
@@ -82,11 +91,15 @@ rtk proxy "<skill-root>/scripts/finspect" passages "<asset-uuid>" \
 
 ## Structured scrape
 
+Start a separate run or use the same-run drain boundary above.
+
 ```bash
+SCRAPE_RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start "structured scrape" --mode autonomous_local)"
 rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/product" \
-  --research-run-id "$RUN_ID" \
+  --research-run-id "$SCRAPE_RUN_ID" \
   --schema '{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}' \
   --json
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
 ```
 
 Structured provider output is validated before successful document ingestion. Invalid structured output remains a failed extraction attempt; it is not silently accepted.
@@ -102,6 +115,8 @@ created → planning → corpus_review → acquiring → extracting → indexing
 After all run-scoped index jobs complete, `frun finish` advances through coverage review, synthesis, validation, and the requested terminal outcome.
 
 ```bash
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
+rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
 rtk proxy "<skill-root>/scripts/frun" finish "$RUN_ID" --outcome satisfied
 rtk proxy "<skill-root>/scripts/frun" status "$RUN_ID"
 ```
@@ -115,11 +130,11 @@ PostgreSQL jobs remain durable when Valkey is unavailable. Qdrant contains no un
 ```bash
 rtk proxy "<skill-root>/scripts/research-db" index-list
 rtk proxy "<skill-root>/scripts/research-db" index-build --current-config --all
-rtk proxy "<skill-root>/scripts/research-db" worker --once --batch-size 64
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
 rtk proxy "<skill-root>/scripts/research-db" reconcile-qdrant
+rtk proxy "<skill-root>/scripts/research-db" doctor
 rtk proxy "<skill-root>/scripts/research-db" index-activate "<index-id>"
 rtk proxy "<skill-root>/scripts/research-db" index-rollback "<prior-index-id>"
-rtk proxy "<skill-root>/scripts/research-db" doctor
 ```
 
 Never embed a query against an alias backed by a different embedding fingerprint. Retrieval falls back to PostgreSQL lexical search and `doctor` reports the mismatch.
@@ -135,6 +150,7 @@ Exports are never replay, retry, selection, ingestion, or workflow inputs.
 
 ## Documentation
 
+- `references/authoritative-workflows.md`: canonical acquisition, completion, transaction, and projection-recovery sequences.
 - `references/research-store-architecture.md`: Target A authority and consistency.
 - `references/operations-runbook.md`: deployment, backup, restore, worker, projection, and recovery.
 - `references/research-store-operations.md`: compact operator commands.
@@ -150,6 +166,7 @@ Exports are never replay, retry, selection, ingestion, or workflow inputs.
 - A supported acquisition reports stable authoritative IDs or a stage-specific failure.
 - No Firecrawl or network invocation occurs after failed authoritative preflight.
 - PostgreSQL identities resolve to immutable bytes under `BLOB_ROOT`.
+- Payload bytes are installed before PostgreSQL commits metadata that references them.
 - The worker and active Qdrant alias match the configured embedding fingerprint.
 - Valkey loss does not strand durable work.
 - Bounded inspection observes record, character, byte, and tokenizer limits.
