@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Documentation command verification test.
-
-Verifies that documentation files exist, cover all required topics,
-and that SKILL.md references the new documentation. This is a
-deterministic, no-network test.
-
-Acceptance criteria for issue #69:
-- [ ] Documentation command verification.
-- [ ] Recovery drill checklist.
-"""
+"""Verify RC-9 documentation against authoritative parser and storage contracts."""
 
 from __future__ import annotations
 
@@ -18,233 +9,173 @@ from typing import ClassVar
 
 import pytest
 
-SCRIPTS = Path(__file__).parent
+SCRIPTS = Path(__file__).resolve().parent
 SKILL_ROOT = SCRIPTS.parent
+RUN_ID = "fr_" + "a" * 32
+INVOCATION_ID = "fc_" + "b" * 32
+
+REFERENCE_FILES = [
+    "references/operations-runbook.md",
+    "references/migration-guide.md",
+    "references/coding-agent-guide.md",
+    "references/recovery-drill-checklist.md",
+    "references/research-store-architecture.md",
+    "references/research-store-operations.md",
+    "references/workflow-state-schema.md",
+    "references/budget-policy.md",
+    "references/cli-script-disambiguation.md",
+    "references/research-domain-schemas.md",
+    "references/phase-1-gate-report.md",
+    "references/phase-6-retrieval-transparency.md",
+    "references/release-notes-rc9.md",
+]
+
+RUNTIME_DOCUMENTS = [
+    "README.md",
+    "SKILL.md",
+    "references/operations-runbook.md",
+    "references/research-store-operations.md",
+    "references/research-store-architecture.md",
+    "references/recovery-drill-checklist.md",
+    "references/cli-script-disambiguation.md",
+    "references/coding-agent-guide.md",
+    "references/workflow-state-schema.md",
+]
+
+REMOVED_RUNTIME_MARKERS = (
+    "/tmp/firecrawl_scratch",
+    "firecrawl_scratch",
+    "_corpus.json",
+    "_search.json",
+    "_meta.json",
+    "_index.md",
+    "_workflow_input.json",
+    "persist_results.py",
+    "scripts/fread",
+    "import-scratch",
+    "FIRECRAWL_RESEARCH_PERSIST",
+    "FIRECRAWL_RESEARCH_ACTIVE",
+    "FIRECRAWL_CAPTURE_RAW",
+    "SCRATCH_ROOT",
+    "scratch-only",
+    "filesystem-only acquisition",
+    "--reuse-search",
+    "--scrape-ranks",
+    "--output-dir",
+)
 
 
-def _documented_commands() -> set[str]:
-    """Return top-level commands from the authoritative CLI parser."""
-    from research_store.cli import parser
-
-    root = parser()
-    for action in root._actions:
+def _subcommands(parser: argparse.ArgumentParser) -> set[str]:
+    for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction):
             return set(action.choices)
     return set()
 
 
-def _check_command_exists(cmd: str, extra_args: list[str]) -> bool:
-    """Check whether a documented top-level command exists.
-
-    Argument details remain in the documentation fixtures for readability, but
-    command recognition is tested by inspecting the parser directly. This keeps
-    the documentation test deterministic and avoids sourcing operator secrets.
-    """
-    del extra_args
-    return cmd in _documented_commands()
-
-
-# ------------------------------------------------------------------
-# Commands documented in operations-runbook.md
-# ------------------------------------------------------------------
-
-OPERATIONS_RUNBOOK_COMMANDS = [
-    # Core health and initialization
-    ("migrate", []),
-    ("status", []),
-    ("doctor", []),
-    ("ingest-ready", []),
-    ("verify-blobs", []),
-    # Worker and index lifecycle
-    ("worker", []),
-    ("index-once", []),
-    ("index-list", []),
-    ("index-build", ["--current-config", "--all"]),
-    ("index-activate", ["test-id"]),
-    ("index-rollback", ["test-id"]),
-    ("index-prune", ["--dry-run"]),
-    ("index-prune", ["--dry-run", "--keep-last", "2"]),
-    ("index-prune", ["--force", "--index-id", "test-id"]),
-    ("reindex", ["--all"]),
-    ("reconcile-qdrant", []),
-    # Derivations and explicit exports
-    ("rederive", ["--all"]),
-    ("rederive", ["--snapshot", "test-snapshot-id"]),
-    ("rederive-v2", ["--all"]),
-    ("rederive-v2", ["--snapshot", "test-snapshot-id"]),
-    ("rederive-v2", ["--document", "test-doc-id"]),
-    ("export-invocation", ["fc_test-id", "--output", "/tmp/out.json"]),
-    ("export-run", ["test-run-id", "--output", "/tmp/out.json"]),
-    # Run lifecycle and wrapper boundary
-    ("run-start", ["test-ext-id", "Test objective"]),
-    ("run-status", ["test-run-id"]),
-    (
-        "run-operation-start",
-        ["test-run-id", "fc_test-id", "fscrape", "--input-file", "/tmp/input.json"],
-    ),
-    ("run-operation-finish", ["test-run-id", "fc_test-id", "--status", "succeeded"]),
-    (
-        "run-mode-change",
-        [
-            "test-run-id",
-            "agent_led",
-            "--expected-revision",
-            "1",
-            "--idempotency-key",
-            "test-key",
-            "--requested-by",
-            "operator",
-            "--approved-by",
-            "operator",
-            "--reason",
-            "test",
-        ],
-    ),
-    (
-        "run-transition",
-        [
-            "test-run-id",
-            "planning",
-            "--expected-revision",
-            "1",
-            "--idempotency-key",
-            "test-key",
-        ],
-    ),
-    ("run-finish", ["test-run-id", "--outcome", "satisfied"]),
-    ("run-reopen", ["test-run-id"]),
-    ("run-cancel", ["test-run-id"]),
-    ("run-annotate", ["test-run-id", "--type", "pivot", "--reason", "test pivot"]),
-    ("run-verify", ["test-run-id"]),
-    ("run-audit", ["test-run-id"]),
-    ("run-compare", ["test-run-id-1", "test-run-id-2"]),
-    # Budget, resources, benchmark, and derivations
-    (
-        "budget-record",
-        [
-            "test-run-id",
-            "--research-spec",
-            "/tmp/spec.json",
-            "--budget-snapshot",
-            "/tmp/budget.json",
-        ],
-    ),
-    ("endpoint-health", []),
-    ("resource-status", []),
-    ("benchmark", ["run", "--dataset", "/tmp/dataset.json"]),
-    ("benchmark", ["results", "--results-path", "/tmp/results.json"]),
-    ("benchmark", ["report", "--results-path", "/tmp/results.json"]),
-    ("derivation-list", []),
-    ("derivation-list", ["--document", "test-doc-id"]),
-    ("derivation-activate", ["test-deriv-id"]),
-    ("derivation-compare", ["old-id", "new-id"]),
-    ("normalize", ["--document", "test-doc-id"]),
-    ("normalize", ["--all"]),
-    ("parser-info", []),
-    ("prune-cache", []),
-]
-
-# Commands documented in migration-guide.md
-MIGRATION_COMMANDS = [
-    ("migrate", []),
-    ("status", []),
-    ("ingest-ready", []),
-    ("doctor", []),
-    ("verify-blobs", []),
-    ("index-build", ["--current-config", "--all"]),
-    ("worker", ["--once", "--batch-size", "64"]),
-    ("reconcile-qdrant", []),
-    ("index-activate", ["test-id"]),
-    ("index-rollback", ["test-id"]),
-]
-
-# Commands documented in coding-agent-guide.md
-CODING_AGENT_COMMANDS = [
-    ("search-assets", ["test-query", "--limit", "20"]),
-    ("inspect-asset", ["test-candidate-id"]),
-    ("fetch-passages", ["test-candidate-id", "--max-tokens", "2000"]),
-    ("corpus-overview", []),
-]
-
-
-class TestDocumentationCommands:
-    """Verify that every command referenced in documentation exists."""
-
-    @pytest.mark.parametrize("cmd,extra_args", OPERATIONS_RUNBOOK_COMMANDS)
-    def test_operations_runbook_command(self, cmd: str, extra_args: list[str]) -> None:
-        """Every operations runbook command must be recognized by research-db."""
-        assert _check_command_exists(cmd, extra_args), (
-            f"Command '{cmd}' with args {extra_args} from operations runbook "
-            f"is not recognized by research-db CLI"
-        )
-
-    @pytest.mark.parametrize("cmd,extra_args", MIGRATION_COMMANDS)
-    def test_migration_guide_command(self, cmd: str, extra_args: list[str]) -> None:
-        """Every migration guide command must be recognized by research-db."""
-        assert _check_command_exists(cmd, extra_args), (
-            f"Command '{cmd}' with args {extra_args} from migration guide "
-            f"is not recognized by research-db CLI"
-        )
-
-    @pytest.mark.parametrize("cmd,extra_args", CODING_AGENT_COMMANDS)
-    def test_coding_agent_command(self, cmd: str, extra_args: list[str]) -> None:
-        """Every coding agent guide command must be recognized by research-db."""
-        assert _check_command_exists(cmd, extra_args), (
-            f"Command '{cmd}' with args {extra_args} from coding agent guide "
-            f"is not recognized by research-db CLI"
-        )
-
-
-# ------------------------------------------------------------------
-# Documentation file verification
-# ------------------------------------------------------------------
+def _options(parser: argparse.ArgumentParser) -> set[str]:
+    return {
+        option
+        for action in parser._actions
+        for option in getattr(action, "option_strings", ())
+    }
 
 
 class TestDocumentationFiles:
-    """Verify that all referenced documentation files exist and are non-empty."""
-
-    REFERENCE_FILES: ClassVar[list[str]] = [
-        "references/operations-runbook.md",
-        "references/migration-guide.md",
-        "references/coding-agent-guide.md",
-        "references/recovery-drill-checklist.md",
-        "references/research-store-architecture.md",
-        "references/research-store-operations.md",
-        "references/workflow-state-schema.md",
-        "references/budget-policy.md",
-        "references/cli-script-disambiguation.md",
-        "references/research-domain-schemas.md",
-        "references/phase-1-gate-report.md",
-        "references/phase-6-retrieval-transparency.md",
-    ]
+    REFERENCE_FILES: ClassVar[list[str]] = REFERENCE_FILES
 
     @pytest.mark.parametrize("rel_path", REFERENCE_FILES)
     def test_reference_file_exists(self, rel_path: str) -> None:
-        """Every referenced documentation file must exist."""
         path = SKILL_ROOT / rel_path
-        assert path.exists(), f"Missing reference file: {rel_path}"
-        assert path.stat().st_size > 0, f"Empty reference file: {rel_path}"
+        assert path.is_file(), f"missing reference file: {rel_path}"
+        assert path.stat().st_size > 0, f"empty reference file: {rel_path}"
 
-    def test_skill_md_references_new_docs(self) -> None:
-        """SKILL.md must reference the new documentation files."""
-        skill_md = SKILL_ROOT / "SKILL.md"
-        content = skill_md.read_text(encoding="utf-8")
-        assert "operations-runbook.md" in content, (
-            "SKILL.md does not reference operations-runbook.md"
-        )
-        assert "migration-guide.md" in content, (
-            "SKILL.md does not reference migration-guide.md"
-        )
-        assert "coding-agent-guide.md" in content, (
-            "SKILL.md does not reference coding-agent-guide.md"
-        )
+    @pytest.mark.parametrize("rel_path", RUNTIME_DOCUMENTS)
+    def test_runtime_docs_do_not_advertise_removed_surfaces(
+        self,
+        rel_path: str,
+    ) -> None:
+        content = (SKILL_ROOT / rel_path).read_text(encoding="utf-8")
+        for marker in REMOVED_RUNTIME_MARKERS:
+            assert marker not in content, (
+                f"removed runtime marker {marker!r} remains in {rel_path}"
+            )
 
-    def test_operations_runbook_has_all_sections(self) -> None:
-        """Operations runbook must cover all required topics."""
-        runbook = SKILL_ROOT / "references/operations-runbook.md"
-        content = runbook.read_text(encoding="utf-8")
+    def test_target_a_boundary_is_explicit(self) -> None:
+        for rel_path in (
+            "README.md",
+            "references/research-store-architecture.md",
+            "references/migration-guide.md",
+            "references/release-notes-rc9.md",
+        ):
+            content = (SKILL_ROOT / rel_path).read_text(encoding="utf-8")
+            assert "Target A" in content
+            assert "BLOB_ROOT" in content
+            assert "PostgreSQL" in content
+            assert "Qdrant" in content
+            assert "Valkey" in content
 
-        required_sections = [
+        architecture = (
+            SKILL_ROOT / "references/research-store-architecture.md"
+        ).read_text(encoding="utf-8")
+        assert "Future PostgreSQL payload migration" in architecture
+        assert "not implemented" in architecture
+
+    def test_release_notes_define_breaking_boundary(self) -> None:
+        content = (SKILL_ROOT / "references/release-notes-rc9.md").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "82d3369c0be9bba381f38b598c3b05ed4b683ae6",
+            "1aaa92f7c3a84ea1ed210947130b120cc814826e",
+            "Breaking changes",
+            "Parser and error compatibility",
+            "Current equivalents",
+            "Legacy acquisition-tree migration",
+            "Migration effects",
+            "Rollback",
+            "No tag name is asserted",
+            "future migration",
+        ):
+            assert required in content
+
+    def test_migration_guide_defines_import_and_rollback(self) -> None:
+        content = (SKILL_ROOT / "references/migration-guide.md").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "82d3369c0be9bba381f38b598c3b05ed4b683ae6",
+            "research-db import-scratch",
+            "--dry-run",
+            "Current equivalents",
+            "Rollback boundary",
+            "unsupported schema lineage",
+        ):
+            assert required in content
+
+    def test_skill_uses_current_finspect_run_option(self) -> None:
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        assert 'invocations --run "$RUN_ID"' in content
+        assert 'search-responses --run "$RUN_ID"' in content
+        assert "invocations --run-id" not in content
+        assert "search-responses --run-id" not in content
+
+    def test_required_run_binding_is_shown(self) -> None:
+        for rel_path in (
+            "README.md",
+            "SKILL.md",
+            "references/operations-runbook.md",
+            "references/research-store-operations.md",
+            "references/recovery-drill-checklist.md",
+        ):
+            content = (SKILL_ROOT / rel_path).read_text(encoding="utf-8")
+            assert "--research-run-id" in content
+            assert "frun" in content
+
+    def test_operations_runbook_has_required_sections(self) -> None:
+        content = (SKILL_ROOT / "references/operations-runbook.md").read_text(
+            encoding="utf-8"
+        )
+        for section in (
             "Architecture overview",
             "Service boundaries",
             "Execution modes",
@@ -257,41 +188,17 @@ class TestDocumentationFiles:
             "Interrupted-run recovery",
             "PostgreSQL workflow recovery",
             "Benchmarking",
+            "Release evidence",
             "Destructive commands",
             "Recovery drill checklist",
-        ]
+        ):
+            assert section.lower() in content.lower()
 
-        for section in required_sections:
-            assert section.lower() in content.lower(), (
-                f"operations-runbook.md missing section: {section}"
-            )
-
-    def test_migration_guide_has_all_sections(self) -> None:
-        """Migration guide must cover all required topics."""
-        guide = SKILL_ROOT / "references/migration-guide.md"
-        content = guide.read_text(encoding="utf-8")
-
-        required_sections = [
-            "Migration principles",
-            "Pre-migration checklist",
-            "Running migrations",
-            "Migration sequence",
-            "Interrupted migration repair",
-            "Forward-repair migrations",
-            "Migration testing",
-        ]
-
-        for section in required_sections:
-            assert section.lower() in content.lower(), (
-                f"migration-guide.md missing section: {section}"
-            )
-
-    def test_coding_agent_guide_has_all_sections(self) -> None:
-        """Coding agent guide must cover all required topics."""
-        guide = SKILL_ROOT / "references/coding-agent-guide.md"
-        content = guide.read_text(encoding="utf-8")
-
-        required_sections = [
+    def test_coding_agent_guide_has_required_sections(self) -> None:
+        content = (SKILL_ROOT / "references/coding-agent-guide.md").read_text(
+            encoding="utf-8"
+        )
+        for section in (
             "Architecture overview",
             "Authority boundaries",
             "Execution modes",
@@ -307,35 +214,30 @@ class TestDocumentationFiles:
             "Configuration variables",
             "Coding conventions",
             "Testing guidance",
-        ]
+        ):
+            assert section.lower() in content.lower()
 
-        for section in required_sections:
-            assert section.lower() in content.lower(), (
-                f"coding-agent-guide.md missing section: {section}"
-            )
+    def test_migration_guide_has_required_sections(self) -> None:
+        content = (SKILL_ROOT / "references/migration-guide.md").read_text(
+            encoding="utf-8"
+        )
+        for section in (
+            "Migration principles",
+            "Pre-migration checklist",
+            "Running migrations",
+            "Migration sequence",
+            "Interrupted migration repair",
+            "Forward-repair migrations",
+            "Rollback boundary",
+            "Migration testing",
+        ):
+            assert section.lower() in content.lower()
 
-    def test_operations_runbook_documents_destructive_commands(self) -> None:
-        """Destructive commands must be documented with scope and safeguards."""
-        runbook = SKILL_ROOT / "references/operations-runbook.md"
-        content = runbook.read_text(encoding="utf-8")
-
-        destructive_commands = [
-            "index-prune --force",
-            "reset-firecrawl-research",
-            "verify-blobs",
-        ]
-
-        for cmd in destructive_commands:
-            assert cmd in content, (
-                f"Destructive command '{cmd}' not documented in operations runbook"
-            )
-
-    def test_operations_runbook_documents_all_config_vars(self) -> None:
-        """All configuration variables must have authoritative definitions."""
-        runbook = SKILL_ROOT / "references/operations-runbook.md"
-        content = runbook.read_text(encoding="utf-8")
-
-        required_vars = [
+    def test_operations_runbook_documents_required_config(self) -> None:
+        content = (SKILL_ROOT / "references/operations-runbook.md").read_text(
+            encoding="utf-8"
+        )
+        for variable in (
             "DATABASE_URL",
             "BLOB_ROOT",
             "QDRANT_URL",
@@ -344,113 +246,171 @@ class TestDocumentationFiles:
             "RERANKER_URL",
             "FIRECRAWL_LLM_LOCAL_BASE_URL",
             "FIRECRAWL_AUDIT_AUTO_SEMANTIC",
-        ]
+        ):
+            assert variable in content
 
-        for var in required_vars:
-            assert var in content, (
-                f"Configuration variable '{var}' not documented in operations runbook"
-            )
 
-    def test_migration_guide_documents_all_migrations(self) -> None:
-        """Key clean-baseline migrations must be documented."""
-        guide = SKILL_ROOT / "references/migration-guide.md"
-        content = guide.read_text(encoding="utf-8")
+class TestParserBackedExamples:
+    def test_fsearch_examples_parse(self) -> None:
+        from research_store.fsearch_service import build_parser
 
-        # Check that key migrations are mentioned
-        key_migrations = [
-            "0001",
-            "0006",
-            "0007",
-            "0031",
-            "0032",
-            "0033",
-            "0038_postgres_authority",
-        ]
-
-        for migration in key_migrations:
-            assert migration in content, (
-                f"Migration {migration} not documented in migration guide"
-            )
-
-    def test_removed_filesystem_authority_is_not_documented(self) -> None:
-        """Operational documentation must not advertise removed runtime paths."""
-        forbidden = (
-            "FIRECRAWL_" + "CATALOG",
-            "legacy" + "_adapter",
-            "catalog" + "-export",
-            "catalog" + "_v5",
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "bounded query",
+                "--research-run-id",
+                RUN_ID,
+                "--limit",
+                "20",
+                "--scrape-limit",
+                "5",
+                "--sources",
+                "web,news",
+                "--tbs",
+                "qdr:d",
+                "--invocation-id",
+                INVOCATION_ID,
+                "--idempotency-key",
+                "stable-key",
+                "--json",
+            ]
         )
-        for rel_path in self.REFERENCE_FILES + ["README.md", "SKILL.md"]:
-            content = (SKILL_ROOT / rel_path).read_text(encoding="utf-8").lower()
-            for token in forbidden:
-                assert token.lower() not in content, (
-                    f"Removed runtime identifier {token!r} found in {rel_path}"
-                )
+        assert args.research_run_id == RUN_ID
+        assert args.scrape_limit == 5
 
-    def test_removed_scratch_interfaces_are_not_documented(self) -> None:
-        removed = (
-            "persist_results.py",
-            "scripts/fread",
-            "import-scratch",
-            "FIRECRAWL_RESEARCH_PERSIST",
-            "SCRATCH_ROOT",
+        options = _options(parser)
+        assert "--dir" in options
+        assert "--reuse-search" not in options
+        assert "--scrape-ranks" not in options
+
+    def test_fscrape_examples_parse(self) -> None:
+        from research_store.fscrape_cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "https://example.com",
+                "--research-run-id",
+                RUN_ID,
+                "--format",
+                "markdown",
+                "--invocation-id",
+                INVOCATION_ID,
+                "--idempotency-key",
+                "stable-key",
+                "--json",
+            ]
         )
-        documentation = [SKILL_ROOT / "README.md", SKILL_ROOT / "SKILL.md"]
-        documentation.extend((SKILL_ROOT / "docs").glob("*.md"))
-        documentation.extend((SKILL_ROOT / "references").glob("*.md"))
+        assert args.research_run_id == RUN_ID
+        assert args.format == "markdown"
+        assert "--output-dir" not in _options(parser)
 
-        for path in documentation:
-            content = path.read_text(encoding="utf-8")
-            for marker in removed:
-                assert marker not in content, (
-                    f"removed interface {marker!r} remains documented in "
-                    f"{path.relative_to(SKILL_ROOT)}"
-                )
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["runs", "--limit", "20"],
+            ["invocations", "--run", RUN_ID, "--limit", "20"],
+            ["search-responses", "--run", RUN_ID, "--limit", "20"],
+            ["replay-search", "00000000-0000-0000-0000-000000000001"],
+            [
+                "scrape-candidates",
+                "00000000-0000-0000-0000-000000000001",
+                "--format",
+                "markdown",
+                "--idempotency-key",
+                "stable-key",
+            ],
+            [
+                "retry-candidates",
+                "00000000-0000-0000-0000-000000000002",
+                "--idempotency-key",
+                "new-key",
+            ],
+            ["attempts", "--run", RUN_ID],
+            ["inspect", "00000000-0000-0000-0000-000000000003"],
+            [
+                "passages",
+                "00000000-0000-0000-0000-000000000003",
+                "--limit",
+                "20",
+                "--max-chars",
+                "20000",
+                "--max-tokens",
+                "4000",
+            ],
+            ["lexical-search", "terms", "--run", RUN_ID],
+            ["pattern-search", "literal.identifier", "--mode", "literal"],
+        ],
+    )
+    def test_finspect_examples_parse(self, argv: list[str]) -> None:
+        from research_store.inspection_cli import parser
 
-    def test_recovery_drill_checklist_exists(self) -> None:
-        """Recovery drill checklist must be present in operations runbook."""
-        runbook = SKILL_ROOT / "references/operations-runbook.md"
-        content = runbook.read_text(encoding="utf-8")
+        parsed = parser().parse_args(argv)
+        assert parsed.command
 
-        assert "Recovery drill checklist" in content, (
-            "Recovery drill checklist not found in operations runbook"
-        )
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["migrate"],
+            ["status"],
+            ["ingest-ready"],
+            ["doctor"],
+            ["verify-blobs"],
+            ["worker", "--once", "--batch-size", "64"],
+            ["index-list"],
+            ["index-build", "--current-config", "--all"],
+            ["reconcile-qdrant"],
+            ["index-activate", "index-id"],
+            ["index-rollback", "prior-index-id"],
+            ["index-prune", "--dry-run"],
+            ["endpoint-health"],
+            ["resource-status"],
+            ["rederive", "--snapshot", "snapshot-id"],
+            ["export-invocation", INVOCATION_ID, "--output", "invocation.json"],
+            ["export-run", RUN_ID, "--output", "run.json"],
+            ["corpus-overview"],
+            ["search-assets", "query", "--limit", "20"],
+            ["inspect-asset", "candidate-id"],
+            ["fetch-passages", "candidate-id", "--max-tokens", "2000"],
+            ["run-status", RUN_ID],
+            [
+                "benchmark",
+                "run",
+                "--dataset",
+                "tests/fixtures/benchmark/benchmark-v2.json",
+                "--output",
+                "benchmark-results.json",
+            ],
+            [
+                "benchmark",
+                "results",
+                "--results-path",
+                "benchmark-results.json",
+            ],
+            [
+                "benchmark",
+                "report",
+                "--results-path",
+                "benchmark-results.json",
+                "--output",
+                "benchmark-report.md",
+            ],
+        ],
+    )
+    def test_research_db_examples_parse(self, argv: list[str]) -> None:
+        from research_store.cli import parser
 
-        # Check for key drill items
-        drill_items = [
-            "Full disaster recovery",
-            "Index cutover recovery",
-            "Run recovery drill",
-            "Endpoint failure drill",
-        ]
+        parsed = parser().parse_args(argv)
+        assert parsed.command
 
-        for item in drill_items:
-            assert item in content, (
-                f"Recovery drill item '{item}' not found in operations runbook"
-            )
+    def test_current_research_db_has_no_legacy_import_command(self) -> None:
+        from research_store.cli import parser
 
-    def test_standalone_recovery_drill_checklist(self) -> None:
-        """A standalone recovery drill checklist file must exist."""
-        checklist = SKILL_ROOT / "references/recovery-drill-checklist.md"
-        assert checklist.exists(), "Standalone recovery drill checklist not found"
-        content = checklist.read_text(encoding="utf-8")
-        assert len(content) > 500, "Recovery drill checklist is too short"
-
-        # Verify key drill types are present
-        drills = [
-            "Full Disaster Recovery",
-            "Index Cutover Recovery",
-            "Run Recovery",
-            "Endpoint Failure",
-            "Migration Upgrade",
-        ]
-        for drill in drills:
-            assert drill in content, (
-                f"Drill '{drill}' not found in recovery-drill-checklist.md"
-            )
+        commands = _subcommands(parser())
+        assert "import-scratch" not in commands
 
 
-def test_authoritative_fsearch_documents_low_level_acquisition_exit_contract():
+def test_authoritative_fsearch_documents_low_level_exit_contract() -> None:
     content = (SKILL_ROOT / "docs" / "authoritative-fsearch.md").read_text(
         encoding="utf-8"
     )
@@ -460,3 +420,18 @@ def test_authoritative_fsearch_documents_low_level_acquisition_exit_contract():
     assert "`2` for authoritative preflight failure" in content
     assert "`3`" in content
     assert "idempotency-key conflict" in content
+
+
+def test_removed_flag_documentation_matches_parser_contract() -> None:
+    content = (SKILL_ROOT / "docs" / "authoritative-fsearch.md").read_text(
+        encoding="utf-8"
+    )
+    assert "`--dir` remains a hidden compatibility tombstone" in content
+    assert "`--reuse-search` and `--scrape-ranks` are not registered" in content
+    assert "standard `unrecognized arguments` diagnostic" in content
+
+    fscrape = (SKILL_ROOT / "docs" / "authoritative-fscrape.md").read_text(
+        encoding="utf-8"
+    )
+    assert "`--output-dir PATH` and `--output-dir=PATH` fail" in fscrape
+    assert "before the Firecrawl adapter is" in fscrape

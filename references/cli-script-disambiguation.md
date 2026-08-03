@@ -1,47 +1,66 @@
 # Firecrawl CLI Disambiguation
 
-## Three Firecrawl Interfaces
+## Three Firecrawl interfaces
 
-| Interface | Package | Primary Use | Install Method |
-|-----------|---------|-------------|----------------|
-| **Node.js CLI** | `firecrawl-cli` (npm) | Authoritative wrapper transport (`fsearch`, `fscrape`), search, scrape, crawl, map, parse | Install in the active Node/npm environment with `rtk proxy npm install -g firecrawl-cli` |
-| **Python SDK** | `firecrawl-py` (PyPI) | Programmatic REST API calls from Python scripts | `pip install firecrawl-py` |
-| **MCP Tools** | Firecrawl MCP server | Tool calls exposed by the host agent, such as search and scrape tools | Host-agent MCP configuration |
+| Interface | Package | Use |
+|---|---|---|
+| Node.js CLI | `firecrawl-cli` | Provider transport invoked internally by authoritative `fsearch` and `fscrape` |
+| Python SDK | `firecrawl-py` | Direct programmatic API work outside the bundled wrapper contract |
+| MCP tools | Firecrawl MCP server | Host-agent tool calls; authoritative only when routed through the PostgreSQL acquisition services |
 
-## Which Firecrawl Binary Do Scripts Use?
+## Bundled wrapper contract
 
-Launch `fsearch` and `fscrape` through `rtk proxy`. Inside the wrappers, the scripts invoke `firecrawl` directly from `PATH` (no nested RTK, no `npx`, no `firecrawl-py`, no `python -m firecrawl`). This should resolve to the **Node.js CLI** installed for the current agent environment.
+Launch bundled commands through `rtk proxy` at the outer agent-visible boundary. Inside the wrappers, `firecrawl` is invoked directly from `PATH` so streams and exit codes remain intact.
 
-The Python SDK (`firecrawl-py` v4.28.2) is installed as a separate package and is **not** used by these scripts. The Python SDK is the Firecrawl REST API client — it is used when you want structured programmatic access (for example, in an `execute_code` block), not by the bundled wrappers.
+```bash
+rtk proxy "<skill-root>/scripts/frun" start "Research objective"
+rtk proxy "<skill-root>/scripts/fsearch" "<query>" --research-run-id "fr_<uuid>"
+rtk proxy "<skill-root>/scripts/fscrape" "https://example.com" --research-run-id "fr_<uuid>"
+```
 
-## Key Differences
+Before the Node CLI or any network transport is constructed, the wrappers require:
 
-| Aspect | Node.js CLI | Python SDK | MCP Tools |
-|--------|-------------|------------|-----------|
-| Install | NVM/node global or npx | pip | MCP server config |
-| Search | `firecrawl search "query"` | Client.search() | `firecrawl_search` tool |
-| Scrape | `firecrawl scrape url` | Client.scrape_url() | `firecrawl_scrape` tool |
-| Output | Console + file flags (`-o`) | Python objects | Tool output in agent context |
-| Scratch files | Built-in via `fsearch`/`fscrape` scripts | Not built-in (you handle files) | Not built-in (you handle files) |
-| Auth | `--api-key` or `FIRECRAWL_API_KEY` env | `FIRECRAWL_API_KEY` env | Inherited from MCP config |
+- `DATABASE_URL`;
+- Alembic head and writable PostgreSQL privileges;
+- durable writable `BLOB_ROOT`;
+- valid acquisition-eligible `fr_<uuid>` binding.
 
-## Troubleshooting `firecrawl` bin resolution
+The wrappers return stable authoritative IDs. They do not use provider output files as runtime state.
 
-If `fsearch` returns exit 127 or "command not found":
+## Interface differences
 
-1. Check whether `firecrawl` is on `PATH`: `rtk which firecrawl`
-2. If it is absent, install the CLI into the active Node/npm environment: `rtk proxy npm install -g firecrawl-cli`
-3. Verify the executable with `rtk proxy firecrawl --version`
+| Aspect | Node.js CLI | Python SDK | MCP tools |
+|---|---|---|---|
+| Installation | npm | pip | host-agent configuration |
+| Authentication | `FIRECRAWL_API_KEY` / `FIRECRAWL_API_URL` | same API configuration | MCP server configuration |
+| Bundled persistence | only through `fsearch` / `fscrape` authoritative services | caller must use an authoritative integration | tool output is not persisted unless routed through an authoritative integration |
+| Result contract | wrapper returns run, invocation, response/candidate or corpus IDs | Python objects | tool result in agent context |
+| Retry authority | PostgreSQL idempotency and invocation records | caller-defined | integration-defined |
 
-## Environment Variables
+Do not treat a direct SDK or MCP response as a successful Firecrawl Research Skill acquisition unless it is committed through the same PostgreSQL and `BLOB_ROOT` services.
 
-All three interfaces share the same primary auth:
+## Binary resolution
+
+If a bundled wrapper reports that `firecrawl` is unavailable:
+
+```bash
+rtk which firecrawl
+rtk proxy npm install -g firecrawl-cli
+rtk proxy firecrawl --version
+```
+
+Do not add `npx`, Python SDK substitution, MCP fallback, or a second transport inside the wrappers without an issue that preserves preflight, persistence, idempotency, and failure ordering.
+
+## Environment variables
 
 | Variable | Applies to |
-|----------|------------|
-| `FIRECRAWL_API_KEY` | Node CLI, Python SDK |
-| `FIRECRAWL_API_URL` | Node CLI, Python SDK (custom base URL) |
-| `FIRECRAWL_RESEARCH_RUN_ID` | Skill wrappers (explicit PostgreSQL `fr_<uuid>` run linkage) |
-| `FIRECRAWL_SEARCH_RETRIES` | `fsearch` (transient acquisition retry count; default `2`) |
+|---|---|
+| `FIRECRAWL_API_KEY` | Node CLI and Python SDK |
+| `FIRECRAWL_API_URL` | Node CLI and Python SDK |
+| `DATABASE_URL` | bundled authoritative services |
+| `BLOB_ROOT` | immutable provider payload storage |
+| `FIRECRAWL_RESEARCH_RUN_ID` | default wrapper run binding |
+| `FIRECRAWL_INVOCATION_ID` | deliberate retry identity |
+| `FIRECRAWL_SEARCH_RETRIES` | bounded transient `fsearch` transport retries |
 
-The bundled acquisition wrappers require authoritative PostgreSQL preflight. MCP tools get auth from the MCP server's own config and must not be treated as persisted acquisition unless their output is ingested through the authoritative service.
+Provider transport retries remain inside one authoritative invocation and operation budget. A failed authoritative preflight permits zero transport attempts.
