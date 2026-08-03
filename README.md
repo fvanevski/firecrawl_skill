@@ -39,11 +39,21 @@ scripts/fsearch 'bounded query' \
   --limit 20 \
   --scrape-limit 5
 
-scripts/fscrape 'https://example.com/article' \
-  --research-run-id "$RUN_ID"
-
-scripts/research-db doctor
+python3 scripts/drain_index_jobs.py --batch-size 64
+scripts/research-db run-status "$RUN_ID"
 scripts/frun finish "$RUN_ID" --outcome satisfied
+scripts/frun status "$RUN_ID"
+```
+
+`research-db worker --once` handles at most one bounded batch. The drain helper repeats it until a batch reports `claimed=0` and fails closed on worker errors, invalid output, failed jobs, or lease loss. Do not start another acquisition on the same run or finish it while run-scoped indexing is unfinished.
+
+To add a direct scrape to an existing nonterminal run, drain and verify prior work first, then drain again after the scrape:
+
+```bash
+python3 scripts/drain_index_jobs.py --batch-size 64
+scripts/fscrape 'https://example.com/article' --research-run-id "$RUN_ID"
+python3 scripts/drain_index_jobs.py --batch-size 64
+scripts/research-db run-status "$RUN_ID"
 ```
 
 `fsearch_smart` creates a run when `--research-run-id` is omitted. Its `--dry-run` mode emits a deterministic plan without database or network writes.
@@ -81,13 +91,14 @@ scripts/research-db fetch-passages '<candidate-id>' --max-tokens 2000
 
 scripts/research-db index-list
 scripts/research-db index-build --current-config --all
-scripts/research-db worker --once --batch-size 64
+python3 scripts/drain_index_jobs.py --batch-size 64
 scripts/research-db reconcile-qdrant
+scripts/research-db doctor
 scripts/research-db index-activate '<index-id>'
 scripts/research-db index-rollback '<prior-index-id>'
 ```
 
-Qdrant loss does not destroy authoritative data. Rebuild a compatible fingerprinted collection from PostgreSQL chunks and activate it only after reconciliation. Valkey loss requires no data repair; restart it and the worker continues from PostgreSQL jobs.
+Qdrant loss does not destroy authoritative data. Rebuild a compatible fingerprinted collection from PostgreSQL chunks and activate it only after complete job processing and reconciliation. Valkey loss requires no data repair; restart it and the worker continues from PostgreSQL jobs.
 
 ## Explicit exports
 
@@ -98,7 +109,7 @@ scripts/research-db export-invocation 'fc_<uuid>' --output invocation.json
 scripts/research-db export-run 'fr_<uuid>' --output run.json
 ```
 
-For deployment, backup, restore, Qdrant rebuild, Valkey loss, interrupted-run recovery, migration, and rollback procedures, read:
+For the canonical acquisition, completion, and projection-recovery sequences, read `references/authoritative-workflows.md`. Additional deployment and compatibility references:
 
 - `references/operations-runbook.md`
 - `references/research-store-operations.md`
