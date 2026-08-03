@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -147,7 +148,7 @@ def generate_queries(
 
 def canonical_plan(spec: ResearchSpec, queries: list[dict[str, Any]]) -> dict[str, Any]:
     question_id = spec.questions[0].question_id
-    freshness = serialize_model(spec.time_window)
+    freshness = asdict(spec.time_window)
     normalized = []
     for index, item in enumerate(queries):
         text = " ".join(str(item.get("query", "")).split())
