@@ -1,36 +1,38 @@
 # Workflow State Schema
 
-Alembic revision `0006_workflow_state` establishes the PostgreSQL workflow foundation. PostgreSQL is the sole authority for run, invocation, event, semantic, evidence, and audit state. Scratch files are disposable diagnostics and are never read to resolve current state.
+PostgreSQL is the sole authority for workflow state, invocation state, acquisition provenance, and corpus identities. Under Target A, immutable provider payload bytes remain in `BLOB_ROOT`. Qdrant and Valkey cannot advance workflow state.
 
 ## Authority and invariants
 
 - `research_runs.state` is the authoritative lifecycle state.
-- `research_runs.lifecycle_revision` is a monotonic compare-and-swap revision.
-- `research_run_transitions` and `research_events` are append-only at the database layer.
-- Every persistent wrapper operation has an authoritative `research_invocations` row.
-- Idempotency keys are scoped to their run or invocation and reject conflicting reuse.
-- Qdrant, Valkey, blobs, and scratch output cannot advance or overwrite workflow state.
-- Terminal runs reject new operations until explicitly reopened.
+- `research_runs.lifecycle_revision` is monotonic and used for compare-and-swap.
+- `research_run_transitions` and `research_events` are append-only.
+- Every persistent top-level operation records an authoritative `research_invocations` row.
+- Search responses, stable candidates, extraction attempts, corpus identities, and jobs are PostgreSQL records.
+- Idempotency keys reject conflicting reuse.
+- Terminal runs reject new acquisition until explicitly reopened.
+- Successful operation completion is read from committed service records, never a file-mediated handoff.
+- Failed authoritative preflight occurs before Firecrawl construction or network invocation.
 
 ## Data dictionary
 
-| Table | Purpose | Primary invariants |
+| Table or record family | Purpose | Primary invariants |
 |---|---|---|
-| `research_runs` | Authoritative current state for one research run | State matrix; monotonic revision; immutable execution-mode provenance; current spec/budget/coverage pointers |
-| `research_run_transitions` | Immutable state-transition ledger | Unique run revision and idempotency key; prior and next states differ |
-| `research_invocations` | Search, scrape, retrieval, synthesis, audit, and child operations | Same-run parent; unique external ID; start revision; terminal status and output |
-| `research_events` | Immutable ordered operational event stream | Same-run invocation FK; stable sequence/cursor order; unique run idempotency key |
-| `research_specs` | Immutable versioned ResearchSpec records | Unique spec revision; canonical payload hash; validation result |
-| `semantic_calls` | Model or host-agent decision provenance | Same-run invocation; prompt/model/input identity; explicit mechanical status |
-| `semantic_artifacts` | Validated structured semantic outputs | Same-run call; schema identity; canonical content hash; validation status |
-| `budget_snapshots` | Immutable resource authorization | Run/spec revision binding; policy/config hashes; effective hard caps |
-| `research_run_assets` | Run-to-snapshot provenance | Explicit role; no inferred filesystem membership |
-| `coverage_snapshots` | Versioned coverage state | Monotonic coverage revision; deterministic ledger |
-| `audit_assessments` / `audit_stage_outputs` | Staged audit evidence and results | Immutable identity, explicit model/policy provenance, partial-stage retention |
+| `research_runs` | Current state for one run | state matrix, monotonic revision, execution-mode provenance |
+| `research_run_transitions` | Immutable transition ledger | unique revision and idempotency key |
+| `research_invocations` | Top-level and child operations | same-run parent, unique external ID, explicit terminal status |
+| `research_events` | Ordered operational event stream | same-run invocation binding and stable ordering |
+| `research_specs` | Versioned research scope | canonical payload and validation |
+| `semantic_calls`, `semantic_artifacts` | Model or host decision provenance | model/input/schema identity and validation |
+| `budget_snapshots` | Immutable resource authorization | run/spec/policy binding |
+| `search_responses`, `search_candidates` | Retained provider search and stable selection | immutable response identity and candidate occurrence provenance |
+| `extraction_attempts` | Direct and candidate extraction outcomes | item-level success/failure and lineage |
+| sources, snapshots, documents, derivations, chunks | Corpus identity graph | content digest and versioned derivation identity |
+| `research_run_assets` | Run-to-corpus provenance | explicit role and authoritative identity |
+| embedding manifests and index jobs | Projection work | exact chunk/index-definition binding and lease safety |
+| coverage, claims, evidence, audits | Research decision evidence | versioned, referentially valid, append-oriented records |
 
 ## State machine
-
-Permitted transitions are defined in `research_store.run_service.PERMITTED_TRANSITIONS`:
 
 ```text
 created → planning
@@ -45,48 +47,46 @@ synthesizing → validating | failed
 validating → completed | partial | failed
 ```
 
-`cancelled` is available through the explicit cancellation command from any nonterminal state. `completed`, `partial`, `failed`, and `cancelled` are terminal.
+`cancelled` is available from nonterminal states through explicit cancellation. `completed`, `partial`, `failed`, and `cancelled` are terminal.
 
-## Wrapper workflow boundary
+## Wrapper boundary
 
-`fsearch` and `fscrape` call the PostgreSQL-only `WorkflowOperationService` through internal CLI commands:
+For `fsearch` and `fscrape`:
 
-```text
-run-operation-start
-run-operation-finish
-```
+1. validate argument and schema contracts;
+2. validate database configuration, schema head, privileges, blob durability, and run eligibility;
+3. create or resolve the authoritative invocation;
+4. only then construct and invoke Firecrawl;
+5. commit retained provider response, stable candidates or extraction attempts, corpus identities, blobs, manifests, and jobs;
+6. read the committed authoritative result;
+7. return bounded stable IDs and a stage-specific exit status.
 
-The start boundary:
+A search response may commit before a later selected-extraction failure; the nonzero result includes the bounded committed partial identities. A multi-URL scrape preserves item order and item-level outcomes.
 
-1. resolves the `fr_<uuid>` run;
-2. rejects terminal or incompatible state;
-3. advances only permitted acquisition stages;
-4. records a running `research_invocations` row and event before network work.
+`fsearch_smart` persists plan, budget, provenance, events, acquisition, and resume checkpoints through the same PostgreSQL services. `--dry-run` is pure planning and does not enter the state machine.
 
-The finish boundary:
+## Replay and retry
 
-1. resolves and validates the invocation/run binding;
-2. records the terminal invocation exactly once;
-3. advances to `indexing` only when `_corpus.json` reports committed assets;
-4. remains retry-safe when the invocation commit succeeded but a later transition was interrupted.
+- `finspect replay-search <response-id>` is read-only and verifies retained blob integrity.
+- Repeating identical acquisition with the same idempotency key returns the original committed records without a duplicate provider call.
+- `retry-candidates` creates explicit retry lineage and retries only failed items.
+- A stale lifecycle revision requires a fresh status read.
+- A new key denotes a genuinely new operation.
 
-`frun finish` verifies run-scoped indexing and advances the permitted terminal path. It does not jump directly from `created` to `completed`.
+## Completion
 
-## Repository operations
-
-`PostgresUnitOfWork` provides bounded record methods. `ResearchRunService` applies lifecycle policy and compare-and-swap revisions. `InvocationService` manages authoritative invocation state. `WorkflowOperationService` coordinates wrapper boundaries without adding a second source of truth.
-
-Execution-mode changes record requester, approver, reason, prior mode, next mode, and policy version, then invalidate affected semantic artifacts without deleting provenance.
+After acquisition reaches `indexing`, `frun finish` verifies run-scoped projection work and advances through permitted coverage, synthesis, validation, and terminal transitions. It cannot jump from `created` to `completed`.
 
 ## Repair
 
-After an uncertain command:
+```bash
+scripts/research-db run-status '<fr-id>'
+scripts/finspect invocations --run '<fr-id>'
+scripts/finspect attempts --run '<fr-id>'
+scripts/research-db verify-blobs
+scripts/research-db doctor
+```
 
-1. read `research-db run-status <fr_id>`;
-2. read the invocation/event ledger;
-3. retry the same command with the same idempotency key;
-4. use a new key only for a genuinely new command against the reported revision.
+Never edit ledgers or synthesize state from exports, Qdrant, Valkey, or local files. Reopen is the supported path for intentional work after terminal state.
 
-Never edit append-only ledgers. Reopen is the supported path for intentional work after terminal state.
-
-The clean schema head is `0038_postgres_authority`. Databases created by the removed deprecated migration path must be reset with `scripts/reset-firecrawl-research` before use.
+The clean schema head is `0038_postgres_authority`. See `migration-guide.md` for the exact legacy-tree import boundary.
