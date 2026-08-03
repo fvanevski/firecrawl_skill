@@ -2,7 +2,7 @@
 
 # Operations Runbook
 
-Operational procedures for the PostgreSQL-authoritative Firecrawl Research Skill.
+Operational procedures for the PostgreSQL-authoritative Firecrawl Research Skill. `authoritative-workflows.md` is the canonical source for acquisition, completion, transaction, and projection-recovery command ordering.
 
 ## Table of contents
 
@@ -34,7 +34,9 @@ The deployed release implements Target A.
 | Coordination | Valkey | Optional wakeups and bounded transient state | Recreate; workers poll PostgreSQL |
 | Process-local storage | Secure ephemeral files | Bounded implementation details only | Delete; never use as authority |
 
-Target A deliberately does not store provider payload bytes in PostgreSQL. A future PostgreSQL-payload design requires a separate schema, migration, capacity, backup, and rollback plan.
+Target A deliberately does not store provider payload bytes in PostgreSQL. Acquisition installs payload bytes in `BLOB_ROOT` before PostgreSQL commits metadata that references their digest. A PostgreSQL rollback may leave an unreferenced orphan blob; committed metadata pointing to absent bytes is corruption.
+
+A future PostgreSQL-payload design requires a separate schema, migration, capacity, backup, and rollback plan.
 
 ## 2. Service boundaries
 
@@ -47,7 +49,7 @@ Authoritative for:
 - research specifications, budgets, coverage, claims, evidence, semantic provenance, audits, and terminal decisions;
 - index definitions, embedding manifests, jobs, leases, and worker heartbeats.
 
-Never hand-edit append-only ledgers. Use service commands with current revisions and stable idempotency keys.
+Never hand-edit append-only ledgers. Use service commands with current revisions and stable idempotency keys. Stable authoritative IDs are returned only after the corresponding transaction commits.
 
 ### `BLOB_ROOT`
 
@@ -110,6 +112,8 @@ A database from an unsupported older lineage must be handled according to `migra
 
 ### 4.4 Worker service
 
+Continuous service:
+
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now firecrawl-research-indexer.service
@@ -126,6 +130,14 @@ scripts/research-db worker \
   --max-attempts 5
 ```
 
+`research-db worker --once` handles at most one bounded batch. For a deterministic complete drain, use:
+
+```bash
+python3 scripts/drain_index_jobs.py --batch-size 64
+```
+
+The helper returns success only after a batch reports `claimed=0`; it fails closed on invalid output, worker errors, failed jobs, lease loss, or an exceeded batch bound.
+
 ### 4.5 Acquisition smoke test
 
 ```bash
@@ -135,12 +147,14 @@ scripts/fscrape 'https://example.com' \
   --research-run-id "$RUN_ID" \
   --json
 
+python3 scripts/drain_index_jobs.py --batch-size 64
+scripts/research-db run-status "$RUN_ID"
 scripts/research-db doctor
 scripts/frun finish "$RUN_ID" --outcome satisfied
 scripts/frun status "$RUN_ID"
 ```
 
-Any failed authoritative preflight must occur before Firecrawl or network invocation.
+Any failed authoritative preflight must occur before Firecrawl or network invocation. Do not finish or attach another acquisition while run-scoped indexing is unfinished.
 
 ## 5. Configuration variables
 
@@ -208,26 +222,29 @@ PostgreSQL and `BLOB_ROOT` must be restored from the same logical boundary. Qdra
 2. Restore PostgreSQL.
 3. Restore the matching `BLOB_ROOT`.
 4. Verify schema and blobs.
-5. Rebuild and reconcile Qdrant.
-6. Activate only a complete compatible index.
-7. Restart the worker and run `doctor`.
+5. Build a compatible Qdrant projection.
+6. Drain all durable index jobs.
+7. Reconcile and activate only a complete compatible index.
+8. Restart the worker and run `doctor`.
 
 ```bash
 scripts/research-db verify-blobs
 scripts/research-db status
 scripts/research-db index-build --current-config --all
-scripts/research-db worker --once --batch-size 64
+python3 scripts/drain_index_jobs.py --batch-size 64
 scripts/research-db reconcile-qdrant
-scripts/research-db index-activate '<index-id>'
 scripts/research-db doctor
+scripts/research-db index-activate '<index-id>'
 ```
+
+Abort restore acceptance on failed/dead jobs, lease loss, missing blobs, missing or orphaned Qdrant points, or fingerprint mismatch.
 
 ## 7. Qdrant rebuild
 
 ```bash
 scripts/research-db index-list
 scripts/research-db index-build --current-config --all
-scripts/research-db worker --once --batch-size 64
+python3 scripts/drain_index_jobs.py --batch-size 64
 scripts/research-db reconcile-qdrant
 scripts/research-db doctor
 scripts/research-db index-activate '<index-id>'
@@ -251,7 +268,7 @@ scripts/research-db doctor
 systemctl --user restart firecrawl-research-indexer.service
 ```
 
-No corpus, workflow, or job repair is required solely because Valkey was lost.
+No corpus, workflow, or job repair is required solely because Valkey was lost. A deterministic validation may stop Valkey and use `drain_index_jobs.py` to prove PostgreSQL polling remains sufficient.
 
 ## 9. Endpoint restart
 
@@ -260,12 +277,14 @@ For embedding or reranking outages:
 1. stop the worker for an extended outage;
 2. restart the endpoint with the same model identity;
 3. run `endpoint-health`, `resource-status`, and `doctor`;
-4. restart the worker and drain retryable jobs.
+4. restart the worker or run the fail-closed drain helper;
+5. verify no failed, dead, missing, or incompatible work remains.
 
 ```bash
 scripts/research-db endpoint-health
 scripts/research-db resource-status
 scripts/research-db doctor
+python3 scripts/drain_index_jobs.py --batch-size 32
 ```
 
 A model revision or vector-dimension change requires a new index definition and collection.
@@ -281,6 +300,13 @@ scripts/research-db doctor
 ```
 
 Retry uncertain identical input with its original idempotency key and invocation identity. A stale lifecycle revision requires a fresh status read before any new mutation. Do not delete failed calls or edit ledger rows.
+
+If the operation committed corpus and job records, drain and verify the run before adding more acquisition or finishing:
+
+```bash
+python3 scripts/drain_index_jobs.py --batch-size 64
+scripts/research-db run-status 'fr_<uuid>'
+```
 
 Reopen terminal work explicitly:
 
@@ -319,6 +345,7 @@ Select stable candidates:
 ```bash
 scripts/finspect scrape-candidates '<candidate-uuid>' \
   --idempotency-key '<stable-key>'
+python3 scripts/drain_index_jobs.py --batch-size 64
 ```
 
 Explicit exports are presentation outputs only:
@@ -350,7 +377,9 @@ CI must test the exact candidate SHA and record:
 
 - Ruff lint and formatting;
 - Python 3.11 and 3.12 results;
-- documentation/parser contracts;
+- documentation/parser and lifecycle contracts;
+- blob-before-metadata ordering and failed-blob-write suppression;
+- multi-batch worker drain behavior;
 - disposable PostgreSQL, Qdrant, Valkey, worker, and recovery contracts;
 - exact-head evidence artifact and digest.
 
@@ -385,7 +414,8 @@ Review `--dry-run`, identify one exact inactive target, and preserve rollback co
 
 - Restore matching PostgreSQL and `BLOB_ROOT`.
 - Verify schema and hashes.
-- Rebuild and activate Qdrant.
+- Build Qdrant and drain all durable jobs.
+- Reconcile and activate Qdrant.
 - Recreate Valkey.
 - Start the worker.
 - Retrieve a known bounded passage and resolve provenance.
@@ -394,6 +424,7 @@ Review `--dry-run`, identify one exact inactive target, and preserve rollback co
 
 - Build a second fingerprinted collection.
 - Interrupt before activation.
+- Resume and drain all jobs.
 - Reconcile alias state.
 - Complete or roll back.
 - Prove compatible retrieval.
@@ -403,7 +434,7 @@ Review `--dry-run`, identify one exact inactive target, and preserve rollback co
 - Interrupt after authoritative invocation start.
 - Verify the persisted nonterminal state.
 - Retry identical input with the same idempotency key or close the failed attempt and create a new operation.
-- Complete indexing and finish the run.
+- Drain indexing, verify run state, and finish the run.
 
 ### Endpoint failure drill
 
