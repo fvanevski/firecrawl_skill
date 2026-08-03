@@ -1,16 +1,16 @@
 name: RC7 one-time documentation and formatting
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - refactor/rc7-authoritative-smart-validation
 
 permissions:
   contents: write
 
 jobs:
   document-and-format:
-    if: github.event.pull_request.head.ref == 'refactor/rc7-authoritative-smart-validation' && github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
