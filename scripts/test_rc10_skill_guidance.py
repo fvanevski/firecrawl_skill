@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -279,3 +280,134 @@ def test_skill_rejects_unbounded_stateful_checkpoint_retry() -> None:
     assert "retry automatically" in checkpoint_section
     assert "create a replacement run" in checkpoint_section
     assert "unbounded retry loop" in checkpoint_section
+
+
+def test_skill_describes_verify_as_blob_integrity_reporting_only() -> None:
+    content = _skill_content()
+    section = content.split(
+        "## Blob-integrity reporting, audit scheduling, and comparison",
+        1,
+    )[1].split("## Qdrant and Valkey recovery", 1)[0]
+
+    for required in (
+        "invocation output `results`",
+        "`snapshot` or `artifacts`",
+        "It does not validate terminal state",
+        "`total: 0` and exit status `0`",
+        "it is not evidence that the run completed or passed",
+    ):
+        assert required in section
+
+    assert "authoritative completion verification" not in content.split(
+        "Use the run wrapper",
+        1,
+    )[0]
+    assert "`frun verify` checks committed run evidence" not in content
+    assert "verify or audit research runs" not in content
+
+
+def test_verify_allows_zero_total_report_without_completion_evidence() -> None:
+    from research_store.run_service import ResearchRunService
+
+    run_uuid = UUID(int=1)
+
+    class Runs:
+        def list_invocations(self, run_id: UUID) -> list[dict]:
+            assert run_id == run_uuid
+            return []
+
+    class UnitOfWork:
+        runs = Runs()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    service = ResearchRunService(lambda: UnitOfWork(), blob_store=object())
+    report = service.verify(run_uuid)
+
+    assert report["target"] == str(run_uuid)
+    assert report["total"] == 0
+    assert report["available"] == 0
+    assert report["missing"] == 0
+    assert report["hash_mismatch"] == 0
+    assert report["file_based_unverified"] == 0
+    assert report["artifacts"] == []
+
+
+def test_skill_describes_audit_as_partial_assessment_scheduling_only() -> None:
+    content = _skill_content()
+    section = content.split(
+        "## Blob-integrity reporting, audit scheduling, and comparison",
+        1,
+    )[1].split("## Qdrant and Valkey recovery", 1)[0]
+
+    for required in (
+        "schedules and persists an audit assessment identity with status `partial`",
+        "does not invoke a semantic provider",
+        "execute deterministic audit-stage validation",
+        "only a scheduled partial record",
+        "are not consumed by the current scheduling path",
+    ):
+        assert required in section
+
+    assert "persists an audit through the configured semantic authority" not in content
+    assert "deterministic validation path" not in content
+
+
+def test_trigger_audit_only_schedules_partial_assessment(monkeypatch) -> None:
+    from research_store import container
+    from research_store.run_service import ResearchRunService
+
+    run_uuid = UUID(int=2)
+    captured: dict[str, object] = {}
+
+    class AuditService:
+        def schedule_assessment(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return {
+                "assessment_id": "assessment-id",
+                "status": kwargs["status"],
+                "stages": kwargs["stage_set"],
+            }
+
+    monkeypatch.setattr(
+        container,
+        "build_audit_service",
+        lambda uow_factory: AuditService(),
+    )
+
+    service = ResearchRunService(lambda: None)
+    result = service.trigger_audit(
+        run_uuid,
+        target_hash="a" * 64,
+        provider="openai",
+        model="audit-model",
+        force=True,
+        stages=["rubric", "evidence"],
+        max_calls=3,
+        max_input_tokens=4096,
+        fallback_provider="gemini",
+        fallback_model="fallback-model",
+    )
+
+    assert captured["args"] == (run_uuid,)
+    kwargs = captured["kwargs"]
+    assert kwargs["target_type"] == "run"
+    assert kwargs["target_id"] == run_uuid
+    assert kwargs["status"] == "partial"
+    assert kwargs["provider"] == "openai"
+    assert kwargs["model"] == "audit-model"
+    assert kwargs["stage_set"] == ["rubric", "evidence"]
+    for unused_option in (
+        "force",
+        "max_calls",
+        "max_input_tokens",
+        "fallback_provider",
+        "fallback_model",
+    ):
+        assert unused_option not in kwargs
+    assert result["status"] == "partial"
