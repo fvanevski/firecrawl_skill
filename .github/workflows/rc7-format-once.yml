@@ -1,0 +1,37 @@
+name: RC7 one-time formatting
+
+on:
+  push:
+    branches:
+      - refactor/rc7-authoritative-smart-validation
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refactor/rc7-authoritative-smart-validation
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install ruff==0.16.1
+      - name: Format changed Python sources
+        run: |
+          ruff format scripts/fsearch_smart scripts/live_validate.py scripts/research_store/smart_orchestrator.py
+          git diff --check
+      - name: Commit formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/fsearch_smart scripts/live_validate.py scripts/research_store/smart_orchestrator.py
+          git commit -m 'style(rc7): apply canonical Ruff formatting'
+          git push origin HEAD:refactor/rc7-authoritative-smart-validation
