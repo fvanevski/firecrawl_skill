@@ -117,6 +117,7 @@ jobs:
             -ra \
             -p no:cacheprovider \
             scripts/test_documentation.py \
+            scripts/test_documented_workflows.py \
             scripts/test_authoritative_storage_gate.py \
             scripts/test_acquisition_authority.py \
             scripts/test_authoritative_fsearch.py \
@@ -154,7 +155,10 @@ jobs:
               "python_version": os.environ["PYTHON_VERSION"],
               "contracts": [
                   "postgresql-authoritative-acquisition",
+                  "blob-before-metadata-ordering",
                   "blob-integrity",
+                  "documented-lifecycle-execution",
+                  "multi-batch-worker-drain",
                   "qdrant-rebuild",
                   "valkey-loss-tolerance",
                   "worker-recovery",
