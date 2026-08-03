@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Exercise the canonical RC-9 lifecycle and transaction documentation."""
 
 from __future__ import annotations
