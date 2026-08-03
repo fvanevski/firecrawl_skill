@@ -1,13 +1,8 @@
-"""PostgreSQL-backed planning persistence and state-aware smart-run recovery.
+"""Atomic smart-search planning and PostgreSQL-backed lifecycle resume.
 
-The legacy ``ResearchOrchestrator.run`` implementation assumes an in-memory
-context beginning in ``created`` state.  This adapter preserves the existing
-stage implementations while reconstructing their context from PostgreSQL and
-``BLOB_ROOT`` after process restart.
-
-No local path, manifest, Qdrant record, or Valkey entry is accepted as workflow
-authority.  Search-response replay reads immutable payloads through the
-content-addressed blob store referenced by PostgreSQL.
+This module adapts the existing staged orchestrator to process restarts. It
+reconstructs stage inputs from PostgreSQL and immutable ``BLOB_ROOT`` payloads;
+Qdrant and Valkey are never consulted as authorities.
 """
 
 from __future__ import annotations
@@ -20,29 +15,29 @@ from typing import Any
 from uuid import UUID
 
 from research_domain import load_model, serialize_model
-from research_domain.models import ResearchSpec
+from research_domain.models import ResearchSpec, SearchPlan
 
 from .domain import IngestRequest
 from .orchestrator import OrchestratorResult, ResearchOrchestrator
 from .run_service import RunStateError, StaleRunRevisionError
-from .stages import ContextKeys, StageOutcome
+from .stages import ContextKeys
 
 logger = logging.getLogger(__name__)
 
-TERMINAL_STATES = frozenset({"completed", "partial", "failed", "cancelled"})
-PLANNING_STATES = frozenset({"created", "planning"})
 NETWORK_ENTRY_STATES = frozenset(
     {"created", "planning", "corpus_review", "coverage_review", "acquiring"}
 )
+PLANNING_STATES = frozenset({"created", "planning"})
+TERMINAL_STATES = frozenset({"completed", "partial", "failed", "cancelled"})
 
 
 class SmartResumeError(RuntimeError):
-    """Persisted smart-run state is incomplete or cannot be resumed safely."""
+    """Persisted smart-run state cannot be resumed without guessing."""
 
 
 @dataclass(frozen=True)
 class PlanningBundle:
-    """Authoritative planning records for one research run."""
+    """One authoritative ResearchSpec/budget/search-plan tuple."""
 
     spec_row_id: UUID
     spec_revision: int
@@ -54,17 +49,17 @@ class PlanningBundle:
     plan: dict[str, Any]
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
+def _mapping(value: Any, label: str) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     if isinstance(value, str):
-        loaded = json.loads(value)
-        if isinstance(loaded, dict):
-            return loaded
-    raise SmartResumeError("authoritative JSON payload is not an object")
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+    raise SmartResumeError(f"{label} is not a JSON object")
 
 
-def _latest_budget_row(uow: Any, run_id: UUID) -> dict[str, Any] | None:
+def _latest_budget(uow: Any, run_id: UUID) -> dict[str, Any] | None:
     with uow.connection.cursor() as cursor:
         cursor.execute(
             """SELECT id,research_spec_id,spec_revision,run_revision,
@@ -85,21 +80,15 @@ def _latest_budget_row(uow: Any, run_id: UUID) -> dict[str, Any] | None:
         "run_revision": int(row[3]),
         "policy_version": str(row[4]),
         "policy_config_sha256": str(row[5]),
-        "snapshot": _as_dict(row[6]),
+        "snapshot": _mapping(row[6], "budget snapshot"),
     }
 
 
 def load_planning_bundle(run_service: Any, run_id: UUID) -> PlanningBundle | None:
-    """Load the latest complete spec/budget/plan tuple for ``run_id``.
-
-    A partially committed tuple returns ``None`` only when no planning record
-    exists at all.  Once any component exists, missing or inconsistent members
-    are treated as corruption and fail closed.
-    """
-
+    """Load a complete planning tuple or fail closed on partial persistence."""
     with run_service.uow_factory() as uow:
         spec_row = uow.runs.get_research_spec(run_id)
-        budget_row = _latest_budget_row(uow, run_id)
+        budget_row = _latest_budget(uow, run_id)
         try:
             plan_row = uow.runs.get_search_plan(run_id)
         except (KeyError, ValueError):
@@ -108,37 +97,37 @@ def load_planning_bundle(run_service: Any, run_id: UUID) -> PlanningBundle | Non
     if spec_row is None and budget_row is None and plan_row is None:
         return None
     if spec_row is None:
-        raise SmartResumeError("persisted smart run has budget/plan but no ResearchSpec")
+        raise SmartResumeError("planning records contain no ResearchSpec")
     if budget_row is None:
-        raise SmartResumeError("persisted smart run has no authoritative budget snapshot")
+        raise SmartResumeError("planning records contain no budget snapshot")
     if plan_row is None:
-        raise SmartResumeError("persisted smart run has no authoritative search plan")
+        raise SmartResumeError("planning records contain no search plan")
 
-    spec_payload = _as_dict(spec_row["payload"])
-    spec = load_model(spec_payload)
+    spec = load_model(_mapping(spec_row["payload"], "ResearchSpec"))
     if not isinstance(spec, ResearchSpec):
-        raise SmartResumeError("persisted planning payload is not research-spec-v1")
+        raise SmartResumeError("persisted spec is not research-spec-v1")
+    plan_payload = _mapping(plan_row["payload"], "search plan")
+    plan_model = load_model(plan_payload)
+    if not isinstance(plan_model, SearchPlan):
+        raise SmartResumeError("persisted plan is not search-plan-v1")
 
     spec_row_id = UUID(str(spec_row["id"]))
     if UUID(str(budget_row["research_spec_id"])) != spec_row_id:
-        raise SmartResumeError("budget snapshot references a different ResearchSpec")
+        raise SmartResumeError("budget references another ResearchSpec row")
     if UUID(str(plan_row["research_spec_id"])) != spec_row_id:
-        raise SmartResumeError("search plan references a different ResearchSpec")
-
-    budget = _as_dict(budget_row["snapshot"])
-    plan = _as_dict(plan_row["payload"])
-    if str(plan.get("research_spec_id", "")) != str(spec.research_spec_id):
-        raise SmartResumeError("search-plan payload references a different domain spec ID")
+        raise SmartResumeError("plan references another ResearchSpec row")
+    if plan_model.research_spec_id != spec.research_spec_id:
+        raise SmartResumeError("plan domain ID does not match ResearchSpec")
 
     return PlanningBundle(
         spec_row_id=spec_row_id,
         spec_revision=int(spec_row["spec_revision"]),
         spec=spec,
         budget_row_id=UUID(str(budget_row["id"])),
-        budget=budget,
+        budget=_mapping(budget_row["snapshot"], "budget snapshot"),
         plan_row_id=UUID(str(plan_row["id"])),
         plan_revision=int(plan_row["revision"]),
-        plan=plan,
+        plan=plan_payload,
     )
 
 
@@ -152,16 +141,22 @@ def persist_planning_bundle(
     spec_revision: int = 1,
     run_revision: int = 0,
 ) -> PlanningBundle:
-    """Persist one immutable, idempotent planning tuple before acquisition."""
+    """Commit spec, budget, and plan in one PostgreSQL transaction."""
+    plan_model = load_model(plan)
+    if not isinstance(plan_model, SearchPlan):
+        raise TypeError("provided planning payload is not search-plan-v1")
+    spec_payload = serialize_model(spec)
+    plan_revision = int(plan_model.revision)
 
-    spec_row_id = run_service.record_research_spec(
-        run_id,
-        spec=serialize_model(spec),
-        revision=spec_revision,
-        idempotency_key=f"smart:spec:{run_id}:r{spec_revision}",
-        source="fsearch_smart",
-    )
     with run_service.uow_factory() as uow:
+        spec_row_id = uow.runs.record_research_spec(
+            run_id,
+            spec_revision=spec_revision,
+            schema_name="research_spec",
+            schema_version=1,
+            payload=spec_payload,
+            idempotency_key=f"smart:spec:{run_id}:r{spec_revision}",
+        )
         budget_row_id = uow.runs.record_budget_snapshot(
             run_id,
             spec_row_id,
@@ -172,14 +167,15 @@ def persist_planning_bundle(
             budget,
             f"smart:budget:{run_id}:spec{spec_revision}:run{run_revision}",
         )
-    plan_row_id = run_service.record_search_plan(
-        run_id,
-        research_spec_id=spec_row_id,
-        revision=int(plan.get("revision", spec_revision)),
-        search_plan=plan,
-        idempotency_key=f"smart:plan:{run_id}:r{int(plan.get('revision', spec_revision))}",
-        source="fsearch_smart",
-    )
+        plan_row_id = uow.runs.record_search_plan(
+            run_id,
+            spec_row_id,
+            plan_revision,
+            plan_model,
+            f"smart:plan:{run_id}:r{plan_revision}",
+        )
+        uow.commit()
+
     return PlanningBundle(
         spec_row_id=UUID(str(spec_row_id)),
         spec_revision=spec_revision,
@@ -187,24 +183,18 @@ def persist_planning_bundle(
         budget_row_id=UUID(str(budget_row_id)),
         budget=budget,
         plan_row_id=UUID(str(plan_row_id)),
-        plan_revision=int(plan.get("revision", spec_revision)),
+        plan_revision=plan_revision,
         plan=plan,
     )
 
 
-def _coverage_context(orchestrator: ResearchOrchestrator, run_id: UUID) -> dict[str, Any]:
-    context: dict[str, Any] = {}
-    try:
-        ledger = orchestrator.coverage_service.rebuild_projection(run_id)
-    except Exception:  # No coverage records before corpus_review.
-        return context
-    context[ContextKeys.COVERAGE_LEDGER] = ledger
+def _coverage_context(
+    orchestrator: ResearchOrchestrator, run_id: UUID
+) -> dict[str, Any]:
+    ledger = orchestrator.coverage_service.rebuild_projection(run_id)
     status = getattr(getattr(ledger, "overall_status", None), "value", None)
-    if status:
-        context[ContextKeys.COVERAGE_STATUS] = status
-        context[ContextKeys.OVERALL_STATUS] = status
-    items = []
-    candidate_targets: dict[str, list[str]] = {}
+    items: list[dict[str, Any]] = []
+    targets: dict[str, list[str]] = {}
     for item in getattr(ledger, "items", ()):
         item_id = str(item.coverage_item_id)
         items.append(
@@ -216,185 +206,192 @@ def _coverage_context(orchestrator: ResearchOrchestrator, run_id: UUID) -> dict[
             }
         )
         for candidate_id in getattr(item, "candidate_ids", ()):
-            candidate_targets.setdefault(str(candidate_id), []).append(item_id)
-    context["coverage_items"] = items
-    context["candidate_coverage_items"] = candidate_targets
-    revision = int(getattr(ledger, "revision", 0) or 0)
-    if revision:
-        context["coverage_revision"] = revision
+            targets.setdefault(str(candidate_id), []).append(item_id)
+    context: dict[str, Any] = {
+        ContextKeys.COVERAGE_LEDGER: ledger,
+        "coverage_items": items,
+        "candidate_coverage_items": targets,
+        "coverage_revision": int(getattr(ledger, "revision", 0) or 0),
+    }
+    if status:
+        context[ContextKeys.COVERAGE_STATUS] = status
+        context[ContextKeys.OVERALL_STATUS] = status
     return context
 
 
-def _persisted_counts(orchestrator: ResearchOrchestrator, run_id: UUID) -> dict[str, int]:
-    with orchestrator.run_service.uow_factory() as uow:
-        with uow.connection.cursor() as cursor:
-            cursor.execute(
-                """SELECT
-                     count(*) FILTER (WHERE backend <> 'orchestrator'),
-                     count(DISTINCT query_text) FILTER (WHERE backend <> 'orchestrator'),
-                     (SELECT count(*) FROM extraction_attempts WHERE run_id=%s),
-                     (SELECT count(*) FROM asset_snapshots s
-                        JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
-                       WHERE ea.run_id=%s)
-                   FROM search_responses WHERE run_id=%s""",
-                (run_id, run_id, run_id),
-            )
-            row = cursor.fetchone()
+def _counts(orchestrator: ResearchOrchestrator, run_id: UUID) -> dict[str, int]:
+    with (
+        orchestrator.run_service.uow_factory() as uow,
+        uow.connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            """SELECT
+                 (SELECT count(*) FROM research_run_transitions
+                   WHERE run_id=%s AND prior_state='acquiring'
+                     AND next_state IN ('extracting','coverage_review')),
+                 (SELECT count(*) FROM extraction_attempts WHERE run_id=%s),
+                 (SELECT count(*) FROM asset_snapshots s
+                    JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
+                   WHERE ea.run_id=%s)""",
+            (run_id, run_id, run_id),
+        )
+        row = cursor.fetchone()
     return {
-        "responses": int(row[0] or 0),
-        "waves": int(row[1] or 0),
-        "attempts": int(row[2] or 0),
-        "assets": int(row[3] or 0),
+        "waves": int(row[0] or 0),
+        "attempts": int(row[1] or 0),
+        "assets": int(row[2] or 0),
     }
 
 
-def _restore_authorized_queries(
+def _authorized_queries(
     orchestrator: ResearchOrchestrator, run_id: UUID
 ) -> list[dict[str, Any]]:
-    try:
-        proposals = orchestrator.strategy_service.list_proposals(run_id, limit=1000)
-        decisions = orchestrator.strategy_service.list_decisions(
-            run_id, outcome="accepted", limit=1000
+    with (
+        orchestrator.run_service.uow_factory() as uow,
+        uow.connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            """SELECT p.proposal_id,p.proposed_queries
+               FROM strategy_revisions p
+               WHERE p.run_id=%s AND p.row_type='proposal'
+                 AND p.decision_type='search'
+                 AND EXISTS (
+                   SELECT 1 FROM strategy_revisions d
+                    WHERE d.run_id=p.run_id AND d.row_type='decision'
+                      AND d.proposal_id=p.proposal_id AND d.outcome='accepted'
+                 )
+               ORDER BY p.revision_order""",
+            (run_id,),
         )
-    except Exception:
-        return []
-    accepted = {
-        str(getattr(item, "proposal_id", None) or item.get("proposal_id"))
-        for item in decisions
-    }
-    restored = []
-    for proposal in proposals:
-        proposal_id = str(
-            getattr(proposal, "proposal_id", None) or proposal.get("proposal_id")
+        rows = cursor.fetchall()
+    return [
+        {
+            "proposal_id": str(proposal_id),
+            "decision_type": "search",
+            "proposed_queries": list(queries or []),
+        }
+        for proposal_id, queries in rows
+        if queries
+    ]
+
+
+def _completed_candidates(
+    orchestrator: ResearchOrchestrator, run_id: UUID
+) -> set[str]:
+    with (
+        orchestrator.run_service.uow_factory() as uow,
+        uow.connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            """SELECT DISTINCT ea.candidate_id
+               FROM extraction_attempts ea
+               JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
+               WHERE ea.run_id=%s""",
+            (run_id,),
         )
-        queries = getattr(proposal, "proposed_queries", None)
-        if queries is None and isinstance(proposal, dict):
-            queries = proposal.get("proposed_queries")
-        if proposal_id in accepted and queries:
-            restored.append(
-                {
-                    "proposal_id": proposal_id,
-                    "decision_type": "search",
-                    "proposed_queries": list(queries),
-                }
-            )
-    return restored
+        return {str(row[0]) for row in cursor.fetchall()}
 
 
-def _completed_candidate_ids(orchestrator: ResearchOrchestrator, run_id: UUID) -> set[str]:
-    with orchestrator.run_service.uow_factory() as uow:
-        with uow.connection.cursor() as cursor:
-            cursor.execute(
-                """SELECT DISTINCT ea.candidate_id
-                   FROM extraction_attempts ea
-                   JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
-                   WHERE ea.run_id=%s""",
-                (run_id,),
-            )
-            return {str(row[0]) for row in cursor.fetchall()}
-
-
-def _restore_raw_ingest_requests(
+def _replay_extraction_inputs(
     orchestrator: ResearchOrchestrator,
     run_id: UUID,
     context: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Reconstruct extraction inputs from PostgreSQL and immutable blobs only."""
-
-    completed = _completed_candidate_ids(orchestrator, run_id)
-    raw_requests: list[dict[str, Any]] = []
+    """Recreate unprocessed ingest requests from authoritative response blobs."""
+    completed = _completed_candidates(orchestrator, run_id)
+    requests: list[dict[str, Any]] = []
     seen: set[str] = set()
-    responses = orchestrator.run_service.list_search_responses(run_id)
-    for response in responses:
-        if response.get("backend") == "orchestrator" or response.get("status") == "failed":
+    for response in orchestrator.run_service.list_search_responses(run_id):
+        if response.get("backend") == "orchestrator":
+            continue
+        if response.get("status") == "failed":
             continue
         occurrences = orchestrator.run_service.record_response_candidates(
-            run_id,
-            UUID(str(response["id"])),
+            run_id, UUID(str(response["id"]))
         )
         for occurrence in occurrences:
             candidate_id = str(occurrence.get("candidate_id") or "")
-            if not candidate_id or candidate_id in seen or candidate_id in completed:
+            if not candidate_id or candidate_id in completed or candidate_id in seen:
                 continue
             seen.add(candidate_id)
             raw_item = occurrence.get("raw_item") or {}
-            metadata = raw_item.get("metadata") or {}
-            canonical_url = occurrence.get("canonical_url") or occurrence.get(
-                "original_url"
-            )
-            request_metadata = {
+            firecrawl = raw_item.get("metadata") or {}
+            url = occurrence.get("canonical_url") or occurrence.get("original_url")
+            metadata = {
                 "candidate_id": candidate_id,
                 "candidate_occurrence_id": str(occurrence.get("id")),
                 "search_response_id": str(response["id"]),
+                "resume_replay": True,
                 "firecrawl": {
                     "result_index": int(occurrence.get("rank") or 0),
-                    "scrape_id": metadata.get("scrapeId"),
-                    "source_url": metadata.get("sourceURL") or canonical_url,
-                    "status_code": metadata.get("statusCode"),
+                    "scrape_id": firecrawl.get("scrapeId"),
+                    "source_url": firecrawl.get("sourceURL") or url,
+                    "status_code": firecrawl.get("statusCode"),
                 },
-                "resume_replay": True,
             }
             markdown = raw_item.get("markdown")
             if isinstance(markdown, str) and markdown.strip():
-                raw_requests.append(
+                requests.append(
                     {
                         "request": IngestRequest(
-                            requested_url=canonical_url,
-                            final_url=metadata.get("url")
-                            or metadata.get("sourceURL")
-                            or canonical_url,
-                            content=markdown.encode("utf-8"),
-                            normalized_content=markdown.encode("utf-8"),
+                            requested_url=url,
+                            final_url=firecrawl.get("url")
+                            or firecrawl.get("sourceURL")
+                            or url,
+                            content=markdown.encode(),
+                            normalized_content=markdown.encode(),
                             mime_type="text/markdown",
                             title=occurrence.get("title"),
-                            http_status=metadata.get("statusCode"),
+                            http_status=firecrawl.get("statusCode"),
                             firecrawl_version="cli-1.19.27",
                             crawl_options={
                                 "operation": "search --scrape replay",
                                 "formats": ["markdown"],
                             },
-                            metadata=request_metadata,
+                            metadata=metadata,
                         ),
-                        "metadata": request_metadata,
+                        "metadata": metadata,
                     }
                 )
             else:
-                raw_requests.append(
+                requests.append(
                     {
-                        "requested_url": canonical_url or "unknown:",
+                        "requested_url": url or "unknown:",
                         "error": "Firecrawl candidate has no scraped markdown",
-                        "metadata": request_metadata,
+                        "metadata": metadata,
                     }
                 )
-    context["raw_ingest_requests"] = raw_requests
-    return raw_requests
+    context["raw_ingest_requests"] = requests
+    return requests
 
 
-def _restore_extracted_assets(
+def _assets(
     orchestrator: ResearchOrchestrator, run_id: UUID
 ) -> list[dict[str, Any]]:
-    with orchestrator.run_service.uow_factory() as uow:
-        with uow.connection.cursor() as cursor:
-            cursor.execute(
-                """SELECT ea.id,ea.candidate_id,s.id,s.requested_url,
-                          array_agg(ch.id ORDER BY ch.ordinal)
-                   FROM extraction_attempts ea
-                   JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
-                   JOIN documents d ON d.snapshot_id=s.id
-                   JOIN chunks ch ON ch.document_id=d.id
-                   WHERE ea.run_id=%s
-                   GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
-                   ORDER BY s.id""",
-                (run_id,),
-            )
-            rows = cursor.fetchall()
+    with (
+        orchestrator.run_service.uow_factory() as uow,
+        uow.connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            """SELECT ea.id,ea.candidate_id,s.id,s.requested_url,
+                      array_agg(ch.id ORDER BY ch.ordinal)
+               FROM extraction_attempts ea
+               JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
+               JOIN documents d ON d.snapshot_id=s.id
+               JOIN chunks ch ON ch.document_id=d.id
+               WHERE ea.run_id=%s
+               GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
+               ORDER BY s.id""",
+            (run_id,),
+        )
+        rows = cursor.fetchall()
     return [
         {
             "status": "complete",
             "ordinal": index,
             "requested_url": row[3],
             "snapshot_id": str(row[2]),
-            "chunk_ids": [str(item) for item in row[4]],
+            "chunk_ids": [str(chunk_id) for chunk_id in row[4]],
             "candidate_id": str(row[1]),
             "extraction_attempt_id": str(row[0]),
             "resume_replay": True,
@@ -403,29 +400,35 @@ def _restore_extracted_assets(
     ]
 
 
-def _latest_packet_revision(orchestrator: ResearchOrchestrator, run_id: UUID) -> int:
-    with orchestrator.run_service.uow_factory() as uow:
-        with uow.connection.cursor() as cursor:
-            cursor.execute(
-                """SELECT packet_revision FROM evidence_packets
-                   WHERE run_id=%s ORDER BY packet_revision DESC LIMIT 1""",
-                (run_id,),
-            )
-            row = cursor.fetchone()
+def _packet_revision(orchestrator: ResearchOrchestrator, run_id: UUID) -> int:
+    with (
+        orchestrator.run_service.uow_factory() as uow,
+        uow.connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            """SELECT packet_revision FROM evidence_packets
+               WHERE run_id=%s ORDER BY packet_revision DESC LIMIT 1""",
+            (run_id,),
+        )
+        row = cursor.fetchone()
     if row is None:
-        raise SmartResumeError("synthesizing run has no persisted EvidencePacket")
+        raise SmartResumeError("synthesizing run has no EvidencePacket")
     return int(row[0])
 
 
 class ResumableResearchOrchestrator(ResearchOrchestrator):
-    """Run existing stages from the lifecycle state committed in PostgreSQL."""
+    """Dispatch existing stage services from the persisted lifecycle state."""
+
+    def _refresh(self, run_id: UUID) -> tuple[str, int]:
+        status = self.run_service.status(run_id=run_id)
+        return status.state, status.lifecycle_revision
 
     def _checkpoint(
         self, run_id: UUID, context: dict[str, Any], state: str
     ) -> OrchestratorResult | None:
         if context.get("_stop_after_state") != state:
             return None
-        counts = _persisted_counts(self, run_id)
+        counts = _counts(self, run_id)
         return OrchestratorResult(
             run_id=run_id,
             final_state=state,
@@ -434,10 +437,6 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
             wave_count=counts["waves"],
             successful_urls=counts["assets"],
         )
-
-    def _refresh(self, run_id: UUID) -> tuple[Any, str, int]:
-        status = self.run_service.status(run_id=run_id)
-        return status, status.state, status.lifecycle_revision
 
     def run(
         self,
@@ -450,20 +449,25 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
     ) -> OrchestratorResult:
         max_cycles = max_adaptive_cycles or self.orchestrator_config.max_adaptive_cycles
         ctx = dict(context or {})
-        ctx["spec"] = spec
-        ctx["search_plan"] = search_plan
-        ctx["execution_mode"] = self.orchestrator_config.execution_mode
-        ctx["_max_adaptive_cycles"] = max_cycles
+        ctx.update(
+            {
+                "spec": spec,
+                "search_plan": search_plan,
+                "execution_mode": self.orchestrator_config.execution_mode,
+                "_max_adaptive_cycles": max_cycles,
+            }
+        )
         ctx.setdefault(ContextKeys.WALL_CLOCK_START, time.monotonic())
-        ctx.update({key: value for key, value in _coverage_context(self, run_id).items() if key not in ctx})
-        ctx.setdefault(ContextKeys.AUTHORIZED_QUERIES, _restore_authorized_queries(self, run_id))
-        counts = _persisted_counts(self, run_id)
+        state, revision = self._refresh(run_id)
+        counts = _counts(self, run_id)
         ctx.setdefault(ContextKeys.WAVE_COUNT, counts["waves"])
         ctx.setdefault(ContextKeys.EXTRACTION_ATTEMPTS, counts["attempts"])
         ctx.setdefault(ContextKeys.SUCCESSFUL_URLS, counts["assets"])
-
-        status, state, revision = self._refresh(run_id)
+        if state not in PLANNING_STATES and state not in TERMINAL_STATES:
+            ctx.update(_coverage_context(self, run_id))
+        ctx.setdefault(ContextKeys.AUTHORIZED_QUERIES, _authorized_queries(self, run_id))
         coverage_revision = int(ctx.get("coverage_revision") or 0) or None
+
         if state in TERMINAL_STATES:
             return OrchestratorResult(
                 run_id=run_id,
@@ -481,7 +485,7 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                 )
                 if result.error:
                     return self._failed_result(run_id, result.error)
-                status, state, revision = self._refresh(run_id)
+                state, revision = self._refresh(run_id)
                 checkpoint = self._checkpoint(run_id, ctx, state)
                 if checkpoint:
                     return checkpoint
@@ -494,12 +498,9 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                     actor_type="orchestrator",
                     actor_identifier="ResumableResearchOrchestrator",
                     triggering_event="run.corpus_review",
-                    reason="resume from persisted spec, budget, and search plan",
+                    reason="resume from persisted planning tuple",
                 )
-                status, state, revision = self._refresh(run_id)
-                checkpoint = self._checkpoint(run_id, ctx, state)
-                if checkpoint:
-                    return checkpoint
+                state, revision = self._refresh(run_id)
 
             if state == "corpus_review":
                 result = self._execute_stage(
@@ -507,7 +508,7 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                 )
                 if result.error:
                     return self._failed_result(run_id, result.error)
-                status, state, revision = self._refresh(run_id)
+                state, revision = self._refresh(run_id)
                 ctx.update(_coverage_context(self, run_id))
                 coverage_revision = int(ctx.get("coverage_revision") or 1)
                 checkpoint = self._checkpoint(run_id, ctx, state)
@@ -518,7 +519,7 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
             while state not in TERMINAL_STATES:
                 iterations += 1
                 if iterations > max(12, max_cycles * 6):
-                    raise SmartResumeError("orchestrator resume loop exceeded safety bound")
+                    raise SmartResumeError("resume loop exceeded its safety bound")
 
                 if state == "acquiring":
                     if int(ctx.get(ContextKeys.WAVE_COUNT, 0)) >= max_cycles:
@@ -531,7 +532,7 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                             actor_type="orchestrator",
                             actor_identifier="ResumableResearchOrchestrator",
                             triggering_event="run.coverage_review",
-                            reason="adaptive-cycle budget exhausted before another acquisition",
+                            reason="adaptive-cycle budget exhausted",
                         )
                     else:
                         result = self._execute_stage(
@@ -547,34 +548,17 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                         ctx[ContextKeys.WAVE_COUNT] = int(
                             ctx.get(ContextKeys.WAVE_COUNT, 0)
                         ) + 1
-                        if int(ctx[ContextKeys.WAVE_COUNT]) >= max_cycles:
-                            ctx["_budget_exhausted"] = True
-                    status, state, revision = self._refresh(run_id)
+                    state, revision = self._refresh(run_id)
                     checkpoint = self._checkpoint(run_id, ctx, state)
                     if checkpoint:
                         return checkpoint
                     continue
 
                 if state == "extracting":
-                    raw_requests = list(ctx.get("raw_ingest_requests") or [])
-                    if not raw_requests:
-                        raw_requests = _restore_raw_ingest_requests(self, run_id, ctx)
-                    if not raw_requests:
-                        assets = _restore_extracted_assets(self, run_id)
-                        next_state = "indexing" if assets else "coverage_review"
-                        if assets:
-                            ctx["extracted_assets"] = assets
-                        self.run_service.transition(
-                            run_id,
-                            next_state,
-                            expected_revision=revision,
-                            idempotency_key=f"resume:extraction-empty:{run_id}:{next_state}",
-                            actor_type="orchestrator",
-                            actor_identifier="ResumableResearchOrchestrator",
-                            triggering_event=f"run.{next_state}",
-                            reason="resume found no unprocessed replayable candidates",
-                        )
-                    else:
+                    inputs = list(ctx.get("raw_ingest_requests") or [])
+                    if not inputs:
+                        inputs = _replay_extraction_inputs(self, run_id, ctx)
+                    if inputs:
                         result = self._execute_stage(
                             "extraction",
                             run_id,
@@ -585,18 +569,30 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                         )
                         if result.error:
                             return self._failed_result(run_id, result.error)
-                    status, state, revision = self._refresh(run_id)
+                    else:
+                        restored = _assets(self, run_id)
+                        next_state = "indexing" if restored else "coverage_review"
+                        ctx["extracted_assets"] = restored
+                        self.run_service.transition(
+                            run_id,
+                            next_state,
+                            expected_revision=revision,
+                            idempotency_key=f"resume:extraction:{run_id}:{next_state}",
+                            actor_type="orchestrator",
+                            actor_identifier="ResumableResearchOrchestrator",
+                            triggering_event=f"run.{next_state}",
+                            reason="resume found no unprocessed candidates",
+                        )
+                    state, revision = self._refresh(run_id)
                     checkpoint = self._checkpoint(run_id, ctx, state)
                     if checkpoint:
                         return checkpoint
                     continue
 
                 if state == "indexing":
-                    ctx["extracted_assets"] = _restore_extracted_assets(self, run_id)
+                    ctx["extracted_assets"] = _assets(self, run_id)
                     if not ctx["extracted_assets"]:
-                        raise SmartResumeError(
-                            "indexing run has no PostgreSQL-linked snapshots and chunks"
-                        )
+                        raise SmartResumeError("indexing state has no persisted chunks")
                     result = self._execute_stage(
                         "indexing",
                         run_id,
@@ -607,7 +603,7 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                     )
                     if result.error:
                         return self._failed_result(run_id, result.error)
-                    status, state, revision = self._refresh(run_id)
+                    state, revision = self._refresh(run_id)
                     result = self._execute_stage(
                         "evidence_preparation",
                         run_id,
@@ -618,7 +614,7 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                     )
                     if result.error:
                         return self._failed_result(run_id, result.error)
-                    status, state, revision = self._refresh(run_id)
+                    state, revision = self._refresh(run_id)
                     checkpoint = self._checkpoint(run_id, ctx, state)
                     if checkpoint:
                         return checkpoint
@@ -629,18 +625,18 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                         run_id,
                         "coverage_review",
                         expected_revision=revision,
-                        idempotency_key=f"resume:retrieval-review:{run_id}:{revision}",
+                        idempotency_key=f"resume:retrieval:{run_id}:{revision}",
                         actor_type="orchestrator",
                         actor_identifier="ResumableResearchOrchestrator",
                         triggering_event="run.coverage_review",
-                        reason="resume retrieval checkpoint from authoritative corpus",
+                        reason="resume retrieval from authoritative corpus",
                     )
-                    status, state, revision = self._refresh(run_id)
+                    state, revision = self._refresh(run_id)
                     continue
 
                 if state == "coverage_review":
                     ctx.update(_coverage_context(self, run_id))
-                    coverage_revision = int(ctx.get("coverage_revision") or coverage_revision or 1)
+                    coverage_revision = int(ctx.get("coverage_revision") or 1)
                     if int(ctx.get(ContextKeys.WAVE_COUNT, 0)) >= max_cycles:
                         ctx["_budget_exhausted"] = True
                     result = self._execute_stage(
@@ -653,16 +649,14 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                     )
                     if result.error:
                         return self._failed_result(run_id, result.error)
-                    status, state, revision = self._refresh(run_id)
-                    ctx.update(_coverage_context(self, run_id))
-                    coverage_revision = int(ctx.get("coverage_revision") or coverage_revision)
+                    state, revision = self._refresh(run_id)
                     checkpoint = self._checkpoint(run_id, ctx, state)
                     if checkpoint:
                         return checkpoint
                     continue
 
                 if state == "synthesizing":
-                    ctx["evidence_packet_revision"] = _latest_packet_revision(self, run_id)
+                    ctx["evidence_packet_revision"] = _packet_revision(self, run_id)
                     result = self._execute_stage(
                         "synthesis",
                         run_id,
@@ -673,7 +667,7 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                     )
                     if result.error:
                         return self._failed_result(run_id, result.error)
-                    status, state, revision = self._refresh(run_id)
+                    state, revision = self._refresh(run_id)
                     checkpoint = self._checkpoint(run_id, ctx, state)
                     if checkpoint:
                         return checkpoint
@@ -686,7 +680,7 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                         if ctx.get(ContextKeys.OVERALL_STATUS) == "sufficient"
                         else "partial"
                     )
-                    ctx["_terminal_reason"] = "resumed persisted validation checkpoint"
+                    ctx["_terminal_reason"] = "resumed validation checkpoint"
                     result = self._execute_stage(
                         "terminal",
                         run_id,
@@ -697,12 +691,12 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                     )
                     if result.error:
                         return self._failed_result(run_id, result.error)
-                    status, state, revision = self._refresh(run_id)
+                    state, revision = self._refresh(run_id)
                     continue
 
-                raise SmartResumeError(f"unsupported persisted run state: {state}")
+                raise SmartResumeError(f"unsupported persisted state: {state}")
 
-            counts = _persisted_counts(self, run_id)
+            counts = _counts(self, run_id)
             return OrchestratorResult(
                 run_id=run_id,
                 final_state=state,
@@ -719,10 +713,10 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
 __all__ = [
     "NETWORK_ENTRY_STATES",
     "PLANNING_STATES",
+    "TERMINAL_STATES",
     "PlanningBundle",
     "ResumableResearchOrchestrator",
     "SmartResumeError",
-    "TERMINAL_STATES",
     "load_planning_bundle",
     "persist_planning_bundle",
 ]
