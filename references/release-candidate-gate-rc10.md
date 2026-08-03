@@ -1,6 +1,6 @@
 # RC-10 Aggregate Release-Candidate Gate
 
-Parent epic: #183  
+Parent epic: #183
 Gate issue: #193
 
 ## Selected base candidate
