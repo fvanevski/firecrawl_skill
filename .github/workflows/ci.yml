@@ -56,7 +56,8 @@ jobs:
             scripts/test_release_invariant_contracts.py \
             scripts/test_smoke_test.py \
             scripts/test_release_campaign_verifier.py \
-            scripts/test_exact_head_ci_evidence.py
+            scripts/test_exact_head_ci_evidence.py \
+            scripts/test_pytest_skip_verifier.py
 
   test:
     name: "Test — Python ${{ matrix.python-version }}"
@@ -108,13 +109,17 @@ jobs:
             qdrant/qdrant:v1.18.3-unprivileged
           sleep 3
 
-      - name: Run tests
+      - name: Run tests and classify skips
         env:
           RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_telemetry_test"
           RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_telemetry_test"
+          PYTEST_JUNIT: ${{ runner.temp }}/pytest-${{ matrix.python-version }}.xml
+          PYTEST_SKIP_REPORT: ${{ runner.temp }}/pytest-skips-${{ matrix.python-version }}.json
         run: |
           python -m pytest \
             -q \
+            -ra \
+            --junitxml="$PYTEST_JUNIT" \
             -p no:cacheprovider \
             scripts/test_research_domain.py \
             scripts/test_research_store.py \
@@ -155,6 +160,21 @@ jobs:
             scripts/test_database_native_inspection.py \
             scripts/test_database_native_inspection_integration.py \
             scripts/test_research_store_integration.py
+          python scripts/verify_pytest_skips.py \
+            --junitxml "$PYTEST_JUNIT" \
+            --allowlist references/pytest-skip-allowlist.json \
+            --output "$PYTEST_SKIP_REPORT"
+
+      - name: Upload broad-suite test and skip evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: broad-test-evidence-${{ github.event.pull_request.head.sha || github.sha }}-py${{ matrix.python-version }}
+          path: |
+            ${{ runner.temp }}/pytest-${{ matrix.python-version }}.xml
+            ${{ runner.temp }}/pytest-skips-${{ matrix.python-version }}.json
+          if-no-files-found: warn
+          retention-days: 90
 
   strict-campaign-contract:
     name: "Strict campaign contract tests — Python ${{ matrix.python-version }}"

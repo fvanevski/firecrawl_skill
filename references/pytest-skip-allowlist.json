@@ -1,0 +1,23 @@
+{
+  "schema_version": "pytest-skip-allowlist-v1",
+  "entries": [
+    {
+      "node_id": "scripts/test_claim_binding_service.py::test_evaluate_claims_integration",
+      "reason_contains": "requires LLM endpoint",
+      "classification": "credentialed-llm-integration",
+      "replacement_gate": "Real release campaign"
+    },
+    {
+      "node_id": "scripts/test_strict_campaign.py::TestStrictCampaignIntegration::test_strict_campaign_artifacts_written",
+      "reason_contains": "requires full infrastructure; skip by default",
+      "classification": "credentialed-full-stack-integration",
+      "replacement_gate": "Real release campaign"
+    },
+    {
+      "node_id": "scripts/test_strict_campaign.py::TestStrictCampaignIntegration::test_strict_metric_engine_with_seeded_data",
+      "reason_contains": "requires seeding many related tables with correct FK constraints",
+      "classification": "credentialed-full-stack-integration",
+      "replacement_gate": "Real release campaign"
+    }
+  ]
+}

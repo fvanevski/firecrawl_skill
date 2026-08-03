@@ -435,3 +435,36 @@ def test_removed_flag_documentation_matches_parser_contract() -> None:
     )
     assert "`--output-dir PATH` and `--output-dir=PATH` fail" in fscrape
     assert "before the Firecrawl adapter is" in fscrape
+
+
+def test_rc10_requires_post_merge_real_campaign_before_issue_closure() -> None:
+    gate = (SKILL_ROOT / "references" / "release-candidate-gate-rc10.md").read_text(
+        encoding="utf-8"
+    )
+    for required in (
+        "`Refs #193`, not `Closes #193`",
+        "does not itself satisfy or close issue #193",
+        "exact resulting `main` SHA",
+        "Real release campaign",
+        "candidate SHA, dispatch SHA, workflow SHA",
+        "artifact ID",
+        "artifact digest",
+        "Close issue #193 and parent epic #183 only after",
+        "real-release-campaign-<exact-main-sha>",
+    ):
+        assert required in gate
+
+    workflow = (
+        SKILL_ROOT / ".github" / "workflows" / "release-campaign.yml"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "workflow_dispatch:",
+        "candidate-sha:",
+        "required: true",
+        'test "$DISPATCH_REF" = "refs/heads/main"',
+        'test "$DISPATCH_SHA" = "$CANDIDATE_SHA"',
+        'test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"',
+        'test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"',
+        "real-release-campaign-${{ inputs.candidate-sha }}",
+    ):
+        assert required in workflow

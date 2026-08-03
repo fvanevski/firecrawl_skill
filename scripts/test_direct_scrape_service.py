@@ -35,6 +35,7 @@ from research_store.direct_scrape_service import (
     _ResolvedTarget,
 )
 from research_store.domain import IngestRequest
+from research_store.inspection_service import InspectionService
 from research_store.parsing import get_registry
 from research_store.postgres import PostgresUnitOfWork, connect
 from research_store.service import CorpusService
@@ -803,6 +804,93 @@ def test_format_parser_identity_retry_lineage_and_transport_provenance(
             (retried.invocation_id,),
         )
         assert cur.fetchone()[0] == failed.invocation_id
+
+
+def test_failed_retry_preserves_attempt_and_invocation_lineage(tmp_path: Path):
+    _integration()
+    run_id = uuid4()
+    _insert_run(run_id)
+    request = [DirectScrapeRequest(url="https://example.com/retry-lineage")]
+
+    first_adapter = _SequenceAdapter(
+        [
+            ScrapeTransportResult(
+                raw_payload=b"",
+                returncode=1,
+                stderr=b"initial upstream failure",
+                metadata={"failure_class": "network"},
+            )
+        ]
+    )
+    first = _build_service(tmp_path, lambda: first_adapter).execute(
+        run_id,
+        request,
+        idempotency_key="retry-lineage-first",
+    )
+    assert first.status == "failed"
+
+    second_adapter = _SequenceAdapter(
+        [
+            ScrapeTransportResult(
+                raw_payload=b"",
+                returncode=1,
+                stderr=b"retry also failed",
+                metadata={"failure_class": "network"},
+            )
+        ]
+    )
+    second = _build_service(tmp_path, lambda: second_adapter).retry_failed(
+        run_id,
+        request,
+        prior_invocation_id=first.invocation_id,
+        idempotency_key="retry-lineage-second",
+    )
+    assert second.status == "failed"
+
+    third_adapter = _SequenceAdapter(
+        [
+            ScrapeTransportResult(
+                raw_payload=b"# Third attempt\n\nAuthoritative success.",
+                provider_request_id="provider-third",
+                metadata={"firecrawl_cli_version": "test-cli"},
+            )
+        ]
+    )
+    third = _build_service(tmp_path, lambda: third_adapter).retry_failed(
+        run_id,
+        request,
+        prior_invocation_id=second.invocation_id,
+        idempotency_key="retry-lineage-third",
+    )
+    assert third.status == "complete"
+
+    first_attempt = first.items[0].extraction_attempt_id
+    second_attempt = second.items[0].extraction_attempt_id
+    third_attempt = third.items[0].extraction_attempt_id
+    assert first_attempt is not None
+    assert second_attempt is not None
+    assert third_attempt is not None
+
+    inspector = InspectionService(_config(tmp_path))
+    attempts = inspector.list_extraction_attempts(
+        candidate_id=first.items[0].candidate_id
+    )
+    by_id = {item["id"]: item for item in attempts["items"]}
+    assert by_id[str(first_attempt)]["retry_parent_id"] is None
+    assert by_id[str(second_attempt)]["retry_parent_id"] == str(first_attempt)
+    assert by_id[str(third_attempt)]["retry_parent_id"] == str(second_attempt)
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cur:
+        cur.execute(
+            "SELECT parent_invocation_id FROM research_invocations WHERE id=%s",
+            (second.invocation_id,),
+        )
+        assert cur.fetchone()[0] == first.invocation_id
+        cur.execute(
+            "SELECT parent_invocation_id FROM research_invocations WHERE id=%s",
+            (third.invocation_id,),
+        )
+        assert cur.fetchone()[0] == second.invocation_id
 
 
 def test_same_snapshot_bytes_do_not_collapse_parser_document_identity(
