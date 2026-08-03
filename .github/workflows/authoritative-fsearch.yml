@@ -40,18 +40,22 @@ jobs:
           path = Path('scripts/live_validate.py')
           text = path.read_text(encoding='utf-8')
 
-          old_profiles = '''PROFILE_OPERATION_CAPS = {
-              "focused": 40,
-              "termux": 40,
-              "full": 100,
-          }
-          '''
-          new_profiles = '''PROFILE_OPERATION_CAPS = {
-              "focused": 40,
-              "failure-path": 20,
-              "full": 100,
-          }
-          '''
+          old_profiles = "\n".join([
+              "PROFILE_OPERATION_CAPS = {",
+              '    "focused": 40,',
+              '    "termux": 40,',
+              '    "full": 100,',
+              "}",
+              "",
+          ])
+          new_profiles = "\n".join([
+              "PROFILE_OPERATION_CAPS = {",
+              '    "focused": 40,',
+              '    "failure-path": 20,',
+              '    "full": 100,',
+              "}",
+              "",
+          ])
           if old_profiles not in text:
               raise SystemExit('expected profile block not found')
           text = text.replace(old_profiles, new_profiles, 1)
@@ -68,15 +72,17 @@ jobs:
               r'''\s+\(run_id,\),\n'''
               r'''\s+\)\n'''
           )
-          candidate_replacement = '''            cursor.execute(
-              """SELECT c.id,c.canonical_url,c.domain,
-                        coalesce(c.title,''),coalesce(c.snippet,'')
-                 FROM search_candidates c
-                 WHERE c.run_id=%s
-                 ORDER BY c.id""",
-              (run_id,),
-          )
-          '''
+          candidate_replacement = "\n".join([
+              "            cursor.execute(",
+              '                """SELECT c.id,c.canonical_url,c.domain,',
+              "                          coalesce(c.title,''),coalesce(c.snippet,'')",
+              "                   FROM search_candidates c",
+              "                   WHERE c.run_id=%s",
+              '                   ORDER BY c.id""",',
+              "                (run_id,),",
+              "            )",
+              "",
+          ])
           text, candidate_count = candidate_pattern.subn(
               candidate_replacement,
               text,
@@ -94,16 +100,18 @@ jobs:
               r'''        self\.run_fscrape_valkey_loss\(\)\n\n'''
               r'''        if self\.args\.profile == "full":\n'''
           )
-          execute_replacement = '''        self.validate_dry_run()
-          if self.args.profile == "failure-path":
-              self.run_fscrape_valkey_loss()
-              return self.finish()
-
-          self.run_smart("academic", "academic", resume=True)
-          self.run_fscrape_valkey_loss()
-
-          if self.args.profile == "full":
-          '''
+          execute_replacement = "\n".join([
+              "        self.validate_dry_run()",
+              '        if self.args.profile == "failure-path":',
+              "            self.run_fscrape_valkey_loss()",
+              "            return self.finish()",
+              "",
+              '        self.run_smart("academic", "academic", resume=True)',
+              "        self.run_fscrape_valkey_loss()",
+              "",
+              '        if self.args.profile == "full":',
+              "",
+          ])
           text, execute_count = execute_pattern.subn(
               execute_replacement,
               text,
