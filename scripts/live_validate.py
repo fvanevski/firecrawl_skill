@@ -28,8 +28,7 @@ BENCHMARKS = {
     },
     "academic": {
         "topic": (
-            "methodological naturalism cosmology burden of proof "
-            "evidence objections"
+            "methodological naturalism cosmology burden of proof evidence objections"
         ),
         "facets": ("naturalism", "cosmology", "burden", "evidence", "objection"),
         "min_domains": 3,
@@ -334,9 +333,9 @@ class AuthoritativeInspector:
         minimum_domains = 1
         if benchmark:
             facets = tuple(benchmark["facets"])
-            facet_coverage = (
-                sum(facet.lower() in candidate_text for facet in facets) / len(facets)
-            )
+            facet_coverage = sum(
+                facet.lower() in candidate_text for facet in facets
+            ) / len(facets)
             minimum_domains = int(benchmark["min_domains"])
 
         job_counts = {str(row[0]): int(row[1]) for row in job_rows}
@@ -359,12 +358,7 @@ class AuthoritativeInspector:
             "authoritative_events": event_count + coverage_event_count > 0,
             "unique_queries": bool(queries)
             and len(queries)
-            == len(
-                {
-                    re.sub(r"\W+", " ", query.lower()).strip()
-                    for query in queries
-                }
-            ),
+            == len({re.sub(r"\W+", " ", query.lower()).strip() for query in queries}),
             "broad_first": bool(queries) and "site:" not in queries[0].lower(),
             "max_query_similarity": max(pairwise, default=0.0) <= 0.80,
             "domain_diversity": len(domains) >= minimum_domains,
@@ -421,9 +415,7 @@ class AuthoritativeInspector:
                 benchmark,
                 require_corpus=require_corpus,
             )
-            if last["checks"]["worker_completed"] and last["checks"][
-                "qdrant_coverage"
-            ]:
+            if last["checks"]["worker_completed"] and last["checks"]["qdrant_coverage"]:
                 return last
             time.sleep(0.5)
         return last or self.run_metrics(
@@ -723,8 +715,7 @@ class Campaign:
         if not re.fullmatch(r"fr_[0-9a-f]{32}", external_id):
             case["status"] = "fail"
             case["stderr"] = (
-                case["stderr"]
-                + f"\ninvalid authoritative run ID: {external_id!r}"
+                case["stderr"] + f"\ninvalid authoritative run ID: {external_id!r}"
             ).strip()
             return None
         self.runs[name] = {
@@ -759,8 +750,7 @@ class Campaign:
             "database_unchanged": before_counts == after_counts,
             "firecrawl_operations_unchanged": before_operations == after_operations,
             "structured_stdout": (
-                payload.get("schema_version")
-                == "authoritative-smart-search-plan-v1"
+                payload.get("schema_version") == "authoritative-smart-search-plan-v1"
                 and payload.get("mode") == "dry_run"
             ),
         }
@@ -993,9 +983,7 @@ class Campaign:
         metrics = self.collect_metrics() if self.runs else []
         operations = self.operation_data()
         required_cases_pass = all(
-            case["status"] == "pass"
-            for case in self.cases
-            if case.get("required")
+            case["status"] == "pass" for case in self.cases if case.get("required")
         )
         quality_pass = bool(metrics) and all(item.get("pass") for item in metrics)
         manifest = {

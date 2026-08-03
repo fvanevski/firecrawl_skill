@@ -498,13 +498,9 @@ _EXCLUDED_PARTS = {
     "generated",
 }
 
-# RC-6-owned runtime surfaces are empty. Remaining entries are classified
-# separately as RC-7 work or intentional removed-flag compatibility errors.
-_RC7_PENDING_RUNTIME_ALLOWLIST: dict[tuple[str, str], int] = {
-    ("scripts/fsearch_smart", "_meta.json"): 1,
-    ("scripts/fsearch_smart", "firecrawl_scratch"): 1,
-    ("scripts/live_validate.py", "_meta.json"): 1,
-}
+# RC-6/RC-7-owned runtime surfaces are empty. Remaining entries are
+# intentional removed-flag compatibility errors.
+_RC7_PENDING_RUNTIME_ALLOWLIST: dict[tuple[str, str], int] = {}
 _COMPATIBILITY_ERROR_ALLOWLIST: dict[tuple[str, str], int] = {
     ("scripts/research_store/fsearch_service.py", "--reuse-search"): 2,
     ("scripts/research_store/fsearch_service.py", "reuse_search"): 1,
