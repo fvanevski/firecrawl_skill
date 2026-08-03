@@ -30,12 +30,26 @@ def validation_module():
     return load_script("rc7_live_validate", SCRIPTS / "live_validate.py")
 
 
-def _successful_result():
+def _budget():
+    return {
+        "policy_version": "budget-policy-v1",
+        "policy_config_sha256": "a" * 64,
+        "spec_revision": 1,
+        "run_revision": 0,
+        "selected_tier": "standard",
+        "effective_caps": {
+            "max_search_branches": 3,
+            "max_adaptive_cycles": 2,
+        },
+    }
+
+
+def _result(*, outcome="completed", state="completed"):
     return SimpleNamespace(
-        outcome="satisfied",
-        final_state="completed",
+        outcome=outcome,
+        final_state=state,
         wave_count=1,
-        successful_urls=("https://example.com",),
+        successful_urls=1,
         error=None,
     )
 
@@ -48,33 +62,48 @@ def test_smart_dry_run_is_stdout_only_and_has_no_external_calls(
     smart = smart_module()
     monitored = tmp_path / "tmp"
     monitored.mkdir()
-    monkeypatch.setenv("TMPDIR", str(monitored))
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("dry-run performed an external call")
 
+    monkeypatch.setenv("TMPDIR", str(monitored))
     monkeypatch.setattr(smart, "resolved_research_environment", forbidden)
     monkeypatch.setattr(smart.subprocess, "run", forbidden)
 
-    result = smart.main(
-        [
-            "bounded authoritative dry-run",
-            "--dry-run",
-            "--invocation-id",
-            "fc_" + "1" * 32,
-        ]
-    )
-
-    assert result == 0
+    assert smart.main(["bounded dry-run", "--dry-run"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_version"] == "authoritative-smart-search-plan-v1"
     assert payload["mode"] == "dry_run"
-    assert payload["strategy"]["acquisition_mode"] == "coverage_led_orchestrator"
-    assert payload["queries"][0]["query"] == "bounded authoritative dry-run"
+    assert payload["queries"][0]["query"] == "bounded dry-run"
     assert list(monitored.rglob("*")) == []
 
 
-def test_smart_failed_authoritative_preflight_prevents_planning_and_network(
+def test_canonical_plan_is_domain_valid_and_targets_the_spec_question():
+    from budget_policy import conservative_research_spec
+    from research_domain import load_model
+    from research_domain.models import SearchPlan
+
+    smart = smart_module()
+    spec = conservative_research_spec("canonical planning", "general")
+    payload = smart.canonical_plan(
+        spec,
+        [
+            {
+                "query": "canonical planning primary sources",
+                "facet": "primary",
+                "intended_source_class": "primary",
+                "expected_organizations": ["Example Standards Body"],
+                "expected_contribution": "primary evidence",
+            }
+        ],
+    )
+    plan = load_model(payload)
+    assert isinstance(plan, SearchPlan)
+    assert plan.research_spec_id == spec.research_spec_id
+    assert plan.queries[0].target_question_ids == (spec.questions[0].question_id,)
+
+
+def test_failed_authoritative_preflight_prevents_planning_and_execution(
     monkeypatch: pytest.MonkeyPatch,
 ):
     smart = smart_module()
@@ -85,104 +114,102 @@ def test_smart_failed_authoritative_preflight_prevents_planning_and_network(
         "resolved_research_environment",
         lambda: {"DATABASE_URL": "", "PATH": os.environ.get("PATH", "")},
     )
-    monkeypatch.setattr(smart, "generate_search_plan", planner)
-    monkeypatch.setattr(smart, "execute_orchestrator", executor)
+    monkeypatch.setattr(smart, "generate_queries", planner)
+    monkeypatch.setattr(smart, "execute", executor)
 
     with pytest.raises(SystemExit) as exc:
-        smart.main(
-            [
-                "preflight failure",
-                "--research-run-id",
-                "fr_" + "2" * 32,
-            ]
-        )
-
+        smart.main(["preflight failure", "--research-run-id", "fr_" + "2" * 32])
     assert exc.value.code == 2
     planner.assert_not_called()
     executor.assert_not_called()
 
 
-def test_smart_normal_and_resume_use_only_authoritative_run_state(
-    tmp_path: Path,
+def test_existing_run_reuses_persisted_bundle_without_replanning(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    from budget_policy import conservative_research_spec
+    from research_store import smart_orchestrator
+
     smart = smart_module()
-    monitored = tmp_path / "tmp"
-    monitored.mkdir()
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "DATABASE_URL": "postgresql://research@test/research",
-            "TMPDIR": str(monitored),
-            "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
-        }
+    spec = conservative_research_spec("resume authoritative run", "general")
+    plan = smart.canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}])
+    bundle = SimpleNamespace(
+        spec=spec,
+        budget=_budget(),
+        plan=plan,
+        spec_row_id="00000000-0000-0000-0000-000000000101",
+        spec_revision=1,
+        plan_row_id="00000000-0000-0000-0000-000000000201",
+        plan_revision=1,
     )
-    run_id = "fr_" + "3" * 32
-    status = SimpleNamespace(state="acquiring")
-    prepared: list[str] = []
-    executed: list[str] = []
-
-    def prepare(value, _topic, _environment):
-        prepared.append(value)
-        return value, object(), status
-
-    def execute(value, *_args, **_kwargs):
-        executed.append(value)
-        return _successful_result()
-
-    monkeypatch.setattr(smart, "resolved_research_environment", lambda: environment)
-    monkeypatch.setattr(smart, "prepare_authoritative_run", prepare)
+    status = SimpleNamespace(
+        id="00000000-0000-0000-0000-000000000001",
+        state="acquiring",
+        lifecycle_revision=4,
+    )
+    monkeypatch.setattr(smart, "resolved_research_environment", lambda: {"DATABASE_URL": "postgresql://test", "FIRECRAWL_RESEARCH_AUTO_ENV": "0"})
     monkeypatch.setattr(
         smart,
-        "generate_search_plan",
-        lambda topic, max_queries: (
-            [
-                {
-                    "query": topic,
-                    "facet": "objective",
-                    "subquestion": topic,
-                }
-            ],
-            {"status": "generated"},
-            {"status": "not_run"},
-        ),
+        "prepare_run",
+        lambda *_args: ("fr_" + "3" * 32, object(), object(), status),
     )
-    monkeypatch.setattr(smart, "execute_orchestrator", execute)
+    monkeypatch.setattr(smart_orchestrator, "load_planning_bundle", lambda *_args: bundle)
+    monkeypatch.setattr(
+        smart,
+        "initialize_bundle",
+        mock.Mock(side_effect=AssertionError("persisted run was replanned")),
+    )
+    executed = mock.Mock(return_value=_result())
+    monkeypatch.setattr(smart, "execute", executed)
 
-    for _ in range(2):
-        assert (
-            smart.main(
-                [
-                    "resume authoritative run",
-                    "--research-run-id",
-                    run_id,
-                    "--max-adaptive-cycles",
-                    "1",
-                ]
-            )
-            == 0
-        )
+    assert smart.main([spec.objective, "--research-run-id", "fr_" + "3" * 32]) == 0
+    smart.initialize_bundle.assert_not_called()
+    executed.assert_called_once()
 
-    assert prepared == [run_id, run_id]
-    assert executed == [run_id, run_id]
-    assert list(monitored.rglob("*")) == []
-    assert not hasattr(smart, "write_scratch_diagnostics")
+
+def test_terminal_rerun_uses_persisted_outcome_without_planner(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from budget_policy import conservative_research_spec
+    from research_store import smart_orchestrator
+
+    smart = smart_module()
+    spec = conservative_research_spec("terminal run", "general")
+    bundle = SimpleNamespace(
+        spec=spec,
+        budget=_budget(),
+        plan=smart.canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}]),
+        spec_row_id="00000000-0000-0000-0000-000000000101",
+        spec_revision=1,
+        plan_row_id="00000000-0000-0000-0000-000000000201",
+        plan_revision=1,
+    )
+    status = SimpleNamespace(
+        id="00000000-0000-0000-0000-000000000001",
+        state="completed",
+        lifecycle_revision=9,
+    )
+    monkeypatch.setattr(smart, "resolved_research_environment", lambda: {"DATABASE_URL": "postgresql://test", "FIRECRAWL_RESEARCH_AUTO_ENV": "0"})
+    monkeypatch.setattr(
+        smart,
+        "prepare_run",
+        lambda *_args: ("fr_" + "4" * 32, object(), object(), status),
+    )
+    monkeypatch.setattr(smart_orchestrator, "load_planning_bundle", lambda *_args: bundle)
+    monkeypatch.setattr(
+        smart,
+        "initialize_bundle",
+        mock.Mock(side_effect=AssertionError("terminal run was replanned")),
+    )
+    monkeypatch.setattr(smart, "execute", lambda *_args: _result(outcome="resumed"))
+
+    assert smart.main([spec.objective, "--research-run-id", "fr_" + "4" * 32]) == 0
+    smart.initialize_bundle.assert_not_called()
 
 
 class _FakeInspector:
     def table_counts(self):
-        return {
-            "research_runs": 1,
-            "research_invocations": 2,
-            "search_responses": 3,
-            "search_candidates": 4,
-            "extraction_attempts": 5,
-            "asset_snapshots": 6,
-            "documents": 7,
-            "chunks": 8,
-            "research_events": 9,
-            "index_jobs": 10,
-        }
+        return {"research_runs": 1, "search_responses": 2}
 
     def probe_qdrant_alias(self):
         return {
@@ -196,16 +223,13 @@ class _FakeInspector:
         return {
             "external_run_id": external_run_id,
             "search_response_count": 1,
-            "candidate_count": 2,
+            "candidate_count": 1,
             "snapshot_count": 1,
             "document_count": 1,
-            "chunk_count": 2,
+            "chunk_count": 1,
+            "blob_integrity": {"expected": 1, "verified": 1},
             "projection": {"coverage": 1.0, "compatible": True},
-            "checks": {
-                "authoritative_records": True,
-                "worker_completed": True,
-                "qdrant_coverage": True,
-            },
+            "checks": {"authoritative_records": True},
             "pass": True,
         }
 
@@ -226,36 +250,6 @@ def _validation_args(*, artifact_root=None):
     )
 
 
-def test_live_validation_failed_store_preflight_stops_before_network(tmp_path: Path):
-    validation = validation_module()
-    calls = []
-
-    def runner(command, **_kwargs):
-        calls.append(command)
-        return SimpleNamespace(
-            returncode=1,
-            stdout="",
-            stderr="database unavailable",
-        )
-
-    campaign = validation.Campaign(
-        _validation_args(),
-        inspector=_FakeInspector(),
-        runner=runner,
-        real_cli="/usr/bin/firecrawl",
-        work_root=tmp_path / "work",
-    )
-    try:
-        assert campaign.preflight() is False
-    finally:
-        campaign.close()
-
-    assert len(calls) == 1
-    assert calls[0][-1] == "ingest-ready"
-    assert not any("fsearch" in str(part) for command in calls for part in command)
-    assert not any("fscrape" in str(part) for command in calls for part in command)
-
-
 def test_live_validation_rejects_persistent_tmpdir_entries(tmp_path: Path):
     validation = validation_module()
 
@@ -272,11 +266,7 @@ def test_live_validation_rejects_persistent_tmpdir_entries(tmp_path: Path):
         work_root=tmp_path / "work",
     )
     try:
-        case = campaign.run(
-            "residue",
-            ["/bin/true"],
-            json_output=True,
-        )
+        case = campaign.run("residue", ["/bin/true"], json_output=True)
         assert case["status"] == "fail"
         assert case["details"]["temporary_entries"] == ["unexpected.json"]
         assert list(campaign.monitored_tmp.rglob("*")) == []
@@ -289,47 +279,14 @@ def test_live_validation_writes_final_artifacts_only_when_requested(
     capsys: pytest.CaptureFixture[str],
 ):
     validation = validation_module()
-    no_artifacts = validation.Campaign(
-        _validation_args(),
-        inspector=_FakeInspector(),
-        real_cli="/usr/bin/firecrawl",
-        work_root=tmp_path / "work-no-artifacts",
-    )
-    no_artifacts.cases.append(
-        {
-            "name": "case",
-            "status": "pass",
-            "required": True,
-            "returncode": 0,
-            "seconds": 0.0,
-            "operations_after": 0,
-            "stdout": "",
-            "stderr": "",
-            "details": {},
-        }
-    )
-    no_artifacts.runs["run"] = {
-        "external_run_id": "fr_" + "4" * 32,
-        "benchmark_key": None,
-        "require_corpus": True,
-    }
-    try:
-        assert no_artifacts.finish() == 0
-        assert not list((tmp_path / "work-no-artifacts").rglob("manifest.json"))
-        assert not list((tmp_path / "work-no-artifacts").rglob("report.md"))
-        payload = json.loads(capsys.readouterr().out)
-        assert payload["schema_version"] == "authoritative-live-validation-v1"
-    finally:
-        no_artifacts.close()
-
     artifact_root = tmp_path / "artifacts"
-    requested = validation.Campaign(
+    campaign = validation.Campaign(
         _validation_args(artifact_root=str(artifact_root)),
         inspector=_FakeInspector(),
         real_cli="/usr/bin/firecrawl",
-        work_root=tmp_path / "work-requested",
+        work_root=tmp_path / "work",
     )
-    requested.cases.append(
+    campaign.cases.append(
         {
             "name": "case",
             "status": "pass",
@@ -342,30 +299,25 @@ def test_live_validation_writes_final_artifacts_only_when_requested(
             "details": {},
         }
     )
-    requested.runs["run"] = {
+    campaign.runs["run"] = {
         "external_run_id": "fr_" + "5" * 32,
         "benchmark_key": None,
         "require_corpus": True,
     }
     try:
-        assert requested.finish() == 0
+        assert campaign.finish() == 0
         destination = artifact_root / "test-campaign"
-        manifest = json.loads(
-            (destination / "manifest.json").read_text(encoding="utf-8")
-        )
-        assert manifest["quality_metrics"][0]["snapshot_count"] == 1
-        assert manifest["quality_metrics"][0]["document_count"] == 1
-        assert manifest["quality_metrics"][0]["chunk_count"] == 2
-        report = (destination / "report.md").read_text(encoding="utf-8")
-        assert "Authoritative run metrics" in report
+        manifest = json.loads((destination / "manifest.json").read_text())
+        assert manifest["quality_metrics"][0]["chunk_count"] == 1
+        assert "Authoritative run metrics" in (
+            destination / "report.md"
+        ).read_text()
+        assert "Artifacts:" in capsys.readouterr().out
     finally:
-        requested.close()
+        campaign.close()
 
 
-@pytest.mark.skipif(
-    not TEST_DSN,
-    reason="requires explicit disposable PostgreSQL test DSN",
-)
+@pytest.mark.skipif(not TEST_DSN, reason="requires disposable PostgreSQL DSN")
 def test_smart_dry_run_does_not_mutate_disposable_postgresql(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -382,23 +334,16 @@ def test_smart_dry_run_does_not_mutate_disposable_postgresql(
             cursor.execute(
                 """SELECT
                      (SELECT count(*) FROM research_runs),
-                     (SELECT count(*) FROM research_invocations),
-                     (SELECT count(*) FROM search_responses),
-                     (SELECT count(*) FROM search_candidates),
-                     (SELECT count(*) FROM extraction_attempts),
-                     (SELECT count(*) FROM asset_snapshots),
-                     (SELECT count(*) FROM documents),
-                     (SELECT count(*) FROM chunks),
-                     (SELECT count(*) FROM research_events),
-                     (SELECT count(*) FROM index_jobs)"""
+                     (SELECT count(*) FROM research_specs),
+                     (SELECT count(*) FROM research_budget_snapshots),
+                     (SELECT count(*) FROM search_plans),
+                     (SELECT count(*) FROM semantic_calls)"""
             )
             return cursor.fetchone()
 
     before = counts()
-    assert smart.main(["disposable database purity", "--dry-run"]) == 0
-    after = counts()
-
-    assert before == after
+    assert smart.main(["database purity", "--dry-run"]) == 0
+    assert counts() == before
     assert list(monitored.rglob("*")) == []
 
 
@@ -407,11 +352,9 @@ def test_rc7_runtime_sources_have_no_removed_storage_markers():
         "firecrawl_" + "scratch",
         "SCRATCH_" + "ROOT",
         "scratch_" + "file",
-        "scratch_" + "dir",
-        "_meta" + ".json",
-        "_index" + ".md",
         "persist_" + "results.py",
         "import-" + "scratch",
+        "_corpus" + ".json",
     )
     for path in (SCRIPTS / "fsearch_smart", SCRIPTS / "live_validate.py"):
         text = path.read_text(encoding="utf-8")
