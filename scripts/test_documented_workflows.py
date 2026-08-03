@@ -67,9 +67,9 @@ def test_canonical_workflow_orders_drain_before_finish_and_activation() -> None:
 
 
 def test_architecture_matches_blob_first_transaction() -> None:
-    architecture = (
-        SKILL_ROOT / "references/research-store-architecture.md"
-    ).read_text(encoding="utf-8")
+    architecture = (SKILL_ROOT / "references/research-store-architecture.md").read_text(
+        encoding="utf-8"
+    )
     blob = architecture.index("durably install immutable payload bytes")
     transaction = architecture.index("PostgreSQL acquisition transaction")
     commit = architecture.index("commit PostgreSQL metadata")
