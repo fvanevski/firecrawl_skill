@@ -29,16 +29,12 @@ def validation_module():
 def test_validation_profiles_enforce_hard_operation_caps(profile: str, cap: int):
     validation = validation_module()
 
-    args = validation.parse_args(
-        ["--profile", profile, "--max-operations", str(cap)]
-    )
+    args = validation.parse_args(["--profile", profile, "--max-operations", str(cap)])
     assert args.profile == profile
     assert args.max_operations == cap
 
     with pytest.raises(SystemExit) as exc:
-        validation.parse_args(
-            ["--profile", profile, "--max-operations", str(cap + 1)]
-        )
+        validation.parse_args(["--profile", profile, "--max-operations", str(cap + 1)])
     assert exc.value.code == 2
 
 
