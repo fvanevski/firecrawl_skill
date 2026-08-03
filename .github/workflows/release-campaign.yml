@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   campaign:
-    name: "Real release campaigns (issues #146/#153/#170)"
+    name: "Real release campaigns (issues #146/#153/#170/#183/#193)"
     runs-on: [self-hosted, firecrawl-release]
     timeout-minutes: 180
     environment: release-campaign
