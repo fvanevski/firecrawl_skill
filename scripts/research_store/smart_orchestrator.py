@@ -275,9 +275,7 @@ def _authorized_queries(
     ]
 
 
-def _completed_candidates(
-    orchestrator: ResearchOrchestrator, run_id: UUID
-) -> set[str]:
+def _completed_candidates(orchestrator: ResearchOrchestrator, run_id: UUID) -> set[str]:
     with (
         orchestrator.run_service.uow_factory() as uow,
         uow.connection.cursor() as cursor,
@@ -365,9 +363,7 @@ def _replay_extraction_inputs(
     return requests
 
 
-def _assets(
-    orchestrator: ResearchOrchestrator, run_id: UUID
-) -> list[dict[str, Any]]:
+def _assets(orchestrator: ResearchOrchestrator, run_id: UUID) -> list[dict[str, Any]]:
     with (
         orchestrator.run_service.uow_factory() as uow,
         uow.connection.cursor() as cursor,
@@ -465,7 +461,9 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
         ctx.setdefault(ContextKeys.SUCCESSFUL_URLS, counts["assets"])
         if state not in PLANNING_STATES and state not in TERMINAL_STATES:
             ctx.update(_coverage_context(self, run_id))
-        ctx.setdefault(ContextKeys.AUTHORIZED_QUERIES, _authorized_queries(self, run_id))
+        ctx.setdefault(
+            ContextKeys.AUTHORIZED_QUERIES, _authorized_queries(self, run_id)
+        )
         coverage_revision = int(ctx.get("coverage_revision") or 0) or None
 
         if state in TERMINAL_STATES:
@@ -545,9 +543,9 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
                         )
                         if result.error:
                             return self._failed_result(run_id, result.error)
-                        ctx[ContextKeys.WAVE_COUNT] = int(
-                            ctx.get(ContextKeys.WAVE_COUNT, 0)
-                        ) + 1
+                        ctx[ContextKeys.WAVE_COUNT] = (
+                            int(ctx.get(ContextKeys.WAVE_COUNT, 0)) + 1
+                        )
                     state, revision = self._refresh(run_id)
                     checkpoint = self._checkpoint(run_id, ctx, state)
                     if checkpoint:

@@ -405,9 +405,7 @@ def main(argv=None) -> int:
                 if serialize_model(supplied) != serialize_model(bundle.spec):
                     parser.error("--research-spec conflicts with persisted records")
             cycles = resolve_cycles(args.max_adaptive_cycles, bundle.budget, parser)
-            result = execute(
-                external_id, config, bundle, cycles, args.stop_after_state
-            )
+            result = execute(external_id, config, bundle, cycles, args.stop_after_state)
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
 

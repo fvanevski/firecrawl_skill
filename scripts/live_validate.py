@@ -378,12 +378,16 @@ class AuthoritativeInspector:
             and all(int(row[4]) == int(row[1]) for row in job_rows)
         )
         projection = self._projection_metrics(chunk_ids)
-        blob_integrity = self._blob_integrity(blob_digests) if blob_digests else {
-            "expected": 0,
-            "verified": 0,
-            "missing_or_invalid": [],
-            "complete": False,
-        }
+        blob_integrity = (
+            self._blob_integrity(blob_digests)
+            if blob_digests
+            else {
+                "expected": 0,
+                "verified": 0,
+                "missing_or_invalid": [],
+                "complete": False,
+            }
+        )
         state_history = [str(row[1]) for row in transition_rows]
         terminal = state in {"completed", "partial", "failed", "cancelled"}
         corpus_complete = (
@@ -593,7 +597,9 @@ class Campaign:
 
     def _clear_temporary_entries(self) -> None:
         for path in sorted(
-            self.monitored_tmp.rglob("*"), key=lambda item: len(item.parts), reverse=True
+            self.monitored_tmp.rglob("*"),
+            key=lambda item: len(item.parts),
+            reverse=True,
         ):
             if path.is_dir():
                 path.rmdir()
@@ -724,9 +730,7 @@ class Campaign:
                 stderr=f"{type(exc).__name__}: {exc}",
             )
             return False
-        self._record(
-            "qdrant_active_alias", "pass", required=True, details=alias
-        )
+        self._record("qdrant_active_alias", "pass", required=True, details=alias)
         if not self.real_cli:
             self._record(
                 "firecrawl_cli",
@@ -735,9 +739,7 @@ class Campaign:
                 stderr="firecrawl executable not found",
             )
             return False
-        version = self.run(
-            "firecrawl_cli", [self.real_cli, "--version"], timeout=30
-        )
+        version = self.run("firecrawl_cli", [self.real_cli, "--version"], timeout=30)
         return version["status"] == "pass"
 
     def create_run(self, name: str, objective: str) -> str | None:
@@ -792,7 +794,11 @@ class Campaign:
             "smart_dry_run_purity",
             "pass" if all(purity.values()) else "fail",
             required=True,
-            details={**purity, "before_counts": before_counts, "after_counts": after_counts},
+            details={
+                **purity,
+                "before_counts": before_counts,
+                "after_counts": after_counts,
+            },
         )
 
     def run_smart(
@@ -922,9 +928,7 @@ class Campaign:
                     metadata["external_run_id"],
                     benchmark,
                     require_corpus=bool(metadata.get("require_corpus")),
-                    require_resume_history=bool(
-                        metadata.get("require_resume_history")
-                    ),
+                    require_resume_history=bool(metadata.get("require_resume_history")),
                     timeout_seconds=self.args.worker_timeout,
                 )
             except Exception as exc:  # noqa: BLE001
