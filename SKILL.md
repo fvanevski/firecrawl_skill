@@ -1,6 +1,6 @@
 ---
 name: firecrawl
-description: "Acquire, retain, retrieve, and audit web research with Firecrawl. Use when Codex needs to search or scrape the web, inspect the PostgreSQL-authoritative corpus, replay retained responses, select stable candidates, retrieve bounded passages, diagnose ingestion or indexing, or recover research provenance."
+description: "Acquire, retain, retrieve, and inspect web research with Firecrawl. Use when Codex needs to search or scrape the web, inspect the PostgreSQL-authoritative corpus, replay retained responses, select stable candidates, retrieve bounded passages, diagnose ingestion or indexing, report invocation-output blob integrity, schedule or inspect audit assessment records, compare research runs, or recover research provenance."
 ---
 
 <!-- @format -->
@@ -12,12 +12,12 @@ PostgreSQL is authoritative for workflow, acquisition provenance, corpus identit
 ## Choose the first operation
 
 1. Search retained material first with `corpus-overview`, `search-assets`, and bounded `fetch-passages`.
-2. Use `finspect` for run history, retained-response replay, candidate selection, attempts, and bounded inspection.
+2. Use `finspect` for run history, retained-response replay, candidate selection, attempts, exact lexical or pattern search, and bounded inspection.
 3. Acquire new evidence with `fsearch_smart`, `fsearch`, or `fscrape` only when retained evidence is absent, stale, incomplete, or the task explicitly requires current acquisition.
-4. Inspect the authoritative run and invocation before retrying. Distinguish provider, parsing, ingestion, indexing, and retrieval failures.
-5. Never infer success or current state from a local path, presentation export, Qdrant point, or Valkey message.
+4. Inspect the authoritative run and invocation before retrying. Distinguish provider, parsing, ingestion, indexing, retrieval, blob-integrity reporting, audit scheduling or status, and comparison failures.
+5. Never infer success or current state from a local path, presentation export, Qdrant point, Valkey message, zero-total blob report, or partial audit assessment.
 
-Resolve `<skill-root>` to the directory containing this file and keep `rtk proxy` at the outer agent-visible boundary.
+Resolve `<skill-root>` to the directory containing this file and keep `rtk proxy` at the outer agent-visible boundary. The shell entry points automatically source `scripts/research-env` when it is readable unless `FIRECRAWL_RESEARCH_AUTO_ENV=0` is set deliberately.
 
 ```bash
 rtk proxy "<skill-root>/scripts/research-db" corpus-overview
@@ -47,7 +47,7 @@ A normal top-level operation receives a new `fc_<uuid>`. Use `--invocation-id` a
 
 `research-db worker --once` processes at most one bounded batch. `drain_index_jobs.py` repeats bounded batches until PostgreSQL reports `claimed=0` and returns nonzero for invalid output, worker failure, failed jobs, lease loss, or an exceeded bound. Do not start another acquisition on the same run while indexing is unfinished.
 
-To add a direct scrape to the same run, first drain and verify the prior work, then drain again after the scrape:
+To add a direct scrape to the same run, first drain and inspect the prior work, then drain again after the scrape:
 
 ```bash
 rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
@@ -65,7 +65,51 @@ rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-run-id "$RUN
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --dry-run
 ```
 
-## Stable replay and candidate selection
+A `fsearch_smart` exit status of `75` is an intentional resumable checkpoint, not a generic failure and not permission to retry automatically. Preserve the printed `Run ID`, inspect its PostgreSQL state once, and return status `75` to the calling agent or operator. Resume only as a separate deliberate action with the same run after clearing or changing the internal stop-after-state control.
+
+```bash
+# fsearch-smart-checkpoint-handler:start
+set +e
+SMART_OUTPUT="$(
+  rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" 2>&1
+)"
+SMART_STATUS=$?
+set -e
+
+printf '%s\n' "$SMART_OUTPUT"
+RUN_ID="$(sed -n 's/^Run ID: //p' <<<"$SMART_OUTPUT" | tail -n 1)"
+
+case "$SMART_STATUS" in
+  0)
+    test -n "$RUN_ID"
+    ;;
+  75)
+    test -n "$RUN_ID"
+    rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
+    printf '%s\n' \
+      "Checkpoint reached. Resume explicitly with the same run after clearing or changing the stop-after-state control." >&2
+    exit 75
+    ;;
+  *)
+    exit "$SMART_STATUS"
+    ;;
+esac
+# fsearch-smart-checkpoint-handler:end
+```
+
+When continuation is intended, perform it separately. `FIRECRAWL_SMART_STOP_AFTER_STATE` is an internal test or diagnostic control; a normal continuation must not retain the same stop condition that produced the checkpoint.
+
+```bash
+# fsearch-smart-checkpoint-resume:start
+unset FIRECRAWL_SMART_STOP_AFTER_STATE
+rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" \
+  --research-run-id "$RUN_ID"
+# fsearch-smart-checkpoint-resume:end
+```
+
+Planning, budget, provenance, semantic artifacts, and resume checkpoints remain PostgreSQL records. Do not reconstruct a checkpoint from console output or a local file, create a replacement run, or place an unbounded retry loop around a stateful command.
+
+## Stable replay, exact search, and candidate selection
 
 Use database-native identities, not local filenames or ranks.
 
@@ -87,6 +131,25 @@ rtk proxy "<skill-root>/scripts/finspect" passages "<asset-uuid>" \
   --max-tokens 4000
 ```
 
+Use bounded PostgreSQL-native search when an agent needs exact retained text, identifiers, or implementation markers:
+
+```bash
+rtk proxy "<skill-root>/scripts/finspect" lexical-search "<terms>" \
+  --run "$RUN_ID" \
+  --limit 20 \
+  --max-chars 20000 \
+  --max-tokens 4000
+
+rtk proxy "<skill-root>/scripts/finspect" pattern-search "<literal-or-regex>" \
+  --mode literal \
+  --run "$RUN_ID" \
+  --limit 20 \
+  --max-chars 20000 \
+  --max-tokens 4000
+```
+
+Use `--mode regex` only when regular-expression behavior is required. All inspection output remains bounded and cursor-scoped.
+
 `replay-search` verifies retained byte length and SHA-256 before returning the payload and never calls Firecrawl. `scrape-candidates` and `retry-candidates` perform the same authoritative preflight as direct acquisition.
 
 ## Structured scrape
@@ -106,11 +169,28 @@ Structured provider output is validated before successful document ingestion. In
 
 ## Workflow and completion
 
-The acquisition path advances only through permitted PostgreSQL transitions:
+The following is a common acquisition path, not the complete transition graph:
 
 ```text
 created → planning → corpus_review → acquiring → extracting → indexing
 ```
+
+The authoritative PostgreSQL state machine permits these transitions:
+
+```text
+created → planning
+planning → corpus_review | failed
+corpus_review → acquiring | retrieving | failed
+acquiring → extracting | coverage_review | partial | failed
+extracting → indexing | coverage_review | failed
+indexing → coverage_review | partial | failed
+coverage_review → acquiring | extracting | retrieving | synthesizing | partial | failed
+retrieving → coverage_review | synthesizing | failed
+synthesizing → validating | failed
+validating → completed | partial | failed
+```
+
+Explicit cancellation is available from nonterminal states. `completed`, `partial`, `failed`, and `cancelled` are terminal; further acquisition requires an explicit reopen. Consult `references/workflow-state-schema.md` rather than inferring a legal transition from the abbreviated common path.
 
 After all run-scoped index jobs complete, `frun finish` advances through coverage review, synthesis, validation, and the requested terminal outcome.
 
@@ -122,6 +202,21 @@ rtk proxy "<skill-root>/scripts/frun" status "$RUN_ID"
 ```
 
 Retry an uncertain command with its original idempotency key. After a stale revision, inspect `run-status` before deciding whether a new command is valid. Reopen terminal runs explicitly.
+
+## Blob-integrity reporting, audit scheduling, and comparison
+
+Use the run wrapper for invocation-output blob-integrity reports, scheduling or inspecting audit assessment records, and cross-run comparison:
+
+```bash
+rtk proxy "<skill-root>/scripts/frun" verify "$RUN_ID"
+rtk proxy "<skill-root>/scripts/frun" audit "$RUN_ID"
+rtk proxy "<skill-root>/scripts/frun" audit-status "$RUN_ID"
+rtk proxy "<skill-root>/scripts/frun" compare "$RUN_ID" "<other-run-id>"
+```
+
+`frun verify` scans invocation output `results` for `snapshot` or `artifacts` values containing blob `path` and `sha256` pairs, then reports availability, hash mismatches, and file-based unverified references. It does not validate terminal state, claims, evidence packets, synthesis, declared outcome, or run completion. A report with `total: 0` and exit status `0` means that no verifiable path/hash pairs were found; it is not evidence that the run completed or passed. Inspect `frun status` and the relevant evidence or terminal-decision records separately.
+
+`frun audit` currently schedules and persists an audit assessment identity with status `partial`. It does not invoke a semantic provider or execute deterministic audit-stage validation. `frun audit-status` reports the latest stored assessment, which may therefore be only a scheduled partial record rather than a completed semantic evaluation. Provider, model, and stage choices label the scheduled record; accepted controls such as force, call limits, input-token limits, and fallback settings are not evidence that evaluation occurred and are not consumed by the current scheduling path. Do not present either command as authoritative completion verification or completed semantic-audit assurance.
 
 ## Qdrant and Valkey recovery
 
@@ -158,12 +253,17 @@ Exports are never replay, retry, selection, ingestion, or workflow inputs.
 - `references/recovery-drill-checklist.md`: executable recovery drills.
 - `references/cli-script-disambiguation.md`: Node CLI, Python SDK, and MCP boundaries.
 - `references/coding-agent-guide.md`: implementation and testing constraints.
-- `references/workflow-state-schema.md`: lifecycle and invocation contracts.
-- `references/release-notes-rc9.md`: breaking changes and rollback boundary.
+- `references/workflow-state-schema.md`: complete lifecycle and invocation contracts.
+- `references/release-notes-rc9.md`: breaking runtime and legacy-migration compatibility boundary retained by RC-10.
+- `references/release-candidate-gate-rc10.md`: aggregate exact-head gate and mandatory post-merge campaign boundary.
+- `references/release-campaign-timing-diagnostics.md`: strict PostgreSQL-bound timing-evidence contract used by the credentialed release campaign.
+
+RC-9 remains the controlling breaking-change and migration boundary. RC-10 adds aggregate and credentialed release validation without introducing a schema migration, command-surface change, payload relocation, Qdrant authority, or Valkey correctness dependency.
 
 ## Verification
 
-- A supported acquisition reports stable authoritative IDs or a stage-specific failure.
+A supported acquisition reports stable authoritative IDs or a stage-specific failure. In addition:
+
 - No Firecrawl or network invocation occurs after failed authoritative preflight.
 - PostgreSQL identities resolve to immutable bytes under `BLOB_ROOT`.
 - Payload bytes are installed before PostgreSQL commits metadata that references them.
@@ -172,7 +272,16 @@ Exports are never replay, retry, selection, ingestion, or workflow inputs.
 - Bounded inspection observes record, character, byte, and tokenizer limits.
 - `doctor` is read-only.
 
+For every change, run focused tests first, then the repository checks appropriate to the affected contract:
+
 ```bash
+cd "<skill-root>"
+rtk proxy ruff check .
+rtk proxy ruff format --check .
 rtk proxy env PYTHONDONTWRITEBYTECODE=1 \
-  pytest -q -p no:cacheprovider "<skill-root>/scripts/"
+  pytest -q -p no:cacheprovider scripts/
 ```
+
+Changes touching acquisition, persistence, migration, indexing, recovery, documentation/parser contracts, or release verification also require the applicable disposable PostgreSQL, Qdrant, Valkey, worker/recovery, and bounded live-validation suites. Preserve Python 3.11 and 3.12 compatibility and record the exact tested commit SHA. Do not weaken a failing gate, convert an integration failure into a skip, or infer release readiness from a different commit.
+
+For an aggregate release candidate, pull-request checks are necessary but not sufficient. After merge, resolve the exact resulting current `main` SHA, confirm its push-triggered gates, and dispatch `.github/workflows/release-campaign.yml` from `refs/heads/main` with `candidate-sha` equal to that SHA. Release acceptance requires exact identity among candidate, dispatch, workflow, and checked-out SHAs; successful campaign execution; successful strict authoritative verification; successful artifact upload; and final gate enforcement. Retain the workflow run ID, artifact ID, artifact digest, candidate SHA, and complete campaign evidence before closing the release gate or tagging/publishing.
