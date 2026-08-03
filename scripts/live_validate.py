@@ -27,9 +27,7 @@ BENCHMARKS = {
         "min_domains": 2,
     },
     "academic": {
-        "topic": (
-            "methodological naturalism cosmology burden of proof evidence objections"
-        ),
+        "topic": "methodological naturalism cosmology burden of proof evidence objections",
         "facets": ("naturalism", "cosmology", "burden", "evidence", "objection"),
         "min_domains": 3,
     },
@@ -42,12 +40,9 @@ BENCHMARKS = {
         "min_domains": 4,
     },
 }
-PROFILE_OPERATION_CAPS = {
-    "focused": 40,
-    "failure-path": 20,
-    "full": 100,
-}
+PROFILE_OPERATION_CAPS = {"focused": 40, "failure-path": 20, "full": 100}
 _MAX_OUTPUT_CHARS = 4_000
+_CHECKPOINT_EXIT = 75
 
 
 def now_stamp() -> str:
@@ -68,7 +63,7 @@ def bounded(value: str | None, limit: int = _MAX_OUTPUT_CHARS) -> str:
 
 
 class AuthoritativeInspector:
-    """Read validation evidence from PostgreSQL and the Qdrant projection."""
+    """Read validation evidence from PostgreSQL, BLOB_ROOT, and Qdrant."""
 
     def __init__(
         self,
@@ -92,6 +87,10 @@ class AuthoritativeInspector:
                 """SELECT
                      (SELECT count(*) FROM research_runs),
                      (SELECT count(*) FROM research_invocations),
+                     (SELECT count(*) FROM research_specs),
+                     (SELECT count(*) FROM research_budget_snapshots),
+                     (SELECT count(*) FROM search_plans),
+                     (SELECT count(*) FROM semantic_calls),
                      (SELECT count(*) FROM search_responses),
                      (SELECT count(*) FROM search_candidates),
                      (SELECT count(*) FROM extraction_attempts),
@@ -105,6 +104,10 @@ class AuthoritativeInspector:
         names = (
             "research_runs",
             "research_invocations",
+            "research_specs",
+            "research_budget_snapshots",
+            "search_plans",
+            "semantic_calls",
             "search_responses",
             "search_candidates",
             "extraction_attempts",
@@ -160,9 +163,10 @@ class AuthoritativeInspector:
     def _run_row(self, external_run_id: str) -> tuple[UUID, str, Any]:
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
-                """SELECT id,state,query_plan
-                   FROM research_runs
-                   WHERE external_run_id=%s""",
+                """SELECT r.id,r.state,coalesce(p.payload,r.query_plan)
+                   FROM research_runs r
+                   LEFT JOIN search_plans p ON p.id=r.search_plan_id
+                   WHERE r.external_run_id=%s""",
                 (external_run_id,),
             )
             row = cursor.fetchone()
@@ -177,7 +181,8 @@ class AuthoritativeInspector:
                 **alias,
                 "expected_points": 0,
                 "returned_points": 0,
-                "coverage": 1.0,
+                "coverage": 0.0,
+                "empty": True,
             }
 
         from research_store.qdrant import QdrantIndex
@@ -201,6 +206,21 @@ class AuthoritativeInspector:
             "expected_points": len(expected_ids),
             "returned_points": matched,
             "coverage": matched / len(expected_ids),
+            "empty": False,
+        }
+
+    def _blob_integrity(self, digests: list[str]) -> dict[str, Any]:
+        from research_store.blob import ContentAddressedBlobStore
+        from research_store.config import StoreConfig
+
+        store = ContentAddressedBlobStore(StoreConfig.from_env().blob_root)
+        unique = sorted({digest for digest in digests if digest})
+        verified = [digest for digest in unique if store.verify(digest)]
+        return {
+            "expected": len(unique),
+            "verified": len(verified),
+            "missing_or_invalid": sorted(set(unique) - set(verified)),
+            "complete": bool(unique) and len(verified) == len(unique),
         }
 
     def run_metrics(
@@ -209,11 +229,10 @@ class AuthoritativeInspector:
         benchmark: dict[str, Any] | None,
         *,
         require_corpus: bool,
+        require_resume_history: bool = False,
     ) -> dict[str, Any]:
         run_id, state, raw_plan = self._run_row(external_run_id)
-        query_plan = raw_plan
-        if isinstance(query_plan, str):
-            query_plan = json.loads(query_plan)
+        query_plan = json.loads(raw_plan) if isinstance(raw_plan, str) else raw_plan
         plan_entries = (
             query_plan.get("queries", []) if isinstance(query_plan, dict) else []
         )
@@ -227,7 +246,7 @@ class AuthoritativeInspector:
             cursor.execute(
                 """SELECT id,query_text,status,result_count
                    FROM search_responses
-                   WHERE run_id=%s
+                   WHERE run_id=%s AND backend <> 'orchestrator'
                    ORDER BY created_at,id""",
                 (run_id,),
             )
@@ -239,62 +258,66 @@ class AuthoritativeInspector:
                 """SELECT c.id,c.canonical_url,c.domain,
                           coalesce(c.title,''),coalesce(c.snippet,'')
                    FROM search_candidates c
-                   WHERE c.run_id=%s
-                   ORDER BY c.id""",
+                   WHERE c.run_id=%s ORDER BY c.id""",
                 (run_id,),
             )
             candidates = list(cursor.fetchall())
 
+            scalar_queries = {
+                "invocation_count": (
+                    "SELECT count(*) FROM research_invocations WHERE run_id=%s"
+                ),
+                "event_count": "SELECT count(*) FROM research_events WHERE run_id=%s",
+                "coverage_event_count": (
+                    "SELECT count(*) FROM coverage_events WHERE run_id=%s"
+                ),
+                "spec_count": "SELECT count(*) FROM research_specs WHERE run_id=%s",
+                "budget_count": (
+                    "SELECT count(*) FROM research_budget_snapshots WHERE run_id=%s"
+                ),
+                "plan_count": "SELECT count(*) FROM search_plans WHERE run_id=%s",
+                "semantic_call_count": (
+                    "SELECT count(*) FROM semantic_calls WHERE run_id=%s"
+                ),
+                "extraction_count": (
+                    "SELECT count(*) FROM extraction_attempts WHERE run_id=%s"
+                ),
+            }
+            scalars = {}
+            for name, statement in scalar_queries.items():
+                cursor.execute(statement, (run_id,))
+                scalars[name] = int(cursor.fetchone()[0])
+
             cursor.execute(
-                "SELECT count(*) FROM research_invocations WHERE run_id=%s",
-                (run_id,),
-            )
-            invocation_count = int(cursor.fetchone()[0])
-            cursor.execute(
-                "SELECT count(*) FROM research_events WHERE run_id=%s",
-                (run_id,),
-            )
-            event_count = int(cursor.fetchone()[0])
-            cursor.execute(
-                "SELECT count(*) FROM coverage_events WHERE run_id=%s",
-                (run_id,),
-            )
-            coverage_event_count = int(cursor.fetchone()[0])
-            cursor.execute(
-                "SELECT count(*) FROM extraction_attempts WHERE run_id=%s",
-                (run_id,),
-            )
-            extraction_count = int(cursor.fetchone()[0])
-            cursor.execute(
-                """SELECT count(DISTINCT s.id)
+                """SELECT DISTINCT s.id,s.content_sha256
                    FROM asset_snapshots s
-                   JOIN extraction_attempts ea
-                     ON ea.id=s.extraction_attempt_id
+                   JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
                    WHERE ea.run_id=%s""",
                 (run_id,),
             )
-            snapshot_count = int(cursor.fetchone()[0])
+            snapshot_rows = list(cursor.fetchall())
+            snapshot_count = len(snapshot_rows)
+            blob_digests = [str(row[1]) for row in snapshot_rows]
+
             cursor.execute(
                 """SELECT count(DISTINCT d.id)
                    FROM documents d
                    LEFT JOIN asset_snapshots s ON s.id=d.snapshot_id
                    LEFT JOIN extraction_attempts ea
-                     ON ea.id=coalesce(d.extraction_attempt_id,
-                                      s.extraction_attempt_id)
+                     ON ea.id=coalesce(d.extraction_attempt_id,s.extraction_attempt_id)
                    WHERE ea.run_id=%s""",
                 (run_id,),
             )
             document_count = int(cursor.fetchone()[0])
+
             cursor.execute(
                 """SELECT DISTINCT ch.id
                    FROM chunks ch
                    JOIN documents d ON d.id=ch.document_id
                    LEFT JOIN asset_snapshots s ON s.id=d.snapshot_id
                    LEFT JOIN extraction_attempts ea
-                     ON ea.id=coalesce(d.extraction_attempt_id,
-                                      s.extraction_attempt_id)
-                   WHERE ea.run_id=%s
-                   ORDER BY ch.id""",
+                     ON ea.id=coalesce(d.extraction_attempt_id,s.extraction_attempt_id)
+                   WHERE ea.run_id=%s ORDER BY ch.id""",
                 (run_id,),
             )
             chunk_ids = [UUID(str(row[0])) for row in cursor.fetchall()]
@@ -305,13 +328,20 @@ class AuthoritativeInspector:
                               count(started_at),count(completed_at)
                        FROM index_jobs
                        WHERE entity_type='chunk' AND entity_id=ANY(%s)
-                       GROUP BY status
-                       ORDER BY status""",
+                       GROUP BY status ORDER BY status""",
                     (chunk_ids,),
                 )
                 job_rows = list(cursor.fetchall())
             else:
                 job_rows = []
+
+            cursor.execute(
+                """SELECT prior_state,next_state
+                   FROM research_run_transitions
+                   WHERE run_id=%s ORDER BY lifecycle_revision,id""",
+                (run_id,),
+            )
+            transition_rows = list(cursor.fetchall())
 
         domains = {
             str(row[2] or urlsplit(str(row[1] or "")).netloc)
@@ -340,20 +370,43 @@ class AuthoritativeInspector:
         total_jobs = sum(job_counts.values())
         completed_jobs = job_counts.get("complete", 0)
         worker_evidence = (
-            total_jobs > 0
+            bool(chunk_ids)
+            and total_jobs > 0
             and completed_jobs == total_jobs
             and all(int(row[2] or 0) >= int(row[1]) for row in job_rows)
             and all(int(row[3]) == int(row[1]) for row in job_rows)
             and all(int(row[4]) == int(row[1]) for row in job_rows)
         )
         projection = self._projection_metrics(chunk_ids)
+        blob_integrity = self._blob_integrity(blob_digests) if blob_digests else {
+            "expected": 0,
+            "verified": 0,
+            "missing_or_invalid": [],
+            "complete": False,
+        }
+        state_history = [str(row[1]) for row in transition_rows]
+        terminal = state in {"completed", "partial", "failed", "cancelled"}
+        corpus_complete = (
+            scalars["extraction_count"] > 0
+            and snapshot_count > 0
+            and document_count > 0
+            and bool(chunk_ids)
+            and blob_integrity["complete"]
+        )
 
         checks = {
             "persisted_run": bool(run_id),
-            "authoritative_invocations": invocation_count > 0,
+            "terminal_run": terminal,
+            "authoritative_spec": scalars["spec_count"] == 1,
+            "authoritative_budget": scalars["budget_count"] == 1,
+            "authoritative_plan": scalars["plan_count"] == 1,
+            "authoritative_semantic_provenance": scalars["semantic_call_count"] > 0,
+            "authoritative_invocations": scalars["invocation_count"] > 0,
             "authoritative_search_responses": len(responses) > 0,
             "authoritative_candidates": len(candidates) > 0,
-            "authoritative_events": event_count + coverage_event_count > 0,
+            "authoritative_events": (
+                scalars["event_count"] + scalars["coverage_event_count"] > 0
+            ),
             "unique_queries": bool(queries)
             and len(queries)
             == len({re.sub(r"\W+", " ", query.lower()).strip() for query in queries}),
@@ -361,34 +414,31 @@ class AuthoritativeInspector:
             "max_query_similarity": max(pairwise, default=0.0) <= 0.80,
             "domain_diversity": len(domains) >= minimum_domains,
             "facet_coverage": facet_coverage >= 0.70,
-            "corpus_persisted": (
-                not require_corpus
-                or (
-                    extraction_count > 0
-                    and snapshot_count > 0
-                    and document_count > 0
-                    and bool(chunk_ids)
-                )
-            ),
-            "worker_completed": not chunk_ids or worker_evidence,
+            "corpus_persisted": corpus_complete if require_corpus else True,
+            "blob_integrity": blob_integrity["complete"] if require_corpus else True,
+            "worker_completed": worker_evidence if require_corpus else True,
             "qdrant_alias_compatible": bool(projection["compatible"]),
-            "qdrant_coverage": projection["coverage"] == 1.0,
+            "qdrant_coverage": (
+                projection["coverage"] == 1.0 if require_corpus else True
+            ),
+            "resume_checkpoint_observed": (
+                "extracting" in state_history if require_resume_history else True
+            ),
         }
         return {
             "external_run_id": external_run_id,
             "run_id": str(run_id),
             "state": state,
+            "state_history": state_history,
             "query_count": len(queries),
             "search_response_count": len(responses),
             "candidate_count": len(candidates),
             "domain_count": len(domains),
-            "invocation_count": invocation_count,
-            "event_count": event_count,
-            "coverage_event_count": coverage_event_count,
-            "extraction_attempt_count": extraction_count,
+            **scalars,
             "snapshot_count": snapshot_count,
             "document_count": document_count,
             "chunk_count": len(chunk_ids),
+            "blob_integrity": blob_integrity,
             "index_job_counts": job_counts,
             "max_query_similarity": round(max(pairwise, default=0.0), 3),
             "facet_coverage": round(facet_coverage, 3),
@@ -403,6 +453,7 @@ class AuthoritativeInspector:
         benchmark: dict[str, Any] | None,
         *,
         require_corpus: bool,
+        require_resume_history: bool = False,
         timeout_seconds: float,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_seconds
@@ -412,6 +463,7 @@ class AuthoritativeInspector:
                 external_run_id,
                 benchmark,
                 require_corpus=require_corpus,
+                require_resume_history=require_resume_history,
             )
             if last["checks"]["worker_completed"] and last["checks"]["qdrant_coverage"]:
                 return last
@@ -420,6 +472,7 @@ class AuthoritativeInspector:
             external_run_id,
             benchmark,
             require_corpus=require_corpus,
+            require_resume_history=require_resume_history,
         )
 
 
@@ -457,10 +510,7 @@ class Campaign:
         self.real_cli = real_cli or shutil.which("firecrawl")
         self.counter = self.work_root / "operations.json"
         self.counter.write_text(
-            json.dumps(
-                {"count": 0, "max": args.max_operations, "calls": []},
-                sort_keys=True,
-            ),
+            json.dumps({"count": 0, "max": args.max_operations, "calls": []}),
             encoding="utf-8",
         )
         self.cases: list[dict[str, Any]] = []
@@ -478,6 +528,7 @@ class Campaign:
                 "DATABASE_URL": args.database_url,
                 "TMPDIR": str(self.monitored_tmp),
                 "PYTHONDONTWRITEBYTECODE": "1",
+                "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
             }
         )
         if args.qdrant_url:
@@ -499,43 +550,37 @@ class Campaign:
                 import fcntl
                 import json
                 import os
-                from pathlib import Path
                 import sys
-                import time
 
-                args = sys.argv[1:]
-                counter_path = Path(os.environ["FC_OPERATION_COUNTER"])
+                counter_path = os.environ["FC_OPERATION_COUNTER"]
                 maximum = int(os.environ["FC_OPERATION_MAX"])
-                counted = bool(args and args[0] in {"search", "scrape"})
-                if counted:
-                    with counter_path.open("r+", encoding="utf-8") as handle:
-                        fcntl.flock(handle, fcntl.LOCK_EX)
-                        data = json.load(handle)
-                        if data["count"] >= maximum:
-                            print(
-                                f"ERROR: Firecrawl operation cap {maximum} reached",
-                                file=sys.stderr,
-                            )
-                            raise SystemExit(90)
-                        data["count"] += 1
-                        data["calls"].append(
-                            {
-                                "number": data["count"],
-                                "command": args[0],
-                                "at": time.time(),
-                            }
+                with open(counter_path, "r+", encoding="utf-8") as handle:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    data = json.load(handle)
+                    if int(data.get("count", 0)) >= maximum:
+                        print(
+                            f"Firecrawl operation cap exhausted ({maximum})",
+                            file=sys.stderr,
                         )
-                        handle.seek(0)
-                        json.dump(data, handle, indent=2, sort_keys=True)
-                        handle.truncate()
-                        fcntl.flock(handle, fcntl.LOCK_UN)
-                real = os.environ["REAL_FIRECRAWL"]
-                os.execv(real, [real, *args])
+                        raise SystemExit(78)
+                    data["count"] = int(data.get("count", 0)) + 1
+                    data.setdefault("calls", []).append(sys.argv[1:])
+                    handle.seek(0)
+                    handle.truncate()
+                    json.dump(data, handle, sort_keys=True)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                real = os.environ.get("REAL_FIRECRAWL", "")
+                if not real:
+                    print("REAL_FIRECRAWL is unset", file=sys.stderr)
+                    raise SystemExit(127)
+                os.execv(real, [real, *sys.argv[1:]])
                 """
             ),
             encoding="utf-8",
         )
-        proxy.chmod(0o755)
+        proxy.chmod(0o700)
 
     def operation_data(self) -> dict[str, Any]:
         return json.loads(self.counter.read_text(encoding="utf-8"))
@@ -548,14 +593,12 @@ class Campaign:
 
     def _clear_temporary_entries(self) -> None:
         for path in sorted(
-            self.monitored_tmp.rglob("*"),
-            key=lambda item: len(item.parts),
-            reverse=True,
+            self.monitored_tmp.rglob("*"), key=lambda item: len(item.parts), reverse=True
         ):
             if path.is_dir():
                 path.rmdir()
             else:
-                path.unlink()
+                path.unlink(missing_ok=True)
 
     def _record(
         self,
@@ -596,6 +639,7 @@ class Campaign:
         env_changes: dict[str, str | None] | None = None,
         required: bool = True,
         json_output: bool = False,
+        expected_returncodes: tuple[int, ...] = (0,),
     ) -> dict[str, Any]:
         env = self.env.copy()
         for key, value in (env_changes or {}).items():
@@ -616,14 +660,17 @@ class Campaign:
             returncode = int(result.returncode)
             stdout = result.stdout or ""
             stderr = result.stderr or ""
-            status = "pass" if returncode == 0 else "fail"
+            status = "pass" if returncode in expected_returncodes else "fail"
         except subprocess.TimeoutExpired as exc:
             returncode = 124
             stdout = str(exc.stdout or "")
             stderr = f"TIMEOUT after {timeout}s\n{exc.stderr or ''}"
             status = "fail"
 
-        details: dict[str, Any] = {"command": command}
+        details: dict[str, Any] = {
+            "command": command,
+            "expected_returncodes": list(expected_returncodes),
+        }
         if json_output and status == "pass":
             try:
                 details["json"] = json.loads(stdout)
@@ -660,7 +707,6 @@ class Campaign:
                 stderr="DATABASE_URL is required",
             )
             return False
-
         ready = self.run(
             "authoritative_store",
             [str(SCRIPT_DIR / "research-db"), "ingest-ready"],
@@ -668,7 +714,6 @@ class Campaign:
         )
         if ready["status"] != "pass":
             return False
-
         try:
             alias = self.inspector.probe_qdrant_alias()
         except Exception as exc:  # noqa: BLE001
@@ -680,12 +725,8 @@ class Campaign:
             )
             return False
         self._record(
-            "qdrant_active_alias",
-            "pass",
-            required=True,
-            details=alias,
+            "qdrant_active_alias", "pass", required=True, details=alias
         )
-
         if not self.real_cli:
             self._record(
                 "firecrawl_cli",
@@ -695,9 +736,7 @@ class Campaign:
             )
             return False
         version = self.run(
-            "firecrawl_cli",
-            [self.real_cli, "--version"],
-            timeout=30,
+            "firecrawl_cli", [self.real_cli, "--version"], timeout=30
         )
         return version["status"] == "pass"
 
@@ -735,10 +774,7 @@ class Campaign:
                 "fc_" + "0" * 32,
             ],
             timeout=60,
-            env_changes={
-                "DATABASE_URL": None,
-                "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
-            },
+            env_changes={"DATABASE_URL": None},
             json_output=True,
         )
         after_counts = self.inspector.table_counts()
@@ -756,11 +792,7 @@ class Campaign:
             "smart_dry_run_purity",
             "pass" if all(purity.values()) else "fail",
             required=True,
-            details={
-                **purity,
-                "before_counts": before_counts,
-                "after_counts": after_counts,
-            },
+            details={**purity, "before_counts": before_counts, "after_counts": after_counts},
         )
 
     def run_smart(
@@ -782,26 +814,30 @@ class Campaign:
             "--max-adaptive-cycles",
             str(self.args.max_adaptive_cycles),
         ]
-        self.run(
-            f"smart_{name}",
-            command,
-            timeout=self.args.case_timeout,
-        )
         if resume:
-            self.run(
-                f"smart_{name}_resume",
-                command,
+            checkpoint = self.run(
+                f"smart_{name}_checkpoint",
+                [*command, "--stop-after-state", "extracting"],
                 timeout=self.args.case_timeout,
+                expected_returncodes=(_CHECKPOINT_EXIT,),
             )
+            if checkpoint["status"] == "pass":
+                self.run(
+                    f"smart_{name}_resume",
+                    command,
+                    timeout=self.args.case_timeout,
+                )
+        else:
+            self.run(f"smart_{name}", command, timeout=self.args.case_timeout)
         self.runs[name]["benchmark_key"] = benchmark_key
-        self.runs[name]["require_corpus"] = False
+        self.runs[name]["require_corpus"] = True
+        self.runs[name]["require_resume_history"] = resume
         return external_id
 
     def run_fscrape_valkey_loss(self) -> str | None:
         name = "fscrape_valkey_loss"
         external_id = self.create_run(
-            name,
-            "Valkey-loss authoritative direct scrape validation",
+            name, "Valkey-loss authoritative direct scrape validation"
         )
         if external_id is None:
             return None
@@ -826,8 +862,7 @@ class Campaign:
     def run_full_cases(self) -> None:
         search_name = "fsearch_public"
         search_run = self.create_run(
-            search_name,
-            "Public authoritative fsearch validation",
+            search_name, "Public authoritative fsearch validation"
         )
         if search_run:
             self.run(
@@ -851,16 +886,13 @@ class Campaign:
 
         scrape_name = "fscrape_structured"
         scrape_run = self.create_run(
-            scrape_name,
-            "Public authoritative structured fscrape validation",
+            scrape_name, "Public authoritative structured fscrape validation"
         )
         if scrape_run:
             schema = json.dumps(
                 {
                     "type": "object",
-                    "properties": {
-                        "title": {"type": ["string", "null"]},
-                    },
+                    "properties": {"title": {"type": ["string", "null"]}},
                 }
             )
             self.run(
@@ -890,6 +922,9 @@ class Campaign:
                     metadata["external_run_id"],
                     benchmark,
                     require_corpus=bool(metadata.get("require_corpus")),
+                    require_resume_history=bool(
+                        metadata.get("require_resume_history")
+                    ),
                     timeout_seconds=self.args.worker_timeout,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -909,20 +944,16 @@ class Campaign:
     def execute(self) -> int:
         if not self.preflight():
             return self.finish(exit_override=2)
-
         self.validate_dry_run()
         if self.args.profile == "failure-path":
             self.run_fscrape_valkey_loss()
             return self.finish()
-
         self.run_smart("academic", "academic", resume=True)
         self.run_fscrape_valkey_loss()
-
         if self.args.profile == "full":
             self.run_smart("simple", "simple")
             self.run_smart("termux", "termux")
             self.run_full_cases()
-
         return self.finish()
 
     def _report_markdown(self, manifest: dict[str, Any]) -> str:
@@ -934,14 +965,8 @@ class Campaign:
                 f"- Operations: `{manifest['operations']['count']}/"
                 f"{manifest['operations']['max']}`"
             ),
-            (
-                "- Required cases: "
-                f"`{'PASS' if manifest['required_cases_pass'] else 'FAIL'}`"
-            ),
-            (
-                "- Authoritative metrics: "
-                f"`{'PASS' if manifest['quality_pass'] else 'FAIL'}`"
-            ),
+            f"- Required cases: `{'PASS' if manifest['required_cases_pass'] else 'FAIL'}`",
+            f"- Authoritative metrics: `{'PASS' if manifest['quality_pass'] else 'FAIL'}`",
             "",
             "## Cases",
             "",
@@ -949,8 +974,8 @@ class Campaign:
             "|---|---:|---:|---:|",
         ]
         lines.extend(
-            f"| {case['name']} | {case['status']} | "
-            f"{case['seconds']} | {case['operations_after']} |"
+            f"| {case['name']} | {case['status']} | {case['seconds']} | "
+            f"{case['operations_after']} |"
             for case in manifest["cases"]
         )
         lines.extend(
@@ -958,21 +983,18 @@ class Campaign:
                 "",
                 "## Authoritative run metrics",
                 "",
-                (
-                    "| Case | Responses | Candidates | Snapshots | Documents | "
-                    "Chunks | Qdrant coverage | Status |"
-                ),
-                "|---|---:|---:|---:|---:|---:|---:|---:|",
+                "| Case | Responses | Candidates | Snapshots | Documents | Chunks | Blobs | Qdrant | Status |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
             ]
         )
         for item in manifest["quality_metrics"]:
             projection = item.get("projection", {})
+            blobs = item.get("blob_integrity", {})
             lines.append(
                 f"| {item.get('case')} | {item.get('search_response_count', 0)} | "
-                f"{item.get('candidate_count', 0)} | "
-                f"{item.get('snapshot_count', 0)} | "
-                f"{item.get('document_count', 0)} | "
-                f"{item.get('chunk_count', 0)} | "
+                f"{item.get('candidate_count', 0)} | {item.get('snapshot_count', 0)} | "
+                f"{item.get('document_count', 0)} | {item.get('chunk_count', 0)} | "
+                f"{blobs.get('verified', 0)}/{blobs.get('expected', 0)} | "
                 f"{projection.get('coverage', 0):.0%} | "
                 f"{'PASS' if item.get('pass') else 'FAIL'} |"
             )
@@ -997,22 +1019,18 @@ class Campaign:
             "quality_pass": quality_pass,
             "monitored_tmp_clean": not self._temporary_entries(),
         }
-
         if self.args.artifact_root:
             destination = Path(self.args.artifact_root) / self.campaign_id
             destination.mkdir(parents=True, exist_ok=False)
             (destination / "manifest.json").write_text(
-                json.dumps(manifest, indent=2, sort_keys=True),
-                encoding="utf-8",
+                json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
             )
             (destination / "report.md").write_text(
-                self._report_markdown(manifest),
-                encoding="utf-8",
+                self._report_markdown(manifest), encoding="utf-8"
             )
             print(f"Artifacts: {destination}")
         else:
             print(json.dumps(manifest, indent=2, sort_keys=True))
-
         if exit_override is not None:
             return exit_override
         return 0 if required_cases_pass and quality_pass else 1
@@ -1024,18 +1042,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--api-url",
         default=os.environ.get("FIRECRAWL_API_URL", "http://garion.us:3002"),
     )
-    parser.add_argument(
-        "--database-url",
-        default=os.environ.get("DATABASE_URL", ""),
-    )
-    parser.add_argument(
-        "--qdrant-url",
-        default=os.environ.get("QDRANT_URL"),
-    )
-    parser.add_argument(
-        "--qdrant-api-key",
-        default=os.environ.get("QDRANT_API_KEY"),
-    )
+    parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL", ""))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-api-key", default=os.environ.get("QDRANT_API_KEY"))
     parser.add_argument("--max-operations", type=int, default=40)
     parser.add_argument("--max-adaptive-cycles", type=int, default=2)
     parser.add_argument("--case-timeout", type=int, default=1800)
@@ -1043,9 +1052,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--artifact-root")
     parser.add_argument("--run-id")
     parser.add_argument(
-        "--profile",
-        choices=tuple(PROFILE_OPERATION_CAPS),
-        default="focused",
+        "--profile", choices=tuple(PROFILE_OPERATION_CAPS), default="focused"
     )
     args = parser.parse_args(argv)
     profile_cap = PROFILE_OPERATION_CAPS[args.profile]
