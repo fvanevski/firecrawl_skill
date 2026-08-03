@@ -65,27 +65,40 @@ rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-run-id "$RUN
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --dry-run
 ```
 
-A `fsearch_smart` exit status of `75` means the authoritative workflow reached a resumable checkpoint; it is not a generic failure. Preserve the printed `Run ID`, inspect its PostgreSQL state, and resume the same objective with that run rather than creating a replacement run.
+A `fsearch_smart` exit status of `75` means the authoritative workflow reached a resumable checkpoint; it is not a generic failure. Preserve the printed `Run ID`, inspect its PostgreSQL state, and resume the same objective with that run rather than creating a replacement run. Repeat until the command reaches a non-checkpoint outcome.
 
 ```bash
-set +e
-SMART_OUTPUT="$(
-  rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" 2>&1
-)"
-SMART_STATUS=$?
-set -e
+RUN_ID=""
 
-printf '%s\n' "$SMART_OUTPUT"
-RUN_ID="$(sed -n 's/^Run ID: //p' <<<"$SMART_OUTPUT" | tail -n 1)"
+while true; do
+  SMART_ARGS=("<skill-root>/scripts/fsearch_smart" "<topic>")
+  if [[ -n "$RUN_ID" ]]; then
+    SMART_ARGS+=(--research-run-id "$RUN_ID")
+  fi
 
-if [[ "$SMART_STATUS" -eq 75 ]]; then
-  test -n "$RUN_ID"
-  rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
-  rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" \
-    --research-run-id "$RUN_ID"
-elif [[ "$SMART_STATUS" -ne 0 ]]; then
-  exit "$SMART_STATUS"
-fi
+  set +e
+  SMART_OUTPUT="$(rtk proxy "${SMART_ARGS[@]}" 2>&1)"
+  SMART_STATUS=$?
+  set -e
+
+  printf '%s\n' "$SMART_OUTPUT"
+  if [[ -z "$RUN_ID" ]]; then
+    RUN_ID="$(sed -n 's/^Run ID: //p' <<<"$SMART_OUTPUT" | tail -n 1)"
+  fi
+
+  case "$SMART_STATUS" in
+    0)
+      break
+      ;;
+    75)
+      test -n "$RUN_ID"
+      rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
+      ;;
+    *)
+      exit "$SMART_STATUS"
+      ;;
+  esac
+done
 ```
 
 Planning, budget, provenance, semantic artifacts, and resume checkpoints remain PostgreSQL records. Do not reconstruct a checkpoint from console output or a local file.
@@ -255,9 +268,9 @@ For every change, run focused tests first, then the repository checks appropriat
 
 ```bash
 cd "<skill-root>"
-ruff check .
-ruff format --check .
-env PYTHONDONTWRITEBYTECODE=1 \
+rtk proxy ruff check .
+rtk proxy ruff format --check .
+rtk proxy env PYTHONDONTWRITEBYTECODE=1 \
   pytest -q -p no:cacheprovider scripts/
 ```
 
