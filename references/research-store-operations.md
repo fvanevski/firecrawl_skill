@@ -2,39 +2,59 @@
 
 # Research Store Operations
 
-This document is a compact operator reference. `operations-runbook.md` is the complete runbook.
+Compact operator reference. `operations-runbook.md` is normative for recovery and destructive procedures.
 
-## Configure persistence
-
-Preserve explicit caller values. `scripts/research-env` fills only unset variables from the repository-root `.env` and container secret adapters.
+## Configure authoritative services
 
 ```bash
-export FIRECRAWL_RESEARCH_PYTHON="$HOME/.codex/skills/firecrawl/.venv-research-store/bin/python"
+cd "<skill-root>"
+export FIRECRAWL_RESEARCH_PYTHON="<skill-root>/.venv-research-store/bin/python"
 source scripts/research-env
-```
 
-Modes:
-
-- `on`: require a healthy PostgreSQL-backed store before acquisition and fail closed.
-- `auto`: persist when `DATABASE_URL` resolves; otherwise allow scratch-only acquisition.
-- `off`: create scratch diagnostics only; no PostgreSQL, blob, index-job, or Qdrant mutation.
-
-Supported acquisition requires a writable PostgreSQL store, durable `BLOB_ROOT`, and a valid research run. Preflight completes before any Firecrawl request.
-
-Never print or commit database URLs, API keys, or container secret contents.
-
-## Initialize and inspect
-
-The current clean PostgreSQL schema head is `0038_postgres_authority`. It intentionally does not upgrade databases created by the removed filesystem-compatibility migration chain. Reset the research datastores before first use of this baseline.
-
-```bash
-scripts/reset-firecrawl-research
 scripts/research-db status
 scripts/research-db ingest-ready
 scripts/research-db doctor
 ```
 
-`doctor` is read-only. It reports schema, blob integrity, worker heartbeat, pending/dead jobs, active index fingerprint, Qdrant coverage, Valkey reachability, and embedding/reranker health.
+Supported acquisition always requires PostgreSQL, a durable writable `BLOB_ROOT`, and a valid acquisition-eligible run before provider execution. No successful acquisition can downgrade to a local-only result.
+
+## Run acquisition
+
+```bash
+RUN_ID="$(scripts/frun start 'Research objective')"
+
+scripts/fsearch 'bounded query' \
+  --research-run-id "$RUN_ID" \
+  --limit 20 \
+  --scrape-limit 5
+
+scripts/fscrape 'https://example.com' \
+  --research-run-id "$RUN_ID"
+
+scripts/frun finish "$RUN_ID" --outcome satisfied
+scripts/frun status "$RUN_ID"
+```
+
+`fsearch_smart` creates a run when omitted; `--dry-run` performs planning only.
+
+## Inspect and replay
+
+```bash
+scripts/finspect runs --limit 20
+scripts/finspect invocations --run "$RUN_ID" --limit 20
+scripts/finspect search-responses --run "$RUN_ID" --limit 20
+scripts/finspect replay-search '<search-response-uuid>'
+scripts/finspect attempts --run "$RUN_ID"
+scripts/finspect inspect '<asset-uuid>'
+scripts/finspect passages '<asset-uuid>' --max-tokens 2000
+```
+
+Select retained candidates by UUID:
+
+```bash
+scripts/finspect scrape-candidates '<candidate-uuid>' \
+  --idempotency-key '<stable-key>'
+```
 
 ## Run the lease-safe worker
 
@@ -46,21 +66,9 @@ scripts/research-db worker \
   --max-attempts 5
 ```
 
-Production should use `firecrawl-research-indexer.service`. Valkey is only a wakeup optimization; workers always recover work by polling PostgreSQL.
+Valkey is optional latency optimization; PostgreSQL jobs remain durable.
 
-## Use the PostgreSQL workflow
-
-```bash
-RUN_ID="$(scripts/frun start 'Research objective')"
-scripts/fscrape 'https://example.com' --research-run-id "$RUN_ID"
-scripts/fsearch 'bounded query' --research-run-id "$RUN_ID"
-scripts/frun finish "$RUN_ID" --outcome satisfied
-scripts/research-db run-status "$RUN_ID"
-```
-
-Wrappers validate the run before network work, record one PostgreSQL invocation, and advance the state machine through permitted transitions. `frun finish` verifies that run assets are indexed before completing the run. Retry uncertain commands with the same idempotency key; do not edit run or event rows manually.
-
-## Build, activate, and roll back indexes
+## Build, activate, and roll back Qdrant
 
 ```bash
 scripts/research-db index-list
@@ -72,9 +80,9 @@ scripts/research-db index-rollback '<prior-index-id>'
 scripts/research-db index-prune --dry-run
 ```
 
-Qdrant is a projection. Rebuild it from PostgreSQL chunks; never restore workflow truth from vectors.
+Qdrant is rebuilt from PostgreSQL chunks. Never infer workflow or corpus truth from vectors.
 
-## Rederive and export retained records
+## Rederive and export
 
 ```bash
 scripts/research-db rederive --snapshot '<snapshot-id>'
@@ -82,20 +90,18 @@ scripts/research-db export-invocation 'fc_<uuid>' --output invocation.json
 scripts/research-db export-run 'fr_<uuid>' --output run.json
 ```
 
-Exports are one-time JSON diagnostics. They are not a second database and are never read as workflow authority.
+Exports are explicit presentation artifacts and are never consumed as workflow, replay, retry, selection, or ingestion state.
 
 ## Back up and recover
 
-Capture PostgreSQL and the blob root at one recovery boundary. Record current Qdrant alias/index metadata for diagnosis, but rebuild vectors after restore. Valkey does not require backup.
+Capture PostgreSQL and `BLOB_ROOT` at one logical boundary. Restore them together, verify blobs, rebuild Qdrant, recreate Valkey, and restart the worker.
 
-Recovery order:
+```bash
+scripts/research-db verify-blobs
+scripts/research-db index-build --current-config --all
+scripts/research-db worker --once --batch-size 64
+scripts/research-db reconcile-qdrant
+scripts/research-db doctor
+```
 
-1. restore PostgreSQL;
-2. restore the matching blob root;
-3. run `verify-blobs` and `doctor`;
-4. rebuild and activate the current Qdrant index;
-5. restart the worker and verify zero missing/orphaned points.
-
-## Validate before acceptance
-
-Run the full deterministic and integration suites against a uniquely named disposable PostgreSQL database. Live acceptance must prove wrapper preflight, PostgreSQL/blob persistence, lease-safe indexing, Qdrant reconciliation, valid run transitions, endpoint restart recovery, and scratch-only non-persistence.
+The current Target A keeps payload bytes in `BLOB_ROOT`. Moving them into PostgreSQL is a separate future migration, not an operational mode.
