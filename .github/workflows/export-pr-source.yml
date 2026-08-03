@@ -26,13 +26,12 @@ jobs:
           set -euo pipefail
           tar \
             --exclude=.git \
-            --exclude=pr-source.tar.gz \
-            -czf pr-source.tar.gz .
+            -czf "$RUNNER_TEMP/pr-source.tar.gz" .
 
       - name: Upload source archive
         uses: actions/upload-artifact@v4
         with:
           name: pr-source-${{ github.event.pull_request.head.sha }}
-          path: pr-source.tar.gz
+          path: ${{ runner.temp }}/pr-source.tar.gz
           if-no-files-found: error
           retention-days: 1
