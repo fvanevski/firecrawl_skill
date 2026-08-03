@@ -16,9 +16,7 @@ def _write_junit(path: Path, cases: str) -> None:
 
 def _write_allowlist(path: Path, entries: list[dict[str, str]]) -> None:
     path.write_text(
-        json.dumps(
-            {"schema_version": "pytest-skip-allowlist-v1", "entries": entries}
-        ),
+        json.dumps({"schema_version": "pytest-skip-allowlist-v1", "entries": entries}),
         encoding="utf-8",
     )
 
@@ -44,7 +42,11 @@ def test_verify_accepts_exact_classified_skip_set(tmp_path: Path) -> None:
     )
     _write_allowlist(
         allowlist,
-        [_entry("scripts/test_example.py::TestCase::test_external", "requires service")],
+        [
+            _entry(
+                "scripts/test_example.py::TestCase::test_external", "requires service"
+            )
+        ],
     )
 
     result = verify(report, allowlist, output)

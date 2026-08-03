@@ -27,7 +27,9 @@ def _node_id(testcase: ET.Element) -> str:
 
     if not file_name:
         if not class_parts:
-            raise ValueError(f"cannot derive file path for JUnit testcase {test_name!r}")
+            raise ValueError(
+                f"cannot derive file path for JUnit testcase {test_name!r}"
+            )
         file_name = "/".join(class_parts) + ".py"
 
     parts = [file_name]

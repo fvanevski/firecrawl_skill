@@ -1180,7 +1180,7 @@ class DirectScrapeService:
                 parser_used=None,
                 quality_metrics=None,
                 failure_class=failure_class,
-                retry_parent_id=None,
+                retry_parent_id=target.retry_parent_id,
                 disposition="unassessed",
                 error_message=diagnostic,
                 selection_reason=None,
