@@ -73,13 +73,9 @@ def _job(
         "lease_expires_at": lease_expires_at.isoformat()
         if lease_expires_at is not None
         else None,
-        "completed_at": completed_at.isoformat()
-        if completed_at is not None
-        else None,
+        "completed_at": completed_at.isoformat() if completed_at is not None else None,
         "error": None,
-        "heartbeat_at": heartbeat_at.isoformat()
-        if heartbeat_at is not None
-        else None,
+        "heartbeat_at": heartbeat_at.isoformat() if heartbeat_at is not None else None,
     }
 
 
@@ -264,9 +260,7 @@ def test_census_classifies_every_state_once_from_one_postgresql_statement() -> N
 
 
 def test_audited_census_reports_1344_complete_and_32_live() -> None:
-    rows = [
-        _state_row(index, "complete") for index in range(1, 1_345)
-    ] + [
+    rows = [_state_row(index, "complete") for index in range(1, 1_345)] + [
         _state_row(index, "running_live") for index in range(1_345, 1_377)
     ]
     entity_ids = [UUID(int=index) for index in range(1, 1_377)]
