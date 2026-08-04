@@ -1,0 +1,53 @@
+{
+  "schema_version": "pytest-skip-allowlist-v1",
+  "entries": [
+    {
+      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_01_running_live_prevents_quiescent_success",
+      "reason_contains": "RC-01 tracked by #208",
+      "classification": "audit-regression-expected-failure",
+      "replacement_gate": "Issue #208 remediation"
+    },
+    {
+      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_02_drain_reobserves_final_32_completions",
+      "reason_contains": "RC-02 tracked by #209",
+      "classification": "audit-regression-expected-failure",
+      "replacement_gate": "Issue #209 remediation"
+    },
+    {
+      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_04_created_state_is_not_acquisition_eligible",
+      "reason_contains": "RC-04 tracked by #212",
+      "classification": "audit-regression-expected-failure",
+      "replacement_gate": "Issue #212 remediation"
+    },
+    {
+      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_08_provider_declared_no_results_are_empty",
+      "reason_contains": "RC-08 tracked by #213",
+      "classification": "audit-regression-expected-failure",
+      "replacement_gate": "Issue #213 remediation"
+    },
+    {
+      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_09_stage_marker_is_not_a_valid_search_response",
+      "reason_contains": "RC-09 tracked by #213",
+      "classification": "audit-regression-expected-failure",
+      "replacement_gate": "Issue #213 remediation"
+    },
+    {
+      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_11_batch_completion_uses_latest_constituent_terminal_time",
+      "reason_contains": "RC-11 tracked by #217",
+      "classification": "audit-regression-expected-failure",
+      "replacement_gate": "Issue #217 remediation"
+    },
+    {
+      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_16_zero_blob_verification_is_inconclusive",
+      "reason_contains": "RC-16 tracked by #219",
+      "classification": "audit-regression-expected-failure",
+      "replacement_gate": "Issue #219 remediation"
+    },
+    {
+      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_17_orphans_do_not_fail_referenced_blob_integrity",
+      "reason_contains": "RC-17 tracked by #220",
+      "classification": "audit-regression-expected-failure",
+      "replacement_gate": "Issue #220 remediation"
+    }
+  ]
+}
