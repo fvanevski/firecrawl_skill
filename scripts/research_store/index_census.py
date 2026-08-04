@@ -476,7 +476,7 @@ def _optional_datetime(value: Any) -> datetime | None:
     elif isinstance(value, str):
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     else:
-        raise RuntimeError(f"invalid timestamp value {value!r}")
+        raise TypeError(f"invalid timestamp value {value!r}")
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
