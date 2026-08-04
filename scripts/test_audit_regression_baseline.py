@@ -73,7 +73,7 @@ def _assert_rejected(
     except error_type as exc:
         assert contains in str(exc)
         return exc
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise AssertionError(
             f"expected {error_type.__name__}, got {type(exc).__name__}: {exc}"
         ) from exc
