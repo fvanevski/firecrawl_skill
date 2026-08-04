@@ -115,7 +115,11 @@ class IndexWorker:
                 )
             if not jobs:
                 self._heartbeat(result)
-                return result
+                return self._attach_census(
+                    result,
+                    entity_ids=entity_ids,
+                    fingerprint=claim_options["fingerprint"],
+                )
             result["claimed"] = len(jobs)
             self._heartbeat({**result, "busy": True})
             try:
@@ -150,6 +154,62 @@ class IndexWorker:
                         result["lease_lost"] += 1
             self._heartbeat({**result, "busy": True})
         self._heartbeat(result)
+        return self._attach_census(
+            result,
+            entity_ids=entity_ids,
+            fingerprint=claim_options["fingerprint"],
+        )
+
+    def _attach_census(
+        self,
+        result: dict,
+        *,
+        entity_ids: list[UUID] | None,
+        fingerprint: str | None,
+    ) -> dict:
+        """Attach an exact census when a sealed membership was supplied."""
+        if entity_ids is None:
+            return result
+        if not fingerprint:
+            raise ValueError(
+                "sealed index-job census requires the active index fingerprint"
+            )
+
+        with self.uow_factory() as uow:
+            repository_census = getattr(uow.index_jobs, "census_index_jobs", None)
+            if repository_census is not None:
+                census = repository_census(
+                    entity_ids,
+                    fingerprint,
+                    max_attempts=self.max_attempts,
+                )
+            else:
+                from .index_census import census_index_jobs
+
+                census = census_index_jobs(
+                    uow.connection,
+                    entity_ids,
+                    fingerprint,
+                    max_attempts=self.max_attempts,
+                )
+
+        result["census"] = census
+        for key in (
+            "expected",
+            "complete",
+            "claimable",
+            "running_live",
+            "running_expired",
+            "retryable_failed",
+            "dead",
+            "missing_job",
+            "wrong_fingerprint",
+            "manifest_inconsistent",
+        ):
+            result[key] = census[key]
+        result["complete_manifests"] = census.get(
+            "complete_manifests", census["complete"]
+        )
         return result
 
     def _process_microbatch(self, jobs: list[dict]) -> dict:
