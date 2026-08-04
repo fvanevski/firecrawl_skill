@@ -8,12 +8,11 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 from uuid import UUID
 
-import pytest
-
 import drain_index_jobs as drain_module
+import pytest
 from research_store import cli as research_store_cli
 from research_store.acquisition_authority import ACQUISITION_ENTRY_STATES
 from research_store.blob import ContentAddressedBlobStore
@@ -51,7 +50,7 @@ class _RowsCursor:
     def __init__(self, rows: list[tuple[Any, str]]) -> None:
         self._rows = rows
 
-    def __enter__(self) -> _RowsCursor:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: object) -> None:
@@ -68,7 +67,7 @@ class _RowsConnection:
     def __init__(self, rows: list[tuple[Any, str]]) -> None:
         self._rows = rows
 
-    def __enter__(self) -> _RowsConnection:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: object) -> None:
@@ -83,7 +82,7 @@ class _BatchTimingCursor:
         self.connection = connection
         self._row: tuple[datetime] | None = None
 
-    def __enter__(self) -> _BatchTimingCursor:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: object) -> None:
