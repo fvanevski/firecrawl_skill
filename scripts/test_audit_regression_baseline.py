@@ -35,9 +35,7 @@ AUDITED_COMPLETE = 1_344
 AUDITED_RUNNING_LIVE = 32
 AUDITED_TOTAL = 1_376
 AUDITED_FINGERPRINT = "audit-index-fingerprint"
-_TERMINAL_EXTRACTION_STATES = frozenset(
-    {"succeeded", "partial", "failed", "cancelled"}
-)
+_TERMINAL_EXTRACTION_STATES = frozenset({"succeeded", "partial", "failed", "cancelled"})
 
 
 def _worker_result(*, complete: int, running_live: int) -> dict[str, int]:
@@ -373,9 +371,9 @@ class _BatchTimingCursor:
             )
             timestamps = [value for value in params if isinstance(value, datetime)]
             assert timestamps == [self.connection.selected_terminal_at]
-            self.connection.batches[self.connection.target_batch_id][
-                "completed_at"
-            ] = timestamps[0]
+            self.connection.batches[self.connection.target_batch_id]["completed_at"] = (
+                timestamps[0]
+            )
             self.rowcount = 1
             return
 
@@ -397,9 +395,7 @@ class _BatchTimingConnection:
     def __init__(self) -> None:
         self.target_batch_id = UUID(int=11)
         self.unrelated_batch_id = UUID(int=12)
-        self.expected_terminal_at = datetime(
-            2026, 8, 4, 12, 10, tzinfo=timezone.utc
-        )
+        self.expected_terminal_at = datetime(2026, 8, 4, 12, 10, tzinfo=timezone.utc)
         self.batches: dict[UUID, dict[str, Any]] = {
             self.target_batch_id: {"status": "running", "completed_at": None},
             self.unrelated_batch_id: {"status": "running", "completed_at": None},
@@ -558,9 +554,7 @@ def test_rc_01_exact_index_job_census_preserves_sealed_membership() -> None:
     assert census["complete"] == AUDITED_COMPLETE
     assert census["claimable"] == 0
     assert census["running_live"] == AUDITED_RUNNING_LIVE
-    assert all(
-        isinstance(census[name], int) and census[name] >= 0 for name in classes
-    )
+    assert all(isinstance(census[name], int) and census[name] >= 0 for name in classes)
     assert sum(census[name] for name in classes) == census["expected"]
     assert repository.claim_options is not None
 
