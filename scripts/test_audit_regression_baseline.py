@@ -506,11 +506,6 @@ def test_valid_nonempty_provider_response_remains_successful() -> None:
     assert error is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="RC-01 tracked by #208: census must conserve sealed index membership",
-)
 def test_rc_01_exact_index_job_census_preserves_sealed_membership() -> None:
     sealed_entity_ids = [UUID(int=index + 1) for index in range(AUDITED_TOTAL)]
     repository = _IndexCensusRepository(sealed_entity_ids)

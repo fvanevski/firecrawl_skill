@@ -2,12 +2,6 @@
   "schema_version": "pytest-skip-allowlist-v1",
   "entries": [
     {
-      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_01_exact_index_job_census_preserves_sealed_membership",
-      "reason_contains": "RC-01 tracked by #208",
-      "classification": "audit-regression-expected-failure",
-      "replacement_gate": "Issue #208 remediation"
-    },
-    {
       "node_id": "scripts/test_audit_regression_baseline.py::test_rc_02_drain_reobserves_final_32_completions",
       "reason_contains": "RC-02 tracked by #209",
       "classification": "audit-regression-expected-failure",
