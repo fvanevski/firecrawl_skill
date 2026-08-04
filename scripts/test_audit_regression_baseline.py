@@ -216,9 +216,10 @@ def test_rc_02_drain_reobserves_final_32_completions() -> None:
         "the drain did not perform the immediately following observation after "
         "the first claimed=0 state"
     )
-    assert observations[1]["complete_manifests"] - observations[0][
-        "complete_manifests"
-    ] == AUDITED_RUNNING_LIVE
+    assert (
+        observations[1]["complete_manifests"] - observations[0]["complete_manifests"]
+        == AUDITED_RUNNING_LIVE
+    )
 
 
 @pytest.mark.xfail(
