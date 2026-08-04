@@ -25,9 +25,7 @@ CENSUS_CLASSES = (
     "manifest_inconsistent",
 )
 
-NON_COMPLETE_CLASSES = tuple(
-    state for state in CENSUS_CLASSES if state != "complete"
-)
+NON_COMPLETE_CLASSES = tuple(state for state in CENSUS_CLASSES if state != "complete")
 
 _CENSUS_SQL = """
 WITH sealed AS (
@@ -170,9 +168,7 @@ def census_index_jobs(
     latest_heartbeat: tuple[datetime, str] | None = None
     lease_expirations: list[datetime] = []
     retry_availability: list[datetime] = []
-    attempts_by_state: dict[str, list[int]] = {
-        state: [] for state in CENSUS_CLASSES
-    }
+    attempts_by_state: dict[str, list[int]] = {state: [] for state in CENSUS_CLASSES}
     snapshot_at: datetime | None = None
 
     observed = 0
@@ -380,10 +376,11 @@ def _status_is_consistent(
     if status == "running":
         if not all(value not in (None, "") for value in lease_values):
             return False
-        return (
-            manifest_status in {"pending", "indexing", "failed"}
-            and completed_at in (None, "")
-        )
+        return manifest_status in {
+            "pending",
+            "indexing",
+            "failed",
+        } and completed_at in (None, "")
 
     if any(value not in (None, "") for value in lease_values):
         return False
