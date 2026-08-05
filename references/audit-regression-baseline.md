@@ -40,6 +40,19 @@ Mocks and fakes remain acceptable when they are deterministic and boundary-faith
 
 A remediation is complete only when the corresponding assertion passes because the responsible production behavior changed. A neighboring fix must not make a baseline test pass under the wrong issue gate.
 
+### RC-01 worker result and scope contract
+
+A scoped `IndexWorker.run_batch(..., entity_ids=...)` call validates a nonempty active fingerprint before opening a unit of work or performing any heartbeat, claim, lease, embedding, Qdrant, or completion side effect. Invalid scoped authority therefore fails closed.
+
+Worker operation counters and census observations have different aggregation semantics:
+
+- `complete`, `failed`, `lease_lost`, and embedding telemetry remain per-invocation deltas and may be summed across worker batches.
+- `complete_manifests` is the census-wide completed-manifest total for the sealed set at that observation.
+- `census.complete` is the same census-wide total inside the complete structured observation.
+- callers must not sum `complete_manifests` or any census class across observations.
+
+The dedicated census suite exercises both worker paths for pre-side-effect fingerprint rejection, verifies zero-claim census attachment, and simulates multiple claimed batches followed by a zero-claim observation to prove that cumulative census totals do not overwrite or inflate operation and telemetry deltas.
+
 ## Strict expected-failure policy
 
 Each unresolved defect test uses `pytest.mark.xfail(strict=True, raises=AssertionError, ...)`. The assertion must fail against the audited production behavior for the stated RC finding. An underlying production fix therefore creates an unexpected pass and fails this dedicated workflow until the corresponding remediation PR deliberately:
@@ -51,4 +64,4 @@ Issue #208 performed both steps for RC-01. The allowlist remains isolated from t
 
 ## Change boundary
 
-The RC-01 remediation adds an observational PostgreSQL census and worker result evidence only. It does not change orchestration waiting, retry, terminal behavior, database schema, migration history, or the durable authority boundary. PostgreSQL remains authoritative, immutable provider payloads remain in `BLOB_ROOT`, and Qdrant remains a rebuildable projection.
+The RC-01 remediation adds an observational PostgreSQL census and worker result evidence only. It also enforces the pre-existing requirement that a scoped worker call possess an active fingerprint before any mutation and preserves the established per-batch result contract. It does not change orchestration waiting, retry, terminal behavior, database schema, migration history, or the durable authority boundary. PostgreSQL remains authoritative, immutable provider payloads remain in `BLOB_ROOT`, and Qdrant remains a rebuildable projection.

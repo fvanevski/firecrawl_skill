@@ -50,6 +50,15 @@ class IndexWorker:
     def run_batch(self, limit: int = 64, entity_ids: list[UUID] | None = None) -> dict:
         if limit <= 0:
             raise ValueError("limit must be positive")
+
+        fingerprint = getattr(self.embedder, "fingerprint", None)
+        if entity_ids is not None:
+            if not isinstance(fingerprint, str) or not fingerprint.strip():
+                raise ValueError(
+                    "sealed index-job census requires the active index fingerprint"
+                )
+            fingerprint = fingerprint.strip()
+
         result = {
             "worker_id": self.worker_id,
             "claimed": 0,
@@ -64,7 +73,7 @@ class IndexWorker:
             "lease_seconds": self.lease_seconds,
             "worker_id": self.worker_id,
             "max_attempts": self.max_attempts,
-            "fingerprint": getattr(self.embedder, "fingerprint", None),
+            "fingerprint": fingerprint,
         }
         if entity_ids is not None:
             claim_options["entity_ids"] = entity_ids
@@ -167,13 +176,19 @@ class IndexWorker:
         entity_ids: list[UUID] | None,
         fingerprint: str | None,
     ) -> dict:
-        """Attach an exact census when a sealed membership was supplied."""
+        """Attach exact sealed-set evidence without changing batch counters.
+
+        ``result["complete"]`` remains the number completed by this invocation.
+        Census-wide completion is exposed as ``complete_manifests`` and as
+        ``result["census"]["complete"]``.
+        """
         if entity_ids is None:
             return result
-        if not fingerprint:
+        if not isinstance(fingerprint, str) or not fingerprint.strip():
             raise ValueError(
                 "sealed index-job census requires the active index fingerprint"
             )
+        fingerprint = fingerprint.strip()
 
         with self.uow_factory() as uow:
             repository_census = getattr(uow.index_jobs, "census_index_jobs", None)
@@ -196,7 +211,6 @@ class IndexWorker:
         result["census"] = census
         for key in (
             "expected",
-            "complete",
             "claimable",
             "running_live",
             "running_expired",

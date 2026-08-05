@@ -505,7 +505,7 @@ class _WorkerRepository:
 
 
 class _WorkerUow:
-    def __init__(self, repository: _WorkerRepository) -> None:
+    def __init__(self, repository: Any) -> None:
         self.index_jobs = repository
 
     def __enter__(self) -> Self:
@@ -532,8 +532,10 @@ def test_worker_attaches_exact_census_after_zero_claim_batch() -> None:
     result = worker.run_batch(limit=64, entity_ids=entity_ids)
 
     assert result["claimed"] == 0
+    assert result["complete"] == 0
     assert result["census"]["expected"] == 2
-    assert result["complete_manifests"] == result["complete"] == 1
+    assert result["census"]["complete"] == 1
+    assert result["complete_manifests"] == 1
     assert result["running_live"] == 1
     assert repository.claim_options is not None
     assert repository.claim_options["entity_ids"] == entity_ids
@@ -544,3 +546,120 @@ def test_worker_attaches_exact_census_after_zero_claim_batch() -> None:
             {"max_attempts": worker.max_attempts},
         )
     ]
+
+
+@pytest.mark.parametrize("limit", [1, 64])
+@pytest.mark.parametrize("fingerprint", [None, "", "   ", 42])
+def test_scoped_worker_requires_fingerprint_before_any_side_effect(
+    limit: int,
+    fingerprint: object,
+) -> None:
+    from types import SimpleNamespace
+
+    from research_store.indexing import IndexWorker
+
+    side_effects: list[str] = []
+
+    def forbidden_uow() -> None:
+        side_effects.append("unit_of_work")
+        raise AssertionError("scoped validation must run before any unit of work")
+
+    worker = IndexWorker(
+        uow_factory=forbidden_uow,
+        index=SimpleNamespace(),
+        embedder=SimpleNamespace(fingerprint=fingerprint),
+        worker_id="fail-closed-census-worker",
+    )
+
+    with pytest.raises(ValueError, match="active index fingerprint"):
+        worker.run_batch(limit=limit, entity_ids=[UUID(int=1)])
+
+    assert side_effects == []
+
+
+class _SequencedWorkerRepository:
+    def __init__(self, entity_ids: list[UUID]) -> None:
+        self.entity_ids = entity_ids
+        self.claim_batches = [
+            [{"id": UUID(int=101)}, {"id": UUID(int=102)}],
+            [{"id": UUID(int=103)}],
+            [],
+        ]
+        self.census_totals = [2, 3, 3]
+        self.claim_calls: list[tuple[int, dict[str, Any]]] = []
+        self.census_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def claim_jobs(self, limit: int, **options: Any) -> list[dict[str, Any]]:
+        self.claim_calls.append((limit, options))
+        return self.claim_batches.pop(0)
+
+    def heartbeat_worker(self, _worker_id: str, _metadata: dict[str, Any]) -> None:
+        return None
+
+    def census_index_jobs(self, *args: Any, **kwargs: Any) -> dict[str, int]:
+        observation = len(self.census_calls)
+        self.census_calls.append((args, kwargs))
+        complete = self.census_totals[observation]
+        return {
+            "expected": len(self.entity_ids),
+            "complete": complete,
+            "complete_manifests": complete,
+            "claimable": 0,
+            "running_live": len(self.entity_ids) - complete,
+            "running_expired": 0,
+            "retryable_failed": 0,
+            "dead": 0,
+            "missing_job": 0,
+            "wrong_fingerprint": 0,
+            "manifest_inconsistent": 0,
+        }
+
+
+def test_worker_preserves_batch_completion_deltas_across_census_observations() -> None:
+    from types import SimpleNamespace
+
+    from research_store.indexing import IndexWorker
+
+    class _BatchDeltaWorker(IndexWorker):
+        def _process_microbatch(self, jobs: list[dict]) -> dict[str, Any]:
+            return {
+                "complete": len(jobs),
+                "failed": 0,
+                "lease_lost": 0,
+                "embedding_batches": 1,
+                "embedding_texts": len(jobs),
+                "embedding_elapsed_seconds": 0.25,
+            }
+
+    entity_ids = [UUID(int=1), UUID(int=2), UUID(int=3)]
+    repository = _SequencedWorkerRepository(entity_ids)
+    worker = _BatchDeltaWorker(
+        uow_factory=lambda: _WorkerUow(repository),
+        index=SimpleNamespace(),
+        embedder=SimpleNamespace(fingerprint=FINGERPRINT),
+        worker_id="delta-preserving-census-worker",
+    )
+
+    observations = [worker.run_batch(limit=2, entity_ids=entity_ids) for _ in range(3)]
+
+    assert [item["claimed"] for item in observations] == [2, 1, 0]
+    assert [item["complete"] for item in observations] == [2, 1, 0]
+    assert [item["complete_manifests"] for item in observations] == [2, 3, 3]
+    assert [item["census"]["complete"] for item in observations] == [2, 3, 3]
+
+    aggregate = {
+        "complete": 0,
+        "embedding_batches": 0,
+        "embedding_texts": 0,
+        "embedding_elapsed_seconds": 0.0,
+    }
+    for observation in observations:
+        for key in aggregate:
+            aggregate[key] += observation[key]
+
+    assert aggregate == {
+        "complete": 3,
+        "embedding_batches": 2,
+        "embedding_texts": 3,
+        "embedding_elapsed_seconds": 0.5,
+    }
