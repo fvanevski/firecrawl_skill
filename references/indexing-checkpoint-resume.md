@@ -123,6 +123,12 @@ a transition, or create an invocation before being rejected. Valid `fsearch` and
 | Concurrent checkpoint finalization has one transition | row-locked checkpoint finalizer | existing checkpoint terminal integration test |
 | Recoverable work remains nonterminal and bounded | drain/checkpoint stage | existing checkpoint contract and integration tests |
 
+The dedicated `Index checkpoint` workflow executes this matrix against disposable
+PostgreSQL and Qdrant services on Python 3.11 and 3.12. The general CI workflow
+independently runs Ruff checking, Ruff format verification, the full `scripts/`
+test suite on both Python versions, release invariants, and strict campaign
+contract tests.
+
 ## Non-goals
 
 This change does not make Qdrant authoritative, infer historical provenance,
