@@ -145,7 +145,7 @@ def upgrade():
         CREATE OR REPLACE FUNCTION _require_terminal_decision_for_transition()
         RETURNS trigger AS $$
         DECLARE
-          decision terminal_decisions%ROWTYPE;
+          decision terminal_decisions%%ROWTYPE;
         BEGIN
           IF NEW.next_state NOT IN ('completed', 'partial', 'failed', 'cancelled') THEN
             RETURN NEW;
@@ -158,7 +158,7 @@ def upgrade():
 
           IF NOT FOUND THEN
             RAISE EXCEPTION
-              'terminal transition requires terminal_decisions row for run % and idempotency key %',
+              'terminal transition requires terminal_decisions row for run %% and idempotency key %%',
               NEW.run_id, NEW.idempotency_key
               USING ERRCODE = '23514',
                     CONSTRAINT = 'terminal_transition_requires_decision';
@@ -180,7 +180,7 @@ def upgrade():
              OR _terminal_decision_target_state(decision.outcome) <> NEW.next_state
           THEN
             RAISE EXCEPTION
-              'terminal decision does not authorize transition to % at lifecycle revision %',
+              'terminal decision does not authorize transition to %% at lifecycle revision %%',
               NEW.next_state, NEW.lifecycle_revision
               USING ERRCODE = '23514',
                     CONSTRAINT = 'terminal_decision_transition_semantic_match';
@@ -197,7 +197,7 @@ def upgrade():
         CREATE OR REPLACE FUNCTION _require_transition_for_terminal_decision()
         RETURNS trigger AS $$
         DECLARE
-          transition research_run_transitions%ROWTYPE;
+          transition research_run_transitions%%ROWTYPE;
         BEGIN
           IF NEW.reason_code = 'legacy_unstructured'
              OR NEW.decision_transaction_id IS NULL
