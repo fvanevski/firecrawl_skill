@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Self
 from uuid import UUID
 
 import pytest
-
-SCRIPTS = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPTS))
 
 from research_store.index_census import CENSUS_CLASSES, census_index_jobs
 

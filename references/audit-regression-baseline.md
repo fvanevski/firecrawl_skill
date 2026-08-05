@@ -51,7 +51,7 @@ Worker operation counters and census observations have different aggregation sem
 - `census.complete` is the same census-wide total inside the complete structured observation.
 - callers must not sum `complete_manifests` or any census class across observations.
 
-The dedicated census suite exercises both worker paths for pre-side-effect fingerprint rejection, verifies zero-claim census attachment, and simulates multiple claimed batches followed by a zero-claim observation to prove that cumulative census totals do not overwrite or inflate operation and telemetry deltas.
+The dedicated census suite exercises both worker paths for pre-side-effect fingerprint rejection, verifies zero-claim census attachment, and simulates multiple claimed batches followed by a zero-claim observation to prove that cumulative census totals do not overwrite or inflate operation and telemetry deltas. Test-module import-path setup is owned by `scripts/conftest.py`, so the census test keeps its production imports at module scope without a test-local `sys.path` mutation or an E402 suppression.
 
 ## Strict expected-failure policy
 
