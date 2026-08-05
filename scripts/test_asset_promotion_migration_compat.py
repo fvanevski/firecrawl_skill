@@ -11,7 +11,6 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-
 from asset_promotion_test_support import TEST_DSN, _request
 from research_store.asset_promotion_service import AssetPromotionService
 from research_store.config import StoreConfig

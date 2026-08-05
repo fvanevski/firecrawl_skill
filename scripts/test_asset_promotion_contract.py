@@ -207,4 +207,4 @@ def test_reference_documents_authority_stages_reopen_and_compatibility():
     assert "legacy_unstructured" in reference
     assert "No earlier stage" in reference
     assert "finalized successful extraction" in reference
-    assert "recomputes and verifies" in reference
+    assert "recompute and verify" in reference

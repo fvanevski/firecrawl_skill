@@ -7,7 +7,6 @@ from threading import Event
 from uuid import UUID, uuid4
 
 import pytest
-
 from asset_promotion_test_support import (
     TEST_DSN,
     _promote,

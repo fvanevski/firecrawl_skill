@@ -73,8 +73,8 @@ barrier. While holding the run row lock, the service:
 5. hashes the canonical member representation with SHA-256.
 
 PostgreSQL does not trust values calculated by the service. Deferred constraint
-triggers recomputes and verifies every member hash, the aggregate membership
-hash, the persisted asset count, the distinct chunk count, and contiguous member
+triggers recompute and verify every member hash, the aggregate membership hash,
+the persisted asset count, the distinct chunk count, and contiguous member
 ordering before commit. Member chunk arrays must be non-null, sorted, and free
 of duplicates. A syntactically valid but non-addressing hash or inconsistent
 count therefore aborts the sealing transaction.

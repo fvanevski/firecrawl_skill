@@ -6,7 +6,6 @@ from dataclasses import replace
 from uuid import UUID, uuid4
 
 import pytest
-
 from asset_promotion_test_support import (
     TEST_DSN,
     _advance_to_indexing,

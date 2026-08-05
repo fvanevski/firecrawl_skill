@@ -9,7 +9,6 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-
 from research_store.asset_promotion_service import AssetPromotionService
 from research_store.config import StoreConfig
 from research_store.container import build_run_service, build_service
