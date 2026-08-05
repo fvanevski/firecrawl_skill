@@ -24,22 +24,28 @@ jobs:
           set -euo pipefail
           target='scripts/test_research_store_integration.py'
           workflow='.github/workflows/restore-integration-fixture.yml'
-          git show 3cb4fef01473581a9c649d05559156087796c1ca:"$target" > "$target"
-          test "$(wc -c < "$target")" -eq 156506
+          parent='3cb4fef01473581a9c649d05559156087796c1ca'
+          git show "$parent:$target" > /tmp/original-fixture.py
+          test "$(git hash-object /tmp/original-fixture.py)" = '959595733b362494117cf48692a594ecfc64ffcf'
+          cp /tmp/original-fixture.py "$target"
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('scripts/test_research_store_integration.py')
-          text = path.read_text(encoding='utf-8')
-          old = 'assert cursor.fetchone()[0] == "0038_postgres_authority"'
-          new = 'assert cursor.fetchone()[0] == "0039_index_checkpoint_guard"'
-          if text.count(old) != 1:
-              raise SystemExit(f'expected exactly one migration-head assertion, found {text.count(old)}')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          target = Path('scripts/test_research_store_integration.py')
+          original = Path('/tmp/original-fixture.py').read_bytes()
+          old = b'assert cursor.fetchone()[0] == "0038_postgres_authority"'
+          new = b'assert cursor.fetchone()[0] == "0039_index_checkpoint_guard"'
+          if original.count(old) != 1:
+              raise SystemExit(f'expected exactly one migration-head assertion, found {original.count(old)}')
+          expected = original.replace(old, new)
+          target.write_bytes(expected)
+          actual = target.read_bytes()
+          if actual != expected:
+              raise SystemExit('restored fixture does not match the immutable expected bytes')
+          if len(actual) != 156510:
+              raise SystemExit(f'unexpected restored fixture size: {len(actual)}')
           PY
-          test "$(wc -c < "$target")" -eq 156510
           git diff --check -- "$target"
-          test "$(git diff --numstat -- "$target")" = $'1\t1\tscripts/test_research_store_integration.py'
           git rm "$workflow"
           git add "$target"
           git config user.name 'github-actions[bot]'
