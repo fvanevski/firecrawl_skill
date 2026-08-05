@@ -82,6 +82,12 @@ The migration explicitly updates only terminal-decision rows that exist at the
 }
 ```
 
+Because the preexisting terminal-decision ledger is append-only, migration 0039
+disables that table's append-only trigger only around this controlled historical
+backfill and re-enables it before installing the new constraints and terminal
+command triggers. The entire upgrade remains one PostgreSQL transaction, so no
+externally visible interval permits unguarded decision mutation.
+
 Those historical rows have no transaction identity and cannot authorize a new
 terminal transition. The `reason_code` and `state_census` columns have **no
 legacy defaults** after migration; every future authoritative writer must supply
