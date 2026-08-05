@@ -5,7 +5,6 @@ from typing import Any, Self
 from uuid import UUID
 
 import pytest
-
 from research_store.index_census import CENSUS_CLASSES, census_index_jobs
 
 SNAPSHOT = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
