@@ -2,9 +2,9 @@
 
 ## 1. Migration principles
 
-PostgreSQL is authoritative for workflow, acquisition provenance, corpus identities, and durable jobs. Under Target A, immutable provider payload bytes remain in `BLOB_ROOT`; Qdrant is rebuildable and Valkey is transient.
+PostgreSQL is authoritative for workflow, acquisition provenance, corpus identities, staged asset promotion, exact completion membership, and durable jobs. Under Target A, immutable provider payload bytes remain in `BLOB_ROOT`; Qdrant is rebuildable and Valkey is transient.
 
-Alembic migrations are forward-only and transactional. The current clean schema head is `0038_postgres_authority`.
+Alembic migrations are forward-only and transactional. The current clean schema head is `0040_asset_promotion_membership`.
 
 A future migration that stores payload bytes in PostgreSQL is not part of this release. Do not delete or bypass `BLOB_ROOT` based on the phrase “PostgreSQL-authoritative.”
 
@@ -27,7 +27,7 @@ Before changing code or schema:
    - a legacy acquisition tree that has not been imported; or
    - an unsupported database from an older migration lineage.
 
-Do not manually stamp Alembic or infer authoritative state from local acquisition files.
+Do not manually stamp Alembic or infer authoritative state from local acquisition files, Qdrant points, or historical run-asset rows.
 
 ## 3. Running migrations
 
@@ -44,8 +44,8 @@ Expected schema state:
 
 ```json
 {
-  "current": "0038_postgres_authority",
-  "head": "0038_postgres_authority",
+  "current": "0040_asset_promotion_membership",
+  "head": "0040_asset_promotion_membership",
   "at_head": true
 }
 ```
@@ -64,10 +64,24 @@ Expected schema state:
 | `0009_search_plans`–`0016_invocation_events` | Search planning, retained responses, stable candidates, coverage, decisions, and invocation events |
 | `0017_claims_evidence`–`0030_duplicate_groups` | Claims, evidence, audits, extraction provenance, derivations, retrieval traces, packets, and duplicate groups |
 | `0031_synthesis_stages`, `0032_semantic_cache`, `0033_resource_governance`, `0034_add_validation_stage` | Synthesis, cache, resource governance, and validation |
-| `0035_index_point_counts`–`0037_not_invoked_token_source` | Index verification and measured telemetry |
-| `0038_postgres_authority` | Current Target A schema head |
+| `0035_index_point_counts`–`0038_postgres_authority` | Index verification, measured telemetry, and consolidated PostgreSQL authority |
+| `0039_index_checkpoint_guard` | Exact indexing checkpoint membership, lifecycle CAS, bounded recovery, and terminal transition guards |
+| `0040_asset_promotion_membership` | Explicit asset-promotion stages, append-only provenance, PostgreSQL-verified membership seals, and checkpoint binding |
 
 Removed revisions and runtime compatibility tables are not migration targets.
+
+### 4.1 Revision 0040 compatibility boundary
+
+Revision 0040 is additive and does not fabricate promotion history for pre-existing `research_run_assets`. Rows present before the migration remain readable as:
+
+```text
+current_stage = unknown
+provenance = legacy_unstructured
+```
+
+No discovery, extraction, retention-policy, evidence-eligibility, or completion-critical event is backfilled. Existing active checkpoints created before revision 0040 remain readable under the revision-0039 compatibility contract. A new checkpoint requires an exact active asset-membership seal and fails closed if a run still contains unknown historical assets.
+
+Any evidence-bearing repair must be implemented as a new forward migration or explicit operator workflow. Do not update promotion tables manually merely to make a completion gate pass. See `asset-promotion-membership.md` for the stage, sealing, reopen/reseal, and historical-read contracts.
 
 ## 5. Legacy acquisition-tree compatibility boundary
 
@@ -142,14 +156,17 @@ scripts/research-db doctor
 
 If Alembic remains at the prior revision, rerun the migration. If revision metadata and required objects disagree, restore or reset; do not edit schema state manually.
 
+For an interrupted `0039 → 0040` upgrade, verify that Alembic either remains at `0039_index_checkpoint_guard` with no committed revision-0040 objects or reaches `0040_asset_promotion_membership` with all promotion, event, seal, member, and checkpoint-binding objects present. PostgreSQL transactional DDL prevents a supported migration from committing a half-applied revision.
+
 ## 7. Forward-repair migrations
 
 Future corrections must be new revisions that preserve:
 
-- PostgreSQL workflow and identity authority;
+- PostgreSQL workflow, asset-promotion, and identity authority;
 - `BLOB_ROOT` payload integrity under Target A;
-- append-only transition and event ledgers;
-- idempotent retries;
+- append-only transition, event, and promotion ledgers;
+- database-verified exact membership hashes and counts;
+- idempotent retries and lifecycle compare-and-swap behavior;
 - explicit recovery and compatibility notes;
 - fresh-database and populated-prior-head tests when in-place upgrade is supported.
 
@@ -166,6 +183,8 @@ Before upgrading, retain a matching PostgreSQL dump and `BLOB_ROOT` backup. If r
 5. recreate Valkey;
 6. run `verify-blobs`, `status`, `ingest-ready`, and `doctor`.
 
+Revision 0040 does not implement a destructive downgrade. Its `downgrade()` raises a forward-only error. Restoring only PostgreSQL, or only `BLOB_ROOT`, is not a valid rollback because extraction provenance and immutable payload references must remain at the same logical boundary.
+
 Do not attempt to reconstruct authoritative records from presentation exports, Qdrant, Valkey, or the legacy source tree. The pre-RC-6 revision should be deployed only for bounded import or rollback work, not retained as the normal runtime.
 
 ## 9. Migration testing
@@ -176,6 +195,10 @@ export RESEARCH_STORE_TEST_ALLOW_RESET='firecrawl_test'
 
 env PYTHONDONTWRITEBYTECODE=1 \
   pytest -q -p no:cacheprovider \
+  scripts/test_asset_promotion_contract.py \
+  scripts/test_asset_promotion_integration.py \
+  scripts/test_asset_promotion_reopen_concurrency.py \
+  scripts/test_asset_promotion_migration_compat.py \
   scripts/test_research_store_integration.py \
   scripts/test_workflow_service.py \
   scripts/test_documentation.py
