@@ -60,6 +60,18 @@ class CheckpointWorkflowOperationService(WorkflowOperationService):
         operation: str,
         input_data: dict[str, Any],
     ):
+        # Validate all caller-controlled routing fields before any checkpoint or
+        # lifecycle mutation. _BEGIN_PATHS is the same authoritative allowlist
+        # used by the base implementation, so the preflight cannot drift from
+        # the operation that will subsequently be executed.
+        if operation not in self._BEGIN_PATHS:
+            raise WorkflowBoundaryError(f"unsupported wrapper operation: {operation}")
+        if not isinstance(external_invocation_id, str) or not external_invocation_id.strip():
+            raise WorkflowBoundaryError("external_invocation_id is required")
+        if not isinstance(input_data, dict):
+            raise WorkflowBoundaryError("wrapper input_data must be an object")
+        self._status(external_run_id)
+
         self._finalize_indexing(
             external_run_id,
             f"wrapper:{external_invocation_id}:resume",

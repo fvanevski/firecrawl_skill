@@ -23,6 +23,7 @@ from drain_index_jobs import (
 )
 from research_store.config import StoreConfig
 from research_store.container import build_run_service, build_service
+from research_store.index_checkpoint_replay import replay_completed_checkpoint
 from research_store.index_checkpoint_service import IndexCheckpointService
 from research_store.indexing import IndexWorker
 
@@ -111,11 +112,14 @@ def _build_runner(
     config.require_database()
     run_service = build_run_service(config)
     status = run_service.status(external_id=external_run_id)
+    checkpoint_service = IndexCheckpointService(
+        run_service.uow_factory,
+        max_attempts=config.max_index_attempts,
+    )
+
     if status.state != "indexing":
-        raise RuntimeError(
-            f"research run {external_run_id} must be in indexing state, "
-            f"got {status.state}"
-        )
+        replay = replay_completed_checkpoint(checkpoint_service, status.id)
+        return run_service, checkpoint_service, None, replay
     if cancelled():
         raise DrainCancelled
 
@@ -126,10 +130,6 @@ def _build_runner(
     if not isinstance(fingerprint, str) or not fingerprint.strip():
         raise RuntimeError("configured embedder must expose an immutable fingerprint")
 
-    checkpoint_service = IndexCheckpointService(
-        run_service.uow_factory,
-        max_attempts=config.max_index_attempts,
-    )
     checkpoint = checkpoint_service.ensure(
         status.id,
         lifecycle_revision=status.lifecycle_revision,
@@ -162,13 +162,25 @@ def _build_runner(
             checkpoint=checkpoint,
             deadline_at=deadline_at,
         ),
+        None,
     )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.batch_size <= 0:
+        raise SystemExit("--batch-size must be positive")
+    if args.max_batches <= 0:
+        raise SystemExit("--max-batches must be positive")
     if args.deadline_seconds <= 0:
         raise SystemExit("--deadline-seconds must be positive")
+    if args.initial_backoff_seconds <= 0:
+        raise SystemExit("--initial-backoff-seconds must be positive")
+    if args.max_backoff_seconds < args.initial_backoff_seconds:
+        raise SystemExit(
+            "--max-backoff-seconds must be at least --initial-backoff-seconds"
+        )
+
     stop = Event()
     previous: dict[int, Any] = {}
     for signum in (signal.SIGTERM, signal.SIGINT):
@@ -182,58 +194,74 @@ def main(argv: Sequence[str] | None = None) -> int:
     checkpoint = None
     finalization = None
     try:
-        run_service, checkpoint_service, runner = _build_runner(
+        run_service, checkpoint_service, runner, finalization = _build_runner(
             args.research_run_id,
             deadline_at=deadline_at,
             cancelled=stop.is_set,
         )
-        checkpoint = runner.checkpoint
-        result = drain_index_jobs_result(
-            Path(__file__).resolve().with_name("research-db"),
-            batch_size=args.batch_size,
-            max_batches=args.max_batches,
-            deadline_seconds=args.deadline_seconds,
-            initial_backoff_seconds=args.initial_backoff_seconds,
-            max_backoff_seconds=args.max_backoff_seconds,
-            runner=runner,
-            require_census=True,
-            waiter=stop.wait,
-            cancelled=stop.is_set,
-        )
-        checkpoint = runner.checkpoint
-        if result.status == "complete":
-            current = run_service.status(external_id=args.research_run_id)
-            finalization = checkpoint_service.finalize(
-                current.id,
-                checkpoint.id,
-                expected_revision=current.lifecycle_revision,
-                idempotency_key=f"index-checkpoint:{checkpoint.id}:finalize",
-                actor_type="wrapper",
-                actor_identifier="frun-resume",
+        if finalization is not None:
+            checkpoint = finalization.checkpoint
+            result = DrainResult(
+                status="complete",
+                exit_code=0,
+                recoverable=False,
+                reason="completed_checkpoint_replayed",
+                batches=0,
+                elapsed_seconds=max(0.0, time.monotonic() - setup_started),
+                last_census=finalization.census,
             )
-            if not finalization.advanced:
-                if finalization.status == "recoverable":
-                    result = DrainResult(
-                        status="resumable",
-                        exit_code=RESUMABLE_EXIT_CODE,
-                        recoverable=True,
-                        reason="fresh_finalization_read_found_recoverable_work",
-                        batches=result.batches,
-                        elapsed_seconds=result.elapsed_seconds,
-                        last_worker_result=result.last_worker_result,
-                        last_census=finalization.census,
-                    )
-                else:
-                    result = DrainResult(
-                        status="failed",
-                        exit_code=1,
-                        recoverable=False,
-                        reason=f"finalization_{finalization.status}",
-                        batches=result.batches,
-                        elapsed_seconds=result.elapsed_seconds,
-                        last_worker_result=result.last_worker_result,
-                        last_census=finalization.census,
-                    )
+        else:
+            if runner is None:
+                raise RuntimeError(
+                    "indexing resume setup omitted its checkpoint runner"
+                )
+            checkpoint = runner.checkpoint
+            result = drain_index_jobs_result(
+                Path(__file__).resolve().with_name("research-db"),
+                batch_size=args.batch_size,
+                max_batches=args.max_batches,
+                deadline_seconds=args.deadline_seconds,
+                initial_backoff_seconds=args.initial_backoff_seconds,
+                max_backoff_seconds=args.max_backoff_seconds,
+                runner=runner,
+                require_census=True,
+                waiter=stop.wait,
+                cancelled=stop.is_set,
+            )
+            checkpoint = runner.checkpoint
+            if result.status == "complete":
+                current = run_service.status(external_id=args.research_run_id)
+                finalization = checkpoint_service.finalize(
+                    current.id,
+                    checkpoint.id,
+                    expected_revision=current.lifecycle_revision,
+                    idempotency_key=f"index-checkpoint:{checkpoint.id}:finalize",
+                    actor_type="wrapper",
+                    actor_identifier="frun-resume",
+                )
+                if not finalization.advanced:
+                    if finalization.status == "recoverable":
+                        result = DrainResult(
+                            status="resumable",
+                            exit_code=RESUMABLE_EXIT_CODE,
+                            recoverable=True,
+                            reason="fresh_finalization_read_found_recoverable_work",
+                            batches=result.batches,
+                            elapsed_seconds=result.elapsed_seconds,
+                            last_worker_result=result.last_worker_result,
+                            last_census=finalization.census,
+                        )
+                    else:
+                        result = DrainResult(
+                            status="failed",
+                            exit_code=1,
+                            recoverable=False,
+                            reason=f"finalization_{finalization.status}",
+                            batches=result.batches,
+                            elapsed_seconds=result.elapsed_seconds,
+                            last_worker_result=result.last_worker_result,
+                            last_census=finalization.census,
+                        )
     except DrainCancelled:
         result = DrainResult(
             status="cancelled",
