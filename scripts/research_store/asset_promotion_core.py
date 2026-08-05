@@ -10,6 +10,8 @@ from .asset_promotion_models import (
     AssetMembershipSealedError,
 )
 
+DEFAULT_POLICY_VERSION = "completion-membership-v1"
+
 
 class _AssetPromotionCoreMixin:
     def list_assets(self, run_id: UUID) -> list[dict[str, Any]]:
