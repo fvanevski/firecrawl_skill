@@ -168,9 +168,7 @@ def _extract_census(payload: dict[str, Any]) -> dict[str, Any] | None:
         _nonnegative_int(census, field)
     complete_manifests = _nonnegative_int(census, "complete_manifests")
     if complete_manifests != census["complete"]:
-        raise ValueError(
-            "worker census complete_manifests must equal census complete"
-        )
+        raise ValueError("worker census complete_manifests must equal census complete")
     observed = sum(int(census[field]) for field in CENSUS_CLASSES)
     if observed != expected:
         raise ValueError(

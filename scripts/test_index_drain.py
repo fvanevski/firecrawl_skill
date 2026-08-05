@@ -186,9 +186,7 @@ def test_irrecoverable_census_classes_fail_closed(field: str) -> None:
     module = _load_module()
     clock = _Clock()
     values = {field: 1}
-    runner, calls = _sequence_runner(
-        [_worker(_census(complete=3, **values))]
-    )
+    runner, calls = _sequence_runner([_worker(_census(complete=3, **values))])
 
     result = module.drain_index_jobs_result(
         Path("research-db"),
@@ -240,9 +238,7 @@ def test_cancellation_interrupts_a_bounded_wait_without_terminalizing() -> None:
     module = _load_module()
     clock = _Clock()
     clock.cancel = True
-    runner, calls = _sequence_runner(
-        [_worker(_census(complete=3, running_live=1))]
-    )
+    runner, calls = _sequence_runner([_worker(_census(complete=3, running_live=1))])
 
     result = module.drain_index_jobs_result(
         Path("research-db"),
@@ -453,9 +449,7 @@ def test_run_scoped_runner_seals_postgresql_membership_once(
     monkeypatch.setitem(sys.modules, "research_store.indexing", indexing_module)
 
     runner = module._run_scoped_runner("fr_test")
-    completed = runner(
-        ["research-db", "worker", "--once", "--batch-size", "7"]
-    )
+    completed = runner(["research-db", "worker", "--once", "--batch-size", "7"])
 
     assert completed.returncode == 0
     assert run_batch_calls == [(7, entity_ids)]
