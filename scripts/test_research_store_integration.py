@@ -89,7 +89,7 @@ def prepared_database():
         )
         assert all(cursor.fetchone())
         cursor.execute("SELECT version_num FROM alembic_version")
-        assert cursor.fetchone()[0] == "0038_postgres_authority"
+        assert cursor.fetchone()[0] == "0039_index_checkpoint_guard"
 
 
 def test_wrapper_workflow_runs_entirely_from_postgresql(service):
@@ -1570,7 +1570,6 @@ def test_search_plan_persistence_and_queries(service):
     ]
     plan_payload["revision"] = 1
 
-    # 1. Normal success path
     plan_id = run_svc.record_search_plan(
         status.id,
         db_spec_id,
@@ -1580,7 +1579,6 @@ def test_search_plan_persistence_and_queries(service):
     )
     assert plan_id is not None
 
-    # Fetch plan
     stored_plan = run_svc.get_search_plan(status.id, plan_id=plan_id)
     assert stored_plan["id"] == plan_id
     assert stored_plan["revision"] == 1
@@ -1590,14 +1588,12 @@ def test_search_plan_persistence_and_queries(service):
     assert query["query_text"] == plan_payload["queries"][0]["query"]
     assert query["facet"] == plan_payload["queries"][0]["facet"]
 
-    # Fetch query by ID
     query_id = UUID(plan_payload["queries"][0]["query_id"])
     query_row = run_svc.get_plan_query(query_id)
     assert query_row["id"] == query_id
     assert query_row["plan_id"] == plan_id
     assert query_row["run_id"] == status.id
 
-    # List queries for plan
     with service.uow_factory() as uow:
         plan_queries = uow.list_plan_queries(plan_id)
         assert len(plan_queries) == 1
@@ -1607,7 +1603,6 @@ def test_search_plan_persistence_and_queries(service):
         assert len(all_plans) == 1
         assert all_plans[0]["id"] == plan_id
 
-    # 2. Idempotent retry
     retry_id = run_svc.record_search_plan(
         status.id,
         db_spec_id,
@@ -1617,7 +1612,6 @@ def test_search_plan_persistence_and_queries(service):
     )
     assert retry_id == plan_id
 
-    # 3. Conflicting idempotency use
     conflicting = deepcopy(plan_payload)
     conflicting["queries"][0]["query"] = "Different query text entirely"
     with pytest.raises(ValueError, match="idempotency key was used"):
@@ -1629,7 +1623,6 @@ def test_search_plan_persistence_and_queries(service):
             "plan-idempotency-rev1",
         )
 
-    # 4. Overwriting revision 1 with new idempotency key fails (immutable plan revisions)
     plan_v1_other = deepcopy(plan_payload)
     plan_v1_other["queries"][0]["query"] = "Another search query text"
     with pytest.raises(ValueError, match="already exists"):
@@ -1641,7 +1634,6 @@ def test_search_plan_persistence_and_queries(service):
             "plan-idempotency-rev1-alt",
         )
 
-    # 5. Revision 2 succeeds and supersedes revision 1
     plan_v2 = deepcopy(plan_payload)
     plan_v2["revision"] = 2
     plan_v2["queries"][0]["query_id"] = str(uuid4())
@@ -1663,7 +1655,6 @@ def test_search_plan_persistence_and_queries(service):
     assert latest["revision"] == 2
     assert latest["status"] == "active"
 
-    # 6. Unknown coverage target ID rejection
     plan_invalid_target = deepcopy(plan_payload)
     plan_invalid_target["revision"] = 3
     plan_invalid_target["queries"][0]["target_question_ids"] = [
@@ -1679,21 +1670,10 @@ def test_search_plan_persistence_and_queries(service):
         )
 
 
-# ---------------------------------------------------------------------------
-# Issue #25 — PostgreSQL integration tests for new workflow observation events
-# ---------------------------------------------------------------------------
-
-
 class TestCoverageWorkflowObservationEvents:
-    """Integration tests for the 6 new coverage event types added in migration 0014.
-
-    These tests verify the actual SQL path (not just the in-memory repository)
-    for candidate_identified, extraction_attempted, asset_acquired,
-    evidence_retrieved, source_class_observed, and freshness_observed.
-    """
+    """Integration tests for the 6 new coverage event types added in migration 0014."""
 
     def test_candidate_identified_event(self, service):
-        """Verify candidate_identified event is persisted and projected."""
         from research_store.coverage_service import CoverageService
         from research_store.run_service import ResearchRunService
 
@@ -1702,27 +1682,22 @@ class TestCoverageWorkflowObservationEvents:
             "Coverage workflow observation test", f"coverage-{uuid4()}"
         )
         coverage = CoverageService(service.uow_factory)
-
         items = coverage.create_items_from_spec(
             status.id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
         item_id = items[0].coverage_item_id
         candidate_id = uuid4()
-
         event = coverage.apply_candidate_identified(
             status.id, item_id, candidate_id=candidate_id
         )
         assert event.event_type == "candidate_identified"
         assert event.coverage_revision >= 2
-
-        # Verify projection picks up the candidate_id
         ledger = coverage.rebuild_projection(status.id)
         assert len(ledger.items[0].candidate_ids) == 1
         assert ledger.items[0].candidate_ids[0] == candidate_id
 
     def test_asset_acquired_event(self, service):
-        """Verify asset_acquired changes status to 'acquired' and tracks source URL."""
         from research_store.coverage_service import CoverageService
         from research_store.run_service import ResearchRunService
 
@@ -1731,23 +1706,19 @@ class TestCoverageWorkflowObservationEvents:
             "Coverage workflow observation test", f"coverage-{uuid4()}"
         )
         coverage = CoverageService(service.uow_factory)
-
         items = coverage.create_items_from_spec(
             status.id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
         item_id = items[0].coverage_item_id
         url = "https://integration.example.com/source"
-
         event = coverage.apply_asset_acquired(status.id, item_id, source_url=url)
         assert event.event_type == "asset_acquired"
-
         ledger = coverage.rebuild_projection(status.id)
         assert ledger.items[0].status.value == "acquired"
         assert ledger.items[0].independent_source_count == 1
 
     def test_evidence_retrieved_event(self, service):
-        """Verify evidence_retrieved adds passage_ids without changing status."""
         from research_store.coverage_service import CoverageService
         from research_store.run_service import ResearchRunService
 
@@ -1756,26 +1727,21 @@ class TestCoverageWorkflowObservationEvents:
             "Coverage workflow observation test", f"coverage-{uuid4()}"
         )
         coverage = CoverageService(service.uow_factory)
-
         items = coverage.create_items_from_spec(
             status.id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
         item_id = items[0].coverage_item_id
         passage_ids = [str(uuid4()), str(uuid4())]
-
         event = coverage.apply_evidence_retrieved(
             status.id, item_id, passage_ids=passage_ids
         )
         assert event.event_type == "evidence_retrieved"
-
         ledger = coverage.rebuild_projection(status.id)
         assert len(ledger.items[0].passage_ids) == 2
-        # Status must remain unassessed — evidence retrieval is NOT a support judgment
         assert ledger.items[0].status.value == "unassessed"
 
     def test_source_class_observed_event(self, service):
-        """Verify source_class_observed accumulates authority classes."""
         from research_store.coverage_service import CoverageService
         from research_store.run_service import ResearchRunService
 
@@ -1784,26 +1750,22 @@ class TestCoverageWorkflowObservationEvents:
             "Coverage workflow observation test", f"coverage-{uuid4()}"
         )
         coverage = CoverageService(service.uow_factory)
-
         items = coverage.create_items_from_spec(
             status.id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
         item_id = items[0].coverage_item_id
-
         coverage.apply_source_class_observed(
             status.id, item_id, authority_class="primary"
         )
         coverage.apply_source_class_observed(
             status.id, item_id, authority_class="authoritative_secondary"
         )
-
         ledger = coverage.rebuild_projection(status.id)
         assert "primary" in ledger.items[0].authority_classes_present
         assert "authoritative_secondary" in ledger.items[0].authority_classes_present
 
     def test_freshness_observed_event(self, service):
-        """Verify freshness_observed updates freshness_status."""
         from research_domain.models import FreshnessStatus
         from research_store.coverage_service import CoverageService
         from research_store.run_service import ResearchRunService
@@ -1813,22 +1775,18 @@ class TestCoverageWorkflowObservationEvents:
             "Coverage workflow observation test", f"coverage-{uuid4()}"
         )
         coverage = CoverageService(service.uow_factory)
-
         items = coverage.create_items_from_spec(
             status.id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
         item_id = items[0].coverage_item_id
-
         coverage.apply_freshness_observed(
             status.id, item_id, freshness_status="unsatisfied"
         )
-
         ledger = coverage.rebuild_projection(status.id)
         assert ledger.items[0].freshness_status == FreshnessStatus.UNSATISFIED
 
     def test_extraction_attempted_tracks_source_url(self, service):
-        """Verify extraction_attempted tracks source_url for independent-source counting."""
         from research_store.coverage_service import CoverageService
         from research_store.run_service import ResearchRunService
 
@@ -1837,25 +1795,19 @@ class TestCoverageWorkflowObservationEvents:
             "Coverage workflow observation test", f"coverage-{uuid4()}"
         )
         coverage = CoverageService(service.uow_factory)
-
         items = coverage.create_items_from_spec(
             status.id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
         item_id = items[0].coverage_item_id
-
         coverage.apply_extraction_attempted(
             status.id, item_id, source_url="https://integration.example.com"
         )
-
         ledger = coverage.rebuild_projection(status.id)
-        # Status must remain unassessed
         assert ledger.items[0].status.value == "unassessed"
-        # Source URL is tracked for independent-source counting
         assert ledger.items[0].independent_source_count == 1
 
     def test_duplicate_source_url_deduplicated_in_projection(self, service):
-        """Two asset_acquired events with the same URL must yield independent_source_count == 1."""
         from research_store.coverage_service import CoverageService
         from research_store.run_service import ResearchRunService
 
@@ -1864,26 +1816,22 @@ class TestCoverageWorkflowObservationEvents:
             "Coverage workflow observation test", f"coverage-{uuid4()}"
         )
         coverage = CoverageService(service.uow_factory)
-
         items = coverage.create_items_from_spec(
             status.id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
         item_id = items[0].coverage_item_id
         url = "https://integration.example.com/dedup"
-
         coverage.apply_asset_acquired(
             status.id, item_id, source_url=url, idempotency_key="dedup:1"
         )
         coverage.apply_asset_acquired(
             status.id, item_id, source_url=url, idempotency_key="dedup:2"
         )
-
         ledger = coverage.rebuild_projection(status.id)
         assert ledger.items[0].independent_source_count == 1
 
     def test_source_event_id_provenance(self, service):
-        """Verify source_event_id is preserved in the coverage event."""
         from research_store.coverage_service import CoverageService
         from research_store.run_service import ResearchRunService
 
@@ -1892,58 +1840,35 @@ class TestCoverageWorkflowObservationEvents:
             "Coverage workflow observation test", f"coverage-{uuid4()}"
         )
         coverage = CoverageService(service.uow_factory)
-
         items = coverage.create_items_from_spec(
             status.id,
             {"questions": [{"question_id": uuid4(), "text": "Q1"}]},
         )
         item_id = items[0].coverage_item_id
-
         with service.uow_factory() as uow, uow.connection.cursor() as cur:
             cur.execute(
                 "SELECT id FROM research_events WHERE run_id=%s LIMIT 1",
                 (status.id,),
             )
             source_event = cur.fetchone()[0]
-
         event = coverage.apply_asset_acquired(
             status.id,
             item_id,
             source_url="https://integration.example.com",
             source_event_id=source_event,
         )
-
         assert event.source_event_id == source_event
 
 
-# ===================================================================
-# Integration test: ResearchOrchestrator end-to-end
-# ===================================================================
-
-
 class TestResearchOrchestratorIntegration:
-    """End-to-end integration test for ResearchOrchestrator with PostgreSQL.
-
-    This test verifies:
-    - DB revision tracking (current_revision updates after every stage)
-    - State transition persistence (all transitions are recorded in DB)
-    - Final completed state (run ends in 'completed' state)
-    """
-
     def test_orchestrator_end_to_end(self, service):
-        """Execute ResearchOrchestrator.run() end-to-end with PostgreSQL."""
-        from uuid import uuid4
-
         from research_store.orchestrator import OrchestratorConfig, ResearchOrchestrator
         from research_store.run_service import ResearchRunService
 
-        # Build orchestrator
         orchestrator = ResearchOrchestrator.build(
             config=service.config,
             orchestrator_config=OrchestratorConfig(max_adaptive_cycles=2),
         )
-
-        # Create a test run
         run_svc = ResearchRunService(service.uow_factory)
         run_status = run_svc.create(
             "Integration test objective",
@@ -1951,14 +1876,12 @@ class TestResearchOrchestratorIntegration:
             execution_mode="autonomous_local",
         )
         run_id = run_status.id
-
         from budget_policy import conservative_research_spec
         from research_domain import serialize_model
 
         spec = serialize_model(
             conservative_research_spec("Integration test objective", "fact_finding")
         )
-
         qid = spec["questions"][0]["question_id"]
         search_plan = {
             "schema_version": "search-plan-v1",
@@ -1986,24 +1909,15 @@ class TestResearchOrchestratorIntegration:
                 },
             ],
         }
-
-        # Run the orchestrator
         result = orchestrator.run(
             run_id=run_id,
             spec=spec,
             search_plan=search_plan,
         )
-
-        # Verify the run ended in a terminal state
-        print("ORCHESTRATOR RESULT:", result)
         assert result.final_state in ("completed", "partial", "failed")
         assert result.outcome == result.final_state
-
-        # Verify the run state in the database
         final_status = run_svc.status(run_id=run_id)
         assert final_status.state in ("completed", "partial", "failed")
-
-        # Verify state transitions were recorded
         with service.uow_factory() as uow, uow.connection.cursor() as cur:
             cur.execute(
                 "SELECT COUNT(*) FROM research_run_transitions WHERE run_id=%s",
@@ -2011,48 +1925,20 @@ class TestResearchOrchestratorIntegration:
             )
             transition_count = cur.fetchone()[0]
         assert transition_count > 0
-
-        # Verify revision tracking: the lifecycle_revision should have
-        # incremented through the stages
         assert final_status.lifecycle_revision > 0
 
 
-# ===================================================================
-# Test: Migration 0015 — terminal_decisions
-# ===================================================================
-
-
 class TestMigration0015TerminalDecisions:
-    """Test upgrade() on a fresh database containing Phase 1–3 tables.
-
-    Verifies:
-    - Index creation
-    - DDL trigger behavior (append-only enforcement)
-    - Forward-only downgrade behavior
-    - Compatibility with existing Phase 1/2/3 tables
-    """
-
     def test_migration_creates_terminal_decisions_table(self):
-        """Verify terminal_decisions table is created with correct schema."""
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
         assert migrate(TEST_DSN) >= 15
-
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-            # Verify table exists
-            cursor.execute(
-                "SELECT to_regclass('terminal_decisions')",
-            )
+            cursor.execute("SELECT to_regclass('terminal_decisions')")
             assert cursor.fetchone()[0] is not None
-
-            # Verify enum exists
-            cursor.execute(
-                "SELECT to_regtype('terminal_decision_outcome')",
-            )
+            cursor.execute("SELECT to_regtype('terminal_decision_outcome')")
             assert cursor.fetchone()[0] is not None
-
-            # Verify columns exist
             cursor.execute(
                 """SELECT column_name, data_type, is_nullable
                 FROM information_schema.columns
@@ -2063,25 +1949,26 @@ class TestMigration0015TerminalDecisions:
                 row[0]: {"data_type": row[1], "nullable": row[2]}
                 for row in cursor.fetchall()
             }
-            assert "id" in columns
-            assert "run_id" in columns
-            assert "decision_id" in columns
-            assert "run_revision" in columns
-            assert "coverage_revision" in columns
-            assert "outcome" in columns
-            assert "no_progress_signals" in columns
-            assert "unresolved_gap" in columns
-            assert "policy_version" in columns
-            assert "idempotency_key" in columns
-            assert "created_at" in columns
+            for name in (
+                "id",
+                "run_id",
+                "decision_id",
+                "run_revision",
+                "coverage_revision",
+                "outcome",
+                "no_progress_signals",
+                "unresolved_gap",
+                "policy_version",
+                "idempotency_key",
+                "created_at",
+            ):
+                assert name in columns
 
     def test_migration_indexes_created(self):
-        """Verify indexes are created correctly."""
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
         assert migrate(TEST_DSN) >= 15
-
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute(
                 """SELECT indexname FROM pg_indexes
@@ -2094,12 +1981,10 @@ class TestMigration0015TerminalDecisions:
             assert "terminal_decisions_decision_idx" in indexes
 
     def test_append_only_trigger_enforced(self):
-        """Verify DDL trigger prevents UPDATE/DELETE."""
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
         assert migrate(TEST_DSN) >= 15
-
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             run_id = uuid4()
             cursor.execute(
@@ -2109,7 +1994,6 @@ class TestMigration0015TerminalDecisions:
                 ) VALUES (%s, 'test', '{}', 'v1', 'v1', 'created', 'autonomous_local', %s)""",
                 (run_id, f"fr_test_{uuid4().hex}"),
             )
-            # Insert a row
             cursor.execute(
                 """INSERT INTO terminal_decisions(
                     run_id, decision_id, run_revision, coverage_revision,
@@ -2119,11 +2003,8 @@ class TestMigration0015TerminalDecisions:
                     'terminal-decision-policy-v1', 'test-idem-key')""",
                 (run_id, uuid4()),
             )
-            assert cursor.rowcount == 1
             cursor.execute("SELECT id FROM terminal_decisions LIMIT 1")
             row_id = cursor.fetchone()[0]
-
-            # Try to UPDATE — should fail
             cursor.execute("SAVEPOINT update_sp")
             with pytest.raises(Exception, match="terminal_decisions is append-only"):
                 cursor.execute(
@@ -2131,8 +2012,6 @@ class TestMigration0015TerminalDecisions:
                     (row_id,),
                 )
             cursor.execute("ROLLBACK TO SAVEPOINT update_sp")
-
-            # Try to DELETE — should fail
             cursor.execute("SAVEPOINT delete_sp")
             with pytest.raises(Exception, match="terminal_decisions is append-only"):
                 cursor.execute(
@@ -2142,12 +2021,10 @@ class TestMigration0015TerminalDecisions:
             cursor.execute("ROLLBACK TO SAVEPOINT delete_sp")
 
     def test_forward_only_downgrade(self):
-        """Verify downgrade raises RuntimeError."""
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
         assert migrate(TEST_DSN) >= 15
-
         from alembic import command
         from alembic.config import Config
 
@@ -2167,194 +2044,113 @@ class TestMigration0015TerminalDecisions:
                 os.environ.pop("DATABASE_URL", None)
 
     def test_current_schema_contains_all_workflow_tables(self):
-        """Verify the current baseline creates every required workflow table."""
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
         assert migrate(TEST_DSN) >= 15
-
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-            # Verify existing tables still exist
             cursor.execute(
                 """SELECT to_regclass('research_runs'),
                 to_regclass('coverage_events'),to_regclass('coverage_snapshots'),
                 to_regclass('strategy_revisions'),to_regclass('search_plans'),
                 to_regclass('search_responses'),to_regclass('search_candidates')"""
             )
-            results = cursor.fetchone()
-            assert all(results), "Existing Phase 1/2/3 tables should still exist"
-
-            # Verify terminal_decisions table coexists
+            assert all(cursor.fetchone())
             cursor.execute(
                 """SELECT to_regclass('terminal_decisions'),
                 to_regclass('research_runs'),to_regclass('coverage_events')"""
             )
-            results = cursor.fetchone()
-            assert all(results), (
-                "terminal_decisions should coexist with existing tables"
-            )
-
-
-# ---------------------------------------------------------------------------
-# PostgreSQL command-handler integration tests
-# ---------------------------------------------------------------------------
+            assert all(cursor.fetchone())
 
 
 def test_run_annotate_handler_executes_through_service(monkeypatch, capsys):
-    """Verify that research-db run-annotate actually invokes the service method.
-
-    This test catches regressions like B1 (calling .to_dict() on dict values)
-    by exercising the full CLI handler path against a disposable PostgreSQL.
-    """
     external_id = f"fr_annotate_{uuid4().hex}"
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    # Start a run first
-    assert (
-        store_cli.main(
-            [
-                "run-start",
-                external_id,
-                "Annotate integration test",
-                "--mode",
-                "autonomous_local",
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()  # discard run-start output
-
-    # Annotate the run
-    assert (
-        store_cli.main(
-            [
-                "run-annotate",
-                external_id,
-                "--type",
-                "pivot",
-                "--reason",
-                "integration test annotation",
-            ]
-        )
-        == 0
-    )
+    assert store_cli.main(
+        [
+            "run-start",
+            external_id,
+            "Annotate integration test",
+            "--mode",
+            "autonomous_local",
+        ]
+    ) == 0
+    capsys.readouterr()
+    assert store_cli.main(
+        [
+            "run-annotate",
+            external_id,
+            "--type",
+            "pivot",
+            "--reason",
+            "integration test annotation",
+        ]
+    ) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["event_type"] == "pivot"
     assert result["lifecycle_revision"] >= 1
 
-    # Verify the annotation persisted
-    assert store_cli.main(["run-status", external_id]) == 0
-    status = json.loads(capsys.readouterr().out)
-    assert status["state"] == "created"
-
 
 def test_run_verify_handler_executes_through_service(monkeypatch, capsys):
-    """Verify that research-db run-verify actually invokes the service method.
-
-    Exercises the verify handler path to ensure it returns a valid report
-    even when no blob store is configured (total=0 case).
-    """
     external_id = f"fr_verify_{uuid4().hex}"
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-    # No BLOB_ROOT configured — verify should return total=0 report
     monkeypatch.delenv("BLOB_ROOT", raising=False)
-
-    # Start a run
-    assert (
-        store_cli.main(
-            [
-                "run-start",
-                external_id,
-                "Verify integration test",
-                "--mode",
-                "deterministic_debug",
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()  # discard run-start output
-
-    # Verify the run
+    assert store_cli.main(
+        [
+            "run-start",
+            external_id,
+            "Verify integration test",
+            "--mode",
+            "deterministic_debug",
+        ]
+    ) == 0
+    capsys.readouterr()
     assert store_cli.main(["run-verify", external_id]) == 0
     result = json.loads(capsys.readouterr().out)
     assert "target" in result
     assert "verified_at" in result
     assert result["total"] == 0
     assert result["available"] == 0
-    # N4: file_based_unverified field should be present
     assert "file_based_unverified" in result
 
 
 def test_run_audit_handler_executes_through_service(monkeypatch, capsys):
-    """Verify that research-db run-audit actually invokes the audit service.
-
-    Exercises the audit handler path against a disposable PostgreSQL.
-    The audit will be recorded in PostgreSQL regardless of LLM availability.
-    """
     external_id = f"fr_audit_{uuid4().hex}"
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    # Start a run
-    assert (
-        store_cli.main(
-            [
-                "run-start",
-                external_id,
-                "Audit integration test",
-                "--mode",
-                "autonomous_local",
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()  # discard run-start output
-
-    # Run audit — the audit service records the assessment in PostgreSQL
-    # even if the LLM call fails, it returns a result with status
     assert store_cli.main(
         [
-            "run-audit",
+            "run-start",
             external_id,
-            "--target-hash",
-            "a" * 64,
+            "Audit integration test",
+            "--mode",
+            "autonomous_local",
         ]
+    ) == 0
+    capsys.readouterr()
+    assert store_cli.main(
+        ["run-audit", external_id, "--target-hash", "a" * 64]
     ) in (0, 1)
-    # The handler should have printed a JSON result
     out = capsys.readouterr().out.strip()
-    assert out, "run-audit should produce JSON output"
+    assert out
     result = json.loads(out)
     assert "status" in result or "assessment_id" in result or "error" in result
 
 
 def test_run_compare_handler_executes_through_service(monkeypatch, capsys):
-    """Verify that research-db run-compare actually invokes the legacy adapter.
-
-    Exercises the compare handler path against two runs in PostgreSQL.
-    """
     external_id_a = f"fr_compare_a_{uuid4().hex}"
     external_id_b = f"fr_compare_b_{uuid4().hex}"
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    # Start two runs
-    assert (
-        store_cli.main(
-            ["run-start", external_id_a, "Compare test A", "--mode", "autonomous_local"]
-        )
-        == 0
-    )
-    capsys.readouterr()  # discard first run-start output
-    assert (
-        store_cli.main(
-            ["run-start", external_id_b, "Compare test B", "--mode", "autonomous_local"]
-        )
-        == 0
-    )
-    capsys.readouterr()  # discard second run-start output
-
-    # Compare the two runs
+    assert store_cli.main(
+        ["run-start", external_id_a, "Compare test A", "--mode", "autonomous_local"]
+    ) == 0
+    capsys.readouterr()
+    assert store_cli.main(
+        ["run-start", external_id_b, "Compare test B", "--mode", "autonomous_local"]
+    ) == 0
+    capsys.readouterr()
     assert store_cli.main(["run-compare", external_id_a, external_id_b]) in (0, 1)
     out = capsys.readouterr().out.strip()
-    assert out, "run-compare should produce JSON output"
+    assert out
     result = json.loads(out)
     assert (
         "status" in result
@@ -2365,7 +2161,6 @@ def test_run_compare_handler_executes_through_service(monkeypatch, capsys):
 
 
 def _configure_cli_for_service(monkeypatch, service):
-    """Point CLI service builders at the same derivation config as the fixture."""
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
     monkeypatch.setenv("BLOB_ROOT", str(service.config.blob_root))
     monkeypatch.setenv("EMBEDDING_MODEL", service.config.embedding_model)
@@ -2377,7 +2172,6 @@ def _configure_cli_for_service(monkeypatch, service):
 
 
 def _seed_completed_indexed_asset(service, external_run_id):
-    """Persist one run-scoped asset and mark its queued index jobs complete."""
     manifest = service.ingest_batch(
         f"fixture_{uuid4().hex}",
         "scrape",
@@ -2390,7 +2184,6 @@ def _seed_completed_indexed_asset(service, external_run_id):
         research_run_external_id=external_run_id,
     )
     assert manifest["failure_count"] == 0
-
     run_id = build_run_service(service.config).status(external_id=external_run_id).id
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -2416,32 +2209,21 @@ def _seed_completed_indexed_asset(service, external_run_id):
 
 
 def test_run_finish_handler_executes_through_service(monkeypatch, capsys, service):
-    """Verify that research-db run-finish actually invokes the service method.
-
-    Exercises the finish handler path to ensure idempotent terminal transitions.
-    """
     from research_store.container import build_run_service
 
     external_id = f"fr_finish_{uuid4().hex}"
     _configure_cli_for_service(monkeypatch, service)
-
-    # Start a run
-    assert (
-        store_cli.main(
-            [
-                "run-start",
-                external_id,
-                "Finish integration test",
-                "--mode",
-                "autonomous_local",
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()  # discard run-start output
+    assert store_cli.main(
+        [
+            "run-start",
+            external_id,
+            "Finish integration test",
+            "--mode",
+            "autonomous_local",
+        ]
+    ) == 0
+    capsys.readouterr()
     _seed_completed_indexed_asset(service, external_id)
-
-    # Advance through all states to validating (required before completed)
     svc = build_run_service()
     status = svc.status(external_id=external_id)
     revision = status.lifecycle_revision
@@ -2460,58 +2242,34 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys, servic
             actor_type="integration-test",
         )
         revision += 1
-
-    # Finish the run
-    assert (
-        store_cli.main(
-            [
-                "run-finish",
-                external_id,
-                "--outcome",
-                "satisfied",
-            ]
-        )
-        == 0
-    )
+    assert store_cli.main(
+        ["run-finish", external_id, "--outcome", "satisfied"]
+    ) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["state"] == "completed"
     assert result["terminal"] is True
     assert result["lifecycle_revision"] >= 1
-
-    # Verify terminal state
     assert store_cli.main(["run-status", external_id]) == 0
     status = json.loads(capsys.readouterr().out)
     assert status["state"] == "completed"
 
 
 def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
-    """Verify that finishing a run twice with the same outcome is idempotent.
-
-    The second finish call should preserve the authoritative run identity and
-    lifecycle revision.
-    """
     from research_store.container import build_run_service
 
     external_id = f"fr_finish_idem_{uuid4().hex}"
     _configure_cli_for_service(monkeypatch, service)
-
-    # Start a run
-    assert (
-        store_cli.main(
-            [
-                "run-start",
-                external_id,
-                "Finish idempotency test",
-                "--mode",
-                "autonomous_local",
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()  # discard run-start output
+    assert store_cli.main(
+        [
+            "run-start",
+            external_id,
+            "Finish idempotency test",
+            "--mode",
+            "autonomous_local",
+        ]
+    ) == 0
+    capsys.readouterr()
     _seed_completed_indexed_asset(service, external_id)
-
-    # Advance through all states to validating (required before completed)
     svc = build_run_service()
     status = svc.status(external_id=external_id)
     revision = status.lifecycle_revision
@@ -2530,42 +2288,30 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
             actor_type="integration-test",
         )
         revision += 1
-
-    # Finish the run with a unique idempotency key
     finish_key = f"finish-idem:complete:{external_id}"
-    assert (
-        store_cli.main(
-            [
-                "run-finish",
-                external_id,
-                "--outcome",
-                "satisfied",
-                "--idempotency-key",
-                finish_key,
-            ]
-        )
-        == 0
-    )
+    assert store_cli.main(
+        [
+            "run-finish",
+            external_id,
+            "--outcome",
+            "satisfied",
+            "--idempotency-key",
+            finish_key,
+        ]
+    ) == 0
     first_result = json.loads(capsys.readouterr().out)
     first_revision = first_result["lifecycle_revision"]
     first_run_id = first_result["id"]
-    assert first_result["state"] == "completed"
-    assert first_result["terminal"] is True
-
-    # Finish again with the same outcome — should be idempotent
-    assert (
-        store_cli.main(
-            [
-                "run-finish",
-                external_id,
-                "--outcome",
-                "satisfied",
-                "--idempotency-key",
-                finish_key,
-            ]
-        )
-        == 0
-    )
+    assert store_cli.main(
+        [
+            "run-finish",
+            external_id,
+            "--outcome",
+            "satisfied",
+            "--idempotency-key",
+            finish_key,
+        ]
+    ) == 0
     second_result = json.loads(capsys.readouterr().out)
     assert second_result["state"] == "completed"
     assert second_result["terminal"] is True
@@ -2574,29 +2320,21 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
 
 
 def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
-    """Verify that reopening a finished run transitions it back to created state."""
     from research_store.container import build_run_service
 
     external_id = f"fr_reopen_idem_{uuid4().hex}"
     _configure_cli_for_service(monkeypatch, service)
-
-    # Start a run
-    assert (
-        store_cli.main(
-            [
-                "run-start",
-                external_id,
-                "Reopen idempotency test",
-                "--mode",
-                "autonomous_local",
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()  # discard run-start output
+    assert store_cli.main(
+        [
+            "run-start",
+            external_id,
+            "Reopen idempotency test",
+            "--mode",
+            "autonomous_local",
+        ]
+    ) == 0
+    capsys.readouterr()
     _seed_completed_indexed_asset(service, external_id)
-
-    # Advance through all states to validating (required before completed)
     svc = build_run_service()
     status = svc.status(external_id=external_id)
     revision = status.lifecycle_revision
@@ -2615,162 +2353,72 @@ def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
             actor_type="integration-test",
         )
         revision += 1
-
-    # Finish the run
-    assert (
-        store_cli.main(
-            [
-                "run-finish",
-                external_id,
-                "--outcome",
-                "satisfied",
-            ]
-        )
-        == 0
-    )
+    assert store_cli.main(
+        ["run-finish", external_id, "--outcome", "satisfied"]
+    ) == 0
     finish_result = json.loads(capsys.readouterr().out)
     finish_revision = finish_result["lifecycle_revision"]
-
-    # Reopen the run
-    assert (
-        store_cli.main(
-            [
-                "run-reopen",
-                external_id,
-                "--reason",
-                "need more research",
-            ]
-        )
-        == 0
-    )
+    assert store_cli.main(
+        ["run-reopen", external_id, "--reason", "need more research"]
+    ) == 0
     reopen_result = json.loads(capsys.readouterr().out)
     assert reopen_result["next_state"] == "created"
     assert reopen_result["lifecycle_revision"] == finish_revision + 1
-
-    # Verify the run is back in created state
     assert store_cli.main(["run-status", external_id]) == 0
     status = json.loads(capsys.readouterr().out)
     assert status["state"] == "created"
 
 
 def test_run_annotate_idempotency_same_key(monkeypatch, capsys):
-    """Verify that two annotate calls with the same idempotency key return the same event.
-
-    The second annotate call should return reused=true and the event_id
-    should be identical to the first call.
-    """
     external_id = f"fr_annotate_idem_{uuid4().hex}"
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    # Start a run
-    assert (
-        store_cli.main(
-            [
-                "run-start",
-                external_id,
-                "Annotate idempotency test",
-                "--mode",
-                "autonomous_local",
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()  # discard run-start output
-
-    # Annotate the run
-    assert (
-        store_cli.main(
-            [
-                "run-annotate",
-                external_id,
-                "--type",
-                "pivot",
-                "--reason",
-                "integration test annotation",
-                "--idempotency-key",
-                "annotate:idem:key:1",
-            ]
-        )
-        == 0
-    )
+    assert store_cli.main(
+        [
+            "run-start",
+            external_id,
+            "Annotate idempotency test",
+            "--mode",
+            "autonomous_local",
+        ]
+    ) == 0
+    capsys.readouterr()
+    command = [
+        "run-annotate",
+        external_id,
+        "--type",
+        "pivot",
+        "--reason",
+        "integration test annotation",
+        "--idempotency-key",
+        "annotate:idem:key:1",
+    ]
+    assert store_cli.main(command) == 0
     first_result = json.loads(capsys.readouterr().out)
-    first_event_id = first_result["event_id"]
-    first_revision = first_result["lifecycle_revision"]
-
-    # Annotate again with the same idempotency key
-    assert (
-        store_cli.main(
-            [
-                "run-annotate",
-                external_id,
-                "--type",
-                "pivot",
-                "--reason",
-                "integration test annotation",
-                "--idempotency-key",
-                "annotate:idem:key:1",
-            ]
-        )
-        == 0
-    )
+    assert store_cli.main(command) == 0
     second_result = json.loads(capsys.readouterr().out)
-    assert second_result["event_id"] == first_event_id
-    assert second_result["lifecycle_revision"] == first_revision
+    assert second_result["event_id"] == first_result["event_id"]
+    assert second_result["lifecycle_revision"] == first_result["lifecycle_revision"]
     assert second_result.get("reused") is True
 
 
 def test_run_audit_idempotency_same_target_hash(monkeypatch, capsys):
-    """Verify that two audit calls with the same target_hash return the same assessment.
-
-    The second audit call should be idempotent and return the same assessment_id.
-    """
     external_id = f"fr_audit_idem_{uuid4().hex}"
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
-    # Start a run
-    assert (
-        store_cli.main(
-            [
-                "run-start",
-                external_id,
-                "Audit idempotency test",
-                "--mode",
-                "autonomous_local",
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()  # discard run-start output
-
-    # Run audit with a target hash
-    first_rc = store_cli.main(
+    assert store_cli.main(
         [
-            "run-audit",
+            "run-start",
             external_id,
-            "--target-hash",
-            "a" * 64,
+            "Audit idempotency test",
+            "--mode",
+            "autonomous_local",
         ]
-    )
-    assert first_rc in (0, 1)
-    first_out = capsys.readouterr().out.strip()
-    assert first_out, "run-audit should produce JSON output"
-    first_result = json.loads(first_out)
-
-    # Run audit again with the same target_hash
-    second_rc = store_cli.main(
-        [
-            "run-audit",
-            external_id,
-            "--target-hash",
-            "a" * 64,
-        ]
-    )
-    assert second_rc in (0, 1)
-    second_out = capsys.readouterr().out.strip()
-    assert second_out, "run-audit should produce JSON output"
-    second_result = json.loads(second_out)
-
-    # Both calls should reference the same assessment
+    ) == 0
+    capsys.readouterr()
+    command = ["run-audit", external_id, "--target-hash", "a" * 64]
+    assert store_cli.main(command) in (0, 1)
+    first_result = json.loads(capsys.readouterr().out.strip())
+    assert store_cli.main(command) in (0, 1)
+    second_result = json.loads(capsys.readouterr().out.strip())
     first_assessment_id = first_result.get("assessment_id")
     second_assessment_id = second_result.get("assessment_id")
     assert first_assessment_id == second_assessment_id or (
@@ -2779,9 +2427,7 @@ def test_run_audit_idempotency_same_target_hash(monkeypatch, capsys):
 
 
 def test_run_annotate_unknown_external_id(monkeypatch, capsys):
-    """Verify that annotate with a non-existent external ID fails with a clear error."""
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-
     result = store_cli.main(
         [
             "run-annotate",
@@ -2795,42 +2441,27 @@ def test_run_annotate_unknown_external_id(monkeypatch, capsys):
     assert result != 0
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# P5-06 hierarchical chunking: migration integration tests
-# ---------------------------------------------------------------------------
-
-
 def test_hierarchical_chunk_columns_exist_after_migration():
-    """Verify migration 0025 adds tokenizer_name and parent_block_id columns."""
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """
-            SELECT column_name, column_default, is_nullable
+            """SELECT column_name, column_default, is_nullable
             FROM information_schema.columns
             WHERE table_name = 'chunks'
               AND column_name IN ('tokenizer_name', 'parent_block_id')
-            ORDER BY column_name
-            """
+            ORDER BY column_name"""
         )
         rows = cursor.fetchall()
         col_map = {r[0]: {"default": r[1], "nullable": r[2]} for r in rows}
         assert "tokenizer_name" in col_map
         assert "parent_block_id" in col_map
-        # Both should be nullable (tokenizer_name gets default on existing rows)
         assert col_map["tokenizer_name"]["nullable"] == "YES"
         assert col_map["parent_block_id"]["nullable"] == "YES"
 
 
 def test_hierarchical_chunk_derivation_key_constraint():
-    """Verify the updated chunks_derivation_key includes tokenizer_name."""
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        # Insert a source, snapshot, document, and block
         cursor.execute(
-            """INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id""",
+            "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
             ("https://test-derivation-key.example/",),
         )
         source_id = cursor.fetchone()[0]
@@ -2856,8 +2487,6 @@ def test_hierarchical_chunk_derivation_key_constraint():
             (document_id, "paragraph", 0, "block text"),
         )
         block_id = cursor.fetchone()[0]
-
-        # Insert first chunk
         cursor.execute(
             """INSERT INTO chunks(
                 document_id,first_block_id,last_block_id,ordinal,text,
@@ -2876,35 +2505,32 @@ def test_hierarchical_chunk_derivation_key_constraint():
             ),
         )
         cursor.connection.commit()
-
-        # Try to insert duplicate — should fail
-        with pytest.raises(Exception):  # noqa: B017,SIM117
-            with connect(TEST_DSN) as conn, conn.cursor() as cur:
-                cur.execute(
-                    """INSERT INTO chunks(
-                        document_id,first_block_id,last_block_id,ordinal,text,
-                        content_sha256,chunker_name,chunker_version,tokenizer_name
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (
-                        document_id,
-                        block_id,
-                        block_id,
-                        0,
-                        "chunk text",
-                        "f" * 64,
-                        "hierarchical",
-                        "hierarchical-v1",
-                        "cl100k_base",
-                    ),
-                )
-                conn.commit()
+    with pytest.raises(Exception):  # noqa: B017,SIM117
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,first_block_id,last_block_id,ordinal,text,
+                    content_sha256,chunker_name,chunker_version,tokenizer_name
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (
+                    document_id,
+                    block_id,
+                    block_id,
+                    0,
+                    "chunk text",
+                    "f" * 64,
+                    "hierarchical",
+                    "hierarchical-v1",
+                    "cl100k_base",
+                ),
+            )
+            conn.commit()
 
 
 def test_hierarchical_chunk_parent_block_fk():
-    """Verify parent_block_id FK rejects invalid UUIDs."""
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id""",
+            "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
             ("https://test-parent-fk.example/",),
         )
         source_id = cursor.fetchone()[0]
@@ -2923,7 +2549,6 @@ def test_hierarchical_chunk_parent_block_fk():
             (snapshot_id, "test", "markdown", "v1", "v1", "h" * 64),
         )
         document_id = cursor.fetchone()[0]
-        # Create a block
         cursor.execute(
             """INSERT INTO document_blocks(
                 document_id,block_type,ordinal,text
@@ -2932,60 +2557,53 @@ def test_hierarchical_chunk_parent_block_fk():
         )
         valid_block_id = cursor.fetchone()[0]
         connection.commit()
-
-        # Insert chunk with valid parent_block_id — should succeed
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO chunks(
+                document_id,first_block_id,last_block_id,ordinal,text,
+                content_sha256,chunker_name,chunker_version,tokenizer_name,
+                parent_block_id
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (
+                document_id,
+                valid_block_id,
+                valid_block_id,
+                0,
+                "chunk with parent",
+                "i" * 64,
+                "hierarchical",
+                "hierarchical-v1",
+                "cl100k_base",
+                valid_block_id,
+            ),
+        )
+        conn.commit()
+    invalid_uuid = str(uuid4())
+    with pytest.raises(Exception):  # noqa: B017,SIM117
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,first_block_id,last_block_id,ordinal,text,
                     content_sha256,chunker_name,chunker_version,tokenizer_name,
                     parent_block_id
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (
                     document_id,
                     valid_block_id,
                     valid_block_id,
-                    0,
-                    "chunk with parent",
-                    "i" * 64,
+                    1,
+                    "chunk with invalid parent",
+                    "j" * 64,
                     "hierarchical",
                     "hierarchical-v1",
                     "cl100k_base",
-                    valid_block_id,
+                    invalid_uuid,
                 ),
             )
             conn.commit()
 
-        # Try invalid parent_block_id — should fail
-        invalid_uuid = str(uuid4())
-        with pytest.raises(Exception):  # noqa: B017,SIM117
-            with connect(TEST_DSN) as conn, conn.cursor() as cur:
-                cur.execute(
-                    """INSERT INTO chunks(
-                        document_id,first_block_id,last_block_id,ordinal,text,
-                        content_sha256,chunker_name,chunker_version,tokenizer_name,
-                        parent_block_id
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (
-                        document_id,
-                        valid_block_id,
-                        valid_block_id,
-                        1,
-                        "chunk with invalid parent",
-                        "j" * 64,
-                        "hierarchical",
-                        "hierarchical-v1",
-                        "cl100k_base",
-                        invalid_uuid,
-                    ),
-                )
-                conn.commit()
-
 
 def test_hierarchical_chunk_persist_ingest_sets_parent_block_id():
-    """Verify persist_ingest produces non-NULL parent_block_id when blocks exist."""
-    from dataclasses import replace
-
     from research_store.container import build_service
     from research_store.domain import IngestRequest
 
@@ -3007,8 +2625,6 @@ def test_hierarchical_chunk_persist_ingest_sets_parent_block_id():
     )
     result = svc.ingest(request)
     assert result.chunk_ids
-
-    # Verify parent_block_id is non-NULL for all chunks
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         placeholders = ",".join(["%s"] * len(result.chunk_ids))
         cursor.execute(
@@ -3025,11 +2641,9 @@ def test_hierarchical_chunk_persist_ingest_sets_parent_block_id():
 
 
 def test_hierarchical_chunk_migration_preserves_legacy_data():
-    """Verify existing structural chunks survive migration to 0025."""
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        # Create legacy-style data (pre-migration)
         cursor.execute(
-            """INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id""",
+            "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
             ("https://test-legacy.example/",),
         )
         source_id = cursor.fetchone()[0]
@@ -3055,8 +2669,6 @@ def test_hierarchical_chunk_migration_preserves_legacy_data():
             (document_id, "paragraph", 0, "legacy block"),
         )
         block_id = cursor.fetchone()[0]
-
-        # Insert legacy chunk (no tokenizer_name, no parent_block_id)
         cursor.execute(
             """INSERT INTO chunks(
                 document_id,first_block_id,last_block_id,ordinal,text,
@@ -3075,11 +2687,7 @@ def test_hierarchical_chunk_migration_preserves_legacy_data():
         )
         legacy_chunk_id = cursor.fetchone()[0]
         cursor.connection.commit()
-
-    # Migrate to head (applies 0025)
     assert migrate(TEST_DSN) >= 25
-
-    # Verify legacy chunk still exists and is queryable
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT chunker_name, chunker_version, tokenizer_name,
@@ -3089,16 +2697,12 @@ def test_hierarchical_chunk_migration_preserves_legacy_data():
         )
         row = cursor.fetchone()
         assert row is not None
-        assert row[0] == "structural"  # chunker_name
-        assert row[1] == "structural-v1"  # chunker_version
-        # tokenizer_name should be NULL (migration sets default on new rows only)
-        # parent_block_id should be NULL (legacy chunks have no parent)
-        # first_block_id should still point to the block
+        assert row[0] == "structural"
+        assert row[1] == "structural-v1"
         assert row[4] == block_id
 
 
 def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
-    """Verify that retrieval stage events are persisted in batch and ordered correctly by stage."""
     from types import SimpleNamespace
 
     from research_store.domain import IngestRequest
@@ -3106,10 +2710,6 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
 
     with service.uow_factory() as uow:
         run_id = uow.start_run("trace persistence test", {})
-
-    # Create a document with multiple chunks via the ingest path so real
-    # chunk_ids exist.  Two heading sections with enough text each exceed the
-    # 1,000-token chunk limit, guaranteeing n >= 2.
     asset = service.ingest(
         IngestRequest(
             "https://trace.example/test",
@@ -3126,7 +2726,6 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
             return {"active": "test_collection"}
 
         def search(self, *_args):
-            # Return one result per chunk from semantic
             return [
                 {
                     "id": str(uuid4()),
@@ -3145,7 +2744,6 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
         chunker_version="structural-v1",
         embedding_fingerprint="abc",
     )
-
     corpus_service = CorpusService(
         config,
         service.uow_factory,
@@ -3153,34 +2751,20 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
         index=IntegrationTestIndex(),
         embedder=lambda _q: [0.1],
     )
-
-    # Run a search with a candidate limit of 1
-    # Both chunks are returned by semantic. Lexical doesn't run because requested_mode="semantic"
     execution, _results = corpus_service.search_assets(
         "test trace ordering",
         candidate_limit=1,
         run_id=run_id,
         requested_mode="semantic",
     )
-
-    # Verify trace order and rejection reasons
     trace = corpus_service.get_retrieval_trace(execution.execution_id)
-
-    # We should have N semantic and N fused events (N = number of chunks)
-    # semantic events come first, then fused events
     n = len(chunk_ids)
     assert len(trace) == 2 * n
-
-    # Verify ordering: semantic should come before fused
     for i in range(n):
         assert trace[i]["stage"] == "semantic"
     for i in range(n, 2 * n):
         assert trace[i]["stage"] == "fused"
-
-    # Verify candidate-limit rejection on fused entries.
-    # With candidate_limit=1 the first fused event (trace[n]) is selected,
-    # and the second fused event (trace[n + 1]) is rejected.
-    assert n >= 2, "fixture must produce at least 2 chunks"
+    assert n >= 2
     assert trace[n]["selected"] is True
     assert trace[n]["rejection_reason"] is None
     assert trace[n + 1]["selected"] is False
@@ -3188,30 +2772,13 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
 
 
 def test_validation_stage_persistence(service):
-    """Verify that the ``validation`` synthesis stage can be persisted in PostgreSQL.
-
-    This is the regression test for the P0 defect identified in the Phase 7
-    release gate evaluation (issue #70): migration 0031 created the
-    ``synthesis_stages`` table with a CHECK constraint that only allowed
-    ``("outline", "binding", "draft", "citation_pass")``, which meant the
-    fifth deterministic ``validation`` stage could never be persisted.
-
-    This test inserts a ``validation`` stage record directly through the
-    unit-of-work to confirm the database constraint and the Python domain
-    model both accept it.
-    """
-    from uuid import uuid4
-
     from research_store.domain import SynthesisStageRecord
 
     now = _utcnow()
     stage_id = uuid4()
-
-    # --- Domain model validation ---
-    # The frozenset _SYNTHESIS_STAGE_NAMES must include "validation".
     record = SynthesisStageRecord(
         id=stage_id,
-        run_id=uuid4(),  # placeholder, overwritten below
+        run_id=uuid4(),
         stage_name="validation",
         stage_status="completed",
         semantic_call_id=None,
@@ -3236,16 +2803,10 @@ def test_validation_stage_persistence(service):
         created_at=now,
         updated_at=now,
     )
-    # __post_init__ should not raise
     assert record.stage_name == "validation"
-
-    # --- Database CHECK constraint ---
-    # Create a real run so the FK constraint is satisfied.
     with service.uow_factory() as uow:
         run_id = uow.start_run("validation stage persistence test", {})
-
     with service.uow_factory() as uow:
-        # Insert via the raw dict path (what ReportArtifactService uses).
         uow.insert_synthesis_stage(
             {
                 "id": stage_id,
@@ -3258,25 +2819,13 @@ def test_validation_stage_persistence(service):
                 "model_name": "local",
                 "prompt_version": "synthesis-v1",
                 "schema_version": 1,
-                "artifact": {
-                    "report_hash": "abc123",
-                    "current_packet_revision": 1,
-                    "stale_packet": False,
-                    "validation_status": "valid",
-                    "is_complete": True,
-                    "claim_manifest": [],
-                    "validation_errors_count": 0,
-                    "validation_warnings_count": 0,
-                    "summary": "All claims supported.",
-                },
+                "artifact": record.artifact,
                 "error": None,
                 "attempts": 1,
                 "created_at": now,
                 "updated_at": now,
             }
         )
-
-        # Retrieve the record back.
         retrieved = uow.get_synthesis_stage(run_id, "validation")
         assert retrieved is not None
         assert retrieved["stage_name"] == "validation"
@@ -3285,33 +2834,14 @@ def test_validation_stage_persistence(service):
 
 
 def _utcnow():
-    """Return a timezone-aware UTC datetime."""
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc)
 
 
-# ---------------------------------------------------------------------------
-# C03: Index rebuild and cutover recovery (issue #136)
-# ---------------------------------------------------------------------------
-
-
 class TestIndexRebuildRecovery:
-    """End-to-end tests for index rebuild, reconciliation, and recovery.
-
-    These tests verify that:
-    - index-build creates jobs for every eligible manifest
-    - scheduled counts reconcile with actual pending jobs
-    - doctor/index-reconcile detect discrepancies
-    - interrupted builds can resume without duplicate work
-    - alias cutover only happens after complete verification
-    """
-
     def setup_method(self):
-        """Truncate test data between tests to avoid accumulation."""
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
-            # Delete in reverse dependency order to respect foreign keys
             cur.execute("DELETE FROM index_point_counts;")
             cur.execute("DELETE FROM index_jobs;")
             cur.execute("DELETE FROM embedding_manifests;")
@@ -3324,7 +2854,6 @@ class TestIndexRebuildRecovery:
             cur.execute("DELETE FROM asset_snapshots;")
             cur.execute("DELETE FROM sources;")
             conn.commit()
-
         import contextlib
 
         import httpx
@@ -3336,23 +2865,14 @@ class TestIndexRebuildRecovery:
                     httpx.delete(f"http://localhost:6333/collections/{c['name']}")
 
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
-        """Every eligible chunk gets a manifest AND a pending job."""
-
         from research_store.cli import _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
 
-        # Insert test chunks and documents
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
-            # Insert source
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://recovery.example/test",),
             )
             source_id = cur.fetchone()[0]
-
-            # Insert snapshot
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
@@ -3360,8 +2880,6 @@ class TestIndexRebuildRecovery:
                 (source_id, "https://recovery.example/test", "a" * 64),
             )
             snapshot_id = cur.fetchone()[0]
-
-            # Insert document
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -3377,26 +2895,20 @@ class TestIndexRebuildRecovery:
                 ),
             )
             document_id = cur.fetchone()[0]
-
-            # Insert 3 chunks
-            chunk_ids = []
             for i in range(3):
                 cur.execute(
                     """INSERT INTO chunks(
                         document_id,ordinal,text,content_sha256,chunker_name,chunker_version
-                    ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                    ) VALUES (%s,%s,%s,%s,%s,%s)""",
                     (
                         document_id,
                         i,
                         f"chunk text {i}",
-                        f"{'c' * 64}",
+                        "c" * 64,
                         "structural",
                         "structural-v1",
                     ),
                 )
-                chunk_ids.append(cur.fetchone()[0])
-
-        # Run index-build
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
@@ -3406,20 +2918,14 @@ class TestIndexRebuildRecovery:
             chunker_version="structural-v1",
         )
         result = _index_build(config)
-
-        # Verify manifests and jobs were created
         assert result["selected_chunks"] == 3
         assert result["scheduled"] == 3
-
-        # Verify all 3 manifests exist
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT count(*) FROM embedding_manifests WHERE index_definition_id=%s",
                 (result["index_definition"]["id"],),
             )
             assert cur.fetchone()[0] == 3
-
-            # Verify all 3 jobs are pending
             cur.execute(
                 """SELECT count(*) FROM index_jobs
                 WHERE index_definition_id=%s AND status='pending'""",
@@ -3427,31 +2933,9 @@ class TestIndexRebuildRecovery:
             )
             assert cur.fetchone()[0] == 3
 
-            # Verify scheduled == pending
-            cur.execute(
-                """SELECT count(*) FROM index_jobs
-                WHERE index_definition_id=%s AND status='pending'
-                AND manifest_id IN (
-                    SELECT id FROM embedding_manifests
-                    WHERE index_definition_id=%s
-                )""",
-                (
-                    result["index_definition"]["id"],
-                    result["index_definition"]["id"],
-                ),
-            )
-            assert cur.fetchone()[0] == 3
-
     def test_index_build_idempotent_resume_no_duplicates(self, service):
-        """Running index-build twice does not create duplicate jobs."""
-
         from research_store.cli import _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
@@ -3486,7 +2970,6 @@ class TestIndexRebuildRecovery:
                 ) VALUES (%s,0,%s,%s,%s,%s)""",
                 (doc_id, "idempotent chunk", "f" * 64, "structural", "structural-v1"),
             )
-
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
@@ -3495,15 +2978,9 @@ class TestIndexRebuildRecovery:
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # First run
         result1 = _index_build(config)
         assert result1["selected_chunks"] == 1
         assert result1["scheduled"] == 1
-
-        # Simulate an exhausted job. An explicit operator-authorized rebuild
-        # must restore a fresh attempt budget; otherwise the next claim marks
-        # the pending row dead again without doing any work.
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """UPDATE index_jobs SET status='dead',attempt_count=5,
@@ -3517,16 +2994,9 @@ class TestIndexRebuildRecovery:
                    WHERE index_definition_id=%s""",
                 (result1["index_definition"]["id"],),
             )
-
-        # Second run — should be idempotent: no duplicate jobs created.
-        # The manifest is still pending and the chunk is not in Qdrant,
-        # so it is requeued (scheduled == 1), but the INSERT uses
-        # ON CONFLICT DO NOTHING so only one job row exists.
         result2 = _index_build(config)
         assert result2["selected_chunks"] == 1
-        assert result2["scheduled"] == 1  # Requeued, but no duplicate job
-
-        # Verify only one job exists and its retry budget was reset.
+        assert result2["scheduled"] == 1
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT count(*),min(status),min(attempt_count) FROM index_jobs
@@ -3539,16 +3009,8 @@ class TestIndexRebuildRecovery:
             assert attempt_count == 0
 
     def test_index_build_resume_interrupted_build(self, service):
-        """Index build requeues every manifest whose physical point is absent,
-        including a manifest incorrectly marked complete, without duplicate jobs."""
-
         from research_store.cli import _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data with 2 chunks
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
@@ -3577,7 +3039,6 @@ class TestIndexRebuildRecovery:
                 ),
             )
             doc_id = cur.fetchone()[0]
-            # Insert 2 chunks
             for i in range(2):
                 cur.execute(
                     """INSERT INTO chunks(
@@ -3592,7 +3053,6 @@ class TestIndexRebuildRecovery:
                         "structural-v1",
                     ),
                 )
-
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
@@ -3601,13 +3061,9 @@ class TestIndexRebuildRecovery:
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # First run — creates 2 manifests and 2 jobs
         result1 = _index_build(config)
         assert result1["selected_chunks"] == 2
         assert result1["scheduled"] == 2
-
-        # Simulate interrupted build: mark one manifest as complete, leave one pending
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT id FROM embedding_manifests
@@ -3620,32 +3076,15 @@ class TestIndexRebuildRecovery:
                 WHERE id=%s""",
                 (complete_manifest_id,),
             )
-            # Also mark the corresponding job as complete
             cur.execute(
                 """UPDATE index_jobs SET status='complete',completed_at=now()
                 WHERE manifest_id=%s""",
                 (complete_manifest_id,),
             )
-
-            # Verify state: 1 complete, 1 pending
-            cur.execute(
-                """SELECT index_status, count(*) FROM embedding_manifests
-                WHERE index_definition_id=%s GROUP BY index_status""",
-                (result1["index_definition"]["id"],),
-            )
-            status_counts = dict(cur.fetchall())
-            assert status_counts.get("complete") == 1
-            assert status_counts.get("pending") == 1
-
-        # Re-run index-build. The manifest marked complete has no
-        # corresponding physical Qdrant point, so both manifests must be
-        # requeued rather than trusting PostgreSQL completion alone.
         result2 = _index_build(config)
         assert result2["selected_chunks"] == 2
         assert result2["scheduled"] == 2
         assert result2["missing_points"] == 2
-
-        # Verify: still only 2 jobs total (no duplicates)
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT count(*) FROM index_jobs
@@ -3653,8 +3092,6 @@ class TestIndexRebuildRecovery:
                 (result1["index_definition"]["id"],),
             )
             assert cur.fetchone()[0] == 2
-
-            # Physical absence invalidates the false-complete PostgreSQL state.
             cur.execute(
                 """SELECT m.index_status,j.status
                 FROM embedding_manifests m
@@ -3665,16 +3102,8 @@ class TestIndexRebuildRecovery:
             assert cur.fetchone() == ("pending", "pending")
 
     def test_index_build_recreates_missing_jobs(self, service):
-        """When a job is deleted but the manifest remains, index-build
-        recreates the job rather than raising an error."""
-
         from research_store.cli import _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
@@ -3709,7 +3138,6 @@ class TestIndexRebuildRecovery:
                 ) VALUES (%s,0,%s,%s,%s,%s)""",
                 (doc_id, "recon chunk", "i" * 64, "structural", "structural-v1"),
             )
-
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
@@ -3718,21 +3146,8 @@ class TestIndexRebuildRecovery:
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Normal run — creates 1 manifest and 1 job
         result = _index_build(config)
         assert result["scheduled"] == 1
-
-        # Verify job exists
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
-            cur.execute(
-                """SELECT count(*) FROM index_jobs
-                WHERE index_definition_id=%s AND status='pending'""",
-                (result["index_definition"]["id"],),
-            )
-            assert cur.fetchone()[0] == 1
-
-        # Manually corrupt: delete the job but keep the manifest
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """DELETE FROM index_jobs
@@ -3742,12 +3157,8 @@ class TestIndexRebuildRecovery:
                 )""",
                 (result["index_definition"]["id"],),
             )
-
-        # Re-run — should recreate the job (idempotent rebuild)
         result2 = _index_build(config)
-        assert result2["scheduled"] == 1  # Requeued because not in Qdrant
-
-        # Verify the job was recreated
+        assert result2["scheduled"] == 1
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT count(*) FROM index_jobs
@@ -3757,15 +3168,8 @@ class TestIndexRebuildRecovery:
             assert cur.fetchone()[0] == 1
 
     def test_index_reconcile_reports_discrepancies(self, service):
-        """The index-reconcile command reports discrepancies between
-        manifests, jobs, and Qdrant points."""
-        from research_store.cli import _index_reconcile
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from research_store.cli import _index_build, _index_reconcile
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data with a manifest that has no job
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
@@ -3800,7 +3204,6 @@ class TestIndexRebuildRecovery:
                 ) VALUES (%s,0,%s,%s,%s,%s)""",
                 (doc_id, "reconcile chunk", "l" * 64, "structural", "structural-v1"),
             )
-
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
@@ -3808,13 +3211,7 @@ class TestIndexRebuildRecovery:
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Run index-build to create a clean state
-        from research_store.cli import _index_build
-
         result = _index_build(config)
-
-        # Corrupt: delete a job to create a discrepancy
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """DELETE FROM index_jobs
@@ -3825,21 +3222,13 @@ class TestIndexRebuildRecovery:
                 )""",
                 (result["index_definition"]["id"],),
             )
-
-        # Reconcile should detect the discrepancy
         reconcile_result = _index_reconcile(config)
         assert reconcile_result["ok"] is False
         assert len(reconcile_result["discrepancies"]) > 0
 
     def test_doctor_includes_index_reconcile(self, service):
-        """The doctor command includes index reconciliation checks."""
-        from research_store.cli import _doctor
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from research_store.cli import _doctor, _index_build
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
@@ -3874,7 +3263,6 @@ class TestIndexRebuildRecovery:
                 ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
                 (doc_id, "doctor chunk", "o" * 64, "structural", "structural-v1"),
             )
-
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
@@ -3882,28 +3270,15 @@ class TestIndexRebuildRecovery:
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Run index-build first
-        from research_store.cli import _index_build
-
         _index_build(config)
-
-        # Doctor should include index_reconcile
         checks, _failed = _doctor(config)
         assert "index_reconcile" in checks
         assert checks["index_reconcile"]["ok"] is True
         assert checks["index_reconcile"]["total_active_chunks"] >= 1
 
     def test_index_reconcile_repair_flag(self, service):
-        """The --repair flag re-runs index-build for definitions with
-        discrepancies and reports what was repaired."""
         from research_store.cli import _index_build, _index_reconcile
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
@@ -3938,7 +3313,6 @@ class TestIndexRebuildRecovery:
                 ) VALUES (%s,0,%s,%s,%s,%s)""",
                 (doc_id, "repair chunk", "r" * 64, "structural", "structural-v1"),
             )
-
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
@@ -3946,12 +3320,8 @@ class TestIndexRebuildRecovery:
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Run index-build to create a clean state
         result = _index_build(config)
         assert result["scheduled"] == 1
-
-        # Corrupt: delete a job to create a discrepancy
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """DELETE FROM index_jobs
@@ -3962,30 +3332,22 @@ class TestIndexRebuildRecovery:
                 )""",
                 (result["index_definition"]["id"],),
             )
-
-        # Without repair: should detect discrepancy
         reconcile_result = _index_reconcile(config, repair=False)
         assert reconcile_result["ok"] is False
-        assert len(reconcile_result["discrepancies"]) > 0
+        assert reconcile_result["discrepancies"]
         assert reconcile_result["repaired"] == []
-
-        # With repair: should re-run index-build and repair
         reconcile_result = _index_reconcile(config, repair=True)
         assert reconcile_result["ok"] is True
-        assert len(reconcile_result["repaired"]) > 0
-        # Verify the repair actually resolved the discrepancy
+        assert reconcile_result["repaired"]
         reconcile_result = _index_reconcile(config, repair=False)
         assert reconcile_result["ok"] is True
-        assert len(reconcile_result["discrepancies"]) == 0
+        assert reconcile_result["discrepancies"] == []
 
     def test_index_reconcile_repair_requeues_missing_points_and_deletes_orphans(
         self, service
     ):
         from research_store.cli import _index_build, _index_reconcile, _qdrant
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
@@ -3996,11 +3358,7 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (
-                    source_id,
-                    "https://physical-drift.example/test",
-                    "1" * 64,
-                ),
+                (source_id, "https://physical-drift.example/test", "1" * 64),
             )
             snapshot_id = cur.fetchone()[0]
             cur.execute(
@@ -4032,7 +3390,6 @@ class TestIndexRebuildRecovery:
                 ),
             )
             chunk_id = cur.fetchone()[0]
-
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
@@ -4055,7 +3412,6 @@ class TestIndexRebuildRecovery:
                 WHERE index_definition_id=%s""",
                 (definition["id"],),
             )
-
         index = _qdrant(
             config,
             definition["physical_collection"],
@@ -4076,19 +3432,16 @@ class TestIndexRebuildRecovery:
                 }
             ]
         )
-
         before = _index_reconcile(config, repair=False)
         assert before["ok"] is False
         collection = before["qdrant"]["collections"][definition["physical_collection"]]
         assert collection["coverage"] == {"missing": 1, "orphaned": 1}
-
         repaired = _index_reconcile(config, repair=True)
         action = repaired["repair_actions"][0]
         assert action["scheduled"] == 1
         assert action["missing_points"] == 1
         assert action["deleted_orphaned"] == 1
         assert repaired["repaired"] == [str(definition["id"])]
-
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT m.index_status,j.status
@@ -4104,14 +3457,8 @@ class TestIndexRebuildRecovery:
         }
 
     def test_index_point_counts_cached(self, service):
-        """After index-build, the Qdrant point count is cached in PostgreSQL."""
         from research_store.cli import _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
@@ -4146,7 +3493,6 @@ class TestIndexRebuildRecovery:
                 ) VALUES (%s,0,%s,%s,%s,%s)""",
                 (doc_id, "cache chunk", "u" * 64, "structural", "structural-v1"),
             )
-
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
@@ -4154,11 +3500,7 @@ class TestIndexRebuildRecovery:
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Run index-build
         result = _index_build(config)
-
-        # Verify point count was cached
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT point_count,last_verified_at
@@ -4167,18 +3509,12 @@ class TestIndexRebuildRecovery:
             )
             row = cur.fetchone()
             assert row is not None
-            assert row[0] == 1  # One chunk indexed
-            assert row[1] is not None  # Has a timestamp
+            assert row[0] == 1
+            assert row[1] is not None
 
     def test_index_reconcile_reads_from_cache(self, service):
-        """_index_reconcile reads cached point counts from PostgreSQL."""
         from research_store.cli import _index_build, _index_reconcile
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
@@ -4219,7 +3555,6 @@ class TestIndexRebuildRecovery:
                     "structural-v1",
                 ),
             )
-
         config = replace(
             StoreConfig.from_env(),
             database_url=TEST_DSN,
@@ -4227,14 +3562,9 @@ class TestIndexRebuildRecovery:
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Run index-build to create a clean state with cached point count
         _index_build(config)
-
-        # Reconcile should include cached_point_count in its output
         reconcile_result = _index_reconcile(config, repair=False)
         assert reconcile_result["ok"] is True
-        # The qdrant.collections should include cached_point_count
         for collection_info in reconcile_result["qdrant"]["collections"].values():
             assert "cached_point_count" in collection_info
             assert collection_info["cached_point_count"] == 1
