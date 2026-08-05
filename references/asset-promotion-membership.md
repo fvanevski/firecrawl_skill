@@ -37,11 +37,21 @@ rejected. Once an attempt supports an `extracted` event, the status, completion
 time, and output digests that support that immutable provenance cannot be
 rewritten.
 
+A candidate identifies a discovery target, not one permanently mutable asset.
+The first extraction attempt consumes the candidate's initial `discovered`
+subject. If the same candidate is extracted again after that subject has left
+`discovered`, PostgreSQL creates a distinct promotion subject owned by the new
+extraction attempt. A later successful snapshot therefore receives a new subject
+and event chain; the prior subject, snapshot identity, and append-only events are
+never rebound or rewritten. Multiple retained snapshots from one candidate remain
+separately queryable and may be admitted or rejected independently.
+
 A legacy or direct authoritative ingestion path may persist the content-addressed
 snapshot in the same transaction that links it to the run. In that case, the
 retention trigger accepts the linked snapshot itself as output evidence only when
 the linked extraction attempt is finalized as successful and the snapshot has a
-content digest, blob URI, and positive byte length. It then records the explicit
+content digest, blob URI, and positive byte length. It resolves the distinct
+promotion subject owned by that exact attempt, then records the explicit
 `extracted` event before `retained`; it does not skip or synthesize either stage.
 
 Linking the resulting snapshot to the run establishes `retained`. Extraction
@@ -120,7 +130,8 @@ requires a forward repair or restoration from a PostgreSQL backup.
 
 The issue-specific suite exercises the production extraction service rather
 than a direct parser or constant seam. It covers successful, failed, partial,
-and cancelled completion; immutable successful provenance; invalid stage skips;
+and cancelled completion; immutable successful provenance; repeated extraction
+of one candidate into distinct subjects and snapshots; invalid stage skips;
 PostgreSQL rejection of false member/seal hashes and duplicate chunks;
 idempotent sealing; exact checkpoint binding; explicit reopen/reseal CAS;
 deterministic race orderings; interruption recovery; and pre-0040 compatibility.

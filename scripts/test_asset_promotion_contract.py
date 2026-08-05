@@ -120,6 +120,16 @@ def test_extraction_stops_before_evidence_and_completion_membership():
     assert "guard_extraction_attempt_after_promotion" in source
 
 
+def test_candidate_retries_preserve_distinct_attempt_owned_subjects():
+    source = _migration_source()
+    assert "run_asset_promotion_subject_candidate_idx" in source
+    assert "run_asset_promotion_subject_candidate_uk" not in source
+    assert "subject.current_stage='discovered'" in source
+    assert "subject.actor_identifier=attempt_actor_identifier" in source
+    assert "extraction attempt % has no attempt-owned promotion subject" in source
+    assert "A new extraction established a distinct subject" in source
+
+
 def test_seal_binds_only_completion_critical_assets_and_exact_chunks():
     service = _service_source()
     checkpoint = _checkpoint_source()
@@ -205,4 +215,5 @@ def test_reference_documents_authority_stages_reopen_and_compatibility():
     assert "legacy_unstructured" in reference
     assert "No earlier stage" in reference
     assert "finalized successful extraction" in reference
+    assert "distinct promotion subject" in reference
     assert "recompute and verify" in reference

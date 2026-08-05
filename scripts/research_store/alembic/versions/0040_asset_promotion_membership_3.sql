@@ -18,7 +18,7 @@
             'system','search-candidate-trigger','candidate-discovery-v1',
             current_lifecycle_revision,'candidate_persisted',
             'PostgreSQL search candidate was persisted',NEW.created_at,NEW.created_at
-          ) ON CONFLICT DO NOTHING;
+          );
           RETURN NEW;
         END;
         $function$;
@@ -49,19 +49,40 @@
               OR NEW.normalized_blob_sha256 IS NOT NULL
             );
 
-          SELECT * INTO subject_row FROM run_asset_promotion_subjects
-           WHERE run_id=NEW.run_id AND candidate_id=NEW.candidate_id FOR UPDATE;
-          IF NOT FOUND THEN
-            INSERT INTO run_asset_promotion_subjects(
-              run_id,candidate_id,current_stage,stage_revision,provenance,
-              actor_type,actor_identifier,policy_version,lifecycle_revision,
-              reason_code,reason
-            ) VALUES(
-              NEW.run_id,NEW.candidate_id,'discovered',0,'authoritative',
-              'system',attempt_actor_identifier,'candidate-discovery-v1',
-              current_lifecycle_revision,'subject_initialized_for_new_extraction',
-              'A new extraction established the subject; no history was inferred'
-            ) RETURNING * INTO subject_row;
+          IF TG_OP='UPDATE' THEN
+            SELECT subject.* INTO subject_row
+              FROM run_asset_promotion_subjects subject
+             WHERE subject.run_id=NEW.run_id
+               AND subject.candidate_id=NEW.candidate_id
+               AND subject.actor_identifier=attempt_actor_identifier
+             ORDER BY subject.created_at DESC,subject.id DESC
+             LIMIT 1 FOR UPDATE;
+            IF NOT FOUND THEN
+              RAISE EXCEPTION
+                'extraction attempt % has no attempt-owned promotion subject',NEW.id
+                USING ERRCODE='23514';
+            END IF;
+          ELSE
+            SELECT subject.* INTO subject_row
+              FROM run_asset_promotion_subjects subject
+             WHERE subject.run_id=NEW.run_id
+               AND subject.candidate_id=NEW.candidate_id
+               AND subject.snapshot_id IS NULL
+               AND subject.current_stage='discovered'
+             ORDER BY subject.created_at,subject.id
+             LIMIT 1 FOR UPDATE;
+            IF NOT FOUND THEN
+              INSERT INTO run_asset_promotion_subjects(
+                run_id,candidate_id,current_stage,stage_revision,provenance,
+                actor_type,actor_identifier,policy_version,lifecycle_revision,
+                reason_code,reason
+              ) VALUES(
+                NEW.run_id,NEW.candidate_id,'discovered',0,'authoritative',
+                'system',attempt_actor_identifier,'candidate-discovery-v1',
+                current_lifecycle_revision,'subject_initialized_for_new_extraction',
+                'A new extraction established a distinct subject; no history was inferred'
+              ) RETURNING * INTO subject_row;
+            END IF;
           END IF;
 
           IF subject_row.current_stage='discovered' THEN
@@ -164,10 +185,16 @@
               ON attempt.id=snapshot.extraction_attempt_id
            WHERE snapshot.id=NEW.snapshot_id AND attempt.run_id=NEW.run_id;
 
-          IF resolved_candidate_id IS NOT NULL THEN
-            SELECT * INTO resolved_subject FROM run_asset_promotion_subjects
-             WHERE run_id=NEW.run_id AND candidate_id=resolved_candidate_id
-             FOR UPDATE;
+          IF resolved_attempt_id IS NOT NULL THEN
+            SELECT subject.* INTO resolved_subject
+              FROM run_asset_promotion_subjects subject
+             WHERE subject.run_id=NEW.run_id
+               AND subject.candidate_id=resolved_candidate_id
+               AND subject.actor_identifier=format(
+                 'extraction-attempt:%s',resolved_attempt_id
+               )
+             ORDER BY subject.created_at DESC,subject.id DESC
+             LIMIT 1 FOR UPDATE;
           END IF;
 
           IF resolved_subject.id IS NULL THEN
@@ -191,7 +218,8 @@
              WHERE id=resolved_subject.id;
           ELSIF resolved_subject.snapshot_id<>NEW.snapshot_id
              OR resolved_subject.role<>NEW.role THEN
-            RAISE EXCEPTION 'candidate promotion subject is linked to another run asset'
+            RAISE EXCEPTION
+              'extraction-attempt promotion subject is linked to another run asset'
               USING ERRCODE='23514';
           END IF;
 

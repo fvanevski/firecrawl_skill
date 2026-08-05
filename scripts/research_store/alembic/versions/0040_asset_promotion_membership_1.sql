@@ -30,9 +30,10 @@
             OR (snapshot_id IS NOT NULL AND role IS NOT NULL)
           )
         );
-        CREATE UNIQUE INDEX run_asset_promotion_subject_candidate_uk
-          ON run_asset_promotion_subjects(run_id,candidate_id)
-          WHERE candidate_id IS NOT NULL;
+        CREATE INDEX run_asset_promotion_subject_candidate_idx
+          ON run_asset_promotion_subjects(
+            run_id,candidate_id,created_at,id
+          ) WHERE candidate_id IS NOT NULL;
         CREATE UNIQUE INDEX run_asset_promotion_subject_snapshot_uk
           ON run_asset_promotion_subjects(run_id,snapshot_id,role)
           WHERE snapshot_id IS NOT NULL;
