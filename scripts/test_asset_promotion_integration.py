@@ -2,9 +2,31 @@
 
 from __future__ import annotations
 
-# ruff: noqa: F403, F405
+from dataclasses import replace
+from uuid import UUID, uuid4
 
-from asset_promotion_test_support import *  # noqa: F403
+import pytest
+
+from asset_promotion_test_support import (
+    TEST_DSN,
+    AssetPromotionService,
+    IndexCheckpointService,
+    StoreConfig,
+    _advance_to_indexing,
+    _canonical_sha256,
+    _insert_candidate,
+    _mark_run_index_complete,
+    _member_payload,
+    _promote,
+    _request,
+    _seed_retained_assets,
+    _subject_id_for_snapshot,
+    build_extraction_service,
+    build_run_service,
+    build_service,
+    connect,
+    promotion_config,
+)
 
 
 def test_full_stage_path_is_explicit_and_extraction_does_not_auto_admit(
@@ -12,6 +34,7 @@ def test_full_stage_path_is_explicit_and_extraction_does_not_auto_admit(
 ):
     runs = build_run_service(promotion_config)
     corpus = build_service(promotion_config)
+    extraction = build_extraction_service(promotion_config)
     status = runs.create(
         "full promotion path",
         f"fr_full_promotion_{uuid4().hex}",
@@ -32,25 +55,30 @@ def test_full_stage_path_is_explicit_and_extraction_does_not_auto_admit(
             )
         connection.rollback()
 
-    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute(
-            """INSERT INTO extraction_attempts(
-                   candidate_id,run_id,attempt_number,method,method_version,
-                   start_time,end_time,exit_status,failure_class,disposition,
-                   selected,selection_reason)
-                 VALUES(%s,%s,1,'firecrawl_main_content','integration-test',
-                        now(),now(),'succeeded','none','acceptable',true,
-                        'integration test') RETURNING id""",
-            (candidate_id, status.id),
-        )
-        attempt_id = UUID(str(cursor.fetchone()[0]))
+    request = _request("full-path")
+    attempt_id = extraction.create_attempt(
+        candidate_id=candidate_id,
+        run_id=status.id,
+        method_version="integration-test",
+        requested_format="markdown",
+    )
+    assert [event["to_stage"] for event in AssetPromotionService(
+        runs.uow_factory
+    ).list_events(status.id)] == ["discovered", "selected_for_extraction"]
 
-    ingest = corpus.ingest(_request("full-path"))
+    raw_blob = extraction.store_raw_blob(request.content)
+    normalized_blob = extraction.store_normalized_blob(
+        request.normalized_content or request.content
+    )
+    extraction.complete_attempt(
+        attempt_id,
+        "succeeded",
+        raw_blob=raw_blob,
+        normalized_blob=normalized_blob,
+        parser_used=promotion_config.parser_version,
+    )
+    ingest = corpus.ingest(replace(request, extraction_attempt_id=attempt_id))
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute(
-            "UPDATE asset_snapshots SET extraction_attempt_id=%s WHERE id=%s",
-            (attempt_id, ingest.snapshot_id),
-        )
         cursor.execute(
             """INSERT INTO research_run_assets(run_id,snapshot_id,role,metadata)
                  VALUES(%s,%s,'acquired','{}')""",
@@ -84,6 +112,63 @@ def test_full_stage_path_is_explicit_and_extraction_does_not_auto_admit(
     assert all(event["reason_code"] for event in events)
 
 
+@pytest.mark.parametrize("exit_status", ["failed", "partial", "cancelled"])
+def test_non_successful_final_extraction_never_records_extracted_provenance(
+    promotion_config: StoreConfig,
+    exit_status: str,
+):
+    runs = build_run_service(promotion_config)
+    extraction = build_extraction_service(promotion_config)
+    status = runs.create(
+        f"truthful extraction {exit_status}",
+        f"fr_truthful_{exit_status}_{uuid4().hex}",
+        execution_mode="autonomous_local",
+    )
+    candidate_id = _insert_candidate(status.id, exit_status)
+    attempt_id = extraction.create_attempt(candidate_id, status.id)
+    extraction.complete_attempt(
+        attempt_id,
+        exit_status,
+        failure_class="internal",
+        error_message=f"final {exit_status} result",
+    )
+    events = AssetPromotionService(runs.uow_factory).list_events(status.id)
+    assert [event["to_stage"] for event in events] == [
+        "discovered",
+        "selected_for_extraction",
+    ]
+
+
+def test_finalized_success_requires_persisted_output_and_becomes_immutable(
+    promotion_config: StoreConfig,
+):
+    runs = build_run_service(promotion_config)
+    extraction = build_extraction_service(promotion_config)
+    status = runs.create(
+        "truthful successful extraction",
+        f"fr_truthful_success_{uuid4().hex}",
+        execution_mode="autonomous_local",
+    )
+    candidate_id = _insert_candidate(status.id, "success")
+    attempt_id = extraction.create_attempt(candidate_id, status.id)
+    payload = b"authoritative extraction output"
+    raw_blob = extraction.store_raw_blob(payload)
+    extraction.complete_attempt(attempt_id, "succeeded", raw_blob=raw_blob)
+    events = AssetPromotionService(runs.uow_factory).list_events(status.id)
+    assert [event["to_stage"] for event in events] == [
+        "discovered",
+        "selected_for_extraction",
+        "extracted",
+    ]
+    with pytest.raises(Exception, match="immutable promotion provenance"):
+        extraction.complete_attempt(
+            attempt_id,
+            "failed",
+            failure_class="internal",
+            error_message="attempted provenance rewrite",
+        )
+
+
 def test_only_completion_critical_assets_contribute_to_sealed_chunks(
     promotion_config: StoreConfig,
 ):
@@ -91,7 +176,7 @@ def test_only_completion_critical_assets_contribute_to_sealed_chunks(
         promotion_config, count=2
     )
     service = AssetPromotionService(runs.uow_factory)
-    snapshots = [UUID(asset["snapshot_id"]) for asset in manifest["assets"]]
+    snapshots = [UUID(str(asset["snapshot_id"])) for asset in manifest["assets"]]
     included = _subject_id_for_snapshot(status.id, snapshots[0])
     excluded = _subject_id_for_snapshot(status.id, snapshots[1])
 
@@ -167,6 +252,89 @@ def test_shared_snapshot_roles_count_chunks_once_in_checkpoint_membership(
     assert checkpoint.expected_count == seal.expected_chunk_count
 
 
+def test_database_rejects_non_addressing_membership_rows(
+    promotion_config: StoreConfig,
+):
+    _corpus, runs, status, manifest = _seed_retained_assets(promotion_config)
+    snapshot_id = UUID(str(manifest["assets"][0]["snapshot_id"]))
+    service = AssetPromotionService(runs.uow_factory)
+    subject_id = _subject_id_for_snapshot(status.id, snapshot_id)
+    _promote(service, subject_id, "evidence_eligible", status.lifecycle_revision)
+    _promote(service, subject_id, "completion_critical", status.lifecycle_revision)
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT subject.role,array_agg(chunk.id ORDER BY chunk.id)
+                 FROM run_asset_promotion_subjects subject
+                 JOIN documents document ON document.snapshot_id=subject.snapshot_id
+                 JOIN chunks chunk ON chunk.document_id=document.id
+                WHERE subject.id=%s GROUP BY subject.role""",
+            (subject_id,),
+        )
+        role, raw_chunk_ids = cursor.fetchone()
+    chunk_ids = tuple(UUID(str(chunk_id)) for chunk_id in raw_chunk_ids)
+    member_payload = _member_payload(subject_id, snapshot_id, role, chunk_ids)
+    member_sha256 = _canonical_sha256(member_payload)
+    membership_sha256 = _canonical_sha256([member_payload])
+
+    cases = (
+        ("0" * 64, membership_sha256, chunk_ids, "member SHA-256"),
+        (member_sha256, "0" * 64, chunk_ids, "seal SHA-256"),
+        (
+            _canonical_sha256(
+                _member_payload(
+                    subject_id, snapshot_id, role, (chunk_ids[0], chunk_ids[0])
+                )
+            ),
+            _canonical_sha256(
+                [
+                    _member_payload(
+                        subject_id, snapshot_id, role, (chunk_ids[0], chunk_ids[0])
+                    )
+                ]
+            ),
+            (chunk_ids[0], chunk_ids[0]),
+            "non-null, unique, and sorted",
+        ),
+    )
+    for member_hash, seal_hash, stored_chunks, message in cases:
+        with pytest.raises(Exception, match=message):
+            with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO run_asset_membership_seals(
+                           run_id,seal_revision,lifecycle_revision,
+                           membership_sha256,expected_asset_count,
+                           expected_chunk_count,actor_type,actor_identifier,
+                           policy_version,reason_code,reason)
+                         VALUES(%s,1,%s,%s,1,%s,'integration-test',
+                           'negative-database-test','test-v1','invalid_seal',
+                           'the database must reject this row') RETURNING id""",
+                    (
+                        status.id,
+                        status.lifecycle_revision,
+                        seal_hash,
+                        len(set(stored_chunks)),
+                    ),
+                )
+                seal_id = cursor.fetchone()[0]
+                cursor.execute(
+                    """INSERT INTO run_asset_membership_members(
+                           seal_id,run_id,subject_id,snapshot_id,role,ordinal,
+                           chunk_ids,chunk_count,member_sha256)
+                         VALUES(%s,%s,%s,%s,%s,0,%s,%s,%s)""",
+                    (
+                        seal_id,
+                        status.id,
+                        subject_id,
+                        snapshot_id,
+                        role,
+                        list(stored_chunks),
+                        len(stored_chunks),
+                        member_hash,
+                    ),
+                )
+                cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+
 def test_sealing_is_idempotent_hash_addressed_and_completion_payload_is_queryable(
     promotion_config: StoreConfig,
 ):
@@ -201,10 +369,11 @@ def test_sealing_is_idempotent_hash_addressed_and_completion_payload_is_queryabl
     assert result.status == "advanced"
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """SELECT completion->>'asset_membership_seal_id',
-                      completion->>'asset_membership_sha256',
-                      (completion->>'asset_expected')::integer,
-                      (completion->>'asset_expected_chunk_count')::integer
+            """SELECT validation_result->'completion'->>'asset_membership_seal_id',
+                      validation_result->'completion'->>'asset_membership_sha256',
+                      (validation_result->'completion'->>'asset_expected')::integer,
+                      (validation_result->'completion'
+                        ->>'asset_expected_chunk_count')::integer
                  FROM research_run_transitions
                 WHERE run_id=%s AND next_state='coverage_review'
                 ORDER BY lifecycle_revision DESC LIMIT 1""",

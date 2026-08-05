@@ -189,13 +189,16 @@ def test_late_retained_asset_does_not_change_sealed_checkpoint_membership(
         [
             IngestRequest(
                 f"https://checkpoint.example/growth/{uuid4().hex}",
-                b"# Later retained evidence\n\nThis remains outside the sealed barrier.",
+                (
+                    b"# Later retained evidence\n\n"
+                    b"This remains outside the sealed barrier."
+                ),
             )
         ],
         research_run_external_id=status.external_id,
     )
     assert added["failure_count"] == 0
-    late_snapshot_id = added["assets"][0]["snapshot_id"]
+    late_snapshot_id = str(added["assets"][0]["snapshot_id"])
     late_asset = next(
         asset
         for asset in checkpoints.asset_promotions.list_assets(status.id)

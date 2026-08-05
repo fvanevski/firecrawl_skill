@@ -2,9 +2,27 @@
 
 from __future__ import annotations
 
-# ruff: noqa: F403, F405
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from uuid import UUID
 
-from asset_promotion_test_support import *  # noqa: F403
+import pytest
+
+from asset_promotion_test_support import (
+    TEST_DSN,
+    AssetMembershipSealedError,
+    AssetPromotionService,
+    IndexCheckpointService,
+    StoreConfig,
+    _promote,
+    _request,
+    _seed_retained_assets,
+    _subject_id_for_snapshot,
+    _subject_rows,
+    connect,
+    promotion_config,
+    uuid4,
+)
 
 
 def test_post_seal_addition_requires_reopen_then_reseal_with_revision_cas(
@@ -30,7 +48,7 @@ def test_post_seal_addition_requires_reopen_then_reseal_with_revision_cas(
         research_run_external_id=status.external_id,
     )
     assert late["failure_count"] == 0
-    late_snapshot = UUID(late["assets"][0]["snapshot_id"])
+    late_snapshot = UUID(str(late["assets"][0]["snapshot_id"]))
     late_subject = _subject_id_for_snapshot(status.id, late_snapshot)
     _promote(
         checkpoints.asset_promotions,
@@ -162,7 +180,7 @@ def test_seal_and_completion_promotion_are_serialized_in_both_race_orders(
         promotion_config, count=2
     )
     service = AssetPromotionService(runs.uow_factory)
-    snapshots = [UUID(asset["snapshot_id"]) for asset in manifest["assets"]]
+    snapshots = [UUID(str(asset["snapshot_id"])) for asset in manifest["assets"]]
     first = _subject_id_for_snapshot(status.id, snapshots[0])
     second = _subject_id_for_snapshot(status.id, snapshots[1])
     for subject_id in (first, second):

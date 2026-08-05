@@ -1,4 +1,4 @@
-"""Issue #211 PostgreSQL integration tests for staged asset promotion."""
+"""Shared PostgreSQL integration support for issue #211."""
 
 from __future__ import annotations
 
@@ -14,12 +14,17 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from research_store.asset_promotion_models import _canonical_sha256, _member_payload
 from research_store.asset_promotion_service import (
     AssetMembershipSealedError,
     AssetPromotionService,
 )
 from research_store.config import StoreConfig
-from research_store.container import build_run_service, build_service
+from research_store.container import (
+    build_extraction_service,
+    build_run_service,
+    build_service,
+)
 from research_store.domain import IngestRequest
 from research_store.index_checkpoint_service import IndexCheckpointService
 from research_store.postgres import connect, migrate
@@ -28,41 +33,6 @@ TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
-
-
-__all__ = [
-    "AssetMembershipSealedError",
-    "AssetPromotionService",
-    "Config",
-    "Event",
-    "IndexCheckpointService",
-    "Path",
-    "StoreConfig",
-    "TEST_DSN",
-    "ThreadPoolExecutor",
-    "UUID",
-    "_advance_to_indexing",
-    "_insert_candidate",
-    "_mark_run_index_complete",
-    "_promote",
-    "_request",
-    "_seed_retained_assets",
-    "_subject_id_for_snapshot",
-    "_subject_rows",
-    "build_run_service",
-    "build_service",
-    "command",
-    "connect",
-    "hashlib",
-    "migrate",
-    "os",
-    "promotion_config",
-    "pytest",
-    "replace",
-    "urlsplit",
-    "urlunsplit",
-    "uuid4",
-]
 
 
 @pytest.fixture
