@@ -167,7 +167,7 @@ def test_checkpoint_restart_reuses_exact_membership_and_records_observations(
     assert minimum == maximum == len(first.entity_ids)
 
 
-def test_membership_change_invalidates_checkpoint_without_advancing(
+def test_late_retained_asset_does_not_change_sealed_checkpoint_membership(
     checkpoint_config: StoreConfig,
 ):
     corpus, runs, status = _seed_indexing_run(checkpoint_config)
@@ -180,6 +180,8 @@ def test_membership_change_invalidates_checkpoint_without_advancing(
         fingerprint=checkpoints.active_fingerprint(status.id),
         idempotency_key=f"checkpoint:{status.id}",
     )
+    sealed = checkpoints.asset_promotions.get_active_seal(status.id)
+    assert sealed is not None
 
     added = corpus.ingest_batch(
         f"fc_checkpoint_growth_{uuid4().hex}",
@@ -187,22 +189,40 @@ def test_membership_change_invalidates_checkpoint_without_advancing(
         [
             IngestRequest(
                 f"https://checkpoint.example/growth/{uuid4().hex}",
-                b"# Later evidence\n\nThis changes exact run membership.",
+                (
+                    b"# Later retained evidence\n\n"
+                    b"This remains outside the sealed barrier."
+                ),
             )
         ],
         research_run_external_id=status.external_id,
     )
     assert added["failure_count"] == 0
+    late_snapshot_id = str(added["assets"][0]["snapshot_id"])
+    late_asset = next(
+        asset
+        for asset in checkpoints.asset_promotions.list_assets(status.id)
+        if asset["snapshot_id"] == late_snapshot_id
+    )
+    assert late_asset["current_stage"] == "retained"
 
+    still_sealed = checkpoints.asset_promotions.get_active_seal(status.id)
+    assert still_sealed == sealed
+    active = checkpoints.get_active(status.id)
+    assert active is not None
+    assert active.id == checkpoint.id
+    assert active.entity_ids == sealed.chunk_ids
+
+    _mark_run_index_complete(status.id)
     result = checkpoints.finalize(
         status.id,
         checkpoint.id,
         expected_revision=status.lifecycle_revision,
         idempotency_key=f"checkpoint:{status.id}:finalize",
     )
-    assert result.status == "invalidated"
-    assert result.checkpoint.invalidation_reason == "membership_changed"
-    assert runs.status(run_id=status.id).state == "indexing"
+    assert result.status == "advanced"
+    assert result.checkpoint.entity_ids == sealed.chunk_ids
+    assert runs.status(run_id=status.id).state == "coverage_review"
 
 
 def test_lifecycle_revision_change_invalidates_checkpoint_without_advancing(

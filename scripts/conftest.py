@@ -22,6 +22,30 @@ sys.path.insert(0, str(SCRIPTS))
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    """Clear the append-only promotion ledger before legacy rebuild cleanup.
+
+    ``TestIndexRebuildRecovery.setup_method`` resets shared corpus/index rows
+    with dependency-ordered ``DELETE`` statements. Migration 0040 adds the
+    append-only ``run_asset_promotion_events`` ledger, whose row trigger
+    intentionally rejects ``DELETE`` even in tests. Truncating that test-only
+    ledger before pytest invokes the class setup preserves the production
+    append-only invariant while allowing the existing cleanup to proceed.
+    """
+    if (
+        not TEST_DSN
+        or item.cls is None
+        or item.cls.__name__ != "TestIndexRebuildRecovery"
+    ):
+        return
+
+    from research_store.postgres import connect
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute("TRUNCATE TABLE run_asset_promotion_events")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _apply_db_schema():
     """Apply Alembic migrations to the test database once per session.

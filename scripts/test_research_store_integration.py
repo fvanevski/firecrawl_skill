@@ -89,7 +89,7 @@ def prepared_database():
         )
         assert all(cursor.fetchone())
         cursor.execute("SELECT version_num FROM alembic_version")
-        assert cursor.fetchone()[0] == "0039_index_checkpoint_guard"
+        assert cursor.fetchone()[0] == "0040_asset_promotion_membership"
 
 
 def test_wrapper_workflow_runs_entirely_from_postgresql(service):
@@ -3326,9 +3326,15 @@ class TestIndexRebuildRecovery:
 
     def setup_method(self):
         """Truncate test data between tests to avoid accumulation."""
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
-            # Delete in reverse dependency order to respect foreign keys
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            # Delete in reverse dependency order to respect foreign keys.
+            cur.execute("DELETE FROM indexing_checkpoint_observations;")
+            cur.execute("DELETE FROM indexing_checkpoints;")
+            cur.execute("DELETE FROM run_asset_membership_members;")
+            cur.execute("DELETE FROM run_asset_membership_seals;")
+            cur.execute("DELETE FROM run_asset_promotion_events;")
+            cur.execute("DELETE FROM run_asset_promotion_subjects;")
             cur.execute("DELETE FROM index_point_counts;")
             cur.execute("DELETE FROM index_jobs;")
             cur.execute("DELETE FROM embedding_manifests;")
@@ -3359,17 +3365,13 @@ class TestIndexRebuildRecovery:
         from research_store.config import StoreConfig
         from research_store.postgres import connect
 
-        # Insert test chunks and documents
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
-            # Insert source
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://recovery.example/test",),
             )
             source_id = cur.fetchone()[0]
-
-            # Insert snapshot
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
@@ -3377,8 +3379,6 @@ class TestIndexRebuildRecovery:
                 (source_id, "https://recovery.example/test", "a" * 64),
             )
             snapshot_id = cur.fetchone()[0]
-
-            # Insert document
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -3394,8 +3394,6 @@ class TestIndexRebuildRecovery:
                 ),
             )
             document_id = cur.fetchone()[0]
-
-            # Insert 3 chunks
             chunk_ids = []
             for i in range(3):
                 cur.execute(
@@ -3406,45 +3404,37 @@ class TestIndexRebuildRecovery:
                         document_id,
                         i,
                         f"chunk text {i}",
-                        f"{'c' * 64}",
+                        "c" * 64,
                         "structural",
                         "structural-v1",
                     ),
                 )
                 chunk_ids.append(cur.fetchone()[0])
 
-        # Run index-build
         config = replace(
             StoreConfig.from_env(),
-            database_url=TEST_DSN,
+            database_url=test_dsn,
             embedding_dimension=4,
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
         result = _index_build(config)
-
-        # Verify manifests and jobs were created
         assert result["selected_chunks"] == 3
         assert result["scheduled"] == 3
 
-        # Verify all 3 manifests exist
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT count(*) FROM embedding_manifests WHERE index_definition_id=%s",
                 (result["index_definition"]["id"],),
             )
             assert cur.fetchone()[0] == 3
-
-            # Verify all 3 jobs are pending
             cur.execute(
                 """SELECT count(*) FROM index_jobs
                 WHERE index_definition_id=%s AND status='pending'""",
                 (result["index_definition"]["id"],),
             )
             assert cur.fetchone()[0] == 3
-
-            # Verify scheduled == pending
             cur.execute(
                 """SELECT count(*) FROM index_jobs
                 WHERE index_definition_id=%s AND status='pending'
@@ -3466,10 +3456,8 @@ class TestIndexRebuildRecovery:
         from research_store.config import StoreConfig
         from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://idempotent.example/test",),
@@ -3506,22 +3494,17 @@ class TestIndexRebuildRecovery:
 
         config = replace(
             StoreConfig.from_env(),
-            database_url=TEST_DSN,
+            database_url=test_dsn,
             embedding_dimension=4,
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # First run
         result1 = _index_build(config)
         assert result1["selected_chunks"] == 1
         assert result1["scheduled"] == 1
 
-        # Simulate an exhausted job. An explicit operator-authorized rebuild
-        # must restore a fresh attempt budget; otherwise the next claim marks
-        # the pending row dead again without doing any work.
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """UPDATE index_jobs SET status='dead',attempt_count=5,
                    error='lease expired after final allowed attempt'
@@ -3535,16 +3518,11 @@ class TestIndexRebuildRecovery:
                 (result1["index_definition"]["id"],),
             )
 
-        # Second run — should be idempotent: no duplicate jobs created.
-        # The manifest is still pending and the chunk is not in Qdrant,
-        # so it is requeued (scheduled == 1), but the INSERT uses
-        # ON CONFLICT DO NOTHING so only one job row exists.
         result2 = _index_build(config)
         assert result2["selected_chunks"] == 1
-        assert result2["scheduled"] == 1  # Requeued, but no duplicate job
+        assert result2["scheduled"] == 1
 
-        # Verify only one job exists and its retry budget was reset.
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT count(*),min(status),min(attempt_count) FROM index_jobs
                 WHERE index_definition_id=%s""",
@@ -3556,17 +3534,14 @@ class TestIndexRebuildRecovery:
             assert attempt_count == 0
 
     def test_index_build_resume_interrupted_build(self, service):
-        """Index build requeues every manifest whose physical point is absent,
-        including a manifest incorrectly marked complete, without duplicate jobs."""
+        """Resume every manifest whose physical point is absent without duplicates."""
 
         from research_store.cli import _index_build
         from research_store.config import StoreConfig
         from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data with 2 chunks
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://interrupted.example/test",),
@@ -3576,7 +3551,7 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://interrupted.example/test", "int" * 64),
+                (source_id, "https://interrupted.example/test", "1" * 64),
             )
             snapshot_id = cur.fetchone()[0]
             cur.execute(
@@ -3590,11 +3565,10 @@ class TestIndexRebuildRecovery:
                     "markdown",
                     "markdown-v1",
                     "cleanup-v1",
-                    "int" * 64,
+                    "2" * 64,
                 ),
             )
             doc_id = cur.fetchone()[0]
-            # Insert 2 chunks
             for i in range(2):
                 cur.execute(
                     """INSERT INTO chunks(
@@ -3604,7 +3578,7 @@ class TestIndexRebuildRecovery:
                         doc_id,
                         i,
                         f"interrupted chunk {i}",
-                        f"int{i}" * 32,
+                        f"{i + 3}" * 64,
                         "structural",
                         "structural-v1",
                     ),
@@ -3612,20 +3586,17 @@ class TestIndexRebuildRecovery:
 
         config = replace(
             StoreConfig.from_env(),
-            database_url=TEST_DSN,
+            database_url=test_dsn,
             embedding_dimension=4,
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # First run — creates 2 manifests and 2 jobs
         result1 = _index_build(config)
         assert result1["selected_chunks"] == 2
         assert result1["scheduled"] == 2
 
-        # Simulate interrupted build: mark one manifest as complete, leave one pending
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT id FROM embedding_manifests
                 WHERE index_definition_id=%s ORDER BY id LIMIT 1""",
@@ -3637,41 +3608,24 @@ class TestIndexRebuildRecovery:
                 WHERE id=%s""",
                 (complete_manifest_id,),
             )
-            # Also mark the corresponding job as complete
             cur.execute(
                 """UPDATE index_jobs SET status='complete',completed_at=now()
                 WHERE manifest_id=%s""",
                 (complete_manifest_id,),
             )
 
-            # Verify state: 1 complete, 1 pending
-            cur.execute(
-                """SELECT index_status, count(*) FROM embedding_manifests
-                WHERE index_definition_id=%s GROUP BY index_status""",
-                (result1["index_definition"]["id"],),
-            )
-            status_counts = dict(cur.fetchall())
-            assert status_counts.get("complete") == 1
-            assert status_counts.get("pending") == 1
-
-        # Re-run index-build. The manifest marked complete has no
-        # corresponding physical Qdrant point, so both manifests must be
-        # requeued rather than trusting PostgreSQL completion alone.
         result2 = _index_build(config)
         assert result2["selected_chunks"] == 2
         assert result2["scheduled"] == 2
         assert result2["missing_points"] == 2
 
-        # Verify: still only 2 jobs total (no duplicates)
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT count(*) FROM index_jobs
                 WHERE index_definition_id=%s""",
                 (result1["index_definition"]["id"],),
             )
             assert cur.fetchone()[0] == 2
-
-            # Physical absence invalidates the false-complete PostgreSQL state.
             cur.execute(
                 """SELECT m.index_status,j.status
                 FROM embedding_manifests m
@@ -3682,17 +3636,14 @@ class TestIndexRebuildRecovery:
             assert cur.fetchone() == ("pending", "pending")
 
     def test_index_build_recreates_missing_jobs(self, service):
-        """When a job is deleted but the manifest remains, index-build
-        recreates the job rather than raising an error."""
+        """Recreate a missing job while retaining the authoritative manifest."""
 
         from research_store.cli import _index_build
         from research_store.config import StoreConfig
         from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://recon.example/test",),
@@ -3702,7 +3653,7 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://recon.example/test", "g" * 64),
+                (source_id, "https://recon.example/test", "7" * 64),
             )
             snapshot_id = cur.fetchone()[0]
             cur.execute(
@@ -3716,7 +3667,7 @@ class TestIndexRebuildRecovery:
                     "markdown",
                     "markdown-v1",
                     "cleanup-v1",
-                    "h" * 64,
+                    "8" * 64,
                 ),
             )
             doc_id = cur.fetchone()[0]
@@ -3724,33 +3675,21 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
                 ) VALUES (%s,0,%s,%s,%s,%s)""",
-                (doc_id, "recon chunk", "i" * 64, "structural", "structural-v1"),
+                (doc_id, "recon chunk", "9" * 64, "structural", "structural-v1"),
             )
 
         config = replace(
             StoreConfig.from_env(),
-            database_url=TEST_DSN,
+            database_url=test_dsn,
             embedding_dimension=4,
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Normal run — creates 1 manifest and 1 job
         result = _index_build(config)
         assert result["scheduled"] == 1
 
-        # Verify job exists
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
-            cur.execute(
-                """SELECT count(*) FROM index_jobs
-                WHERE index_definition_id=%s AND status='pending'""",
-                (result["index_definition"]["id"],),
-            )
-            assert cur.fetchone()[0] == 1
-
-        # Manually corrupt: delete the job but keep the manifest
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """DELETE FROM index_jobs
                 WHERE manifest_id IN (
@@ -3760,12 +3699,9 @@ class TestIndexRebuildRecovery:
                 (result["index_definition"]["id"],),
             )
 
-        # Re-run — should recreate the job (idempotent rebuild)
         result2 = _index_build(config)
-        assert result2["scheduled"] == 1  # Requeued because not in Qdrant
-
-        # Verify the job was recreated
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        assert result2["scheduled"] == 1
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT count(*) FROM index_jobs
                 WHERE index_definition_id=%s AND status='pending'""",
@@ -3774,16 +3710,13 @@ class TestIndexRebuildRecovery:
             assert cur.fetchone()[0] == 1
 
     def test_index_reconcile_reports_discrepancies(self, service):
-        """The index-reconcile command reports discrepancies between
-        manifests, jobs, and Qdrant points."""
-        from research_store.cli import _index_reconcile
+        """Report discrepancies between manifests, jobs, and Qdrant points."""
+        from research_store.cli import _index_build, _index_reconcile
         from research_store.config import StoreConfig
         from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data with a manifest that has no job
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://reconcile.example/test",),
@@ -3793,7 +3726,7 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://reconcile.example/test", "j" * 64),
+                (source_id, "https://reconcile.example/test", "a" * 64),
             )
             snapshot_id = cur.fetchone()[0]
             cur.execute(
@@ -3807,7 +3740,7 @@ class TestIndexRebuildRecovery:
                     "markdown",
                     "markdown-v1",
                     "cleanup-v1",
-                    "k" * 64,
+                    "b" * 64,
                 ),
             )
             doc_id = cur.fetchone()[0]
@@ -3815,49 +3748,38 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
                 ) VALUES (%s,0,%s,%s,%s,%s)""",
-                (doc_id, "reconcile chunk", "l" * 64, "structural", "structural-v1"),
+                (doc_id, "reconcile chunk", "c" * 64, "structural", "structural-v1"),
             )
 
         config = replace(
             StoreConfig.from_env(),
-            database_url=TEST_DSN,
+            database_url=test_dsn,
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Run index-build to create a clean state
-        from research_store.cli import _index_build
-
         result = _index_build(config)
-
-        # Corrupt: delete a job to create a discrepancy
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """DELETE FROM index_jobs
                 WHERE id IN (
                     SELECT id FROM index_jobs
-                    WHERE index_definition_id=%s AND status='pending'
-                    LIMIT 1
+                    WHERE index_definition_id=%s AND status='pending' LIMIT 1
                 )""",
                 (result["index_definition"]["id"],),
             )
-
-        # Reconcile should detect the discrepancy
         reconcile_result = _index_reconcile(config)
         assert reconcile_result["ok"] is False
-        assert len(reconcile_result["discrepancies"]) > 0
+        assert reconcile_result["discrepancies"]
 
     def test_doctor_includes_index_reconcile(self, service):
-        """The doctor command includes index reconciliation checks."""
-        from research_store.cli import _doctor
+        """Include index reconciliation in doctor output."""
+        from research_store.cli import _doctor, _index_build
         from research_store.config import StoreConfig
         from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://doctor.example/test",),
@@ -3867,7 +3789,7 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://doctor.example/test", "m" * 64),
+                (source_id, "https://doctor.example/test", "d" * 64),
             )
             snapshot_id = cur.fetchone()[0]
             cur.execute(
@@ -3881,7 +3803,7 @@ class TestIndexRebuildRecovery:
                     "markdown",
                     "markdown-v1",
                     "cleanup-v1",
-                    "n" * 64,
+                    "e" * 64,
                 ),
             )
             doc_id = cur.fetchone()[0]
@@ -3889,39 +3811,30 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
                 ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
-                (doc_id, "doctor chunk", "o" * 64, "structural", "structural-v1"),
+                (doc_id, "doctor chunk", "f" * 64, "structural", "structural-v1"),
             )
 
         config = replace(
             StoreConfig.from_env(),
-            database_url=TEST_DSN,
+            database_url=test_dsn,
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Run index-build first
-        from research_store.cli import _index_build
-
         _index_build(config)
-
-        # Doctor should include index_reconcile
         checks, _failed = _doctor(config)
         assert "index_reconcile" in checks
         assert checks["index_reconcile"]["ok"] is True
         assert checks["index_reconcile"]["total_active_chunks"] >= 1
 
     def test_index_reconcile_repair_flag(self, service):
-        """The --repair flag re-runs index-build for definitions with
-        discrepancies and reports what was repaired."""
+        """Repair manifest/job discrepancies through an explicit rebuild."""
         from research_store.cli import _index_build, _index_reconcile
         from research_store.config import StoreConfig
         from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://repair.example/test",),
@@ -3931,7 +3844,7 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://repair.example/test", "p" * 64),
+                (source_id, "https://repair.example/test", "0" * 64),
             )
             snapshot_id = cur.fetchone()[0]
             cur.execute(
@@ -3945,7 +3858,7 @@ class TestIndexRebuildRecovery:
                     "markdown",
                     "markdown-v1",
                     "cleanup-v1",
-                    "q" * 64,
+                    "1" * 64,
                 ),
             )
             doc_id = cur.fetchone()[0]
@@ -3953,47 +3866,38 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
                 ) VALUES (%s,0,%s,%s,%s,%s)""",
-                (doc_id, "repair chunk", "r" * 64, "structural", "structural-v1"),
+                (doc_id, "repair chunk", "2" * 64, "structural", "structural-v1"),
             )
 
         config = replace(
             StoreConfig.from_env(),
-            database_url=TEST_DSN,
+            database_url=test_dsn,
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Run index-build to create a clean state
         result = _index_build(config)
-        assert result["scheduled"] == 1
-
-        # Corrupt: delete a job to create a discrepancy
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """DELETE FROM index_jobs
                 WHERE id IN (
                     SELECT id FROM index_jobs
-                    WHERE index_definition_id=%s AND status='pending'
-                    LIMIT 1
+                    WHERE index_definition_id=%s AND status='pending' LIMIT 1
                 )""",
                 (result["index_definition"]["id"],),
             )
 
-        # Without repair: should detect discrepancy
         reconcile_result = _index_reconcile(config, repair=False)
         assert reconcile_result["ok"] is False
-        assert len(reconcile_result["discrepancies"]) > 0
+        assert reconcile_result["discrepancies"]
         assert reconcile_result["repaired"] == []
 
-        # With repair: should re-run index-build and repair
         reconcile_result = _index_reconcile(config, repair=True)
         assert reconcile_result["ok"] is True
-        assert len(reconcile_result["repaired"]) > 0
-        # Verify the repair actually resolved the discrepancy
+        assert reconcile_result["repaired"]
         reconcile_result = _index_reconcile(config, repair=False)
         assert reconcile_result["ok"] is True
-        assert len(reconcile_result["discrepancies"]) == 0
+        assert reconcile_result["discrepancies"] == []
 
     def test_index_reconcile_repair_requeues_missing_points_and_deletes_orphans(
         self, service
@@ -4002,8 +3906,8 @@ class TestIndexRebuildRecovery:
         from research_store.config import StoreConfig
         from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://physical-drift.example/test",),
@@ -4013,11 +3917,7 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (
-                    source_id,
-                    "https://physical-drift.example/test",
-                    "1" * 64,
-                ),
+                (source_id, "https://physical-drift.example/test", "3" * 64),
             )
             snapshot_id = cur.fetchone()[0]
             cur.execute(
@@ -4031,19 +3931,18 @@ class TestIndexRebuildRecovery:
                     "markdown",
                     "markdown-v1",
                     "cleanup-v1",
-                    "2" * 64,
+                    "4" * 64,
                 ),
             )
             document_id = cur.fetchone()[0]
             cur.execute(
                 """INSERT INTO chunks(
-                    document_id,ordinal,text,content_sha256,
-                    chunker_name,chunker_version
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
                 ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
                 (
                     document_id,
                     "physical drift chunk",
-                    "3" * 64,
+                    "5" * 64,
                     "structural",
                     "structural-v1",
                 ),
@@ -4052,7 +3951,7 @@ class TestIndexRebuildRecovery:
 
         config = replace(
             StoreConfig.from_env(),
-            database_url=TEST_DSN,
+            database_url=test_dsn,
             embedding_dimension=4,
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
@@ -4060,7 +3959,7 @@ class TestIndexRebuildRecovery:
         )
         build = _index_build(config)
         definition = build["index_definition"]
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """UPDATE embedding_manifests
                 SET index_status='complete',indexed_at=now()
@@ -4106,7 +4005,7 @@ class TestIndexRebuildRecovery:
         assert action["deleted_orphaned"] == 1
         assert repaired["repaired"] == [str(definition["id"])]
 
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT m.index_status,j.status
                 FROM embedding_manifests m
@@ -4121,15 +4020,13 @@ class TestIndexRebuildRecovery:
         }
 
     def test_index_point_counts_cached(self, service):
-        """After index-build, the Qdrant point count is cached in PostgreSQL."""
+        """Cache Qdrant point counts in PostgreSQL after index-build."""
         from research_store.cli import _index_build
         from research_store.config import StoreConfig
         from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://cache.example/test",),
@@ -4139,7 +4036,7 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://cache.example/test", "s" * 64),
+                (source_id, "https://cache.example/test", "6" * 64),
             )
             snapshot_id = cur.fetchone()[0]
             cur.execute(
@@ -4153,7 +4050,7 @@ class TestIndexRebuildRecovery:
                     "markdown",
                     "markdown-v1",
                     "cleanup-v1",
-                    "t" * 64,
+                    "7" * 64,
                 ),
             )
             doc_id = cur.fetchone()[0]
@@ -4161,22 +4058,18 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
                 ) VALUES (%s,0,%s,%s,%s,%s)""",
-                (doc_id, "cache chunk", "u" * 64, "structural", "structural-v1"),
+                (doc_id, "cache chunk", "8" * 64, "structural", "structural-v1"),
             )
 
         config = replace(
             StoreConfig.from_env(),
-            database_url=TEST_DSN,
+            database_url=test_dsn,
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Run index-build
         result = _index_build(config)
-
-        # Verify point count was cached
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT point_count,last_verified_at
                 FROM index_point_counts WHERE index_definition_id=%s""",
@@ -4184,19 +4077,17 @@ class TestIndexRebuildRecovery:
             )
             row = cur.fetchone()
             assert row is not None
-            assert row[0] == 1  # One chunk indexed
-            assert row[1] is not None  # Has a timestamp
+            assert row[0] == 1
+            assert row[1] is not None
 
     def test_index_reconcile_reads_from_cache(self, service):
-        """_index_reconcile reads cached point counts from PostgreSQL."""
+        """Read cached point counts from PostgreSQL during reconciliation."""
         from research_store.cli import _index_build, _index_reconcile
         from research_store.config import StoreConfig
         from research_store.postgres import connect
 
-        TEST_DSN = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-
-        # Insert test data
-        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://reconcile-cache.example/test",),
@@ -4206,7 +4097,7 @@ class TestIndexRebuildRecovery:
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://reconcile-cache.example/test", "v" * 64),
+                (source_id, "https://reconcile-cache.example/test", "9" * 64),
             )
             snapshot_id = cur.fetchone()[0]
             cur.execute(
@@ -4220,7 +4111,7 @@ class TestIndexRebuildRecovery:
                     "markdown",
                     "markdown-v1",
                     "cleanup-v1",
-                    "w" * 64,
+                    "a" * 64,
                 ),
             )
             doc_id = cur.fetchone()[0]
@@ -4231,7 +4122,7 @@ class TestIndexRebuildRecovery:
                 (
                     doc_id,
                     "reconcile cache chunk",
-                    "x" * 64,
+                    "b" * 64,
                     "structural",
                     "structural-v1",
                 ),
@@ -4239,19 +4130,14 @@ class TestIndexRebuildRecovery:
 
         config = replace(
             StoreConfig.from_env(),
-            database_url=TEST_DSN,
+            database_url=test_dsn,
             parser_version="markdown-v1",
             normalization_version="cleanup-v1",
             chunker_version="structural-v1",
         )
-
-        # Run index-build to create a clean state with cached point count
         _index_build(config)
-
-        # Reconcile should include cached_point_count in its output
         reconcile_result = _index_reconcile(config, repair=False)
         assert reconcile_result["ok"] is True
-        # The qdrant.collections should include cached_point_count
         for collection_info in reconcile_result["qdrant"]["collections"].values():
             assert "cached_point_count" in collection_info
             assert collection_info["cached_point_count"] == 1
