@@ -88,9 +88,7 @@ class _IndexCheckpointAssetMembershipMixin:
                     "asset_membership_seal_id": str(asset_seal.id),
                     "asset_seal_revision": asset_seal.seal_revision,
                     "asset_expected": asset_seal.expected_asset_count,
-                    "asset_expected_chunk_count": (
-                        asset_seal.expected_chunk_count
-                    ),
+                    "asset_expected_chunk_count": (asset_seal.expected_chunk_count),
                     "asset_membership_schema_version": (
                         "completion-critical-membership-v1"
                     ),

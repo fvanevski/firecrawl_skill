@@ -177,9 +177,7 @@ class _BlockingSealService(AssetPromotionService):
 def test_seal_and_completion_promotion_are_serialized_in_both_race_orders(
     promotion_config: StoreConfig,
 ):
-    _corpus, runs, status, manifest = _seed_retained_assets(
-        promotion_config, count=2
-    )
+    _corpus, runs, status, manifest = _seed_retained_assets(promotion_config, count=2)
     service = AssetPromotionService(runs.uow_factory)
     snapshots = [UUID(str(asset["snapshot_id"])) for asset in manifest["assets"]]
     first = _subject_id_for_snapshot(status.id, snapshots[0])

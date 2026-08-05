@@ -174,9 +174,7 @@ def test_finalized_success_requires_persisted_output_and_becomes_immutable(
 def test_only_completion_critical_assets_contribute_to_sealed_chunks(
     promotion_config: StoreConfig,
 ):
-    _corpus, runs, status, manifest = _seed_retained_assets(
-        promotion_config, count=2
-    )
+    _corpus, runs, status, manifest = _seed_retained_assets(promotion_config, count=2)
     service = AssetPromotionService(runs.uow_factory)
     snapshots = [UUID(str(asset["snapshot_id"])) for asset in manifest["assets"]]
     included = _subject_id_for_snapshot(status.id, snapshots[0])
@@ -237,9 +235,7 @@ def test_shared_snapshot_roles_count_chunks_once_in_checkpoint_membership(
     )
     assert seal.expected_asset_count == 2
     assert seal.expected_chunk_count == len(seal.chunk_ids)
-    assert sum(len(member.chunk_ids) for member in seal.members) > len(
-        seal.chunk_ids
-    )
+    assert sum(len(member.chunk_ids) for member in seal.members) > len(seal.chunk_ids)
 
     checkpoints = IndexCheckpointService(
         runs.uow_factory, max_attempts=promotion_config.max_index_attempts
@@ -343,9 +339,7 @@ def test_database_rejects_non_addressing_membership_rows(
 def test_sealing_is_idempotent_hash_addressed_and_completion_payload_is_queryable(
     promotion_config: StoreConfig,
 ):
-    _corpus, runs, status, _manifest = _seed_retained_assets(
-        promotion_config, count=2
-    )
+    _corpus, runs, status, _manifest = _seed_retained_assets(promotion_config, count=2)
     checkpoints = IndexCheckpointService(
         runs.uow_factory, max_attempts=promotion_config.max_index_attempts
     )

@@ -105,12 +105,10 @@ def test_promotion_provenance_records_actor_policy_revision_time_and_reason():
 
 def test_extraction_stops_before_evidence_and_completion_membership():
     source = _migration_source()
-    function = source.split(
-        "CREATE FUNCTION record_extraction_promotion_stages()", 1
-    )[1]
-    function = function.split(
-        "CREATE TRIGGER extraction_attempt_initializes", 1
-    )[0]
+    function = source.split("CREATE FUNCTION record_extraction_promotion_stages()", 1)[
+        1
+    ]
+    function = function.split("CREATE TRIGGER extraction_attempt_initializes", 1)[0]
     assert "selected_for_extraction" in function
     assert "extracted" in function
     assert "NEW.end_time IS NOT NULL" in function

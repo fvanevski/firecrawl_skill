@@ -201,8 +201,7 @@ class _AssetPromotionStoreMixin:
                 chunk_ids=tuple(UUID(str(item)) for item in chunk_ids),
                 member_sha256=str(member_sha256),
             )
-            for subject_id, snapshot_id, role, chunk_ids, member_sha256
-            in cursor.fetchall()
+            for subject_id, snapshot_id, role, chunk_ids, member_sha256 in cursor.fetchall()
         )
         return AssetMembershipSeal(
             id=UUID(str(seal_id)),

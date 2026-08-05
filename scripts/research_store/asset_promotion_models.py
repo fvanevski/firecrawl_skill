@@ -50,11 +50,7 @@ class AssetMembershipSeal:
     def chunk_ids(self) -> tuple[UUID, ...]:
         return tuple(
             sorted(
-                {
-                    chunk_id
-                    for member in self.members
-                    for chunk_id in member.chunk_ids
-                },
+                {chunk_id for member in self.members for chunk_id in member.chunk_ids},
                 key=str,
             )
         )

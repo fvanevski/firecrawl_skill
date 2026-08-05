@@ -54,11 +54,7 @@ class _AssetPromotionSealMixin:
                 ]
             )
             expected_chunk_count = len(
-                {
-                    chunk_id
-                    for member in members
-                    for chunk_id in member.chunk_ids
-                }
+                {chunk_id for member in members for chunk_id in member.chunk_ids}
             )
             active = self._load_active_seal(cursor, run_id, for_update=True)
             if active is not None:
