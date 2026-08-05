@@ -17,7 +17,7 @@ from uuid import uuid4
 import pytest
 
 from research_store.config import StoreConfig
-from research_store.container import build_service, build_run_service
+from research_store.container import build_run_service, build_service
 from research_store.domain import IngestRequest
 from research_store.index_checkpoint_service import IndexCheckpointService
 from research_store.postgres import connect, migrate
@@ -307,21 +307,23 @@ def test_terminal_transition_requires_decision_and_public_command_is_atomic(
         actor_type="integration-test",
     )
 
-    with pytest.raises(Exception, match="terminal transition requires"):
-        with runs.uow_factory() as uow:
-            uow.runs.apply_run_transition(
-                status.id,
-                "failed",
-                1,
-                f"terminal:{status.id}:bypass",
-                "integration-test",
-                "run-state-v1",
-                permitted_prior_states=frozenset({"planning"}),
-                event_type="run.transitioned.failed",
-                reason="attempted decision bypass",
-                outcome="failed",
-                error="attempted decision bypass",
-            )
+    with (
+        pytest.raises(Exception, match="terminal transition requires"),
+        runs.uow_factory() as uow,
+    ):
+        uow.runs.apply_run_transition(
+            status.id,
+            "failed",
+            1,
+            f"terminal:{status.id}:bypass",
+            "integration-test",
+            "run-state-v1",
+            permitted_prior_states=frozenset({"planning"}),
+            event_type="run.transitioned.failed",
+            reason="attempted decision bypass",
+            outcome="failed",
+            error="attempted decision bypass",
+        )
 
     result = runs.fail(
         status.id,

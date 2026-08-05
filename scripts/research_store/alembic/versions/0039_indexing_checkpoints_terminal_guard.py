@@ -113,7 +113,7 @@ def upgrade():
                   AND decision.idempotency_key = NEW.idempotency_key
              ) THEN
             RAISE EXCEPTION
-              'terminal transition requires terminal_decisions row for run % and idempotency key %',
+              'terminal transition requires terminal_decisions row for run %% and idempotency key %%',
               NEW.run_id, NEW.idempotency_key
               USING ERRCODE = '23514',
                     CONSTRAINT = 'terminal_transition_requires_decision';
