@@ -10,7 +10,7 @@ transaction and under the same run-scoped idempotency key.
 
 from alembic import op
 
-revision = "0039_indexing_checkpoints_terminal_guard"
+revision = "0039_index_checkpoint_guard"
 down_revision = "0038_postgres_authority"
 branch_labels = None
 depends_on = None

@@ -20,7 +20,7 @@ def test_checkpoint_migration_is_linear_additive_and_forward_only():
         / "versions"
         / "0039_indexing_checkpoints_terminal_guard.py"
     )
-    assert 'revision = "0039_indexing_checkpoints_terminal_guard"' in source
+    assert 'revision = "0039_index_checkpoint_guard"' in source
     assert 'down_revision = "0038_postgres_authority"' in source
     assert "CREATE TABLE indexing_checkpoints" in source
     assert "CREATE TABLE indexing_checkpoint_observations" in source
