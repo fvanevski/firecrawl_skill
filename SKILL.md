@@ -39,21 +39,27 @@ rtk proxy "<skill-root>/scripts/fsearch" "<query>" \
   --scrape-limit 5 \
   --sources web,news
 
-rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" \
+  --research-run-id "$RUN_ID" \
+  --batch-size 64
 rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
 ```
 
 A normal top-level operation receives a new `fc_<uuid>`. Use `--invocation-id` and the same idempotency key only for a deliberate retry of uncertain identical input. Conflicting key reuse fails closed.
 
-`research-db worker --once` processes at most one bounded batch. `drain_index_jobs.py` repeats bounded batches until PostgreSQL reports `claimed=0` and returns nonzero for invalid output, worker failure, failed jobs, lease loss, or an exceeded bound. Do not start another acquisition on the same run while indexing is unfinished.
+`research-db worker --once` processes at most one bounded batch. For lifecycle work, `drain_index_jobs.py --research-run-id "$RUN_ID"` seals the run's current PostgreSQL chunk membership and evaluates the exact census after every scoped worker batch. It never treats `claimed=0` as proof that live leases are complete. It waits with bounded backoff, reclaims expired leases, retries recoverable failures within the configured attempt budget, and succeeds only when every expected manifest is complete. Dead, missing-job, wrong-fingerprint, and manifest-inconsistent classes fail closed. A recoverable deadline or batch bound emits structured `index-drain-result-v1` output and exits `75`; cancellation exits `130`. Neither outcome advances lifecycle state. Unscoped use remains available for projection maintenance, but its queue-empty result is not run-completion evidence.
 
 To add a direct scrape to the same run, first drain and inspect the prior work, then drain again after the scrape:
 
 ```bash
-rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" \
+  --research-run-id "$RUN_ID" \
+  --batch-size 64
 rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/article" \
   --research-run-id "$RUN_ID"
-rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" \
+  --research-run-id "$RUN_ID" \
+  --batch-size 64
 rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
 ```
 
@@ -162,7 +168,9 @@ rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/product" \
   --research-run-id "$SCRAPE_RUN_ID" \
   --schema '{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}' \
   --json
-rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" \
+  --research-run-id "$SCRAPE_RUN_ID" \
+  --batch-size 64
 ```
 
 Structured provider output is validated before successful document ingestion. Invalid structured output remains a failed extraction attempt; it is not silently accepted.
@@ -195,7 +203,9 @@ Explicit cancellation is available from nonterminal states. `completed`, `partia
 After all run-scoped index jobs complete, `frun finish` advances through coverage review, synthesis, validation, and the requested terminal outcome.
 
 ```bash
-rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64
+rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" \
+  --research-run-id "$RUN_ID" \
+  --batch-size 64
 rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
 rtk proxy "<skill-root>/scripts/frun" finish "$RUN_ID" --outcome satisfied
 rtk proxy "<skill-root>/scripts/frun" status "$RUN_ID"
@@ -232,7 +242,7 @@ rtk proxy "<skill-root>/scripts/research-db" index-activate "<index-id>"
 rtk proxy "<skill-root>/scripts/research-db" index-rollback "<prior-index-id>"
 ```
 
-Never embed a query against an alias backed by a different embedding fingerprint. Retrieval falls back to PostgreSQL lexical search and `doctor` reports the mismatch.
+The unscoped drain in this projection-recovery sequence is maintenance evidence only. Before activation, independently verify PostgreSQL manifest/job completion and Qdrant reconciliation. Never embed a query against an alias backed by a different embedding fingerprint. Retrieval falls back to PostgreSQL lexical search and `doctor` reports the mismatch.
 
 ## Explicit exports
 

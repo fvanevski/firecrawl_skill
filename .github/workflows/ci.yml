@@ -131,6 +131,7 @@ jobs:
             scripts/test_budget_policy.py \
             scripts/test_index_runtime.py \
             scripts/test_index_census.py \
+            scripts/test_index_drain.py \
             scripts/test_evidence_packet.py \
             scripts/test_claims_evidence.py \
             scripts/test_retrieval_benchmark.py \

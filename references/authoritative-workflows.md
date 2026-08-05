@@ -15,13 +15,19 @@ A PostgreSQL rollback after the blob write may leave an unreferenced orphan blob
 
 ## Drain durable index jobs
 
-`research-db worker --once` processes at most one bounded batch. It is not a queue-drain command. Use the fail-closed helper whenever a procedure must prove that no claimable PostgreSQL jobs remain:
+`research-db worker --once` processes at most one bounded batch. It is not a queue-drain command. For lifecycle work, bind the drain to the authoritative run:
 
 ```bash
-python3 scripts/drain_index_jobs.py --batch-size 64
+python3 scripts/drain_index_jobs.py \
+  --research-run-id "$RUN_ID" \
+  --batch-size 64
 ```
 
-The helper repeatedly runs `research-db worker --once`, prints every versioned JSON result, and returns success only after a batch reports `claimed=0`. It returns nonzero for invalid output, a worker error, any reported failed or lease-lost work, or an exceeded batch bound.
+The run-scoped helper seals the run's current PostgreSQL chunk membership once, executes scoped worker batches, and evaluates the exact census from issue #208. It never treats `claimed=0` as proof that valid leases are finished. It waits with bounded exponential backoff while live work remains, permits the scoped worker to reclaim expired leases and retry recoverable failures within configured attempt limits, and succeeds only when `complete == expected` with every non-complete class zero. Dead, missing-job, wrong-fingerprint, and manifest-inconsistent classes fail closed.
+
+A run-scoped drain uses a 300-second deadline when `--deadline-seconds` is omitted. A recoverable command deadline or batch bound emits a structured `index-drain-result-v1` with status `resumable`, exit status `75`, the last worker result, and the last exact census. SIGINT and SIGTERM are checked during scoped setup, before and after each worker batch, before accepting completion, and during backoff. Once observed, cancellation takes precedence over a newly complete census and emits status `cancelled` with exit status `130`. The helper performs no lifecycle transition, so the run remains resumable and nonterminal.
+
+Unscoped invocation remains compatible for projection maintenance: by default it has no elapsed deadline and is bounded only by `--max-batches`, matching the pre-#209 behavior. Operators may opt into an elapsed unscoped bound with `--deadline-seconds`. An unscoped queue-empty result is maintenance evidence only and is not run-completion evidence.
 
 A continuously running worker service is also valid, but the operator must still verify run-scoped completion before starting additional acquisition on a run, finishing a run, reconciling Qdrant, or activating an index.
 
@@ -35,7 +41,7 @@ scripts/fsearch 'bounded query' \
   --limit 20 \
   --scrape-limit 5
 
-python3 scripts/drain_index_jobs.py --batch-size 64
+python3 scripts/drain_index_jobs.py --research-run-id "$RUN_ID" --batch-size 64
 scripts/research-db run-status "$RUN_ID"
 scripts/frun finish "$RUN_ID" --outcome satisfied
 scripts/frun status "$RUN_ID"
@@ -44,12 +50,12 @@ scripts/frun status "$RUN_ID"
 Do not issue another `fsearch`, `fscrape`, or candidate-acquisition command on the same run while its index work is unfinished. To add a direct scrape to the same run, first drain and verify the prior jobs, then acquire and drain again:
 
 ```bash
-python3 scripts/drain_index_jobs.py --batch-size 64
+python3 scripts/drain_index_jobs.py --research-run-id "$RUN_ID" --batch-size 64
 
 scripts/fscrape 'https://example.com/article' \
   --research-run-id "$RUN_ID"
 
-python3 scripts/drain_index_jobs.py --batch-size 64
+python3 scripts/drain_index_jobs.py --research-run-id "$RUN_ID" --batch-size 64
 scripts/research-db run-status "$RUN_ID"
 ```
 

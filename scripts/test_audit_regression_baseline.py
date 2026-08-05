@@ -46,6 +46,12 @@ def _worker_result(*, complete: int, running_live: int) -> dict[str, int]:
         "expected": AUDITED_TOTAL,
         "claimable": 0,
         "running_live": running_live,
+        "running_expired": 0,
+        "retryable_failed": 0,
+        "dead": 0,
+        "missing_job": 0,
+        "wrong_fingerprint": 0,
+        "manifest_inconsistent": 0,
         "failed": 0,
         "lease_lost": 0,
     }
@@ -554,11 +560,6 @@ def test_rc_01_exact_index_job_census_preserves_sealed_membership() -> None:
     assert repository.claim_options is not None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="RC-02 tracked by #209: drain must reobserve the final 32 completions",
-)
 def test_rc_02_drain_reobserves_final_32_completions() -> None:
     states = [
         _worker_result(
@@ -578,6 +579,7 @@ def test_rc_02_drain_reobserves_final_32_completions() -> None:
         Path("research-db"),
         max_batches=2,
         runner=runner,
+        waiter=lambda _seconds: False,
     )
 
     assert result == 0
