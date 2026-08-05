@@ -217,6 +217,7 @@ class IndexCheckpointService(IndexCheckpointStoreMixin):
                 raise IndexCheckpointStaleError("checkpoint belongs to another run")
 
             if checkpoint.status == "completed":
+                persisted_census = self._checkpoint_census(checkpoint)
                 transition = uow.runs.apply_run_transition(
                     run_id,
                     "coverage_review",
@@ -231,12 +232,17 @@ class IndexCheckpointService(IndexCheckpointStoreMixin):
                     completion={
                         "indexing_checkpoint_id": str(checkpoint.id),
                         "membership_sha256": checkpoint.expected_membership_sha256,
+                        "fingerprint": checkpoint.fingerprint,
+                        "expected": checkpoint.expected_count,
+                        "complete": checkpoint.complete_count,
+                        "manifest_count": checkpoint.manifest_count,
+                        "census": persisted_census,
                     },
                 )
                 return IndexFinalization(
                     "reused",
                     checkpoint,
-                    self._checkpoint_census(checkpoint),
+                    persisted_census,
                     int(transition["lifecycle_revision"]),
                     transition=transition,
                 )
@@ -345,6 +351,7 @@ class IndexCheckpointService(IndexCheckpointStoreMixin):
                     reason="indexing remains incomplete and resumable",
                 )
 
+            persisted_census = self._checkpoint_census(checkpoint)
             transition = uow.runs.apply_run_transition(
                 run_id,
                 "coverage_review",
@@ -363,7 +370,7 @@ class IndexCheckpointService(IndexCheckpointStoreMixin):
                     "expected": expected,
                     "complete": complete,
                     "manifest_count": manifest_count,
-                    "census": census,
+                    "census": persisted_census,
                 },
             )
             cursor.execute(
