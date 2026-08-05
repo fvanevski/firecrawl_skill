@@ -75,7 +75,7 @@ class GuardedResearchRunService(ResearchRunService):
             missing_reason="not_supplied_by_caller",
         )
         if not isinstance(census, dict):
-            raise ValueError("terminal decision state_census must be an object")
+            raise TypeError("terminal decision state_census must be an object")
         completion_payload = dict(completion or {})
         transition_outcome = declared_outcome or outcome
         created = created_at or datetime.now(timezone.utc)
@@ -229,8 +229,12 @@ class GuardedResearchRunService(ResearchRunService):
             )
             if checkpoint is not None:
                 return IndexCheckpointService.checkpoint_census(checkpoint)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "schema_version": "terminal-state-census-v1",
+                "available": False,
+                "reason": f"checkpoint_census_unavailable:{type(exc).__name__}",
+            }
         return {
             "schema_version": "terminal-state-census-v1",
             "available": False,

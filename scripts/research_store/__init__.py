@@ -1,11 +1,17 @@
 """Persistent research asset store for the Firecrawl skill."""
 
+from . import orchestrator as _orchestrator
+from . import run_service as _run_service
+from . import workflow_service as _workflow_service
 from .acquisition_authority import (
     AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
     require_authoritative_acquisition,
 )
 from .acquisition_service import AcquisitionService, FirecrawlSearchAdapter
+from .checkpoint_indexing_stage import CheckpointIndexingStage
+from .checkpoint_orchestrator import CheckpointResearchOrchestrator
+from .checkpoint_workflow_service import CheckpointWorkflowOperationService
 from .config import StoreConfig
 from .direct_scrape_service import (
     DirectScrapeBatchResult,
@@ -30,29 +36,14 @@ from .domain import (
 from .execution_policy import ExecutionModePolicy
 from .extraction_repository import ExtractionAttemptRepository
 from .extraction_service import ExtractionError, ExtractionService
-from . import orchestrator as _orchestrator
-from .orchestrator import (
-    OrchestratorConfig,
-    OrchestratorResult,
-    ResearchOrchestrator,
-)
+from .lifecycle_guard import GuardedResearchRunService
+from .orchestrator import OrchestratorConfig, OrchestratorResult
 from .quality_config import QualityConfig
 from .quality_evaluator import evaluate_quality
 from .quality_service import QualityEvaluationError, QualityService
-from . import run_service as _run_service
-from . import workflow_service as _workflow_service
-from .checkpoint_indexing_stage import CheckpointIndexingStage
-from .checkpoint_orchestrator import CheckpointResearchOrchestrator
-from .checkpoint_workflow_service import CheckpointWorkflowOperationService
-from .lifecycle_guard import GuardedResearchRunService
 from .semantic_service import SemanticCallService
 from .service import CorpusService
-from .stages import (
-    ContextKeys,
-    StageHandler,
-    StageOutcome,
-    StageResult,
-)
+from .stages import ContextKeys, StageHandler, StageOutcome, StageResult
 
 # Preserve the public import path while ensuring every newly constructed run
 # service uses the terminal-decision guard.  Assigning the submodule attribute

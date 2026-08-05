@@ -8,10 +8,11 @@ import json
 import signal
 import subprocess
 import time
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event
-from typing import Any, Sequence
+from typing import Any
 
 from drain_index_jobs import (
     CANCELLED_EXIT_CODE,
@@ -68,7 +69,7 @@ class CheckpointRunner:
             )
             census = result.get("census")
             if not isinstance(census, dict):
-                raise RuntimeError("scoped worker did not return the required census")
+                raise TypeError("scoped worker did not return the required census")
             self.checkpoint = self.checkpoint_service.observe(
                 self.checkpoint.id,
                 census,

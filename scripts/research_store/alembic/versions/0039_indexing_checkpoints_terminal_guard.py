@@ -17,7 +17,7 @@ depends_on = None
 
 
 def upgrade():
-    op.execute(
+    op.get_bind().exec_driver_sql(
         r"""
         ALTER TABLE terminal_decisions
           ADD COLUMN reason_code text NOT NULL DEFAULT 'legacy_unstructured',

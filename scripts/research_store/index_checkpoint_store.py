@@ -13,7 +13,6 @@ from .index_checkpoint_models import (
     IndexCheckpointError,
     IndexCheckpointStaleError,
     _checkpoint_from_row,
-    _membership_digest,
     _parse_datetime,
 )
 
@@ -214,3 +213,5 @@ class IndexCheckpointStoreMixin:
         if row is None:
             raise KeyError(checkpoint_id)
         return _checkpoint_from_row(row)
+
+

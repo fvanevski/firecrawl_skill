@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event
-from typing import Any, Sequence
+from typing import Any
 from uuid import UUID
 
 from drain_index_jobs import drain_index_jobs_result
@@ -65,7 +66,7 @@ class _PersistingCheckpointRunner:
             )
             census = result.get("census")
             if not isinstance(census, dict):
-                raise RuntimeError("scoped indexing result omitted its census")
+                raise TypeError("scoped indexing result omitted its census")
             self.checkpoint = self.checkpoint_service.observe(
                 self.checkpoint.id,
                 census,
