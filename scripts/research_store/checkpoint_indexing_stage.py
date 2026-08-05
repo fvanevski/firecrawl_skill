@@ -158,9 +158,12 @@ class CheckpointIndexingStage:
         ):
             cancellation = Event()
 
+        max_attempts = int(getattr(self.config, "max_index_attempts", 5))
+        lease_seconds = float(getattr(self.config, "job_lease_seconds", 60.0))
+        embedding_batch_size = int(getattr(self.config, "embedding_batch_size", 64))
         checkpoints = IndexCheckpointService(
             self.run_service.uow_factory,
-            max_attempts=self.config.max_index_attempts,
+            max_attempts=max_attempts,
         )
         try:
             checkpoint = checkpoints.ensure(
@@ -189,8 +192,8 @@ class CheckpointIndexingStage:
             index=self.corpus_service.index,
             embedder=embedder,
             queue=getattr(self.corpus_service, "queue", None),
-            lease_seconds=self.config.job_lease_seconds,
-            max_attempts=self.config.max_index_attempts,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
         )
         runner = _PersistingCheckpointRunner(
             worker=worker,
@@ -200,7 +203,7 @@ class CheckpointIndexingStage:
         )
         drain = drain_index_jobs_result(
             Path("research-db"),
-            batch_size=self.config.embedding_batch_size,
+            batch_size=embedding_batch_size,
             max_batches=max_batches,
             deadline_seconds=deadline_seconds,
             initial_backoff_seconds=0.25,
@@ -276,7 +279,8 @@ class CheckpointIndexingStage:
             measured_texts = int(aggregate["embedding_texts"])
             measured_vectors = int(aggregate["complete"])
             if measured_texts == 0:
-                sample_ids = list(entity_ids[: self.config.embedding_batch_size])
+                batch_size = int(getattr(self.config, "embedding_batch_size", 64))
+                sample_ids = list(entity_ids[:batch_size])
                 with self.corpus_service.uow_factory() as uow:
                     records = uow.chunks.chunks_for_index(sample_ids)
                 texts = [record["text"] for record in records]
@@ -300,9 +304,9 @@ class CheckpointIndexingStage:
                     failed_count=int(aggregate["failed"]),
                     total_texts=measured_texts,
                     elapsed_seconds=elapsed,
-                    endpoint_url=self.config.embedding_url,
-                    endpoint_model=self.config.embedding_model,
-                    dimension=self.config.embedding_dimension,
+                    endpoint_url=getattr(self.config, "embedding_url", None),
+                    endpoint_model=getattr(self.config, "embedding_model", None),
+                    dimension=getattr(self.config, "embedding_dimension", None),
                 )
             return None
         except Exception as exc:  # noqa: BLE001

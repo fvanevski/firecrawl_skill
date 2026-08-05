@@ -8,6 +8,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from .run_service import (
+    RUN_STATES,
     TERMINAL_STATES,
     ResearchRunService,
     RunStateError,
@@ -69,16 +70,17 @@ class GuardedResearchRunService(ResearchRunService):
         resolved_reason_code = reason_code or "policy_terminal_decision"
         if not resolved_reason_code.strip():
             raise ValueError("terminal decision reason_code is required")
-        census = self._resolve_state_census(
-            run_id,
-            state_census,
-            missing_reason="not_supplied_by_caller",
-        )
+        census = state_census or {
+            "schema_version": "terminal-state-census-v1",
+            "available": False,
+            "reason": "not_supplied_by_caller",
+        }
         if not isinstance(census, dict):
             raise TypeError("terminal decision state_census must be an object")
         completion_payload = dict(completion or {})
         transition_outcome = declared_outcome or outcome
         created = created_at or datetime.now(timezone.utc)
+        permitted_prior_states = self._terminal_permitted_prior_states(next_state)
 
         try:
             with self.uow_factory() as uow:
@@ -96,30 +98,24 @@ class GuardedResearchRunService(ResearchRunService):
                         idempotency_key=idempotency_key,
                         created_at=created,
                     )
-                    result = uow.runs.apply_run_transition(
+                    return uow.runs.apply_run_transition(
                         run_id,
                         next_state,
                         expected_revision,
                         idempotency_key,
                         actor_type,
                         self.policy_version,
-                        permitted_prior_states=frozenset(
-                            state
-                            for state, destinations in (
-                                self._permitted_transitions().items()
-                            )
-                            if next_state in destinations
-                        ),
+                        permitted_prior_states=permitted_prior_states,
                         actor_identifier=actor_identifier,
                         semantic_proposal_id=semantic_proposal_id,
-                        event_type=triggering_event
-                        or f"run.transitioned.{next_state}",
+                        event_type=(
+                            triggering_event or f"run.transitioned.{next_state}"
+                        ),
                         reason=reason,
                         outcome=transition_outcome,
                         error=error,
                         completion=completion_payload,
                     )
-                    return result
                 with uow.connection.cursor() as cursor:
                     cursor.execute(
                         """SELECT id,decision_id,run_revision,coverage_revision,
@@ -191,11 +187,7 @@ class GuardedResearchRunService(ResearchRunService):
                     idempotency_key,
                     actor_type,
                     self.policy_version,
-                    permitted_prior_states=frozenset(
-                        state
-                        for state, destinations in self._permitted_transitions().items()
-                        if next_state in destinations
-                    ),
+                    permitted_prior_states=permitted_prior_states,
                     actor_identifier=actor_identifier,
                     semantic_proposal_id=semantic_proposal_id,
                     event_type=triggering_event or f"run.transitioned.{next_state}",
@@ -246,6 +238,15 @@ class GuardedResearchRunService(ResearchRunService):
         from .run_service import PERMITTED_TRANSITIONS
 
         return PERMITTED_TRANSITIONS
+
+    def _terminal_permitted_prior_states(self, next_state: str) -> frozenset[str]:
+        if next_state == "cancelled":
+            return RUN_STATES - TERMINAL_STATES
+        return frozenset(
+            state
+            for state, destinations in self._permitted_transitions().items()
+            if next_state in destinations
+        )
 
     def _terminal_command(
         self,

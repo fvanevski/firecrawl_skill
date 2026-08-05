@@ -15,10 +15,7 @@ def _source(path: Path) -> str:
 
 def test_checkpoint_migration_is_linear_additive_and_forward_only():
     source = _source(
-        STORE
-        / "alembic"
-        / "versions"
-        / "0039_indexing_checkpoints_terminal_guard.py"
+        STORE / "alembic" / "versions" / "0039_indexing_checkpoints_terminal_guard.py"
     )
     assert 'revision = "0039_index_checkpoint_guard"' in source
     assert 'down_revision = "0038_postgres_authority"' in source

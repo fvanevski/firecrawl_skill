@@ -11,7 +11,6 @@ from .acquisition_authority import (
 from .acquisition_service import AcquisitionService, FirecrawlSearchAdapter
 from .checkpoint_indexing_stage import CheckpointIndexingStage
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
-from .checkpoint_workflow_service import CheckpointWorkflowOperationService
 from .config import StoreConfig
 from .direct_scrape_service import (
     DirectScrapeBatchResult,
@@ -46,13 +45,14 @@ from .service import CorpusService
 from .stages import ContextKeys, StageHandler, StageOutcome, StageResult
 
 # Preserve the public import path while ensuring every newly constructed run
-# service uses the terminal-decision guard.  Assigning the submodule attribute
-# also covers ``from research_store.run_service import ResearchRunService``.
+# service uses the terminal-decision guard. Assigning the run-service and
+# orchestrator attributes also covers their historical public module imports.
+# Wrapper checkpoint wiring is intentionally explicit in container.py so the
+# base workflow service remains independently testable and reusable.
 _run_service.ResearchRunService = GuardedResearchRunService
 ResearchRunService = GuardedResearchRunService
 _orchestrator.ResearchRunService = GuardedResearchRunService
 _workflow_service.ResearchRunService = GuardedResearchRunService
-_workflow_service.WorkflowOperationService = CheckpointWorkflowOperationService
 _orchestrator.IndexingStage = CheckpointIndexingStage
 _orchestrator.ResearchOrchestrator = CheckpointResearchOrchestrator
 ResearchOrchestrator = CheckpointResearchOrchestrator

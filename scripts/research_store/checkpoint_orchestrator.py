@@ -18,9 +18,7 @@ class CheckpointResearchOrchestrator(ResearchOrchestrator):
                 run_id=run_id,
                 final_state=status.state,
                 outcome="resumable",
-                coverage_revision=getattr(
-                    status, "current_coverage_revision", None
-                ),
+                coverage_revision=getattr(status, "current_coverage_revision", None),
                 error=None,
             )
         return super()._failed_result(run_id, error)

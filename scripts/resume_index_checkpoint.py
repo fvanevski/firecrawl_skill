@@ -178,9 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             break
 
     setup_started = time.monotonic()
-    deadline_at = datetime.now(timezone.utc) + timedelta(
-        seconds=args.deadline_seconds
-    )
+    deadline_at = datetime.now(timezone.utc) + timedelta(seconds=args.deadline_seconds)
     checkpoint = None
     finalization = None
     try:
