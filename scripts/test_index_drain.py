@@ -234,6 +234,57 @@ def test_recoverable_deadline_returns_structured_resumable_result() -> None:
     assert clock.waits == [0.25, 0.25]
 
 
+def test_scoped_default_deadline_remains_bounded() -> None:
+    module = _load_module()
+    clock = _Clock()
+    calls = 0
+
+    def runner(_argv: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        clock.value += module.DEFAULT_SCOPED_DEADLINE_SECONDS + 1
+        return _worker(_census(complete=3, running_live=1))
+
+    result = module.drain_index_jobs_result(
+        Path("research-db"),
+        max_batches=2,
+        runner=runner,
+        require_census=True,
+        clock=clock.monotonic,
+        waiter=clock.wait,
+    )
+
+    assert result.status == "resumable"
+    assert result.reason == "deadline_exhausted"
+    assert result.batches == 1
+    assert calls == 1
+
+
+def test_auto_detected_census_also_uses_the_scoped_default_deadline() -> None:
+    module = _load_module()
+    clock = _Clock()
+    calls = 0
+
+    def runner(_argv: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        clock.value += module.DEFAULT_SCOPED_DEADLINE_SECONDS + 1
+        return _worker(_census(complete=3, running_live=1))
+
+    result = module.drain_index_jobs_result(
+        Path("research-db"),
+        max_batches=2,
+        runner=runner,
+        clock=clock.monotonic,
+        waiter=clock.wait,
+    )
+
+    assert result.status == "resumable"
+    assert result.reason == "deadline_exhausted"
+    assert result.batches == 1
+    assert calls == 1
+
+
 def test_cancellation_interrupts_a_bounded_wait_without_terminalizing() -> None:
     module = _load_module()
     clock = _Clock()
@@ -254,6 +305,80 @@ def test_cancellation_interrupts_a_bounded_wait_without_terminalizing() -> None:
     assert result.to_dict()["lifecycle_terminal"] is False
     assert len(calls) == 1
     assert clock.waits == [0.25]
+
+
+def test_cancellation_before_worker_skips_invocation() -> None:
+    module = _load_module()
+    clock = _Clock()
+    calls = 0
+
+    def runner(_argv: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        pytest.fail("worker must not run after cancellation")
+
+    result = module.drain_index_jobs_result(
+        Path("research-db"),
+        runner=runner,
+        require_census=True,
+        clock=clock.monotonic,
+        waiter=clock.wait,
+        cancelled=lambda: True,
+    )
+
+    assert result.status == "cancelled"
+    assert result.reason == "cancelled_before_worker"
+    assert result.exit_code == module.CANCELLED_EXIT_CODE
+    assert result.batches == 0
+    assert calls == 0
+
+
+def test_cancellation_after_worker_preempts_complete_census() -> None:
+    module = _load_module()
+    clock = _Clock()
+    cancel_state = {"value": False}
+
+    def runner(_argv: object) -> subprocess.CompletedProcess[str]:
+        cancel_state["value"] = True
+        return _worker(_census(complete=4))
+
+    result = module.drain_index_jobs_result(
+        Path("research-db"),
+        runner=runner,
+        require_census=True,
+        clock=clock.monotonic,
+        waiter=clock.wait,
+        cancelled=lambda: cancel_state["value"],
+    )
+
+    assert result.status == "cancelled"
+    assert result.reason == "cancelled_after_worker"
+    assert result.exit_code == module.CANCELLED_EXIT_CODE
+    assert result.recoverable is True
+    assert result.to_dict()["lifecycle_terminal"] is False
+    assert result.batches == 1
+
+
+def test_main_reports_structured_cancellation_during_scoped_setup(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_module()
+
+    def cancelled_setup(*_args: object, **_kwargs: object) -> object:
+        raise module.DrainCancelled
+
+    monkeypatch.setattr(module, "_run_scoped_runner", cancelled_setup)
+    monkeypatch.setattr(module.signal, "signal", lambda *_args: module.signal.SIG_DFL)
+
+    exit_code = module.main(["--research-run-id", "fr_test"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == module.CANCELLED_EXIT_CODE
+    assert payload["status"] == "cancelled"
+    assert payload["reason"] == "cancelled_during_setup"
+    assert payload["recoverable"] is True
+    assert payload["lifecycle_terminal"] is False
 
 
 def test_backoff_is_bounded_and_avoids_a_zero_claim_busy_loop() -> None:
@@ -352,6 +477,66 @@ def test_unscoped_projection_maintenance_remains_backward_compatible() -> None:
     assert result.reason == "unscoped_queue_empty"
     assert len(calls) == 2
     assert clock.waits == []
+
+
+def test_unscoped_default_does_not_add_an_elapsed_deadline() -> None:
+    module = _load_module()
+    clock = _Clock()
+    responses = [
+        subprocess.CompletedProcess(
+            [], 0, '{"claimed": 1, "failed": 0, "lease_lost": 0}', ""
+        ),
+        subprocess.CompletedProcess(
+            [], 0, '{"claimed": 0, "failed": 0, "lease_lost": 0}', ""
+        ),
+    ]
+    calls = 0
+
+    def runner(_argv: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        response = responses[calls]
+        calls += 1
+        clock.value += 301
+        return response
+
+    result = module.drain_index_jobs_result(
+        Path("research-db"),
+        runner=runner,
+        clock=clock.monotonic,
+        waiter=clock.wait,
+    )
+
+    assert result.status == "complete"
+    assert result.reason == "unscoped_queue_empty"
+    assert calls == 2
+    assert result.elapsed_seconds == 602
+
+
+def test_unscoped_deadline_is_available_only_when_explicitly_requested() -> None:
+    module = _load_module()
+    clock = _Clock()
+    calls = 0
+
+    def runner(_argv: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        clock.value += 301
+        return subprocess.CompletedProcess(
+            [], 0, '{"claimed": 1, "failed": 0, "lease_lost": 0}', ""
+        )
+
+    result = module.drain_index_jobs_result(
+        Path("research-db"),
+        deadline_seconds=300,
+        runner=runner,
+        clock=clock.monotonic,
+        waiter=clock.wait,
+    )
+
+    assert result.status == "failed"
+    assert result.reason == "deadline_exhausted"
+    assert result.batches == 1
+    assert calls == 1
 
 
 def test_run_scoped_runner_seals_postgresql_membership_once(
@@ -463,3 +648,25 @@ def test_run_scoped_runner_seals_postgresql_membership_once(
         "normalizer-v1",
         "chunker-v1",
     )
+
+    cancel_state = {"value": False}
+
+    class CancellingCursor(Cursor):
+        def fetchall(self) -> list[tuple[UUID]]:
+            cancel_state["value"] = True
+            return super().fetchall()
+
+    class CancellingConnection:
+        def cursor(self) -> CancellingCursor:
+            return CancellingCursor()
+
+    class CancellingUnitOfWork(UnitOfWork):
+        connection = CancellingConnection()
+
+    corpus_service.uow_factory = lambda: CancellingUnitOfWork()
+    with pytest.raises(module.DrainCancelled):
+        module._run_scoped_runner(
+            "fr_test",
+            cancelled=lambda: cancel_state["value"],
+        )
+    assert run_batch_calls == [(7, entity_ids)]
