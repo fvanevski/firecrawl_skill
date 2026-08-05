@@ -1,0 +1,133 @@
+name: Restore integration fixture
+
+on:
+  push:
+    branches:
+      - rc/audit-04-index-checkpoint-terminal-decision
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Restore immutable fixture and patch one obsolete test
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='scripts/test_research_store_integration.py'
+          workflow='.github/workflows/restore-integration-fixture.yml'
+          parent='3cb4fef01473581a9c649d05559156087796c1ca'
+          git show "$parent:$target" > /tmp/original-fixture.py
+          test "$(git hash-object /tmp/original-fixture.py)" = '959595733b362494117cf48692a594ecfc64ffcf'
+          python - <<'PY'
+          from pathlib import Path
+
+          target = Path('scripts/test_research_store_integration.py')
+          original = Path('/tmp/original-fixture.py').read_text(encoding='utf-8')
+          old_head = 'assert cursor.fetchone()[0] == "0038_postgres_authority"'
+          new_head = 'assert cursor.fetchone()[0] == "0039_index_checkpoint_guard"'
+          if original.count(old_head) != 1:
+              raise SystemExit(
+                  f'expected exactly one migration-head assertion, found '
+                  f'{original.count(old_head)}'
+              )
+          expected = original.replace(old_head, new_head)
+          start_marker = '    def test_append_only_trigger_enforced(self):\n'
+          end_marker = '\n    def test_forward_only_downgrade(self):'
+          if expected.count(start_marker) != 1 or expected.count(end_marker) != 1:
+              raise SystemExit('append-only test boundaries are not unique')
+          start = expected.index(start_marker)
+          end = expected.index(end_marker, start)
+          replacement = '''    def test_append_only_trigger_enforced(self):
+        """Verify structured terminal decisions remain append-only."""
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute("DROP SCHEMA public CASCADE")
+            cursor.execute("CREATE SCHEMA public")
+        assert migrate(TEST_DSN) >= 15
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp/firecrawl-terminal-append-only-test"),
+            embedding_dimension=4,
+        )
+        runs = build_run_service(config)
+        status = runs.create(
+            "append-only terminal decision",
+            f"fr_test_{uuid4().hex}",
+            execution_mode="autonomous_local",
+        )
+        runs.transition(
+            status.id,
+            "planning",
+            expected_revision=status.lifecycle_revision,
+            idempotency_key=f"append-only:{status.id}:planning",
+            actor_type="integration-test",
+        )
+        status = runs.status(run_id=status.id)
+        key = f"append-only:{status.id}:failed"
+        runs.fail(
+            status.id,
+            expected_revision=status.lifecycle_revision,
+            idempotency_key=key,
+            actor_type="integration-test",
+            reason="exercise terminal decision append-only trigger",
+            outcome="failed",
+            error="exercise terminal decision append-only trigger",
+            completion={
+                "reason_code": "integration_append_only_test",
+                "state_census": {
+                    "schema_version": "terminal-state-census-v1",
+                    "available": True,
+                    "counts": {"failed": 1},
+                },
+            },
+        )
+
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT id FROM terminal_decisions
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (status.id, key),
+            )
+            row_id = cursor.fetchone()[0]
+            cursor.execute("SAVEPOINT update_sp")
+            with pytest.raises(Exception, match="terminal_decisions is append-only"):
+                cursor.execute(
+                    "UPDATE terminal_decisions SET outcome='partial' WHERE id=%s",
+                    (row_id,),
+                )
+            cursor.execute("ROLLBACK TO SAVEPOINT update_sp")
+            cursor.execute("SAVEPOINT delete_sp")
+            with pytest.raises(Exception, match="terminal_decisions is append-only"):
+                cursor.execute("DELETE FROM terminal_decisions WHERE id=%s", (row_id,))
+            cursor.execute("ROLLBACK TO SAVEPOINT delete_sp")
+'''
+          expected = expected[:start] + replacement + expected[end:]
+          target.write_text(expected, encoding='utf-8')
+          actual = target.read_text(encoding='utf-8')
+          if actual != expected:
+              raise SystemExit('restored fixture does not match expected transformation')
+          if actual.count('\ndef test_') + actual.count('\n    def test_') != (
+              original.count('\ndef test_') + original.count('\n    def test_')
+          ):
+              raise SystemExit('test-function count changed during restoration')
+          if len(actual.encode('utf-8')) < 156000:
+              raise SystemExit('restored fixture is unexpectedly short')
+          PY
+          python -m py_compile "$target"
+          git diff --check -- "$target"
+          git rm "$workflow"
+          git add "$target"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(tests): restore integration suite and patch terminal fixture'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
