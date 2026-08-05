@@ -36,6 +36,7 @@ __all__ = [
     "Config",
     "Event",
     "IndexCheckpointService",
+    "Path",
     "StoreConfig",
     "TEST_DSN",
     "ThreadPoolExecutor",
@@ -122,7 +123,7 @@ def _seed_retained_assets(config: StoreConfig, count: int = 1):
         research_run_external_id=external_id,
     )
     assert manifest["failure_count"] == 0
-    assert manifest["success_count"] == count
+    assert sum(asset["status"] == "complete" for asset in manifest["assets"]) == count
     return corpus, runs, _advance_to_indexing(runs, status), manifest
 
 
