@@ -213,5 +213,3 @@ class IndexCheckpointStoreMixin:
         if row is None:
             raise KeyError(checkpoint_id)
         return _checkpoint_from_row(row)
-
-
