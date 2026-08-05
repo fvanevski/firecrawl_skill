@@ -1,11 +1,15 @@
 """Persistent research asset store for the Firecrawl skill."""
 
+from . import orchestrator as _orchestrator
+from . import run_service as _run_service
+from . import workflow_service as _workflow_service
 from .acquisition_authority import (
     AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
     require_authoritative_acquisition,
 )
 from .acquisition_service import AcquisitionService, FirecrawlSearchAdapter
+from .checkpoint_orchestrator import CheckpointResearchOrchestrator
 from .config import StoreConfig
 from .direct_scrape_service import (
     DirectScrapeBatchResult,
@@ -30,23 +34,26 @@ from .domain import (
 from .execution_policy import ExecutionModePolicy
 from .extraction_repository import ExtractionAttemptRepository
 from .extraction_service import ExtractionError, ExtractionService
-from .orchestrator import (
-    OrchestratorConfig,
-    OrchestratorResult,
-    ResearchOrchestrator,
-)
+from .lifecycle_guard import GuardedResearchRunService
+from .orchestrator import OrchestratorConfig, OrchestratorResult
 from .quality_config import QualityConfig
 from .quality_evaluator import evaluate_quality
 from .quality_service import QualityEvaluationError, QualityService
-from .run_service import ResearchRunService
 from .semantic_service import SemanticCallService
 from .service import CorpusService
-from .stages import (
-    ContextKeys,
-    StageHandler,
-    StageOutcome,
-    StageResult,
-)
+from .stages import ContextKeys, StageHandler, StageOutcome, StageResult
+
+# Preserve the public import path while ensuring every newly constructed run
+# service uses the terminal-decision guard. The checkpoint orchestrator selects
+# its durable indexing stage only when the run service advertises that
+# capability, leaving the base orchestrator independently reusable and testable.
+# Wrapper checkpoint wiring remains explicit in container.py.
+_run_service.ResearchRunService = GuardedResearchRunService
+ResearchRunService = GuardedResearchRunService
+_orchestrator.ResearchRunService = GuardedResearchRunService
+_workflow_service.ResearchRunService = GuardedResearchRunService
+_orchestrator.ResearchOrchestrator = CheckpointResearchOrchestrator
+ResearchOrchestrator = CheckpointResearchOrchestrator
 
 __all__ = [
     "VALID_NORMALIZATION_DISPOSITIONS",

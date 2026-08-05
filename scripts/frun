@@ -18,6 +18,9 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   frun start <objective> [--mode agent_led|autonomous_local|deterministic_debug]
+  frun resume <fr_id> [--batch-size N] [--max-batches N]
+       [--deadline-seconds N] [--initial-backoff-seconds N]
+       [--max-backoff-seconds N]
   frun finish <fr_id> --outcome <satisfied|partial|...> [--status complete|failed]
        [--source-manifest FILE] [--answer-file FILE] [--auto-audit]
   frun reopen <fr_id> [--reason TEXT]
@@ -55,6 +58,25 @@ case "${1:-}" in
         "$external_id" "$objective" --mode "$mode"
     )"
     python3 -c 'import json,sys; print(json.load(sys.stdin)["external_id"])' <<<"$output"
+    ;;
+
+  resume)
+    shift
+    run_id="${1:-}"
+    [[ -n "$run_id" ]] || usage
+    shift
+    args=("$run_id")
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --batch-size|--max-batches|--deadline-seconds|--initial-backoff-seconds|--max-backoff-seconds)
+          [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }
+          args+=("$1" "$2")
+          shift 2
+          ;;
+        *) echo "ERROR: unknown resume option: $1" >&2; exit 2 ;;
+      esac
+    done
+    exec python3 "$SCRIPT_DIR/resume_index_checkpoint.py" "${args[@]}"
     ;;
 
   finish)

@@ -89,7 +89,7 @@ def prepared_database():
         )
         assert all(cursor.fetchone())
         cursor.execute("SELECT version_num FROM alembic_version")
-        assert cursor.fetchone()[0] == "0038_postgres_authority"
+        assert cursor.fetchone()[0] == "0039_index_checkpoint_guard"
 
 
 def test_wrapper_workflow_runs_entirely_from_postgresql(service):
@@ -2094,51 +2094,68 @@ class TestMigration0015TerminalDecisions:
             assert "terminal_decisions_decision_idx" in indexes
 
     def test_append_only_trigger_enforced(self):
-        """Verify DDL trigger prevents UPDATE/DELETE."""
+        """Verify structured terminal decisions remain append-only."""
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("DROP SCHEMA public CASCADE")
             cursor.execute("CREATE SCHEMA public")
         assert migrate(TEST_DSN) >= 15
 
-        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-            run_id = uuid4()
-            cursor.execute(
-                """INSERT INTO research_runs(
-                    id, objective, query_plan, skill_version,
-                    retrieval_policy_version, state, execution_mode, external_run_id
-                ) VALUES (%s, 'test', '{}', 'v1', 'v1', 'created', 'autonomous_local', %s)""",
-                (run_id, f"fr_test_{uuid4().hex}"),
-            )
-            # Insert a row
-            cursor.execute(
-                """INSERT INTO terminal_decisions(
-                    run_id, decision_id, run_revision, coverage_revision,
-                    outcome, no_progress_signals, unresolved_gap,
-                    policy_version, idempotency_key
-                ) VALUES (%s, %s, 1, 1, 'partial', '{}', 'test gap',
-                    'terminal-decision-policy-v1', 'test-idem-key')""",
-                (run_id, uuid4()),
-            )
-            assert cursor.rowcount == 1
-            cursor.execute("SELECT id FROM terminal_decisions LIMIT 1")
-            row_id = cursor.fetchone()[0]
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=TEST_DSN,
+            blob_root=Path("/tmp/firecrawl-terminal-append-only-test"),
+            embedding_dimension=4,
+        )
+        runs = build_run_service(config)
+        status = runs.create(
+            "append-only terminal decision",
+            f"fr_test_{uuid4().hex}",
+            execution_mode="autonomous_local",
+        )
+        runs.transition(
+            status.id,
+            "planning",
+            expected_revision=status.lifecycle_revision,
+            idempotency_key=f"append-only:{status.id}:planning",
+            actor_type="integration-test",
+        )
+        status = runs.status(run_id=status.id)
+        key = f"append-only:{status.id}:failed"
+        runs.fail(
+            status.id,
+            expected_revision=status.lifecycle_revision,
+            idempotency_key=key,
+            actor_type="integration-test",
+            reason="exercise terminal decision append-only trigger",
+            outcome="failed",
+            error="exercise terminal decision append-only trigger",
+            completion={
+                "reason_code": "integration_append_only_test",
+                "state_census": {
+                    "schema_version": "terminal-state-census-v1",
+                    "available": True,
+                    "counts": {"failed": 1},
+                },
+            },
+        )
 
-            # Try to UPDATE — should fail
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT id FROM terminal_decisions
+                WHERE run_id=%s AND idempotency_key=%s""",
+                (status.id, key),
+            )
+            row_id = cursor.fetchone()[0]
             cursor.execute("SAVEPOINT update_sp")
             with pytest.raises(Exception, match="terminal_decisions is append-only"):
                 cursor.execute(
-                    "UPDATE terminal_decisions SET outcome = 'failed' WHERE id = %s",
+                    "UPDATE terminal_decisions SET outcome='partial' WHERE id=%s",
                     (row_id,),
                 )
             cursor.execute("ROLLBACK TO SAVEPOINT update_sp")
-
-            # Try to DELETE — should fail
             cursor.execute("SAVEPOINT delete_sp")
             with pytest.raises(Exception, match="terminal_decisions is append-only"):
-                cursor.execute(
-                    "DELETE FROM terminal_decisions WHERE id = %s",
-                    (row_id,),
-                )
+                cursor.execute("DELETE FROM terminal_decisions WHERE id=%s", (row_id,))
             cursor.execute("ROLLBACK TO SAVEPOINT delete_sp")
 
     def test_forward_only_downgrade(self):

@@ -98,11 +98,11 @@ def build_invocation_service(config: StoreConfig | None = None):
 
 
 def build_workflow_operation_service(config: StoreConfig | None = None):
-    """Build wrapper workflow boundaries over PostgreSQL state."""
-    from .workflow_service import WorkflowOperationService
+    """Build checkpoint-guarded wrapper boundaries over PostgreSQL state."""
+    from .checkpoint_workflow_service import CheckpointWorkflowOperationService
 
     run_service = build_run_service(config)
-    return WorkflowOperationService(
+    return CheckpointWorkflowOperationService(
         run_service,
         build_invocation_service(config),
     )
@@ -182,7 +182,7 @@ def build_orchestrator(
 
     This is a convenience wrapper around ``ResearchOrchestrator.build``
     that uses the same configuration pattern as the other ``build_*``
-    functions.  When no explicit ``orchestrator_config`` is supplied, a
+    functions. When no explicit ``orchestrator_config`` is supplied, a
     ResourceGovernor is built and attached so that synthesis LLM calls are
     bounded through the governor.
     """
@@ -195,9 +195,7 @@ def build_orchestrator(
             resource_governor=governor,
         )
     elif getattr(orchestrator_config, "resource_governor", None) is None:
-        # Existing config was passed but no governor — attach one.
         governor = build_resource_governor(config)
-        # Rebuild with the governor attached.
         orchestrator_config = OrchestratorConfig(
             execution_mode=getattr(
                 orchestrator_config, "execution_mode", "autonomous_local"
@@ -276,7 +274,6 @@ def build_resource_governor(
         health_query=make_health_query(uow_factory),
     )
 
-    # Register generative endpoint.
     if config.generative_url:
         governor.register_endpoint(
             EndpointConfig(
@@ -291,7 +288,6 @@ def build_resource_governor(
             )
         )
 
-    # Register embedding endpoint.
     if config.embedding_url:
         governor.register_endpoint(
             EndpointConfig(
@@ -304,7 +300,6 @@ def build_resource_governor(
             )
         )
 
-    # Register reranker endpoint.
     if config.reranker_url:
         governor.register_endpoint(
             EndpointConfig(
