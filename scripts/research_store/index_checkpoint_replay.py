@@ -55,7 +55,15 @@ def replay_completed_checkpoint(
                 f"current revision {current_revision}"
             )
 
-        current_membership = service._current_membership(uow, cursor, run_id)
+        asset_seal = service.asset_promotions.load_active_seal_in_transaction(
+            cursor,
+            run_id,
+        )
+        current_membership = (
+            asset_seal.chunk_ids
+            if asset_seal is not None
+            else service._current_membership(uow, cursor, run_id)
+        )
         if (
             current_membership != checkpoint.entity_ids
             or _membership_digest(current_membership)
@@ -64,6 +72,8 @@ def replay_completed_checkpoint(
             raise IndexCheckpointError(
                 "completed checkpoint replay failed: sealed membership changed"
             )
+        if asset_seal is not None:
+            service._validate_asset_binding(cursor, checkpoint.id, asset_seal)
         if service._definition_count(cursor, checkpoint.fingerprint) != 1:
             raise IndexCheckpointError(
                 "completed checkpoint replay failed: index definition changed"
@@ -96,15 +106,12 @@ def replay_completed_checkpoint(
             )
 
         persisted_census = service._checkpoint_census(checkpoint)
-        expected_completion: dict[str, Any] = {
-            "indexing_checkpoint_id": str(checkpoint.id),
-            "membership_sha256": checkpoint.expected_membership_sha256,
-            "fingerprint": checkpoint.fingerprint,
-            "expected": checkpoint.expected_count,
-            "complete": checkpoint.complete_count,
-            "manifest_count": checkpoint.manifest_count,
-            "census": persisted_census,
-        }
+        expected_completion: dict[str, Any] = service._completion_payload(
+            checkpoint,
+            persisted_census,
+            manifest_count=checkpoint.manifest_count,
+            asset_seal=asset_seal,
+        )
         cursor.execute(
             """SELECT id,triggering_event_id,lifecycle_revision,prior_state,
                       next_state,validation_result,idempotency_key
