@@ -1,27 +1,12 @@
-"""Terminal-decision persistence service.
+"""Compatibility surface for terminal-decision policy records.
 
-This module implements the ``TerminalDecisionService`` that persists
-terminal decisions produced by the ``TerminalDecisionPolicy`` to the
-``terminal_decisions`` table (migration 0015).
-
-Key invariants:
-
-* Decisions are append-only — no UPDATE/DELETE is permitted.
-* Idempotency keys prevent duplicate decisions for the same run.
-* The service is intentionally thin — it carries no evaluation logic.
-  The ``TerminalDecisionPolicy`` owns evaluation; this service owns
-  persistence.
-
-Usage::
-
-    service = TerminalDecisionService(uow_factory)
-    record = service.record(
-        run_id=run_id,
-        run_revision=run,
-        coverage_revision=coverage_revision,
-        decision=decision,
-        idempotency_key=f"terminal:{run_id}",
-    )
+Authoritative terminal decisions are not standalone ledger writes. Migration
+0039 binds every new decision to one semantically matching terminal lifecycle
+transition in the same PostgreSQL transaction. Callers must therefore use
+``ResearchRunService.commit_terminal_decision`` or a guarded terminal lifecycle
+helper. This module retains the historical record type and a fail-closed
+``record`` method so older integrations receive a precise migration error rather
+than silently writing false provenance.
 """
 
 from __future__ import annotations
@@ -31,40 +16,28 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-
-logger = logging.getLogger(__name__)
 from uuid import UUID
 
-from research_domain.models import (
-    TerminalDecision,
-)
+from research_domain.models import TerminalDecision
+
+logger = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-
 class TerminalDecisionError(ValueError):
-    """A terminal-decision operation violated a constraint."""
+    """A terminal-decision operation violated an authoritative constraint."""
 
 
 class DuplicateTerminalDecisionError(TerminalDecisionError):
-    """An idempotency key already exists for this run."""
-
-
-# ---------------------------------------------------------------------------
-# Domain types
-# ---------------------------------------------------------------------------
+    """An idempotency key already exists for another terminal command."""
 
 
 @dataclass(frozen=True)
 class TerminalDecisionRecord:
-    """Persisted terminal-decision record returned from the service."""
+    """Persisted terminal-decision record returned by legacy readers."""
 
     id: UUID
     run_id: UUID
@@ -86,7 +59,7 @@ class TerminalDecisionRecord:
         idempotency_key: str,
         created_at: datetime | None = None,
     ) -> TerminalDecisionRecord:
-        """Build a record from an in-memory ``TerminalDecision``."""
+        """Build a compatibility record from an in-memory decision."""
         now = created_at or utcnow()
         return cls(
             id=id,
@@ -103,17 +76,13 @@ class TerminalDecisionRecord:
         )
 
 
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
-
-
 class TerminalDecisionService:
-    """Persist terminal decisions to the ``terminal_decisions`` table.
+    """Fail closed for the retired standalone decision-write API.
 
-    Args:
-        uow_factory: Callable that returns a SQLAlchemy ``Session``-like
-            object with ``execute()``, ``commit()``, and ``rollback()``.
+    Constructing the configured unit of work is intentional: connection and
+    schema failures retain their original diagnostic context. Once a usable
+    authoritative store is available, the method rejects before issuing SQL and
+    directs the caller to the atomic lifecycle API.
     """
 
     def __init__(self, uow_factory: Callable[[], Any]) -> None:
@@ -125,63 +94,28 @@ class TerminalDecisionService:
         decision: TerminalDecision,
         idempotency_key: str,
     ) -> TerminalDecisionRecord:
-        """Persist a terminal decision to the ``terminal_decisions`` table.
+        """Reject standalone persistence of a new terminal decision.
 
-        Args:
-            run_id: The research run UUID.
-            decision: The ``TerminalDecision`` produced by the policy.
-            idempotency_key: Deduplication key — must be unique per run.
-
-        Returns:
-            A ``TerminalDecisionRecord`` with the persisted ID and timestamp.
-
-        Raises:
-            DuplicateTerminalDecisionError: If the idempotency key already
-                exists for this run.
+        Use ``ResearchRunService.commit_terminal_decision`` with the decision,
+        target terminal state, reason code, and state census. The replacement
+        API inserts the decision and transition under one run-scoped
+        idempotency key and one PostgreSQL transaction.
         """
+        del decision, idempotency_key
         try:
-            created_at = utcnow()
-
-            with self.uow_factory() as uow:
-                uow.execute(
-                    """INSERT INTO terminal_decisions (
-                        run_id, decision_id, run_revision, coverage_revision,
-                        outcome, no_progress_signals, unresolved_gap,
-                        policy_version, idempotency_key, created_at
-                    ) VALUES (
-                        :run_id, :decision_id, :run_revision, :coverage_revision,
-                        :outcome, :signals, :unresolved_gap,
-                        :policy_version, :idempotency_key, :created_at
-                    ) RETURNING id, created_at""",
-                    {
-                        "run_id": str(run_id),
-                        "decision_id": str(decision.decision_id),
-                        "run_revision": decision.run_revision,
-                        "coverage_revision": decision.coverage_revision,
-                        "outcome": decision.outcome.value,
-                        "signals": tuple(s.value for s in decision.no_progress_signals),
-                        "unresolved_gap": decision.unresolved_gap,
-                        "policy_version": decision.policy_version,
-                        "idempotency_key": idempotency_key,
-                        "created_at": created_at,
-                    },
-                )
-                row = uow.fetchone()
-
-                return TerminalDecisionRecord.from_decision(
-                    id=row[0],
-                    decision=decision,
-                    idempotency_key=idempotency_key,
-                    created_at=row[1],
+            with self.uow_factory():
+                raise TerminalDecisionError(
+                    "standalone terminal decision persistence is prohibited; "
+                    "use ResearchRunService.commit_terminal_decision so the "
+                    "decision and lifecycle transition commit atomically"
                 )
         except DuplicateTerminalDecisionError:
             raise
+        except TerminalDecisionError:
+            raise
         except Exception as exc:
-            # Blocking: a terminal decision affects whether a run completes,
-            # fails, stops partial, or remains blocked. Losing that record
-            # must not be silently nonblocking.
             logger.error(
-                "terminal decision persistence FAILED — aborting transition: %s",
+                "terminal decision persistence preflight FAILED — aborting: %s",
                 exc,
             )
             raise TerminalDecisionError(

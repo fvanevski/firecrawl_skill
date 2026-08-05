@@ -119,53 +119,61 @@ class GuardedResearchRunService(ResearchRunService):
                         error=error,
                         completion=completion_payload,
                     )
+                expected = (
+                    decision_id,
+                    run_revision,
+                    coverage_revision,
+                    outcome,
+                    list(no_progress_signals),
+                    unresolved_gap,
+                    policy_version,
+                    resolved_reason_code,
+                    census,
+                )
                 with uow.connection.cursor() as cursor:
                     cursor.execute(
-                        """SELECT id,decision_id,run_revision,coverage_revision,
-                                  outcome,no_progress_signals,unresolved_gap,
-                                  policy_version,reason_code,state_census,created_at
-                             FROM terminal_decisions
-                            WHERE run_id=%s AND idempotency_key=%s""",
-                        (run_id, idempotency_key),
+                        """INSERT INTO terminal_decisions(
+                               run_id,decision_id,run_revision,coverage_revision,
+                               outcome,no_progress_signals,unresolved_gap,
+                               policy_version,idempotency_key,created_at,
+                               reason_code,state_census)
+                             VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                             ON CONFLICT(run_id,idempotency_key) DO NOTHING
+                             RETURNING id""",
+                        (
+                            run_id,
+                            decision_id,
+                            run_revision,
+                            coverage_revision,
+                            outcome,
+                            list(no_progress_signals),
+                            unresolved_gap,
+                            policy_version,
+                            idempotency_key,
+                            created,
+                            resolved_reason_code,
+                            json.dumps(census, sort_keys=True),
+                        ),
                     )
-                    existing = cursor.fetchone()
-                    expected = (
-                        decision_id,
-                        run_revision,
-                        coverage_revision,
-                        outcome,
-                        list(no_progress_signals),
-                        unresolved_gap,
-                        policy_version,
-                        resolved_reason_code,
-                        census,
-                    )
-                    if existing is None:
-                        cursor.execute(
-                            """INSERT INTO terminal_decisions(
-                                   run_id,decision_id,run_revision,coverage_revision,
-                                   outcome,no_progress_signals,unresolved_gap,
-                                   policy_version,idempotency_key,created_at,
-                                   reason_code,state_census)
-                                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                                 RETURNING id""",
-                            (
-                                run_id,
-                                decision_id,
-                                run_revision,
-                                coverage_revision,
-                                outcome,
-                                list(no_progress_signals),
-                                unresolved_gap,
-                                policy_version,
-                                idempotency_key,
-                                created,
-                                resolved_reason_code,
-                                json.dumps(census, sort_keys=True),
-                            ),
-                        )
-                        decision_row_id = cursor.fetchone()[0]
+                    inserted = cursor.fetchone()
+                    if inserted is not None:
+                        decision_row_id = inserted[0]
                     else:
+                        cursor.execute(
+                            """SELECT id,decision_id,run_revision,
+                                      coverage_revision,outcome,
+                                      no_progress_signals,unresolved_gap,
+                                      policy_version,reason_code,state_census
+                                 FROM terminal_decisions
+                                WHERE run_id=%s AND idempotency_key=%s""",
+                            (run_id, idempotency_key),
+                        )
+                        existing = cursor.fetchone()
+                        if existing is None:
+                            raise RuntimeError(
+                                "terminal decision idempotency conflict was not "
+                                "readable"
+                            )
                         normalized_existing = (
                             existing[1],
                             int(existing[2]),
