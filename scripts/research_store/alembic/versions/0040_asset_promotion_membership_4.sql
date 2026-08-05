@@ -91,6 +91,158 @@
         BEFORE UPDATE OR DELETE ON run_asset_membership_seals
         FOR EACH ROW EXECUTE FUNCTION guard_membership_seal_update();
 
+        CREATE FUNCTION canonical_asset_membership_member_payload(
+          subject_id uuid,
+          snapshot_id uuid,
+          role text,
+          chunk_ids uuid[]
+        ) RETURNS text
+        LANGUAGE sql
+        IMMUTABLE
+        STRICT
+        SET search_path=pg_catalog
+        AS $function$
+          SELECT '{"chunk_ids":['
+            || COALESCE((
+              SELECT string_agg(to_json(chunk_id::text)::text,',' ORDER BY ordinal)
+                FROM unnest(chunk_ids) WITH ORDINALITY AS chunk(chunk_id,ordinal)
+            ),'')
+            || '],"role":' || to_json(role)::text
+            || ',"snapshot_id":' || to_json(snapshot_id::text)::text
+            || ',"subject_id":' || to_json(subject_id::text)::text
+            || '}'
+        $function$;
+
+        CREATE FUNCTION validate_run_asset_membership_seal(target_seal_id uuid)
+        RETURNS void
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path=pg_catalog,public
+        AS $function$
+        DECLARE
+          seal_row run_asset_membership_seals%ROWTYPE;
+          member_count bigint;
+          ordinal_count bigint;
+          minimum_ordinal integer;
+          maximum_ordinal integer;
+          distinct_chunk_count bigint;
+          computed_membership_sha256 text;
+        BEGIN
+          SELECT * INTO seal_row
+            FROM run_asset_membership_seals WHERE id=target_seal_id;
+          IF NOT FOUND THEN
+            RAISE EXCEPTION 'asset membership seal % does not exist',target_seal_id
+              USING ERRCODE='23503';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+              FROM run_asset_membership_members member
+             WHERE member.seal_id=target_seal_id
+               AND (
+                 array_position(member.chunk_ids,NULL) IS NOT NULL
+                 OR cardinality(member.chunk_ids)<>(
+                   SELECT count(DISTINCT chunk_id)
+                     FROM unnest(member.chunk_ids) AS chunk(chunk_id)
+                 )
+                 OR member.chunk_ids IS DISTINCT FROM ARRAY(
+                   SELECT chunk_id
+                     FROM unnest(member.chunk_ids) AS chunk(chunk_id)
+                    ORDER BY chunk_id
+                 )
+               )
+          ) THEN
+            RAISE EXCEPTION
+              'asset membership member chunk IDs must be non-null, unique, and sorted'
+              USING ERRCODE='23514';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+              FROM run_asset_membership_members member
+             WHERE member.seal_id=target_seal_id
+               AND member.member_sha256<>encode(digest(
+                 canonical_asset_membership_member_payload(
+                   member.subject_id,member.snapshot_id,member.role,member.chunk_ids
+                 ),'sha256'),'hex')
+          ) THEN
+            RAISE EXCEPTION
+              'asset membership member SHA-256 does not address its persisted payload'
+              USING ERRCODE='23514';
+          END IF;
+
+          SELECT count(*),count(DISTINCT ordinal),min(ordinal),max(ordinal),
+                 encode(digest(
+                   '[' || string_agg(
+                     canonical_asset_membership_member_payload(
+                       member.subject_id,member.snapshot_id,member.role,
+                       member.chunk_ids
+                     ),',' ORDER BY member.ordinal
+                   ) || ']',
+                   'sha256'
+                 ),'hex')
+            INTO member_count,ordinal_count,minimum_ordinal,maximum_ordinal,
+                 computed_membership_sha256
+            FROM run_asset_membership_members member
+           WHERE member.seal_id=target_seal_id;
+
+          SELECT count(DISTINCT chunk_id)
+            INTO distinct_chunk_count
+            FROM run_asset_membership_members member
+            CROSS JOIN LATERAL unnest(member.chunk_ids) AS chunk(chunk_id)
+           WHERE member.seal_id=target_seal_id;
+
+          IF member_count=0
+             OR ordinal_count<>member_count
+             OR minimum_ordinal<>0
+             OR maximum_ordinal<>member_count-1 THEN
+            RAISE EXCEPTION
+              'asset membership seal requires a non-empty contiguous member ordering'
+              USING ERRCODE='23514';
+          END IF;
+          IF seal_row.expected_asset_count<>member_count THEN
+            RAISE EXCEPTION
+              'asset membership expected asset count % does not equal persisted count %',
+              seal_row.expected_asset_count,member_count
+              USING ERRCODE='23514';
+          END IF;
+          IF seal_row.expected_chunk_count<>distinct_chunk_count THEN
+            RAISE EXCEPTION
+              'asset membership expected chunk count % does not equal persisted count %',
+              seal_row.expected_chunk_count,distinct_chunk_count
+              USING ERRCODE='23514';
+          END IF;
+          IF seal_row.membership_sha256<>computed_membership_sha256 THEN
+            RAISE EXCEPTION
+              'asset membership seal SHA-256 does not address its persisted members'
+              USING ERRCODE='23514';
+          END IF;
+        END;
+        $function$;
+
+        CREATE FUNCTION validate_run_asset_membership_seal_trigger()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path=pg_catalog,public
+        AS $function$
+        BEGIN
+          PERFORM validate_run_asset_membership_seal(
+            CASE WHEN TG_TABLE_NAME='run_asset_membership_members'
+                 THEN NEW.seal_id ELSE NEW.id END
+          );
+          RETURN NULL;
+        END;
+        $function$;
+        CREATE CONSTRAINT TRIGGER run_asset_membership_seal_validate_trigger
+        AFTER INSERT ON run_asset_membership_seals
+        DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION validate_run_asset_membership_seal_trigger();
+        CREATE CONSTRAINT TRIGGER run_asset_membership_member_validate_trigger
+        AFTER INSERT ON run_asset_membership_members
+        DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION validate_run_asset_membership_seal_trigger();
+
         CREATE FUNCTION reject_membership_member_change()
         RETURNS trigger
         LANGUAGE plpgsql

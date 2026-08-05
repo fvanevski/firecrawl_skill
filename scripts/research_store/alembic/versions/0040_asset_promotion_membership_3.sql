@@ -35,9 +35,20 @@
         DECLARE
           subject_row run_asset_promotion_subjects%ROWTYPE;
           current_lifecycle_revision bigint;
+          attempt_actor_identifier text;
+          extraction_is_authoritative boolean;
         BEGIN
           SELECT lifecycle_revision INTO current_lifecycle_revision
             FROM research_runs WHERE id=NEW.run_id FOR UPDATE;
+          attempt_actor_identifier := format('extraction-attempt:%s',NEW.id);
+          extraction_is_authoritative :=
+            NEW.exit_status::text='succeeded'
+            AND NEW.end_time IS NOT NULL
+            AND (
+              NEW.raw_blob_sha256 IS NOT NULL
+              OR NEW.normalized_blob_sha256 IS NOT NULL
+            );
+
           SELECT * INTO subject_row FROM run_asset_promotion_subjects
            WHERE run_id=NEW.run_id AND candidate_id=NEW.candidate_id FOR UPDATE;
           IF NOT FOUND THEN
@@ -47,7 +58,7 @@
               reason_code,reason
             ) VALUES(
               NEW.run_id,NEW.candidate_id,'discovered',0,'authoritative',
-              'system','extraction-attempt-trigger','candidate-discovery-v1',
+              'system',attempt_actor_identifier,'candidate-discovery-v1',
               current_lifecycle_revision,'subject_initialized_for_new_extraction',
               'A new extraction established the subject; no history was inferred'
             ) RETURNING * INTO subject_row;
@@ -57,7 +68,7 @@
             UPDATE run_asset_promotion_subjects
                SET current_stage='selected_for_extraction',
                    actor_type='system',
-                   actor_identifier='extraction-attempt-trigger',
+                   actor_identifier=attempt_actor_identifier,
                    policy_version='extraction-attempt-v1',
                    lifecycle_revision=current_lifecycle_revision,
                    reason_code='extraction_attempt_started',
@@ -67,24 +78,61 @@
              WHERE id=subject_row.id;
           END IF;
 
-          IF NEW.exit_status::text='succeeded'
+          IF extraction_is_authoritative
              AND subject_row.current_stage='selected_for_extraction' THEN
             UPDATE run_asset_promotion_subjects
                SET current_stage='extracted',
                    actor_type='system',
-                   actor_identifier='extraction-attempt-trigger',
+                   actor_identifier=attempt_actor_identifier,
                    policy_version='extraction-attempt-v1',
                    lifecycle_revision=current_lifecycle_revision,
                    reason_code='extraction_attempt_succeeded',
-                   reason='Selected extraction attempt persisted a successful output'
+                   reason='A finalized extraction attempt persisted successful output bytes'
              WHERE id=subject_row.id;
           END IF;
           RETURN NEW;
         END;
         $function$;
-        CREATE TRIGGER extraction_attempt_records_promotion_stages_trigger
+        CREATE TRIGGER extraction_attempt_initializes_promotion_stage_trigger
         AFTER INSERT ON extraction_attempts
         FOR EACH ROW EXECUTE FUNCTION record_extraction_promotion_stages();
+        CREATE TRIGGER extraction_attempt_finalizes_promotion_stage_trigger
+        AFTER UPDATE OF exit_status,end_time,raw_blob_sha256,normalized_blob_sha256
+        ON extraction_attempts
+        FOR EACH ROW EXECUTE FUNCTION record_extraction_promotion_stages();
+
+        CREATE FUNCTION guard_extraction_attempt_after_promotion()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path=pg_catalog,public
+        AS $function$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+              FROM run_asset_promotion_events event
+             WHERE event.run_id=OLD.run_id
+               AND event.to_stage='extracted'
+               AND event.actor_identifier=format('extraction-attempt:%s',OLD.id)
+          ) AND (
+            NEW.exit_status IS DISTINCT FROM OLD.exit_status
+            OR NEW.end_time IS DISTINCT FROM OLD.end_time
+            OR NEW.raw_blob_sha256 IS DISTINCT FROM OLD.raw_blob_sha256
+            OR NEW.normalized_blob_sha256 IS DISTINCT FROM
+               OLD.normalized_blob_sha256
+          ) THEN
+            RAISE EXCEPTION
+              'finalized extraction attempt % already supports immutable promotion provenance',
+              OLD.id
+              USING ERRCODE='55000';
+          END IF;
+          RETURN NEW;
+        END;
+        $function$;
+        CREATE TRIGGER extraction_attempt_promoted_provenance_guard_trigger
+        BEFORE UPDATE OF exit_status,end_time,raw_blob_sha256,normalized_blob_sha256
+        ON extraction_attempts
+        FOR EACH ROW EXECUTE FUNCTION guard_extraction_attempt_after_promotion();
 
         CREATE FUNCTION retain_linked_run_asset_subject()
         RETURNS trigger

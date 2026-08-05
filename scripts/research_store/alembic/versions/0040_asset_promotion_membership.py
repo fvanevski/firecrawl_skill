@@ -21,6 +21,6 @@ def upgrade():
 
 def downgrade():
     raise RuntimeError(
-        "Asset-promotion migrations are forward-only; apply a forward repair "
-        "or restore PostgreSQL from backup"
+        "Research workflow migrations are forward-only; apply an "
+        "asset-promotion forward repair or restore PostgreSQL from backup"
     )

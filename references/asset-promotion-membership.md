@@ -28,11 +28,18 @@ stage revision, actor, actor identifier, policy version, run lifecycle revision,
 reason code, optional reason, timestamp, and PostgreSQL transaction identity.
 The event table is append-only.
 
-A persisted search candidate establishes `discovered`. An authoritative
-extraction attempt establishes `selected_for_extraction`; only a successful
-attempt establishes `extracted`. Linking the resulting snapshot to the run
-establishes `retained`. Extraction success and retention do **not** implicitly
-establish either `evidence_eligible` or `completion_critical`.
+A persisted search candidate establishes `discovered`. Creating an extraction
+attempt establishes `selected_for_extraction`, but its provisional row is not
+success evidence. Only a finalized successful extraction with `end_time` and at
+least one persisted raw or normalized blob digest establishes `extracted`.
+Failed, partial, and cancelled final results remain selected unless explicitly
+rejected. Once an attempt supports an `extracted` event, the status, completion
+time, and output digests that support that immutable provenance cannot be
+rewritten.
+
+Linking the resulting snapshot to the run establishes `retained`. Extraction
+success and retention do **not** implicitly establish either
+`evidence_eligible` or `completion_critical`.
 
 Generic run-asset links that have no candidate/extraction lineage begin at
 `retained` with `direct_retention` provenance. This records the known retention
@@ -58,10 +65,18 @@ barrier. While holding the run row lock, the service:
 4. records the asset count and the de-duplicated exact chunk count; and
 5. hashes the canonical member representation with SHA-256.
 
+PostgreSQL does not trust values calculated by the service. Deferred constraint
+triggers recompute and verify every member hash, the aggregate membership hash,
+the persisted asset count, the distinct chunk count, and contiguous member
+ordering before commit. Member chunk arrays must be non-null, sorted, and free
+of duplicates. A syntactically valid but non-addressing hash or inconsistent
+count therefore aborts the sealing transaction.
+
 A new indexing checkpoint must bind to the active seal. Its independently hashed
 chunk membership must exactly equal the seal's persisted chunk IDs and expected
 chunk count. Completion evidence records both checkpoint and asset-membership
-identities, counts, and hashes.
+identities, counts, and hashes under the transition ledger's
+`validation_result.completion` object.
 
 Sealing is idempotent when the persisted member set is unchanged. Promotion into
 or out of `completion_critical` while a seal is active fails closed. A caller must
@@ -93,3 +108,12 @@ evidence-bearing forward repair supplies authoritative promotion provenance.
 
 The migration is additive and forward-only. `downgrade()` fails closed; recovery
 requires a forward repair or restoration from a PostgreSQL backup.
+
+## Required regression coverage
+
+The issue-specific suite exercises the production extraction service rather
+than a direct parser or constant seam. It covers successful, failed, partial,
+and cancelled completion; immutable successful provenance; invalid stage skips;
+PostgreSQL rejection of false member/seal hashes and duplicate chunks;
+idempotent sealing; exact checkpoint binding; explicit reopen/reseal CAS;
+deterministic race orderings; interruption recovery; and pre-0040 compatibility.

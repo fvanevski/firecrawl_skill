@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -61,7 +62,7 @@ def test_migration_is_linear_additive_and_forward_only():
     assert "CREATE TABLE run_asset_membership_seals" in source
     assert "CREATE TABLE run_asset_membership_members" in source
     assert "ALTER TABLE indexing_checkpoints" in source
-    assert source.count("END;\n        $function$;") == 10
+    assert source.count("END;\n        $function$;") >= 13
     assert "%%ROWTYPE" not in source
     assert "forward repair" in source
 
@@ -107,11 +108,18 @@ def test_extraction_stops_before_evidence_and_completion_membership():
     function = source.split(
         "CREATE FUNCTION record_extraction_promotion_stages()", 1
     )[1]
-    function = function.split("CREATE TRIGGER extraction_attempt", 1)[0]
+    function = function.split(
+        "CREATE TRIGGER extraction_attempt_initializes", 1
+    )[0]
     assert "selected_for_extraction" in function
     assert "extracted" in function
+    assert "NEW.end_time IS NOT NULL" in function
+    assert "NEW.raw_blob_sha256 IS NOT NULL" in function
+    assert "NEW.normalized_blob_sha256 IS NOT NULL" in function
     assert "evidence_eligible" not in function
     assert "completion_critical" not in function
+    assert "AFTER UPDATE OF exit_status,end_time" in source
+    assert "guard_extraction_attempt_after_promotion" in source
 
 
 def test_seal_binds_only_completion_critical_assets_and_exact_chunks():
@@ -124,6 +132,17 @@ def test_seal_binds_only_completion_critical_assets_and_exact_chunks():
     assert "expected_chunk_count" in service
     assert "prepared_asset_seal.chunk_ids" in checkpoint
     assert "indexing_checkpoint_binds_asset_membership_trigger" in migration
+
+
+def test_postgresql_recomputes_member_hash_seal_hash_and_counts():
+    migration = _migration_source()
+    assert "canonical_asset_membership_member_payload" in migration
+    assert "validate_run_asset_membership_seal" in migration
+    assert "member SHA-256 does not address" in migration
+    assert "seal SHA-256 does not address" in migration
+    assert "expected asset count" in migration
+    assert "expected chunk count" in migration
+    assert "DEFERRABLE INITIALLY DEFERRED" in migration
 
 
 def test_completed_checkpoint_replay_uses_the_bound_asset_seal():
@@ -166,6 +185,11 @@ def test_promotion_and_concurrency_code_has_no_arbitrary_sleep():
     assert "_after_promotion_step" in source
 
 
+def test_asset_promotion_modules_import_without_default_argument_name_errors():
+    importlib.import_module("research_store.asset_promotion_service")
+    importlib.import_module("research_store.index_checkpoint_service")
+
+
 def test_dedicated_workflow_runs_contract_and_postgres_integration_tests():
     workflow = _source(
         SCRIPTS.parent / ".github" / "workflows" / "index-checkpoint.yml"
@@ -182,3 +206,5 @@ def test_reference_documents_authority_stages_reopen_and_compatibility():
     assert "explicitly reopen" in reference
     assert "legacy_unstructured" in reference
     assert "No earlier stage" in reference
+    assert "finalized successful extraction" in reference
+    assert "recomputes and verifies" in reference
