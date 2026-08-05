@@ -39,20 +39,22 @@ scripts/fsearch 'bounded query' \
   --limit 20 \
   --scrape-limit 5
 
-python3 scripts/drain_index_jobs.py --batch-size 64
+python3 scripts/drain_index_jobs.py \
+  --research-run-id "$RUN_ID" \
+  --batch-size 64
 scripts/research-db run-status "$RUN_ID"
 scripts/frun finish "$RUN_ID" --outcome satisfied
 scripts/frun status "$RUN_ID"
 ```
 
-`research-db worker --once` handles at most one bounded batch. The drain helper repeats it until a batch reports `claimed=0` and fails closed on worker errors, invalid output, failed jobs, or lease loss. Do not start another acquisition on the same run or finish it while run-scoped indexing is unfinished.
+`research-db worker --once` handles at most one bounded batch. Run-scoped `drain_index_jobs.py` seals the run's current PostgreSQL chunk membership, consumes the exact index-job census, waits with bounded backoff for live leases, reclaims expired work, retries recoverable failures, and succeeds only when every expected manifest is complete. A recoverable deadline or batch bound returns structured `index-drain-result-v1` output with exit status `75`; cancellation returns `130`. Neither outcome advances the run lifecycle. Unscoped use remains available for projection maintenance, but its `claimed=0` result is not run-completion evidence.
 
 To add a direct scrape to an existing nonterminal run, drain and verify prior work first, then drain again after the scrape:
 
 ```bash
-python3 scripts/drain_index_jobs.py --batch-size 64
+python3 scripts/drain_index_jobs.py --research-run-id "$RUN_ID" --batch-size 64
 scripts/fscrape 'https://example.com/article' --research-run-id "$RUN_ID"
-python3 scripts/drain_index_jobs.py --batch-size 64
+python3 scripts/drain_index_jobs.py --research-run-id "$RUN_ID" --batch-size 64
 scripts/research-db run-status "$RUN_ID"
 ```
 

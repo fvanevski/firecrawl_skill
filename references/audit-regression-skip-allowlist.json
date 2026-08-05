@@ -2,12 +2,6 @@
   "schema_version": "pytest-skip-allowlist-v1",
   "entries": [
     {
-      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_02_drain_reobserves_final_32_completions",
-      "reason_contains": "RC-02 tracked by #209",
-      "classification": "audit-regression-expected-failure",
-      "replacement_gate": "Issue #209 remediation"
-    },
-    {
       "node_id": "scripts/test_audit_regression_baseline.py::test_rc_04_direct_acquisition_obeys_lifecycle_boundaries",
       "reason_contains": "RC-04 tracked by #212",
       "classification": "audit-regression-expected-failure",
