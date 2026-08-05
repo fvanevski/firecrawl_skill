@@ -24,11 +24,17 @@ def upgrade():
           ADD COLUMN state_census jsonb,
           ADD COLUMN decision_transaction_id xid8;
 
+        ALTER TABLE terminal_decisions
+          DISABLE TRIGGER terminal_decisions_append_only_trigger;
+
         UPDATE terminal_decisions
            SET reason_code='legacy_unstructured',
                state_census=
                  '{"schema_version":"terminal-state-census-v1","available":false,"reason":"legacy_unstructured"}'::jsonb
          WHERE reason_code IS NULL OR state_census IS NULL;
+
+        ALTER TABLE terminal_decisions
+          ENABLE TRIGGER terminal_decisions_append_only_trigger;
 
         ALTER TABLE terminal_decisions
           ALTER COLUMN reason_code SET NOT NULL,

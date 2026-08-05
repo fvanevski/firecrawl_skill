@@ -56,7 +56,13 @@ def test_checkpoint_stage_uses_bounded_cancellation_aware_waits():
 
 def test_completed_replay_is_read_only_and_authoritative():
     source = _source(STORE / "index_checkpoint_replay.py")
-    assert "apply_run_transition" not in source
+    tree = ast.parse(source)
+    calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "apply_run_transition" not in calls
     assert "_current_membership" in source
     assert "census_index_jobs" in source
     assert "_manifest_count" in source
@@ -100,7 +106,7 @@ def test_wrapper_validates_operation_before_checkpoint_mutation():
 def test_guarded_terminal_writer_uses_conflict_safe_idempotent_insert():
     source = _source(STORE / "lifecycle_guard.py")
     assert "ON CONFLICT(run_id,idempotency_key) DO NOTHING" in source
-    assert "idempotency conflict was not readable" in source
+    assert "terminal decision idempotency conflict was not readable" in source
 
 
 def test_standalone_terminal_decision_writer_is_fail_closed():

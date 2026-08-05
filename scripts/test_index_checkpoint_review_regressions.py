@@ -29,7 +29,6 @@ from research_store.terminal_decision_service import (
     TerminalDecisionService,
 )
 from research_store.workflow_service import WorkflowBoundaryError
-from resume_index_checkpoint import main as resume_checkpoint_main
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -213,7 +212,7 @@ def test_v39_backfills_only_preexisting_decisions_and_removes_legacy_defaults(
         database_url=database_url,
         blob_root=blob_root,
     )
-    runs, status = _seed_planning_run(config)
+    _runs, status = _seed_planning_run(config)
     legacy_key = f"legacy:{status.id}"
     with connect(database_url) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -258,9 +257,12 @@ def test_orphan_terminal_decision_cannot_commit(checkpoint_config: StoreConfig):
     _runs, status = _seed_planning_run(checkpoint_config)
     key = f"review-orphan:{status.id}"
 
-    with pytest.raises(Exception, match="matching terminal transition"):
-        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-            _insert_structured_decision(cursor, status, key, outcome="failed")
+    with (
+        pytest.raises(Exception, match="matching terminal transition"),
+        connect(TEST_DSN) as connection,
+        connection.cursor() as cursor,
+    ):
+        _insert_structured_decision(cursor, status, key, outcome="failed")
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -277,23 +279,25 @@ def test_semantically_mismatched_terminal_command_rolls_back(
     runs, status = _seed_planning_run(checkpoint_config)
     key = f"review-mismatch:{status.id}"
 
-    with pytest.raises(Exception, match="does not authorize"):
-        with runs.uow_factory() as uow:
-            with uow.connection.cursor() as cursor:
-                _insert_structured_decision(cursor, status, key, outcome="partial")
-            uow.runs.apply_run_transition(
-                status.id,
-                "failed",
-                status.lifecycle_revision,
-                key,
-                "integration-test",
-                "run-state-v1",
-                permitted_prior_states=frozenset({"planning"}),
-                event_type="run.transitioned.failed",
-                reason="mismatched terminal command",
-                outcome="failed",
-                error="mismatched terminal command",
-            )
+    with (
+        pytest.raises(Exception, match="does not authorize"),
+        runs.uow_factory() as uow,
+        uow.connection.cursor() as cursor,
+    ):
+        _insert_structured_decision(cursor, status, key, outcome="partial")
+        uow.runs.apply_run_transition(
+            status.id,
+            "failed",
+            status.lifecycle_revision,
+            key,
+            "integration-test",
+            "run-state-v1",
+            permitted_prior_states=frozenset({"planning"}),
+            event_type="run.transitioned.failed",
+            reason="mismatched terminal command",
+            outcome="failed",
+            error="mismatched terminal command",
+        )
 
     current = runs.status(run_id=status.id)
     assert (current.state, current.lifecycle_revision) == (
@@ -362,7 +366,7 @@ def test_guarded_terminal_command_persists_one_atomic_semantic_pair(
 def test_concurrent_identical_terminal_commands_reuse_one_atomic_pair(
     checkpoint_config: StoreConfig,
 ):
-    runs, status = _seed_planning_run(checkpoint_config)
+    _runs, status = _seed_planning_run(checkpoint_config)
     key = f"review-concurrent-terminal:{status.id}"
     barrier = Barrier(2)
 
@@ -457,6 +461,8 @@ def test_public_resume_replays_completed_checkpoint_without_new_transition(
     monkeypatch,
     capsys,
 ):
+    from resume_index_checkpoint import main as resume_checkpoint_main
+
     _corpus, runs, status = _seed_indexing_run(checkpoint_config)
     checkpoints = IndexCheckpointService(
         runs.uow_factory, max_attempts=checkpoint_config.max_index_attempts
