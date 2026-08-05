@@ -50,6 +50,15 @@ class IndexWorker:
     def run_batch(self, limit: int = 64, entity_ids: list[UUID] | None = None) -> dict:
         if limit <= 0:
             raise ValueError("limit must be positive")
+
+        fingerprint = getattr(self.embedder, "fingerprint", None)
+        if entity_ids is not None:
+            if not isinstance(fingerprint, str) or not fingerprint.strip():
+                raise ValueError(
+                    "sealed index-job census requires the active index fingerprint"
+                )
+            fingerprint = fingerprint.strip()
+
         result = {
             "worker_id": self.worker_id,
             "claimed": 0,
@@ -64,7 +73,7 @@ class IndexWorker:
             "lease_seconds": self.lease_seconds,
             "worker_id": self.worker_id,
             "max_attempts": self.max_attempts,
-            "fingerprint": getattr(self.embedder, "fingerprint", None),
+            "fingerprint": fingerprint,
         }
         if entity_ids is not None:
             claim_options["entity_ids"] = entity_ids
@@ -115,7 +124,11 @@ class IndexWorker:
                 )
             if not jobs:
                 self._heartbeat(result)
-                return result
+                return self._attach_census(
+                    result,
+                    entity_ids=entity_ids,
+                    fingerprint=claim_options["fingerprint"],
+                )
             result["claimed"] = len(jobs)
             self._heartbeat({**result, "busy": True})
             try:
@@ -150,6 +163,67 @@ class IndexWorker:
                         result["lease_lost"] += 1
             self._heartbeat({**result, "busy": True})
         self._heartbeat(result)
+        return self._attach_census(
+            result,
+            entity_ids=entity_ids,
+            fingerprint=claim_options["fingerprint"],
+        )
+
+    def _attach_census(
+        self,
+        result: dict,
+        *,
+        entity_ids: list[UUID] | None,
+        fingerprint: str | None,
+    ) -> dict:
+        """Attach exact sealed-set evidence without changing batch counters.
+
+        ``result["complete"]`` remains the number completed by this invocation.
+        Census-wide completion is exposed as ``complete_manifests`` and as
+        ``result["census"]["complete"]``.
+        """
+        if entity_ids is None:
+            return result
+        if not isinstance(fingerprint, str) or not fingerprint.strip():
+            raise ValueError(
+                "sealed index-job census requires the active index fingerprint"
+            )
+        fingerprint = fingerprint.strip()
+
+        with self.uow_factory() as uow:
+            repository_census = getattr(uow.index_jobs, "census_index_jobs", None)
+            if repository_census is not None:
+                census = repository_census(
+                    entity_ids,
+                    fingerprint,
+                    max_attempts=self.max_attempts,
+                )
+            else:
+                from .index_census import census_index_jobs
+
+                census = census_index_jobs(
+                    uow.connection,
+                    entity_ids,
+                    fingerprint,
+                    max_attempts=self.max_attempts,
+                )
+
+        result["census"] = census
+        for key in (
+            "expected",
+            "claimable",
+            "running_live",
+            "running_expired",
+            "retryable_failed",
+            "dead",
+            "missing_job",
+            "wrong_fingerprint",
+            "manifest_inconsistent",
+        ):
+            result[key] = census[key]
+        result["complete_manifests"] = census.get(
+            "complete_manifests", census["complete"]
+        )
         return result
 
     def _process_microbatch(self, jobs: list[dict]) -> dict:
