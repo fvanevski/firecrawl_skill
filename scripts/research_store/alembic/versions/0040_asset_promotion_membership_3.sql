@@ -142,12 +142,23 @@
         AS $function$
         DECLARE
           resolved_candidate_id uuid;
+          resolved_attempt_id uuid;
+          resolved_attempt_status text;
+          resolved_attempt_end_time timestamptz;
+          snapshot_has_output boolean;
           resolved_subject run_asset_promotion_subjects%ROWTYPE;
           current_lifecycle_revision bigint;
         BEGIN
           SELECT lifecycle_revision INTO current_lifecycle_revision
             FROM research_runs WHERE id=NEW.run_id FOR UPDATE;
-          SELECT attempt.candidate_id INTO resolved_candidate_id
+          SELECT attempt.id,attempt.candidate_id,attempt.exit_status::text,
+                 attempt.end_time,
+                 snapshot.content_sha256 IS NOT NULL
+                   AND snapshot.raw_blob_uri IS NOT NULL
+                   AND snapshot.raw_byte_length > 0
+            INTO resolved_attempt_id,resolved_candidate_id,
+                 resolved_attempt_status,resolved_attempt_end_time,
+                 snapshot_has_output
             FROM asset_snapshots snapshot
             JOIN extraction_attempts attempt
               ON attempt.id=snapshot.extraction_attempt_id
@@ -182,6 +193,25 @@
              OR resolved_subject.role<>NEW.role THEN
             RAISE EXCEPTION 'candidate promotion subject is linked to another run asset'
               USING ERRCODE='23514';
+          END IF;
+
+          IF resolved_subject.current_stage='selected_for_extraction'
+             AND resolved_attempt_status='succeeded'
+             AND resolved_attempt_end_time IS NOT NULL
+             AND snapshot_has_output THEN
+            UPDATE run_asset_promotion_subjects
+               SET current_stage='extracted',
+                   actor_type='system',
+                   actor_identifier=format(
+                     'extraction-attempt:%s',resolved_attempt_id
+                   ),
+                   policy_version='extraction-attempt-v1',
+                   lifecycle_revision=current_lifecycle_revision,
+                   reason_code='linked_snapshot_persisted_successful_output',
+                   reason='The finalized attempt is linked to a persisted content-addressed snapshot'
+             WHERE id=resolved_subject.id;
+            SELECT * INTO resolved_subject FROM run_asset_promotion_subjects
+             WHERE id=resolved_subject.id;
           END IF;
 
           IF resolved_subject.current_stage='extracted' THEN

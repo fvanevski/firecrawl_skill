@@ -37,6 +37,13 @@ rejected. Once an attempt supports an `extracted` event, the status, completion
 time, and output digests that support that immutable provenance cannot be
 rewritten.
 
+A legacy or direct authoritative ingestion path may persist the content-addressed
+snapshot in the same transaction that links it to the run. In that case, the
+retention trigger accepts the linked snapshot itself as output evidence only when
+the linked extraction attempt is finalized as successful and the snapshot has a
+content digest, blob URI, and positive byte length. It then records the explicit
+`extracted` event before `retained`; it does not skip or synthesize either stage.
+
 Linking the resulting snapshot to the run establishes `retained`. Extraction
 success and retention do **not** implicitly establish either
 `evidence_eligible` or `completion_critical`.
@@ -66,8 +73,8 @@ barrier. While holding the run row lock, the service:
 5. hashes the canonical member representation with SHA-256.
 
 PostgreSQL does not trust values calculated by the service. Deferred constraint
-triggers recompute and verify every member hash, the aggregate membership hash,
-the persisted asset count, the distinct chunk count, and contiguous member
+triggers recomputes and verifies every member hash, the aggregate membership
+hash, the persisted asset count, the distinct chunk count, and contiguous member
 ordering before commit. Member chunk arrays must be non-null, sorted, and free
 of duplicates. A syntactically valid but non-addressing hash or inconsistent
 count therefore aborts the sealing transaction.

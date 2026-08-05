@@ -220,28 +220,38 @@
         END;
         $function$;
 
-        CREATE FUNCTION validate_run_asset_membership_seal_trigger()
+        CREATE FUNCTION validate_run_asset_membership_seal_insert_trigger()
         RETURNS trigger
         LANGUAGE plpgsql
         SECURITY DEFINER
         SET search_path=pg_catalog,public
         AS $function$
         BEGIN
-          PERFORM validate_run_asset_membership_seal(
-            CASE WHEN TG_TABLE_NAME='run_asset_membership_members'
-                 THEN NEW.seal_id ELSE NEW.id END
-          );
+          PERFORM validate_run_asset_membership_seal(NEW.id);
+          RETURN NULL;
+        END;
+        $function$;
+        CREATE FUNCTION validate_run_asset_membership_member_insert_trigger()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path=pg_catalog,public
+        AS $function$
+        BEGIN
+          PERFORM validate_run_asset_membership_seal(NEW.seal_id);
           RETURN NULL;
         END;
         $function$;
         CREATE CONSTRAINT TRIGGER run_asset_membership_seal_validate_trigger
         AFTER INSERT ON run_asset_membership_seals
         DEFERRABLE INITIALLY DEFERRED
-        FOR EACH ROW EXECUTE FUNCTION validate_run_asset_membership_seal_trigger();
+        FOR EACH ROW EXECUTE FUNCTION
+          validate_run_asset_membership_seal_insert_trigger();
         CREATE CONSTRAINT TRIGGER run_asset_membership_member_validate_trigger
         AFTER INSERT ON run_asset_membership_members
         DEFERRABLE INITIALLY DEFERRED
-        FOR EACH ROW EXECUTE FUNCTION validate_run_asset_membership_seal_trigger();
+        FOR EACH ROW EXECUTE FUNCTION
+          validate_run_asset_membership_member_insert_trigger();
 
         CREATE FUNCTION reject_membership_member_change()
         RETURNS trigger
