@@ -66,7 +66,7 @@ def test_completed_replay_is_read_only_and_authoritative():
     assert "_current_membership" in source
     assert "census_index_jobs" in source
     assert "_manifest_count" in source
-    assert "validation_result.get(\"completion\")" in source
+    assert 'validation_result.get("completion")' in source
 
 
 def test_public_resume_contract_is_documented_and_exposed():
