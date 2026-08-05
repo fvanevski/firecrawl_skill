@@ -9,24 +9,26 @@ import pytest
 
 from asset_promotion_test_support import (
     TEST_DSN,
-    AssetPromotionService,
-    IndexCheckpointService,
-    StoreConfig,
     _advance_to_indexing,
-    _canonical_sha256,
     _insert_candidate,
     _mark_run_index_complete,
-    _member_payload,
     _promote,
     _request,
     _seed_retained_assets,
     _subject_id_for_snapshot,
+)
+from research_store.asset_promotion_models import _canonical_sha256, _member_payload
+from research_store.asset_promotion_service import AssetPromotionService
+from research_store.config import StoreConfig
+from research_store.container import (
     build_extraction_service,
     build_run_service,
     build_service,
-    connect,
-    promotion_config,
 )
+from research_store.index_checkpoint_service import IndexCheckpointService
+from research_store.postgres import connect
+
+pytest_plugins = ("asset_promotion_test_support",)
 
 
 def test_full_stage_path_is_explicit_and_extraction_does_not_auto_admit(
@@ -62,9 +64,11 @@ def test_full_stage_path_is_explicit_and_extraction_does_not_auto_admit(
         method_version="integration-test",
         requested_format="markdown",
     )
-    assert [event["to_stage"] for event in AssetPromotionService(
-        runs.uow_factory
-    ).list_events(status.id)] == ["discovered", "selected_for_extraction"]
+    service = AssetPromotionService(runs.uow_factory)
+    assert [event["to_stage"] for event in service.list_events(status.id)] == [
+        "discovered",
+        "selected_for_extraction",
+    ]
 
     raw_blob = extraction.store_raw_blob(request.content)
     normalized_blob = extraction.store_normalized_blob(
@@ -92,7 +96,6 @@ def test_full_stage_path_is_explicit_and_extraction_does_not_auto_admit(
         assert cursor.fetchone()[0] == "retained"
 
     current = _advance_to_indexing(runs, status)
-    service = AssetPromotionService(runs.uow_factory)
     seal = service.prepare_for_indexing(
         status.id, lifecycle_revision=current.lifecycle_revision
     )
@@ -297,42 +300,45 @@ def test_database_rejects_non_addressing_membership_rows(
         ),
     )
     for member_hash, seal_hash, stored_chunks, message in cases:
-        with pytest.raises(Exception, match=message):
-            with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-                cursor.execute(
-                    """INSERT INTO run_asset_membership_seals(
-                           run_id,seal_revision,lifecycle_revision,
-                           membership_sha256,expected_asset_count,
-                           expected_chunk_count,actor_type,actor_identifier,
-                           policy_version,reason_code,reason)
-                         VALUES(%s,1,%s,%s,1,%s,'integration-test',
-                           'negative-database-test','test-v1','invalid_seal',
-                           'the database must reject this row') RETURNING id""",
-                    (
-                        status.id,
-                        status.lifecycle_revision,
-                        seal_hash,
-                        len(set(stored_chunks)),
-                    ),
-                )
-                seal_id = cursor.fetchone()[0]
-                cursor.execute(
-                    """INSERT INTO run_asset_membership_members(
-                           seal_id,run_id,subject_id,snapshot_id,role,ordinal,
-                           chunk_ids,chunk_count,member_sha256)
-                         VALUES(%s,%s,%s,%s,%s,0,%s,%s,%s)""",
-                    (
-                        seal_id,
-                        status.id,
-                        subject_id,
-                        snapshot_id,
-                        role,
-                        list(stored_chunks),
-                        len(stored_chunks),
-                        member_hash,
-                    ),
-                )
-                cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        with (
+            pytest.raises(Exception, match=message),
+            connect(TEST_DSN) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute(
+                """INSERT INTO run_asset_membership_seals(
+                       run_id,seal_revision,lifecycle_revision,
+                       membership_sha256,expected_asset_count,
+                       expected_chunk_count,actor_type,actor_identifier,
+                       policy_version,reason_code,reason)
+                     VALUES(%s,1,%s,%s,1,%s,'integration-test',
+                       'negative-database-test','test-v1','invalid_seal',
+                       'the database must reject this row') RETURNING id""",
+                (
+                    status.id,
+                    status.lifecycle_revision,
+                    seal_hash,
+                    len(set(stored_chunks)),
+                ),
+            )
+            seal_id = cursor.fetchone()[0]
+            cursor.execute(
+                """INSERT INTO run_asset_membership_members(
+                       seal_id,run_id,subject_id,snapshot_id,role,ordinal,
+                       chunk_ids,chunk_count,member_sha256)
+                     VALUES(%s,%s,%s,%s,%s,0,%s,%s,%s)""",
+                (
+                    seal_id,
+                    status.id,
+                    subject_id,
+                    snapshot_id,
+                    role,
+                    list(stored_chunks),
+                    len(stored_chunks),
+                    member_hash,
+                ),
+            )
+            cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
 
 
 def test_sealing_is_idempotent_hash_addressed_and_completion_payload_is_queryable(

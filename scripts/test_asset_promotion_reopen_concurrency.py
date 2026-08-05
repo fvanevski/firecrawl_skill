@@ -4,25 +4,27 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from asset_promotion_test_support import (
     TEST_DSN,
-    AssetMembershipSealedError,
-    AssetPromotionService,
-    IndexCheckpointService,
-    StoreConfig,
     _promote,
     _request,
     _seed_retained_assets,
     _subject_id_for_snapshot,
     _subject_rows,
-    connect,
-    promotion_config,
-    uuid4,
 )
+from research_store.asset_promotion_service import (
+    AssetMembershipSealedError,
+    AssetPromotionService,
+)
+from research_store.config import StoreConfig
+from research_store.index_checkpoint_service import IndexCheckpointService
+from research_store.postgres import connect
+
+pytest_plugins = ("asset_promotion_test_support",)
 
 
 def test_post_seal_addition_requires_reopen_then_reseal_with_revision_cas(
