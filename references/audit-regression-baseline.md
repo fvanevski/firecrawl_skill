@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This release-candidate baseline freezes seven remaining defects observed during the audited run as deterministic strict expected failures. RC-01 is now an ordinary passing regression after issue #208 added the exact PostgreSQL index-job census. The remaining entries are intentionally test-only: they describe required corrected behavior while preserving their current defects until the dedicated remediation issues are implemented.
+This release-candidate baseline freezes six remaining defects observed during the audited run as deterministic strict expected failures. RC-01 and RC-02 are now ordinary passing regressions after issues #208 and #209 added the exact PostgreSQL index-job census and the lease-aware drain barrier. The remaining entries are intentionally test-only: they describe required corrected behavior while preserving their current defects until the dedicated remediation issues are implemented.
 
 The audited indexing fixture is exact:
 
@@ -10,14 +10,14 @@ The audited indexing fixture is exact:
 1,344 complete + 32 running-live = 1,376 total
 ```
 
-RC-01 and RC-02 deliberately use different production boundaries. RC-01 exercises the exact index-job census implemented by issue #208. RC-02 exercises the lease-aware drain barrier required by issue #209 and records that the final 32 manifest completions appear in the observation immediately following the first observation with no newly claimed work.
+RC-01 and RC-02 deliberately use different production boundaries. RC-01 exercises the exact index-job census implemented by issue #208. RC-02 exercises the lease-aware drain barrier implemented by issue #209 and records that the final 32 manifest completions appear in the observation immediately following the first observation with no newly claimed work.
 
 ## Finding map
 
 | Finding | Regression test | Frozen required behavior | Remediation status |
 |---|---|---|---|
 | RC-01 | `test_rc_01_exact_index_job_census_preserves_sealed_membership` | The real worker/census boundary reports a mutually exclusive, count-conserving census for the sealed 1,376-member set: 1,344 complete, 32 running-live, zero claimable, and zero in every other census class. | #208 remediated; ordinary passing regression |
-| RC-02 | `test_rc_02_drain_reobserves_final_32_completions` | The real drain boundary reobserves state after the first `claimed=0`; the next observation contains the final 32 completions. | #209 |
+| RC-02 | `test_rc_02_drain_reobserves_final_32_completions` | The real drain boundary reobserves state after the first `claimed=0`; the next observation contains the final 32 completions. | #209 remediated; ordinary passing regression |
 | RC-04 | `test_rc_04_direct_acquisition_obeys_lifecycle_boundaries` | A `created` run is rejected consistently by the authoritative acquisition preflight and direct wrapper operation, and the normal finish boundary cannot bypass preparation, start, persistence, or revision transitions. | #212 |
 | RC-08 | `test_rc_08_provider_declared_no_results_are_empty` | A valid provider-declared no-result payload is an empty successful search, not a provider failure. | #213 |
 | RC-09 | `test_rc_09_stage_execution_does_not_write_provider_response` | Executing a lifecycle stage does not call `record_search_response()` or create provider-response records; lifecycle telemetry must use a separate persistence channel. | #213 |
@@ -25,7 +25,7 @@ RC-01 and RC-02 deliberately use different production boundaries. RC-01 exercise
 | RC-16 | `test_rc_16_zero_blob_verification_is_inconclusive` | Zero eligible or referenced blobs produce an inconclusive result, never a positive integrity proof. | #219 |
 | RC-17 | `test_rc_17_orphans_do_not_fail_referenced_blob_integrity` | Unrelated orphan inventory is reported separately and does not fail healthy referenced-blob integrity. | #220 |
 
-Three controls are ordinary passing tests: exact membership conservation, successful classification of a valid nonempty provider response, and the remediated RC-01 census boundary.
+Four controls are ordinary passing tests: exact membership conservation, successful classification of a valid nonempty provider response, the remediated RC-01 census boundary, and the remediated RC-02 drain barrier.
 
 ## Remediation-fidelity requirements
 
@@ -34,6 +34,7 @@ Each regression test must invoke the production boundary responsible for the cor
 Mocks and fakes remain acceptable when they are deterministic and boundary-faithful:
 
 - The RC-01 repository fake supplies the audited sealed entity set and exact census classes while the real `IndexWorker.run_batch()` boundary is executed.
+- The RC-02 runner supplies two exact worker/census observations while the real `drain_index_jobs()` boundary performs bounded waiting and re-observation.
 - The RC-04 fixtures execute the real authoritative preflight, direct-operation service, and finish boundary while recording lifecycle revision and invocation side effects.
 - The RC-09 fixture executes the real `ResearchOrchestrator._execute_stage()` producer and observes provider-response writes directly.
 - The RC-11 relational fake models batch membership, batch assets, snapshot-to-attempt linkage, terminal-state filtering, unrelated rows, and the exact timestamp aggregation. It does not accept SQL merely because it contains `MAX`, `GREATEST`, or a datetime parameter.
@@ -53,6 +54,12 @@ Worker operation counters and census observations have different aggregation sem
 
 The dedicated census suite exercises both worker paths for pre-side-effect fingerprint rejection, verifies zero-claim census attachment, and simulates multiple claimed batches followed by a zero-claim observation to prove that cumulative census totals do not overwrite or inflate operation and telemetry deltas. Test-module import-path setup is owned by `scripts/conftest.py`, so the census test keeps its production imports at module scope without a test-local `sys.path` mutation or an E402 suppression.
 
+### RC-02 drain-barrier contract
+
+Lifecycle draining seals the run's current PostgreSQL chunk membership once and executes scoped worker batches against that set. A zero-claim observation is diagnostic only: completion requires a count-conserving census with `complete == expected` and every recoverable and irrecoverable non-complete class equal to zero.
+
+The barrier waits with bounded exponential backoff when live or not-yet-claimable recoverable work remains, permits subsequent scoped batches to reclaim expired leases and retry retryable failures within configured attempt limits, and fails closed on dead, missing-job, wrong-fingerprint, or manifest-inconsistent states. Deadline, batch-bound, and cancellation exits are structured, recoverable, and explicitly nonterminal; this issue performs no lifecycle transition or durable checkpoint write.
+
 ## Strict expected-failure policy
 
 Each unresolved defect test uses `pytest.mark.xfail(strict=True, raises=AssertionError, ...)`. The assertion must fail against the audited production behavior for the stated RC finding. An underlying production fix therefore creates an unexpected pass and fails this dedicated workflow until the corresponding remediation PR deliberately:
@@ -60,8 +67,8 @@ Each unresolved defect test uses `pytest.mark.xfail(strict=True, raises=Assertio
 1. removes the test's `xfail` marker while retaining the now-passing regression assertion; and
 2. removes the matching entry from `references/audit-regression-skip-allowlist.json`.
 
-Issue #208 performed both steps for RC-01. The allowlist remains isolated from the repository-wide skip allowlist so each later remediation can remove its classification independently without creating stale entries elsewhere.
+Issues #208 and #209 performed both steps for RC-01 and RC-02. The allowlist remains isolated from the repository-wide skip allowlist so each later remediation can remove its classification independently without creating stale entries elsewhere.
 
 ## Change boundary
 
-The RC-01 remediation adds an observational PostgreSQL census and worker result evidence only. It also enforces the pre-existing requirement that a scoped worker call possess an active fingerprint before any mutation and preserves the established per-batch result contract. It does not change orchestration waiting, retry, terminal behavior, database schema, migration history, or the durable authority boundary. PostgreSQL remains authoritative, immutable provider payloads remain in `BLOB_ROOT`, and Qdrant remains a rebuildable projection.
+The RC-01 remediation added an observational PostgreSQL census and worker result evidence. The RC-02 remediation adds a bounded run-scoped consumer of that census and a structured resumable command result. Neither issue adds a database migration, durable indexing checkpoint, final lifecycle compare-and-swap, terminal-decision persistence, or Qdrant authority. PostgreSQL remains authoritative, immutable provider payloads remain in `BLOB_ROOT`, and Qdrant remains a rebuildable projection.
