@@ -1,4 +1,4 @@
-"""Static contract tests for issue #210 checkpoint and terminal guards."""
+"""Static contract tests for issue #210 indexing checkpoints and terminal guards."""
 
 from __future__ import annotations
 
