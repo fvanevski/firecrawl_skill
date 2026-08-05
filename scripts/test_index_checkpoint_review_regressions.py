@@ -13,7 +13,6 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import pytest
-
 from research_domain.models import TerminalDecision, TerminalDecisionOutcome
 from research_store.config import StoreConfig
 from research_store.container import (
