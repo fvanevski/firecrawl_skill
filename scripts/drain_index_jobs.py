@@ -18,6 +18,7 @@ from uuid import UUID
 Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 Clock = Callable[[], float]
 Waiter = Callable[[float], bool]
+Cancelled = Callable[[], bool]
 
 CENSUS_CLASSES = (
     "complete",
@@ -42,8 +43,13 @@ RECOVERABLE_CLASSES = (
     "running_expired",
     "retryable_failed",
 )
+DEFAULT_SCOPED_DEADLINE_SECONDS = 300.0
 RESUMABLE_EXIT_CODE = 75
 CANCELLED_EXIT_CODE = 130
+
+
+class DrainCancelled(RuntimeError):
+    """A cancellation signal was observed before scoped setup completed."""
 
 
 class DrainResult:
@@ -95,7 +101,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--max-batches", type=int, default=10_000)
-    parser.add_argument("--deadline-seconds", type=float, default=300.0)
+    parser.add_argument(
+        "--deadline-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Elapsed command bound. Run-scoped drains default to 300 seconds; "
+            "unscoped projection maintenance has no elapsed deadline unless this "
+            "option is supplied."
+        ),
+    )
     parser.add_argument("--initial-backoff-seconds", type=float, default=0.25)
     parser.add_argument("--max-backoff-seconds", type=float, default=5.0)
     parser.add_argument(
@@ -127,6 +142,10 @@ def _default_runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
 
 def _default_wait(seconds: float) -> bool:
     time.sleep(seconds)
+    return False
+
+
+def _never_cancelled() -> bool:
     return False
 
 
@@ -202,18 +221,41 @@ def _result(
     )
 
 
+def _cancelled_result(
+    *,
+    reason: str,
+    batches: int,
+    started: float,
+    clock: Clock,
+    payload: dict[str, Any] | None,
+    census: dict[str, Any] | None,
+) -> DrainResult:
+    return _result(
+        status="cancelled",
+        exit_code=CANCELLED_EXIT_CODE,
+        recoverable=True,
+        reason=reason,
+        batches=batches,
+        started=started,
+        clock=clock,
+        payload=payload,
+        census=census,
+    )
+
+
 def drain_index_jobs_result(
     research_db: Path,
     *,
     batch_size: int = 64,
     max_batches: int = 10_000,
-    deadline_seconds: float = 300.0,
+    deadline_seconds: float | None = None,
     initial_backoff_seconds: float = 0.25,
     max_backoff_seconds: float = 5.0,
     runner: Runner = _default_runner,
     require_census: bool = False,
     clock: Clock = time.monotonic,
     waiter: Waiter | None = None,
+    cancelled: Cancelled | None = None,
 ) -> DrainResult:
     """Drain worker batches until the exact census is complete or bounded.
 
@@ -222,14 +264,18 @@ def drain_index_jobs_result(
     ``claimed``, ``failed``, and ``lease_lost`` counters are diagnostic only;
     the exact PostgreSQL census determines wait, retry, reclaim, completion,
     and fail-closed behavior.
+
+    A run-scoped call defaults to a 300-second deadline. Unscoped projection
+    maintenance preserves its historical max-batch-only behavior unless the
+    caller explicitly supplies ``deadline_seconds``.
     """
 
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
     if max_batches <= 0:
         raise ValueError("max_batches must be positive")
-    if deadline_seconds <= 0:
-        raise ValueError("deadline_seconds must be positive")
+    if deadline_seconds is not None and deadline_seconds <= 0:
+        raise ValueError("deadline_seconds must be positive when supplied")
     if initial_backoff_seconds <= 0:
         raise ValueError("initial_backoff_seconds must be positive")
     if max_backoff_seconds < initial_backoff_seconds:
@@ -239,6 +285,12 @@ def drain_index_jobs_result(
         )
 
     wait = waiter or _default_wait
+    is_cancelled = cancelled or _never_cancelled
+    effective_deadline_seconds = (
+        DEFAULT_SCOPED_DEADLINE_SECONDS
+        if require_census and deadline_seconds is None
+        else deadline_seconds
+    )
     command = [
         str(research_db),
         "worker",
@@ -247,14 +299,27 @@ def drain_index_jobs_result(
         str(batch_size),
     ]
     started = clock()
-    deadline = started + deadline_seconds
+    deadline = (
+        started + effective_deadline_seconds
+        if effective_deadline_seconds is not None
+        else None
+    )
     backoff = initial_backoff_seconds
     last_payload: dict[str, Any] | None = None
     last_census: dict[str, Any] | None = None
     census_mode = require_census
 
     for batch_number in range(1, max_batches + 1):
-        if clock() >= deadline:
+        if is_cancelled():
+            return _cancelled_result(
+                reason="cancelled_before_worker",
+                batches=batch_number - 1,
+                started=started,
+                clock=clock,
+                payload=last_payload,
+                census=last_census,
+            )
+        if deadline is not None and clock() >= deadline:
             return _result(
                 status="resumable" if census_mode else "failed",
                 exit_code=RESUMABLE_EXIT_CODE if census_mode else 1,
@@ -268,10 +333,20 @@ def drain_index_jobs_result(
             )
 
         completed = runner(command)
+        cancelled_after_worker = is_cancelled()
         if completed.stdout:
             print(completed.stdout.rstrip())
         if completed.stderr:
             print(completed.stderr.rstrip(), file=sys.stderr)
+        if cancelled_after_worker:
+            return _cancelled_result(
+                reason="cancelled_after_worker",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=last_payload,
+                census=last_census,
+            )
 
         try:
             payload = json.loads(completed.stdout)
@@ -300,8 +375,20 @@ def drain_index_jobs_result(
 
         last_payload = payload
         if census is not None:
+            if not census_mode and deadline is None and deadline_seconds is None:
+                deadline = started + DEFAULT_SCOPED_DEADLINE_SECONDS
             census_mode = True
             last_census = census
+
+        if is_cancelled():
+            return _cancelled_result(
+                reason="cancelled_after_observation",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=payload,
+                census=census,
+            )
 
         if completed.returncode != 0:
             print(
@@ -422,13 +509,22 @@ def drain_index_jobs_result(
         # A zero-claim observation with recoverable work must wait rather than
         # spin, then reobserve the authoritative census.
         if claimed > 0:
+            if is_cancelled():
+                return _cancelled_result(
+                    reason="cancelled_before_next_worker",
+                    batches=batch_number,
+                    started=started,
+                    clock=clock,
+                    payload=payload,
+                    census=census,
+                )
             backoff = initial_backoff_seconds
             continue
         if batch_number == max_batches:
             break
 
-        remaining = deadline - clock()
-        if remaining <= 0:
+        remaining = None if deadline is None else deadline - clock()
+        if remaining is not None and remaining <= 0:
             return _result(
                 status="resumable",
                 exit_code=RESUMABLE_EXIT_CODE,
@@ -440,12 +536,9 @@ def drain_index_jobs_result(
                 payload=payload,
                 census=census,
             )
-        delay = min(backoff, remaining)
-        if wait(delay):
-            return _result(
-                status="cancelled",
-                exit_code=CANCELLED_EXIT_CODE,
-                recoverable=True,
+        delay = backoff if remaining is None else min(backoff, remaining)
+        if wait(delay) or is_cancelled():
+            return _cancelled_result(
                 reason="cancelled_while_recoverable",
                 batches=batch_number,
                 started=started,
@@ -455,6 +548,15 @@ def drain_index_jobs_result(
             )
         backoff = min(max_backoff_seconds, backoff * 2)
 
+    if is_cancelled():
+        return _cancelled_result(
+            reason="cancelled_at_command_bound",
+            batches=max_batches,
+            started=started,
+            clock=clock,
+            payload=last_payload,
+            census=last_census,
+        )
     if census_mode and last_census is not None:
         return _result(
             status="resumable",
@@ -489,13 +591,14 @@ def drain_index_jobs(
     *,
     batch_size: int = 64,
     max_batches: int = 10_000,
-    deadline_seconds: float = 300.0,
+    deadline_seconds: float | None = None,
     initial_backoff_seconds: float = 0.25,
     max_backoff_seconds: float = 5.0,
     runner: Runner = _default_runner,
     require_census: bool = False,
     clock: Clock = time.monotonic,
     waiter: Waiter | None = None,
+    cancelled: Cancelled | None = None,
 ) -> int:
     """Compatibility wrapper returning only the command exit code."""
 
@@ -510,20 +613,34 @@ def drain_index_jobs(
         require_census=require_census,
         clock=clock,
         waiter=waiter,
+        cancelled=cancelled,
     ).exit_code
 
 
-def _run_scoped_runner(external_run_id: str) -> Runner:
+def _run_scoped_runner(
+    external_run_id: str,
+    *,
+    cancelled: Cancelled | None = None,
+) -> Runner:
     """Seal one run's current chunk IDs and return a scoped worker runner."""
 
     from research_store.config import StoreConfig
     from research_store.container import build_run_service, build_service
     from research_store.indexing import IndexWorker
 
+    is_cancelled = cancelled or _never_cancelled
+    if is_cancelled():
+        raise DrainCancelled
+
     config = StoreConfig.from_env()
     config.require_database()
+    if is_cancelled():
+        raise DrainCancelled
+
     run_service = build_run_service(config)
     status = run_service.status(external_id=external_run_id)
+    if is_cancelled():
+        raise DrainCancelled
     if status.state != "indexing":
         raise RuntimeError(
             f"research run {external_run_id} must be in indexing state, "
@@ -531,6 +648,8 @@ def _run_scoped_runner(external_run_id: str) -> Runner:
         )
 
     corpus_service = build_service(config)
+    if is_cancelled():
+        raise DrainCancelled
     if corpus_service.embedder is None:
         raise RuntimeError(
             "configured embedding service is required for index draining"
@@ -554,6 +673,8 @@ def _run_scoped_runner(external_run_id: str) -> Runner:
             ),
         )
         entity_ids = [UUID(str(row[0])) for row in cursor.fetchall()]
+    if is_cancelled():
+        raise DrainCancelled
 
     worker = IndexWorker(
         uow_factory=corpus_service.uow_factory,
@@ -563,6 +684,8 @@ def _run_scoped_runner(external_run_id: str) -> Runner:
         lease_seconds=config.job_lease_seconds,
         max_attempts=config.max_index_attempts,
     )
+    if is_cancelled():
+        raise DrainCancelled
 
     def run_scoped(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         try:
@@ -613,12 +736,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError:
             break
 
+    setup_started = time.monotonic()
     try:
+        if stop.is_set():
+            raise DrainCancelled
         runner = (
-            _run_scoped_runner(args.research_run_id)
+            _run_scoped_runner(args.research_run_id, cancelled=stop.is_set)
             if args.research_run_id
             else _default_runner
         )
+        if stop.is_set():
+            raise DrainCancelled
         result = drain_index_jobs_result(
             research_db,
             batch_size=args.batch_size,
@@ -629,6 +757,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             runner=runner,
             require_census=bool(args.research_run_id),
             waiter=stop.wait,
+            cancelled=stop.is_set,
+        )
+    except DrainCancelled:
+        result = DrainResult(
+            status="cancelled",
+            exit_code=CANCELLED_EXIT_CODE,
+            recoverable=True,
+            reason="cancelled_during_setup",
+            batches=0,
+            elapsed_seconds=max(0.0, time.monotonic() - setup_started),
         )
     except Exception as exc:  # noqa: BLE001
         result = DrainResult(
@@ -637,7 +775,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             recoverable=False,
             reason=f"setup_failed: {type(exc).__name__}: {exc}",
             batches=0,
-            elapsed_seconds=0.0,
+            elapsed_seconds=max(0.0, time.monotonic() - setup_started),
         )
     finally:
         for signum, handler in previous.items():
