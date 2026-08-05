@@ -308,8 +308,7 @@ class IndexCheckpointService(IndexCheckpointStoreMixin):
                     self._checkpoint_census(invalidated),
                     int(current_revision),
                     reason=(
-                        "active fingerprint resolved to "
-                        f"{definition_count} definitions"
+                        f"active fingerprint resolved to {definition_count} definitions"
                     ),
                 )
 
