@@ -15,7 +15,6 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
-
 from research_store.config import StoreConfig
 from research_store.container import build_run_service, build_service
 from research_store.domain import IngestRequest
