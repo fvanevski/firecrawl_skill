@@ -78,4 +78,5 @@ jobs:
             -ra \
             -p no:cacheprovider \
             scripts/test_index_checkpoint_contract.py \
-            scripts/test_index_checkpoint_terminal_integration.py
+            scripts/test_index_checkpoint_terminal_integration.py \
+            scripts/test_index_checkpoint_review_regressions.py

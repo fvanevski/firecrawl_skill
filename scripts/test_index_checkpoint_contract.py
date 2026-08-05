@@ -1,4 +1,4 @@
-"""Static contract tests for issue #210 indexing checkpoints and terminal guards."""
+"""Static contracts complementing issue #210 production-seam integration tests."""
 
 from __future__ import annotations
 
@@ -21,14 +21,26 @@ def test_checkpoint_migration_is_linear_additive_and_forward_only():
     assert 'down_revision = "0038_postgres_authority"' in source
     assert "CREATE TABLE indexing_checkpoints" in source
     assert "CREATE TABLE indexing_checkpoint_observations" in source
-    assert "terminal_transition_requires_decision" in source
-    assert "legacy_unstructured" in source
     assert "forward repair" in source
 
 
+def test_terminal_provenance_is_explicit_atomic_and_bidirectional():
+    source = _source(
+        STORE / "alembic" / "versions" / "0039_indexing_checkpoints_terminal_guard.py"
+    )
+    assert "UPDATE terminal_decisions" in source
+    assert "decision_transaction_id xid8" in source
+    assert "transition_transaction_id xid8" in source
+    assert "terminal_transition_requires_decision_trigger" in source
+    assert "terminal_decision_requires_transition_trigger" in source
+    assert "DEFERRABLE INITIALLY DEFERRED" in source
+    assert "_terminal_decision_target_state" in source
+    assert "ALTER COLUMN reason_code SET DEFAULT" not in source
+    assert "ALTER COLUMN state_census SET DEFAULT" not in source
+
+
 def test_checkpoint_stage_uses_bounded_cancellation_aware_waits():
-    path = STORE / "checkpoint_indexing_stage.py"
-    source = _source(path)
+    source = _source(STORE / "checkpoint_indexing_stage.py")
     tree = ast.parse(source)
     calls = {
         node.func.attr
@@ -42,6 +54,15 @@ def test_checkpoint_stage_uses_bounded_cancellation_aware_waits():
     assert "IndexCheckpointPending" in source
 
 
+def test_completed_replay_is_read_only_and_authoritative():
+    source = _source(STORE / "index_checkpoint_replay.py")
+    assert "apply_run_transition" not in source
+    assert "_current_membership" in source
+    assert "census_index_jobs" in source
+    assert "_manifest_count" in source
+    assert "validation_result.get(\"completion\")" in source
+
+
 def test_public_resume_contract_is_documented_and_exposed():
     frun = _source(SCRIPTS / "frun")
     resume = _source(SCRIPTS / "resume_index_checkpoint.py")
@@ -49,8 +70,10 @@ def test_public_resume_contract_is_documented_and_exposed():
         SCRIPTS.parent / "references" / "indexing-checkpoint-resume.md"
     )
     assert "frun resume <fr_id>" in frun
+    assert "replay_completed_checkpoint" in resume
     assert "RESUMABLE_EXIT_CODE" in resume
     assert "Exit code `75`" in documentation
+    assert "read-only replay" in documentation
     assert "PostgreSQL" in documentation
     assert "Qdrant" in documentation
 
@@ -62,9 +85,33 @@ def test_orchestrator_resumable_adapter_does_not_terminalize_checkpoint_work():
     assert "INDEX_CHECKPOINT_PENDING_PREFIX" in source
 
 
-def test_wrapper_finish_uses_sealed_checkpoint_adapter():
+def test_wrapper_validates_operation_before_checkpoint_mutation():
     source = _source(STORE / "checkpoint_workflow_service.py")
+    validation = source.index("if operation not in self._BEGIN_PATHS")
+    finalization = source.index("self._finalize_indexing(", validation)
+    assert validation < finalization
+    assert "external_invocation_id is required" in source
+    assert "wrapper input_data must be an object" in source
     assert "service.ensure(" in source
     assert "service.finalize(" in source
     assert "super().finish_run" in source
-    assert "run indexing remains recoverable" in source
+
+
+def test_guarded_terminal_writer_uses_conflict_safe_idempotent_insert():
+    source = _source(STORE / "lifecycle_guard.py")
+    assert "ON CONFLICT(run_id,idempotency_key) DO NOTHING" in source
+    assert "idempotency conflict was not readable" in source
+
+
+def test_standalone_terminal_decision_writer_is_fail_closed():
+    source = _source(STORE / "terminal_decision_service.py")
+    assert "standalone terminal decision persistence is prohibited" in source
+    assert "commit_terminal_decision" in source
+    assert "INSERT INTO terminal_decisions" not in source
+
+
+def test_public_run_service_import_remains_checkpoint_guarded():
+    from research_store import ResearchRunService
+    from research_store.lifecycle_guard import GuardedResearchRunService
+
+    assert ResearchRunService is GuardedResearchRunService

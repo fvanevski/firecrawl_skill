@@ -66,7 +66,10 @@ class CheckpointWorkflowOperationService(WorkflowOperationService):
         # the operation that will subsequently be executed.
         if operation not in self._BEGIN_PATHS:
             raise WorkflowBoundaryError(f"unsupported wrapper operation: {operation}")
-        if not isinstance(external_invocation_id, str) or not external_invocation_id.strip():
+        if (
+            not isinstance(external_invocation_id, str)
+            or not external_invocation_id.strip()
+        ):
             raise WorkflowBoundaryError("external_invocation_id is required")
         if not isinstance(input_data, dict):
             raise WorkflowBoundaryError("wrapper input_data must be an object")
