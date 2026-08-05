@@ -105,8 +105,15 @@ def test_wrapper_validates_operation_before_checkpoint_mutation():
 
 def test_guarded_terminal_writer_uses_conflict_safe_idempotent_insert():
     source = _source(STORE / "lifecycle_guard.py")
+    tree = ast.parse(source)
+    string_constants = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
     assert "ON CONFLICT(run_id,idempotency_key) DO NOTHING" in source
-    assert "terminal decision idempotency conflict was not readable" in source
+    assert "WHERE run_id=%s AND idempotency_key=%s" in source
+    assert "terminal decision idempotency conflict was not readable" in string_constants
 
 
 def test_standalone_terminal_decision_writer_is_fail_closed():
