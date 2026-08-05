@@ -12,6 +12,7 @@ from .run_service import (
     TERMINAL_STATES,
     ResearchRunService,
     RunStateError,
+    StaleRunRevisionError,
     TransitionResult,
 )
 from .terminal_decision_service import TerminalDecisionError
@@ -31,6 +32,8 @@ class GuardedResearchRunService(ResearchRunService):
     Terminal helpers preserve their public signatures but route through one UoW
     that inserts ``terminal_decisions`` before the guarded transition insert.
     """
+
+    checkpoint_indexing_enabled = True
 
     def transition(self, run_id: UUID, next_state: str, **command: Any):
         if next_state in TERMINAL_STATES:
@@ -197,7 +200,16 @@ class GuardedResearchRunService(ResearchRunService):
                     completion=completion_payload,
                 )
                 return {**result, "terminal_decision_id": decision_row_id}
-        except (RunStateError, ValueError):
+        except StaleRunRevisionError:
+            raise
+        except RunStateError:
+            raise
+        except ValueError as exc:
+            message = str(exc)
+            if message.startswith("stale research run revision"):
+                raise StaleRunRevisionError(message) from exc
+            if message.startswith("research run transition rejected"):
+                raise RunStateError(message) from exc
             raise
         except Exception as exc:
             raise TerminalDecisionError(
