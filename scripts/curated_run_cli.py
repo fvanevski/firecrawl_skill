@@ -11,6 +11,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+from research_store.asset_promotion_models import AssetPromotionError
 from research_store.asset_promotion_service import AssetPromotionService
 from research_store.container import build_run_service, build_workflow_operation_service
 from research_store.curated_run_service import CuratedRunError, CuratedRunService
@@ -123,7 +124,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:  # pragma: no cover - argparse constrains this branch
             raise AssertionError(args.command)
-    except (CuratedRunError, WorkflowBoundaryError, KeyError, ValueError) as exc:
+    except (
+        AssetPromotionError,
+        CuratedRunError,
+        WorkflowBoundaryError,
+        KeyError,
+        ValueError,
+    ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     _emit(result)
