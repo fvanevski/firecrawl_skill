@@ -97,6 +97,7 @@ def test_curated_four_asset_lifecycle_uses_real_direct_wrappers(
     )
     prepared = curated.prepare(external_id)
     assert prepared.run.state == "acquiring"
+    assert runs.status(run_id=started.run.id).state == "acquiring"
     acquisition_revision = prepared.run.lifecycle_revision
 
     search_adapter = _EmptySearchAdapter()
