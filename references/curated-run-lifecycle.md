@@ -20,7 +20,8 @@ backfills historical mode or provenance.
 
 A direct wrapper invocation is legal only while the run is in `acquiring`.
 Neither `fsearch` nor `fscrape` moves lifecycle state when it begins or
-completes.
+completes. The existing `--research-run` wrapper argument is unchanged; the
+run must now be prepared explicitly before either wrapper is invoked.
 
 ```text
 frun start "objective" --run-mode curated
