@@ -31,17 +31,32 @@ def test_skill_canonical_direct_sequence_requires_explicit_boundaries() -> None:
             "--run-mode curated",
             'frun" prepare "$RUN_ID"',
             '--research-run-id "$RUN_ID"',
+            'frun" assets "$RUN_ID"',
+            'frun" retain "$RUN_ID"',
             'frun" seal-acquisition "$RUN_ID"',
         ),
     )
     assert not re.search(r"--research-run(?:\s|\")", skill)
 
 
-def test_curated_reference_uses_registered_wrapper_option() -> None:
+def test_curated_reference_uses_registered_wrapper_option_and_asset_discovery() -> None:
     reference = _read("references/curated-run-lifecycle.md")
     normalized = " ".join(reference.split())
     assert "fsearch ... --research-run-id <fr_id>" in normalized
     assert "fscrape ... --research-run-id <fr_id>" in normalized
+    _assert_ordered(
+        normalized,
+        (
+            "fscrape ... --research-run-id <fr_id>",
+            "frun assets <fr_id>",
+            "frun retain <fr_id> <promotion_subject_id>",
+            "frun seal-acquisition <fr_id>",
+        ),
+    )
+    assert "stable promotion subject UUIDs" in normalized
+    assert "snapshot IDs, ranks, URLs, and local filenames are not substitutes" in (
+        normalized
+    )
     assert not re.search(r"--research-run(?:\s|\")", reference)
 
 

@@ -59,7 +59,7 @@ def parser() -> argparse.ArgumentParser:
         dest="execution_mode",
     )
 
-    for name in ("mode", "prepare", "seal-acquisition", "resume"):
+    for name in ("mode", "prepare", "assets", "seal-acquisition", "resume"):
         command = subparsers.add_parser(name)
         command.add_argument("run_id")
 
@@ -98,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
             result = service.status(args.run_id)
         elif args.command == "prepare":
             result = service.prepare(args.run_id)
+        elif args.command == "assets":
+            result = service.assets(args.run_id)
         elif args.command == "retain":
             result = service.retain(
                 args.run_id,

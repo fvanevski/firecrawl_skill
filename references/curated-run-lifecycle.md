@@ -28,12 +28,20 @@ frun start "objective" --run-mode curated
 frun prepare <fr_id>
 fsearch ... --research-run-id <fr_id>
 fscrape ... --research-run-id <fr_id>
+frun assets <fr_id>
 frun retain <fr_id> <promotion_subject_id>
 frun reject <fr_id> <promotion_subject_id> --reason "..."
 frun seal-acquisition <fr_id>
 frun resume <fr_id>
 frun finish <fr_id> --outcome satisfied
 ```
+
+`frun assets` is the authoritative discovery surface for stable promotion
+subject UUIDs. It returns the run state and lifecycle revision plus every
+promotion subject's ID, snapshot, role, current stage, provenance, and recorded
+promotion metadata. It is read-only and curated-only. Operators use the
+returned subject `id` values with `retain` and `reject`; snapshot IDs, ranks,
+URLs, and local filenames are not substitutes.
 
 `frun prepare` is the explicit, idempotent transition from `created`,
 `planning`, or `corpus_review` to `acquiring`. An invalid direct call fails
@@ -69,9 +77,9 @@ Historical invocations are not rewritten.
 
 ## Run-scoped retain and reject
 
-`retain`, `reject`, and `seal-acquisition` are available only for runs declared
-`curated`. Retain and reject reuse the staged asset-promotion authority from
-issue #211.
+`assets`, `retain`, `reject`, and `seal-acquisition` are available only for
+runs declared `curated`. Retain and reject reuse the staged asset-promotion
+authority from issue #211.
 
 The command-supplied run UUID, subject UUID, lifecycle revision, ownership
 check, run lock, and subject mutation are validated in the same PostgreSQL
@@ -136,6 +144,7 @@ The issue-specific gate exercises all of the following on Python 3.11 and 3.12:
 
 - real `build_fsearch_service()` and `build_fscrape_service()` entry points;
 - exact invocation-row and start-event lifecycle provenance;
+- authoritative promotion-subject discovery through `frun assets`;
 - rejection of an ineligible state under the insertion lock;
 - a real PostgreSQL concurrency test proving lifecycle transitions wait for the
   invocation start transaction;

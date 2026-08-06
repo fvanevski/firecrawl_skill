@@ -106,7 +106,8 @@ class CuratedRunService:
         if mode_status.run_mode != "curated":
             raise CuratedRunError(
                 f"run {external_run_id} is {mode_status.run_mode}, not curated; "
-                "retain, reject, and seal-acquisition are curated-only commands"
+                "assets, retain, reject, and seal-acquisition are curated-only "
+                "commands"
             )
         return mode_status.run
 
@@ -121,6 +122,20 @@ class CuratedRunService:
             idempotency_key=idempotency_key,
         )
         return RunModeStatus(status, self.mode(status.id))
+
+    def assets(self, external_run_id: str) -> dict[str, Any]:
+        """Return authoritative promotion subjects for one curated run."""
+        status = self._require_curated(external_run_id)
+        assets = self.promotion_service.list_assets(status.id)
+        return {
+            "run_id": str(status.id),
+            "external_id": status.external_id,
+            "state": status.state,
+            "lifecycle_revision": status.lifecycle_revision,
+            "run_mode": "curated",
+            "asset_count": len(assets),
+            "assets": assets,
+        }
 
     def retain(
         self,

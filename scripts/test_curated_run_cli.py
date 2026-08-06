@@ -1,4 +1,4 @@
-"""Operator-facing error contracts for curated run commands."""
+"""Operator-facing error and output contracts for curated run commands."""
 
 from __future__ import annotations
 
@@ -32,6 +32,43 @@ def test_asset_promotion_failure_is_rendered_without_traceback(
     assert captured.out == ""
     assert captured.err == "ERROR: subject belongs to another curated run\n"
     assert "Traceback" not in captured.err
+
+
+def test_assets_success_exposes_stable_promotion_subject_ids(
+    monkeypatch,
+    capsys,
+) -> None:
+    run_id = f"fr_{uuid4().hex}"
+    subject_id = uuid4()
+    monkeypatch.setattr(
+        curated_run_cli,
+        "_service",
+        lambda: SimpleNamespace(
+            assets=lambda requested: {
+                "external_id": requested,
+                "run_mode": "curated",
+                "state": "acquiring",
+                "asset_count": 1,
+                "assets": [
+                    {
+                        "id": str(subject_id),
+                        "current_stage": "extracted",
+                        "snapshot_id": str(uuid4()),
+                    }
+                ],
+            }
+        ),
+    )
+
+    status = curated_run_cli.main(["assets", run_id])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert captured.err == ""
+    assert f'"external_id": "{run_id}"' in captured.out
+    assert '"asset_count": 1' in captured.out
+    assert f'"id": "{subject_id}"' in captured.out
+    assert '"current_stage": "extracted"' in captured.out
 
 
 def test_resume_success_remains_machine_readable(monkeypatch, capsys) -> None:

@@ -20,6 +20,7 @@ Usage:
   frun start <objective> [--run-mode autonomous|curated]
        [--mode agent_led|autonomous_local|deterministic_debug]
   frun prepare <fr_id>
+  frun assets <fr_id>
   frun retain <fr_id> <promotion_subject_id> [--reason TEXT]
   frun reject <fr_id> <promotion_subject_id> --reason TEXT
   frun seal-acquisition <fr_id>
@@ -73,6 +74,11 @@ case "${1:-}" in
   prepare)
     shift
     exec python3 "$SCRIPT_DIR/curated_run_cli.py" prepare "$@"
+    ;;
+
+  assets)
+    shift
+    exec python3 "$SCRIPT_DIR/curated_run_cli.py" assets "$@"
     ;;
 
   retain)
