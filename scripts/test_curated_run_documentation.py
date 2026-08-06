@@ -12,6 +12,10 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def _normalized(path: str) -> str:
+    return " ".join(_read(path).split())
+
+
 def _assert_ordered(content: str, markers: tuple[str, ...]) -> None:
     positions = [content.index(marker) for marker in markers]
     assert positions == sorted(positions)
@@ -19,10 +23,12 @@ def _assert_ordered(content: str, markers: tuple[str, ...]) -> None:
 
 def test_skill_canonical_direct_sequence_requires_explicit_boundaries() -> None:
     skill = _read("SKILL.md")
+    normalized = " ".join(skill.split())
     _assert_ordered(
-        skill,
+        normalized,
         (
-            'frun" start "<research objective>" --run-mode curated',
+            'frun" start "<research objective>"',
+            "--run-mode curated",
             'frun" prepare "$RUN_ID"',
             '--research-run-id "$RUN_ID"',
             'frun" seal-acquisition "$RUN_ID"',
@@ -33,15 +39,16 @@ def test_skill_canonical_direct_sequence_requires_explicit_boundaries() -> None:
 
 def test_curated_reference_uses_registered_wrapper_option() -> None:
     reference = _read("references/curated-run-lifecycle.md")
-    assert "fsearch ... --research-run-id <fr_id>" in reference
-    assert "fscrape ... --research-run-id <fr_id>" in reference
+    normalized = " ".join(reference.split())
+    assert "fsearch ... --research-run-id <fr_id>" in normalized
+    assert "fscrape ... --research-run-id <fr_id>" in normalized
     assert not re.search(r"--research-run(?:\s|\")", reference)
 
 
 def test_curated_reference_defines_interrupted_seal_repair() -> None:
-    reference = _read("references/curated-run-lifecycle.md")
+    reference = _normalized("references/curated-run-lifecycle.md")
     for required in (
-        "without an active membership seal",
+        "before an active membership seal exists",
         "does not start checkpoint processing",
         "`frun finish` fails closed",
         "without repeating the `extracting` or `indexing` transitions",
@@ -51,7 +58,7 @@ def test_curated_reference_defines_interrupted_seal_repair() -> None:
 
 
 def test_documented_production_provenance_surfaces_are_complete() -> None:
-    reference = _read("references/curated-run-lifecycle.md")
+    reference = _normalized("references/curated-run-lifecycle.md")
     for required in (
         "production `fsearch` builder",
         "production `fscrape` path",
@@ -65,7 +72,7 @@ def test_documented_production_provenance_surfaces_are_complete() -> None:
 
 
 def test_documented_authority_and_compatibility_boundaries_remain_explicit() -> None:
-    reference = _read("references/curated-run-lifecycle.md")
+    reference = _normalized("references/curated-run-lifecycle.md")
     for required in (
         "PostgreSQL as the authority",
         "Qdrant remains a rebuildable projection",

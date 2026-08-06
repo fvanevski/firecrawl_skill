@@ -172,12 +172,17 @@ def test_curated_four_asset_lifecycle_uses_real_direct_wrappers(
     curated.start("cross-run guard", other_external_id, run_mode="curated")
     curated.prepare(other_external_id)
     first_subject_id = UUID(str(subjects[0]["id"]))
-    with pytest.raises(AssetPromotionError, match="not requested run"):
-        curated.retain(other_external_id, first_subject_id)
-    assert next(
+    stage_before = next(
         item for item in promotions.list_assets(started.run.id)
         if item["id"] == str(first_subject_id)
-    )["current_stage"] == "extracted"
+    )["current_stage"]
+    with pytest.raises(AssetPromotionError, match="not requested run"):
+        curated.retain(other_external_id, first_subject_id)
+    stage_after = next(
+        item for item in promotions.list_assets(started.run.id)
+        if item["id"] == str(first_subject_id)
+    )["current_stage"]
+    assert stage_after == stage_before
 
     for subject in subjects:
         retained = curated.retain(external_id, UUID(str(subject["id"])))
