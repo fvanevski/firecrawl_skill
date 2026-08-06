@@ -7,7 +7,7 @@ description: "Acquire, retain, retrieve, and inspect web research with Firecrawl
 
 # Firecrawl Research Corpus and Acquisition
 
-PostgreSQL is authoritative for workflow, acquisition provenance, corpus identities, and durable jobs. `BLOB_ROOT` retains immutable payload bytes. Qdrant is a rebuildable projection, and Valkey is optional transient coordination. This is the Target A boundary: payload bytes remain outside PostgreSQL.
+PostgreSQL is authoritative for workflow, acquisition provenance, corpus identities, staged asset promotion, exact completion membership, and durable jobs. `BLOB_ROOT` retains immutable payload bytes. Qdrant is a rebuildable projection, and Valkey is optional transient coordination. This is the Target A boundary: payload bytes remain outside PostgreSQL.
 
 ## Choose the first operation
 
@@ -26,50 +26,83 @@ rtk proxy "<skill-root>/scripts/research-db" inspect-asset "<candidate-id>"
 rtk proxy "<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --max-tokens 2000
 ```
 
-## Authoritative acquisition
+## Authoritative direct acquisition
 
-`fsearch` and `fscrape` require `DATABASE_URL`, an Alembic-head writable PostgreSQL store, a durable writable `BLOB_ROOT`, and a valid acquisition-eligible `fr_<uuid>`. Their preflight completes before Firecrawl construction or network execution. A failed preflight cannot become a successful non-persistent acquisition.
+`fsearch` and `fscrape` require `DATABASE_URL`, an Alembic-head writable PostgreSQL store, a durable writable `BLOB_ROOT`, and a valid `fr_<uuid>` whose lifecycle has been explicitly prepared to `acquiring`. Their preflight completes before Firecrawl construction or network execution. A failed preflight cannot become a successful non-persistent acquisition.
+
+Use a curated run when the operator or agent will choose the exact retained set. The canonical sequence is explicit and ordered:
 
 ```bash
-RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start "<research objective>" --mode autonomous_local)"
+RUN_ID="$(
+  rtk proxy "<skill-root>/scripts/frun" start "<research objective>" \
+    --run-mode curated \
+    --mode autonomous_local
+)"
+
+rtk proxy "<skill-root>/scripts/frun" prepare "$RUN_ID"
 
 rtk proxy "<skill-root>/scripts/fsearch" "<query>" \
   --research-run-id "$RUN_ID" \
   --limit 20 \
-  --scrape-limit 5 \
+  --scrape-limit 0 \
   --sources web,news
 
-rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" \
-  --research-run-id "$RUN_ID" \
-  --batch-size 64
-rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
+rtk proxy "<skill-root>/scripts/fscrape" \
+  "https://example.com/article-one" \
+  "https://example.com/article-two" \
+  --research-run-id "$RUN_ID"
+
+# Inspect the run's promotion subjects and explicitly retain or reject each
+# intended asset before sealing. Use the stable promotion-subject UUIDs.
+rtk proxy "<skill-root>/scripts/frun" retain "$RUN_ID" "<promotion-subject-id>"
+rtk proxy "<skill-root>/scripts/frun" reject "$RUN_ID" "<promotion-subject-id>" \
+  --reason "not part of the curated evidence set"
+
+rtk proxy "<skill-root>/scripts/frun" seal-acquisition "$RUN_ID"
+rtk proxy "<skill-root>/scripts/frun" resume "$RUN_ID" --batch-size 64
+rtk proxy "<skill-root>/scripts/frun" status "$RUN_ID"
 ```
+
+Creating a run does not prepare it. `frun prepare` is the only normal direct-acquisition entry command. Beginning or completing `fsearch` or `fscrape` never changes lifecycle state implicitly.
+
+Every production direct invocation records the exact locked lifecycle state and revision in PostgreSQL before provider execution:
+
+- `fsearch` uses the shared direct-invocation start transaction and an `invocation_started` event;
+- `fscrape` uses its specialized direct-scrape start transaction and a `direct_scrape_started` event; and
+- both reject the operation without committing an invocation or start event if the locked state is not exactly `acquiring`.
 
 A normal top-level operation receives a new `fc_<uuid>`. Use `--invocation-id` and the same idempotency key only for a deliberate retry of uncertain identical input. Conflicting key reuse fails closed.
 
-`research-db worker --once` processes at most one bounded batch. For lifecycle work, `drain_index_jobs.py --research-run-id "$RUN_ID"` seals the run's current PostgreSQL chunk membership and evaluates the exact census after every scoped worker batch. It never treats `claimed=0` as proof that live leases are complete. It waits with bounded backoff, reclaims expired leases, retries recoverable failures within the configured attempt budget, and succeeds only when every expected manifest is complete. Dead, missing-job, wrong-fingerprint, and manifest-inconsistent classes fail closed. A recoverable deadline or batch bound emits structured `index-drain-result-v1` output and exits `75`; cancellation exits `130`. Neither outcome advances lifecycle state. Unscoped use remains available for projection maintenance, but its queue-empty result is not run-completion evidence.
+`retain` and `reject` are curated-only operations. The requested run, promotion subject, lifecycle revision, ownership check, and mutation are validated in one PostgreSQL transaction. A subject from another run is rejected even when both runs have the same lifecycle revision.
 
-To add a direct scrape to the same run, first drain and inspect the prior work, then drain again after the scrape:
+`seal-acquisition` is curated-only and performs no discovery or smart expansion. It advances the run through `extracting` to `indexing`, promotes retained subjects through evidence eligibility, and seals exact PostgreSQL completion membership. The transition and promotion steps are separately durable so an interrupted operation can resume safely.
+
+If sealing is interrupted after the run reaches `indexing` but before an active membership seal exists:
 
 ```bash
-rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" \
-  --research-run-id "$RUN_ID" \
-  --batch-size 64
-rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/article" \
-  --research-run-id "$RUN_ID"
-rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" \
-  --research-run-id "$RUN_ID" \
-  --batch-size 64
-rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
+rtk proxy "<skill-root>/scripts/frun" resume "$RUN_ID"
+# next_action reports: frun seal-acquisition <fr_id>
+rtk proxy "<skill-root>/scripts/frun" seal-acquisition "$RUN_ID"
+rtk proxy "<skill-root>/scripts/frun" resume "$RUN_ID" --batch-size 64
 ```
 
-`fsearch_smart` creates an authoritative run when one is not supplied. `--dry-run` is the only non-persistent execution surface and performs no database or network writes.
+In that state, `frun resume` does not start checkpoint processing and `frun finish` fails closed. Re-running `seal-acquisition` resumes the existing durable promotion/seal operation without repeating lifecycle transitions. Only an active membership seal permits checkpoint resume.
+
+Direct acquisition is closed after sealing. Do not attempt to append another `fsearch` or `fscrape` while the run is `indexing` or later; the wrapper fails with the current state and explicit preparation guidance. A terminal run requires an explicit reopen before a new lifecycle.
+
+`research-db worker --once` processes at most one bounded batch. For curated lifecycle work, use `frun resume`; it verifies mode and active membership before delegating to the bounded checkpoint workflow. The underlying drain evaluates the exact sealed census after every scoped worker batch. It never treats `claimed=0` as proof that live leases are complete. It waits with bounded backoff, reclaims expired leases, retries recoverable failures within the configured attempt budget, and succeeds only when every expected manifest is complete. Dead, missing-job, wrong-fingerprint, and manifest-inconsistent classes fail closed. A recoverable deadline or batch bound emits structured output and remains nonterminal. Unscoped worker use remains available for projection maintenance, but its queue-empty result is not run-completion evidence.
+
+## Autonomous smart acquisition
+
+`fsearch_smart` is the autonomous orchestration surface. It creates an authoritative autonomous run when one is not supplied. `--dry-run` is the only non-persistent execution surface and performs no database or network writes.
 
 ```bash
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>"
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-run-id "$RUN_ID"
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --dry-run
 ```
+
+Do not use `fsearch_smart` to continue a curated run unless autonomous expansion has been explicitly requested and the lifecycle contract permits it. Curated `frun finish` never invokes smart expansion.
 
 A `fsearch_smart` exit status of `75` is an intentional resumable checkpoint, not a generic failure and not permission to retry automatically. Preserve the printed `Run ID`, inspect its PostgreSQL state once, and return status `75` to the calling agent or operator. Resume only as a separate deliberate action with the same run after clearing or changing the internal stop-after-state control.
 
@@ -160,24 +193,29 @@ Use `--mode regex` only when regular-expression behavior is required. All inspec
 
 ## Structured scrape
 
-Start a separate run or use the same-run drain boundary above.
+Structured scrape follows the same explicit curated lifecycle:
 
 ```bash
-SCRAPE_RUN_ID="$(rtk proxy "<skill-root>/scripts/frun" start "structured scrape" --mode autonomous_local)"
+SCRAPE_RUN_ID="$(
+  rtk proxy "<skill-root>/scripts/frun" start "structured scrape" \
+    --run-mode curated \
+    --mode autonomous_local
+)"
+rtk proxy "<skill-root>/scripts/frun" prepare "$SCRAPE_RUN_ID"
 rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/product" \
   --research-run-id "$SCRAPE_RUN_ID" \
   --schema '{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}' \
   --json
-rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" \
-  --research-run-id "$SCRAPE_RUN_ID" \
-  --batch-size 64
+# Explicitly retain or reject the resulting promotion subject, then:
+rtk proxy "<skill-root>/scripts/frun" seal-acquisition "$SCRAPE_RUN_ID"
+rtk proxy "<skill-root>/scripts/frun" resume "$SCRAPE_RUN_ID" --batch-size 64
 ```
 
 Structured provider output is validated before successful document ingestion. Invalid structured output remains a failed extraction attempt; it is not silently accepted.
 
 ## Workflow and completion
 
-The following is a common acquisition path, not the complete transition graph:
+The following is a common curated acquisition path, not the complete transition graph:
 
 ```text
 created → planning → corpus_review → acquiring → extracting → indexing
@@ -200,16 +238,17 @@ validating → completed | partial | failed
 
 Explicit cancellation is available from nonterminal states. `completed`, `partial`, `failed`, and `cancelled` are terminal; further acquisition requires an explicit reopen. Consult `references/workflow-state-schema.md` rather than inferring a legal transition from the abbreviated common path.
 
-After all run-scoped index jobs complete, `frun finish` advances through coverage review, synthesis, validation, and the requested terminal outcome.
+For a curated run, seal exact acquisition membership first, then resume indexing, inspect authoritative status, and finish explicitly:
 
 ```bash
-rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" \
-  --research-run-id "$RUN_ID" \
-  --batch-size 64
-rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
+rtk proxy "<skill-root>/scripts/frun" seal-acquisition "$RUN_ID"
+rtk proxy "<skill-root>/scripts/frun" resume "$RUN_ID" --batch-size 64
+rtk proxy "<skill-root>/scripts/frun" status "$RUN_ID"
 rtk proxy "<skill-root>/scripts/frun" finish "$RUN_ID" --outcome satisfied
 rtk proxy "<skill-root>/scripts/frun" status "$RUN_ID"
 ```
+
+`frun finish` requires an active exact membership seal and complete run-scoped index evidence. It advances through coverage review, synthesis, validation, and the requested terminal outcome without autonomous acquisition.
 
 Retry an uncertain command with its original idempotency key. After a stale revision, inspect `run-status` before deciding whether a new command is valid. Reopen terminal runs explicitly.
 
@@ -255,6 +294,7 @@ Exports are never replay, retry, selection, ingestion, or workflow inputs.
 
 ## Documentation
 
+- `references/curated-run-lifecycle.md`: canonical autonomous/curated mode, direct-invocation provenance, run-scoped promotion, sealing, and interruption repair.
 - `references/authoritative-workflows.md`: canonical acquisition, completion, transaction, and projection-recovery sequences.
 - `references/research-store-architecture.md`: Target A authority and consistency.
 - `references/operations-runbook.md`: deployment, backup, restore, worker, projection, and recovery.
@@ -268,13 +308,17 @@ Exports are never replay, retry, selection, ingestion, or workflow inputs.
 - `references/release-candidate-gate-rc10.md`: aggregate exact-head gate and mandatory post-merge campaign boundary.
 - `references/release-campaign-timing-diagnostics.md`: strict PostgreSQL-bound timing-evidence contract used by the credentialed release campaign.
 
-RC-9 remains the controlling breaking-change and migration boundary. RC-10 adds aggregate and credentialed release validation without introducing a schema migration, command-surface change, payload relocation, Qdrant authority, or Valkey correctness dependency.
+RC-9 remains the controlling breaking-change and migration boundary. RC-10 adds aggregate and credentialed release validation without introducing a schema migration, payload relocation, Qdrant authority, or Valkey correctness dependency. Issue #212 adds only additive run-mode and invocation-provenance JSONB fields plus explicit CLI lifecycle commands; historical records remain uninferred.
 
 ## Verification
 
 A supported acquisition reports stable authoritative IDs or a stage-specific failure. In addition:
 
 - No Firecrawl or network invocation occurs after failed authoritative preflight.
+- Direct invocation start state and revision are written under the authoritative run lock.
+- Direct acquisition outside `acquiring` commits no invocation or start event.
+- Retain/reject cannot cross run ownership boundaries.
+- Checkpoint resume and finish require an active exact membership seal.
 - PostgreSQL identities resolve to immutable bytes under `BLOB_ROOT`.
 - Payload bytes are installed before PostgreSQL commits metadata that references them.
 - The worker and active Qdrant alias match the configured embedding fingerprint.
@@ -292,6 +336,6 @@ rtk proxy env PYTHONDONTWRITEBYTECODE=1 \
   pytest -q -p no:cacheprovider scripts/
 ```
 
-Changes touching acquisition, persistence, migration, indexing, recovery, documentation/parser contracts, or release verification also require the applicable disposable PostgreSQL, Qdrant, Valkey, worker/recovery, and bounded live-validation suites. Preserve Python 3.11 and 3.12 compatibility and record the exact tested commit SHA. Do not weaken a failing gate, convert an integration failure into a skip, or infer release readiness from a different commit.
+Changes touching acquisition, persistence, migration, indexing, recovery, documentation/parser contracts, or release verification also require the applicable disposable PostgreSQL, Qdrant, Valkey, worker/recovery, concurrency, restart/resume, and bounded live-validation suites. Preserve Python 3.11 and 3.12 compatibility and record the exact tested commit SHA. Do not weaken a failing gate, convert an integration failure into a skip, or infer release readiness from a different commit.
 
 For an aggregate release candidate, pull-request checks are necessary but not sufficient. After merge, resolve the exact resulting current `main` SHA, confirm its push-triggered gates, and dispatch `.github/workflows/release-campaign.yml` from `refs/heads/main` with `candidate-sha` equal to that SHA. Release acceptance requires exact identity among candidate, dispatch, workflow, and checked-out SHAs; successful campaign execution; successful strict authoritative verification; successful artifact upload; and final gate enforcement. Retain the workflow run ID, artifact ID, artifact digest, candidate SHA, and complete campaign evidence before closing the release gate or tagging/publishing.
