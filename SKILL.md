@@ -52,8 +52,12 @@ rtk proxy "<skill-root>/scripts/fscrape" \
   "https://example.com/article-two" \
   --research-run-id "$RUN_ID"
 
-# Inspect the run's promotion subjects and explicitly retain or reject each
-# intended asset before sealing. Use the stable promotion-subject UUIDs.
+# Discover the authoritative promotion-subject UUIDs for this exact run.
+rtk proxy "<skill-root>/scripts/frun" assets "$RUN_ID"
+
+# Explicitly retain or reject each intended asset before sealing. Use the
+# returned promotion-subject `id`; snapshot IDs, ranks, URLs, and filenames are
+# not valid substitutes.
 rtk proxy "<skill-root>/scripts/frun" retain "$RUN_ID" "<promotion-subject-id>"
 rtk proxy "<skill-root>/scripts/frun" reject "$RUN_ID" "<promotion-subject-id>" \
   --reason "not part of the curated evidence set"
@@ -72,6 +76,8 @@ Every production direct invocation records the exact locked lifecycle state and 
 - both reject the operation without committing an invocation or start event if the locked state is not exactly `acquiring`.
 
 A normal top-level operation receives a new `fc_<uuid>`. Use `--invocation-id` and the same idempotency key only for a deliberate retry of uncertain identical input. Conflicting key reuse fails closed.
+
+`frun assets` is the curated-only, read-only discovery surface for promotion subjects. It returns the authoritative run state and revision plus stable subject IDs, snapshots, roles, stages, provenance, and promotion metadata. Use each subject's `id` with `retain` or `reject`; do not substitute a snapshot ID, candidate rank, URL, or local filename.
 
 `retain` and `reject` are curated-only operations. The requested run, promotion subject, lifecycle revision, ownership check, and mutation are validated in one PostgreSQL transaction. A subject from another run is rejected even when both runs have the same lifecycle revision.
 
@@ -206,7 +212,8 @@ rtk proxy "<skill-root>/scripts/fscrape" "https://example.com/product" \
   --research-run-id "$SCRAPE_RUN_ID" \
   --schema '{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}' \
   --json
-# Explicitly retain or reject the resulting promotion subject, then:
+rtk proxy "<skill-root>/scripts/frun" assets "$SCRAPE_RUN_ID"
+# Explicitly retain or reject the returned promotion subject, then:
 rtk proxy "<skill-root>/scripts/frun" seal-acquisition "$SCRAPE_RUN_ID"
 rtk proxy "<skill-root>/scripts/frun" resume "$SCRAPE_RUN_ID" --batch-size 64
 ```
@@ -294,7 +301,7 @@ Exports are never replay, retry, selection, ingestion, or workflow inputs.
 
 ## Documentation
 
-- `references/curated-run-lifecycle.md`: canonical autonomous/curated mode, direct-invocation provenance, run-scoped promotion, sealing, and interruption repair.
+- `references/curated-run-lifecycle.md`: canonical autonomous/curated mode, direct-invocation provenance, promotion-subject discovery, run-scoped promotion, sealing, and interruption repair.
 - `references/authoritative-workflows.md`: canonical acquisition, completion, transaction, and projection-recovery sequences.
 - `references/research-store-architecture.md`: Target A authority and consistency.
 - `references/operations-runbook.md`: deployment, backup, restore, worker, projection, and recovery.
@@ -317,6 +324,7 @@ A supported acquisition reports stable authoritative IDs or a stage-specific fai
 - No Firecrawl or network invocation occurs after failed authoritative preflight.
 - Direct invocation start state and revision are written under the authoritative run lock.
 - Direct acquisition outside `acquiring` commits no invocation or start event.
+- `frun assets` returns stable, run-scoped promotion-subject IDs before retain/reject.
 - Retain/reject cannot cross run ownership boundaries.
 - Checkpoint resume and finish require an active exact membership seal.
 - PostgreSQL identities resolve to immutable bytes under `BLOB_ROOT`.
