@@ -17,7 +17,12 @@ fi
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  frun start <objective> [--mode agent_led|autonomous_local|deterministic_debug]
+  frun start <objective> [--run-mode autonomous|curated]
+       [--mode agent_led|autonomous_local|deterministic_debug]
+  frun prepare <fr_id>
+  frun retain <fr_id> <promotion_subject_id> [--reason TEXT]
+  frun reject <fr_id> <promotion_subject_id> --reason TEXT
+  frun seal-acquisition <fr_id>
   frun resume <fr_id> [--batch-size N] [--max-batches N]
        [--deadline-seconds N] [--initial-backoff-seconds N]
        [--max-backoff-seconds N]
@@ -41,23 +46,48 @@ case "${1:-}" in
     objective="${1:-}"
     [[ -n "$objective" ]] || usage
     shift
-    mode="autonomous_local"
+    execution_mode="autonomous_local"
+    run_mode="autonomous"
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --mode) mode="$2"; shift 2 ;;
+        --mode) execution_mode="$2"; shift 2 ;;
+        --run-mode) run_mode="$2"; shift 2 ;;
         *) echo "ERROR: unknown start option: $1" >&2; exit 2 ;;
       esac
     done
-    case "$mode" in
+    case "$execution_mode" in
       agent_led|autonomous_local|deterministic_debug) ;;
-      *) echo "ERROR: unsupported execution mode: $mode" >&2; exit 2 ;;
+      *) echo "ERROR: unsupported execution mode: $execution_mode" >&2; exit 2 ;;
     esac
-    external_id="fr_$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+    case "$run_mode" in
+      autonomous|curated) ;;
+      *) echo "ERROR: unsupported run mode: $run_mode" >&2; exit 2 ;;
+    esac
     output="$(
-      "$SCRIPT_DIR/research-db" run-start \
-        "$external_id" "$objective" --mode "$mode"
+      python3 "$SCRIPT_DIR/curated_run_cli.py" start "$objective" \
+        --run-mode "$run_mode" --mode "$execution_mode"
     )"
     python3 -c 'import json,sys; print(json.load(sys.stdin)["external_id"])' <<<"$output"
+    ;;
+
+  prepare)
+    shift
+    exec python3 "$SCRIPT_DIR/curated_run_cli.py" prepare "$@"
+    ;;
+
+  retain)
+    shift
+    exec python3 "$SCRIPT_DIR/curated_run_cli.py" retain "$@"
+    ;;
+
+  reject)
+    shift
+    exec python3 "$SCRIPT_DIR/curated_run_cli.py" reject "$@"
+    ;;
+
+  seal-acquisition)
+    shift
+    exec python3 "$SCRIPT_DIR/curated_run_cli.py" seal-acquisition "$@"
     ;;
 
   resume)
@@ -76,6 +106,15 @@ case "${1:-}" in
         *) echo "ERROR: unknown resume option: $1" >&2; exit 2 ;;
       esac
     done
+    resume_status="$(python3 "$SCRIPT_DIR/curated_run_cli.py" resume "$run_id")"
+    read -r persisted_run_mode persisted_state < <(
+      python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["run_mode"], data["state"])' \
+        <<<"$resume_status"
+    )
+    if [[ "$persisted_run_mode" == "curated" && "$persisted_state" != "indexing" ]]; then
+      printf '%s\n' "$resume_status"
+      exit 0
+    fi
     exec python3 "$SCRIPT_DIR/resume_index_checkpoint.py" "${args[@]}"
     ;;
 
@@ -100,16 +139,31 @@ case "${1:-}" in
       esac
     done
     [[ -n "$outcome" ]] || { echo "ERROR: --outcome is required" >&2; exit 2; }
-    args=(run-finish "$run_id" --outcome "$outcome" --status "$status")
+    source_sha=""
+    answer_sha=""
     if [[ -n "$source_manifest" ]]; then
       [[ -f "$source_manifest" ]] || { echo "ERROR: source manifest not found: $source_manifest" >&2; exit 1; }
-      args+=(--source-manifest-sha256 "$(sha256sum "$source_manifest" | awk '{print $1}')")
+      source_sha="$(sha256sum "$source_manifest" | awk '{print $1}')"
     fi
     if [[ -n "$answer_file" ]]; then
       [[ -f "$answer_file" ]] || { echo "ERROR: answer file not found: $answer_file" >&2; exit 1; }
-      args+=(--answer-sha256 "$(sha256sum "$answer_file" | awk '{print $1}')")
+      answer_sha="$(sha256sum "$answer_file" | awk '{print $1}')"
     fi
-    "$SCRIPT_DIR/research-db" "${args[@]}" >/dev/null
+    mode_json="$(python3 "$SCRIPT_DIR/curated_run_cli.py" mode "$run_id")"
+    persisted_run_mode="$(
+      python3 -c 'import json,sys; print(json.load(sys.stdin)["run_mode"])' <<<"$mode_json"
+    )"
+    if [[ "$persisted_run_mode" == "curated" ]]; then
+      args=(finish "$run_id" --outcome "$outcome" --status "$status")
+      [[ -z "$source_sha" ]] || args+=(--source-manifest-sha256 "$source_sha")
+      [[ -z "$answer_sha" ]] || args+=(--answer-sha256 "$answer_sha")
+      python3 "$SCRIPT_DIR/curated_run_cli.py" "${args[@]}" >/dev/null
+    else
+      args=(run-finish "$run_id" --outcome "$outcome" --status "$status")
+      [[ -z "$source_sha" ]] || args+=(--source-manifest-sha256 "$source_sha")
+      [[ -z "$answer_sha" ]] || args+=(--answer-sha256 "$answer_sha")
+      "$SCRIPT_DIR/research-db" "${args[@]}" >/dev/null
+    fi
     printf '%s\n' "$run_id"
     if (( auto_audit )); then
       "$SCRIPT_DIR/research-db" run-audit "$run_id"
