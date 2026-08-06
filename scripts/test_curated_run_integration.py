@@ -85,7 +85,7 @@ def _curated(config: StoreConfig):
 def test_curated_four_asset_lifecycle_uses_real_direct_wrappers(
     promotion_config: StoreConfig,
 ) -> None:
-    runs, _workflow, promotions, curated = _curated(promotion_config)
+    runs, _workflow, _promotions, curated = _curated(promotion_config)
     external_id = f"fr_{uuid4().hex}"
 
     started = curated.start(
@@ -163,24 +163,33 @@ def test_curated_four_asset_lifecycle_uses_real_direct_wrappers(
             ("invocation_started", "acquiring", acquisition_revision),
         ]
 
-    subjects = [item for item in promotions.list_assets(started.run.id) if item["id"]]
+    first_inventory = curated.assets(external_id)
+    second_inventory = curated.assets(external_id)
+    assert first_inventory == second_inventory
+    assert first_inventory["external_id"] == external_id
+    assert first_inventory["state"] == "acquiring"
+    assert first_inventory["lifecycle_revision"] == acquisition_revision
+    assert first_inventory["asset_count"] == 4
+    subjects = [item for item in first_inventory["assets"] if item["id"]]
     assert len(subjects) == 4
+    assert len({item["id"] for item in subjects}) == 4
     assert len({item["snapshot_id"] for item in subjects}) == 4
 
     other_external_id = f"fr_{uuid4().hex}"
     curated.start("cross-run guard", other_external_id, run_mode="curated")
     curated.prepare(other_external_id)
+    assert curated.assets(other_external_id)["asset_count"] == 0
     first_subject_id = UUID(str(subjects[0]["id"]))
     stage_before = next(
         item
-        for item in promotions.list_assets(started.run.id)
+        for item in curated.assets(external_id)["assets"]
         if item["id"] == str(first_subject_id)
     )["current_stage"]
     with pytest.raises(AssetPromotionError, match="not requested run"):
         curated.retain(other_external_id, first_subject_id)
     stage_after = next(
         item
-        for item in promotions.list_assets(started.run.id)
+        for item in curated.assets(external_id)["assets"]
         if item["id"] == str(first_subject_id)
     )["current_stage"]
     assert stage_after == stage_before
@@ -188,6 +197,11 @@ def test_curated_four_asset_lifecycle_uses_real_direct_wrappers(
     for subject in subjects:
         retained = curated.retain(external_id, UUID(str(subject["id"])))
         assert retained["current_stage"] == "retained"
+
+    retained_inventory = curated.assets(external_id)
+    assert {item["current_stage"] for item in retained_inventory["assets"]} == {
+        "retained"
+    }
 
     first_seal = curated.seal_acquisition(external_id)
     second_seal = curated.seal_acquisition(external_id)
