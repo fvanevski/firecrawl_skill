@@ -236,12 +236,7 @@ class _LifecycleRunService:
             lifecycle_revision=self.lifecycle_revision,
         )
 
-    def transition(
-        self,
-        _run_id: UUID,
-        next_state: str,
-        **_kwargs: Any,
-    ) -> None:
+    def transition(self, _run_id: UUID, next_state: str, **_kwargs: Any) -> None:
         self.transitions.append(next_state)
         self.state = next_state
         self.lifecycle_revision += 1
@@ -593,11 +588,6 @@ def test_rc_02_drain_reobserves_final_32_completions() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="RC-04 tracked by #212: direct acquisition requires lifecycle boundaries",
-)
 def test_rc_04_direct_acquisition_obeys_lifecycle_boundaries(
     tmp_path: Path,
 ) -> None:
