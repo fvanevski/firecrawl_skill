@@ -139,6 +139,7 @@ class CuratedRunService:
             subject_id,
             "retained",
             expected_lifecycle_revision=status.lifecycle_revision,
+            expected_run_id=status.id,
             actor_type="operator",
             actor_identifier="frun",
             policy_version="curated-run-v1",
@@ -164,6 +165,7 @@ class CuratedRunService:
         return self.promotion_service.reject(
             subject_id,
             expected_lifecycle_revision=status.lifecycle_revision,
+            expected_run_id=status.id,
             actor_type="operator",
             actor_identifier="frun",
             policy_version="curated-run-v1",
@@ -200,6 +202,7 @@ class CuratedRunService:
     def resume(self, external_run_id: str) -> dict[str, Any]:
         mode_status = self.status(external_run_id)
         status = mode_status.run
+        membership_sealed: bool | None = None
         if mode_status.run_mode != "curated":
             return {
                 **mode_status.to_dict(),
@@ -210,12 +213,22 @@ class CuratedRunService:
         elif status.state in {"acquiring", "extracting"}:
             next_action = f"frun seal-acquisition {external_run_id}"
         elif status.state == "indexing":
-            next_action = "resume index checkpoint"
+            membership_sealed = (
+                self.promotion_service.get_active_seal(status.id) is not None
+            )
+            next_action = (
+                "resume index checkpoint"
+                if membership_sealed
+                else f"frun seal-acquisition {external_run_id}"
+            )
         elif status.state in {"coverage_review", "synthesizing", "validating"}:
             next_action = f"frun finish {external_run_id} --outcome satisfied"
         else:
             next_action = "none"
-        return {**mode_status.to_dict(), "next_action": next_action}
+        result = {**mode_status.to_dict(), "next_action": next_action}
+        if membership_sealed is not None:
+            result["membership_sealed"] = membership_sealed
+        return result
 
     def finish(
         self,
@@ -226,7 +239,16 @@ class CuratedRunService:
         source_manifest_sha256: str | None = None,
         answer_sha256: str | None = None,
     ) -> RunModeStatus:
-        self._require_curated(external_run_id)
+        current = self._require_curated(external_run_id)
+        if (
+            status_name != "failed"
+            and current.state == "indexing"
+            and self.promotion_service.get_active_seal(current.id) is None
+        ):
+            raise CuratedRunError(
+                f"run {external_run_id} has no active completion membership; "
+                f"run 'frun seal-acquisition {external_run_id}' before finish"
+            )
         status = self.workflow_service.finish_run(
             external_run_id,
             outcome=outcome,

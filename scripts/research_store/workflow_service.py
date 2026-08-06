@@ -70,14 +70,6 @@ class WorkflowOperationService:
         invocation_service: InvocationService,
     ) -> None:
         self.run_service = run_service
-        if isinstance(invocation_service, InvocationService):
-            from .direct_invocation_service import DirectInvocationService
-
-            if not isinstance(invocation_service, DirectInvocationService):
-                invocation_service = DirectInvocationService(
-                    invocation_service.uow_factory,
-                    invocation_service.event_service,
-                )
         self.invocation_service = invocation_service
         self.uow_factory = run_service.uow_factory
 
@@ -216,14 +208,17 @@ class WorkflowOperationService:
                 "before direct acquisition"
             )
         command_key = f"wrapper:{external_invocation_id}:begin"
-        return self.invocation_service.begin(
-            status.id,
-            external_invocation_id,
-            operation,
-            input_data,
-            idempotency_key=f"{command_key}:invocation",
-            actor_type="wrapper",
-        )
+        try:
+            return self.invocation_service.begin(
+                status.id,
+                external_invocation_id,
+                operation,
+                input_data,
+                idempotency_key=f"{command_key}:invocation",
+                actor_type="wrapper",
+            )
+        except InvocationError as exc:
+            raise WorkflowBoundaryError(str(exc)) from exc
 
     def complete_operation(
         self,

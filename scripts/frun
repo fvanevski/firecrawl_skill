@@ -107,11 +107,14 @@ case "${1:-}" in
       esac
     done
     resume_status="$(python3 "$SCRIPT_DIR/curated_run_cli.py" resume "$run_id")"
-    read -r persisted_run_mode persisted_state < <(
-      python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["run_mode"], data["state"])' \
-        <<<"$resume_status"
+    read -r persisted_run_mode checkpoint_ready < <(
+      python3 -c '
+import json,sys
+data=json.load(sys.stdin)
+print(data["run_mode"], int(data.get("next_action") == "resume index checkpoint"))
+' <<<"$resume_status"
     )
-    if [[ "$persisted_run_mode" == "curated" && "$persisted_state" != "indexing" ]]; then
+    if [[ "$persisted_run_mode" == "curated" && "$checkpoint_ready" != "1" ]]; then
       printf '%s\n' "$resume_status"
       exit 0
     fi

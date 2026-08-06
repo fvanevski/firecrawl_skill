@@ -14,13 +14,17 @@ from .invocation_service import (
     InvocationService,
 )
 
+DIRECT_ACQUISITION_OPERATIONS = frozenset({"fsearch", "fscrape", "direct_scrape"})
+
 
 class DirectInvocationService(InvocationService):
     """Persist a direct invocation and its start-state in one transaction.
 
     The run row is held with ``FOR SHARE`` until the invocation and start event
     commit. A concurrent lifecycle transition therefore cannot interleave
-    between the state observation and the invocation insert.
+    between the state observation and the invocation insert. Operations that
+    execute direct provider acquisition additionally fail closed unless the
+    locked state is exactly ``acquiring``.
     """
 
     def begin(
@@ -46,6 +50,27 @@ class DirectInvocationService(InvocationService):
 
         with self.uow_factory() as uow:
             cur = uow.connection.cursor()
+            cur.execute(
+                """SELECT state,lifecycle_revision
+                   FROM research_runs WHERE id=%s FOR SHARE""",
+                (run_id,),
+            )
+            run_row = cur.fetchone()
+            if run_row is None:
+                raise KeyError(f"run {run_id} not found")
+            lifecycle_state = str(run_row[0])
+            lifecycle_revision = int(run_row[1])
+            if (
+                operation in DIRECT_ACQUISITION_OPERATIONS
+                and lifecycle_state != "acquiring"
+            ):
+                raise InvocationError(
+                    f"cannot begin {operation} while run {run_id} is in state "
+                    f"{lifecycle_state}; explicitly prepare the run before "
+                    "direct acquisition"
+                )
+            self._after_run_lock(run_id, lifecycle_state, lifecycle_revision)
+
             cur.execute(
                 """SELECT id,run_id,operation,status,input
                    FROM research_invocations
@@ -79,22 +104,11 @@ class DirectInvocationService(InvocationService):
                     "use a new ID"
                 )
 
-            cur.execute(
-                """SELECT state,lifecycle_revision
-                   FROM research_runs WHERE id=%s FOR SHARE""",
-                (run_id,),
-            )
-            run_row = cur.fetchone()
-            if run_row is None:
-                raise KeyError(f"run {run_id} not found")
-            lifecycle_state = str(run_row[0])
-            lifecycle_revision = int(run_row[1])
             metadata = {
                 "actor_type": actor_type,
                 "lifecycle_state": lifecycle_state,
                 "lifecycle_revision": lifecycle_revision,
             }
-
             cur.execute(
                 """INSERT INTO research_invocations(
                 run_id,parent_invocation_id,external_invocation_id,
@@ -130,3 +144,11 @@ class DirectInvocationService(InvocationService):
             return InvocationRecord.from_mapping(
                 uow.runs.get_invocation_status(invocation_id=invocation_id)
             )
+
+    def _after_run_lock(
+        self,
+        run_id: UUID,
+        lifecycle_state: str,
+        lifecycle_revision: int,
+    ) -> None:
+        """Deterministic concurrency-test seam while the run lock is held."""
