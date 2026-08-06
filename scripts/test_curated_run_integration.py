@@ -2,102 +2,183 @@
 
 from __future__ import annotations
 
+import json
+from threading import Event, Thread
 from uuid import UUID, uuid4
 
+import pytest
 from asset_promotion_test_support import TEST_DSN, _mark_run_index_complete
+from research_store.asset_promotion_models import AssetPromotionError
 from research_store.asset_promotion_service import AssetPromotionService
 from research_store.config import StoreConfig
 from research_store.container import (
     build_run_service,
-    build_service,
     build_workflow_operation_service,
 )
 from research_store.curated_run_service import CuratedRunService
-from research_store.domain import IngestRequest
+from research_store.direct_invocation_service import DirectInvocationService
+from research_store.direct_scrape_service import ScrapeTransportResult
+from research_store.domain import SearchAdapterResult, utcnow
+from research_store.fscrape_contract import FScrapeRequest
+from research_store.fscrape_service import build_fscrape_service
+from research_store.fsearch_service import FSearchRequest, build_fsearch_service
 from research_store.postgres import connect
 
 pytest_plugins = ("asset_promotion_test_support",)
 
 
-def _ap_request(index: int) -> IngestRequest:
-    token = uuid4().hex
-    return IngestRequest(
-        f"https://apnews.com/article/curated-lifecycle-{index}-{token}",
-        (
-            f"# AP asset {index}\n\nPostgreSQL-authoritative curated evidence {token}."
-        ).encode(),
-    )
+class _EmptySearchAdapter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def search(self, _query_text: str, **_kwargs) -> SearchAdapterResult:
+        self.calls += 1
+        return SearchAdapterResult(
+            raw_payload=json.dumps(
+                {"success": True, "data": {"web": []}}
+            ).encode(),
+            http_status=200,
+            provider_request_id="curated-empty-search",
+            transport_error=None,
+            transport_metadata={"test": True, "implicit_scrape": False},
+            requested_at=utcnow(),
+            responded_at=utcnow(),
+        )
 
 
-def test_curated_four_ap_asset_lifecycle_is_exact_and_idempotent(
+class _FourAssetScrapeAdapter:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def scrape(self, url: str, **_kwargs) -> ScrapeTransportResult:
+        self.calls.append(url)
+        token = uuid4().hex
+        return ScrapeTransportResult(
+            raw_payload=(
+                f"# Curated AP asset\n\nPostgreSQL-authoritative evidence {token}."
+            ).encode(),
+            http_status=200,
+            final_url=url,
+            title="Curated AP asset",
+            provider_request_id=f"scrape-{token}",
+            metadata={"test": True},
+        )
+
+
+class _PausingDirectInvocationService(DirectInvocationService):
+    def __init__(self, uow_factory, locked: Event, release: Event):
+        super().__init__(uow_factory)
+        self.locked = locked
+        self.release = release
+
+    def _after_run_lock(self, _run_id, _state, _revision):
+        self.locked.set()
+        if not self.release.wait(5):
+            raise TimeoutError("test did not release direct invocation lock")
+
+
+def _curated(config: StoreConfig):
+    runs = build_run_service(config)
+    workflow = build_workflow_operation_service(config)
+    promotions = AssetPromotionService(runs.uow_factory)
+    return runs, workflow, promotions, CuratedRunService(runs, workflow, promotions)
+
+
+def test_curated_four_asset_lifecycle_uses_real_direct_wrappers(
     promotion_config: StoreConfig,
 ) -> None:
-    runs = build_run_service(promotion_config)
-    workflow = build_workflow_operation_service(promotion_config)
-    promotions = AssetPromotionService(runs.uow_factory)
-    curated = CuratedRunService(runs, workflow, promotions)
-    corpus = build_service(promotion_config)
-    external_id = f"fr_curated_{uuid4().hex}"
+    runs, _workflow, promotions, curated = _curated(promotion_config)
+    external_id = f"fr_{uuid4().hex}"
 
     started = curated.start(
-        "Complete a curated run using four exact AP assets",
+        "Complete a curated run using four exact assets",
         external_id,
         run_mode="curated",
     )
-    assert started.run_mode == "curated"
     prepared = curated.prepare(external_id)
     assert prepared.run.state == "acquiring"
     acquisition_revision = prepared.run.lifecycle_revision
 
-    search_id = f"fc_curated_search_{uuid4().hex}"
-    search = workflow.begin_operation(
-        external_id,
-        search_id,
-        "fsearch",
-        {"query": "four exact AP assets"},
+    search_adapter = _EmptySearchAdapter()
+    search_external_id = f"fc_{uuid4().hex}"
+    search_result = build_fsearch_service(
+        promotion_config,
+        search_adapter_factory=lambda: search_adapter,
+    ).execute(
+        FSearchRequest(
+            "four exact AP assets",
+            external_id,
+            scrape_limit=0,
+            external_invocation_id=search_external_id,
+        )
     )
-    workflow.complete_operation(
-        external_id,
-        search_id,
-        succeeded=True,
-        output={"records": [{"persisted": True}]},
-    )
+    assert search_result.status == "empty"
+    assert search_adapter.calls == 1
 
-    scrape_id = f"fc_curated_scrape_{uuid4().hex}"
-    scrape = workflow.begin_operation(
-        external_id,
-        scrape_id,
-        "fscrape",
-        {
-            "urls": [
-                f"https://apnews.com/article/curated-lifecycle-{index}"
-                for index in range(4)
-            ]
-        },
+    scrape_adapter = _FourAssetScrapeAdapter()
+    scrape_external_id = f"fc_{uuid4().hex}"
+    urls = tuple(
+        f"https://apnews.com/article/curated-lifecycle-{index}-{uuid4().hex}"
+        for index in range(4)
     )
-    manifest = corpus.ingest_batch(
-        f"fc_curated_assets_{uuid4().hex}",
-        "scrape",
-        [_ap_request(index) for index in range(4)],
-        research_run_external_id=external_id,
+    scrape_result = build_fscrape_service(
+        promotion_config,
+        adapter_factory=lambda: scrape_adapter,
+    ).execute(
+        FScrapeRequest(
+            urls=urls,
+            research_run_id=external_id,
+            external_invocation_id=scrape_external_id,
+        )
     )
-    assert manifest["failure_count"] == 0
-    assert len(manifest["assets"]) == 4
-    workflow.complete_operation(
-        external_id,
-        scrape_id,
-        succeeded=True,
-        output={"records": [{"persisted": True} for _ in range(4)]},
-    )
+    assert scrape_result.status == "complete"
+    assert scrape_adapter.calls == list(urls)
 
-    for invocation in (search, scrape):
-        assert invocation.lifecycle_revision == acquisition_revision
-        assert invocation.metadata["lifecycle_state"] == "acquiring"
-        assert invocation.metadata["lifecycle_revision"] == acquisition_revision
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT id,operation,lifecycle_revision,
+                      metadata->>'lifecycle_state',
+                      (metadata->>'lifecycle_revision')::bigint
+                 FROM research_invocations
+                WHERE external_invocation_id IN (%s,%s)
+                ORDER BY operation""",
+            (search_external_id, scrape_external_id),
+        )
+        invocation_rows = cursor.fetchall()
+        assert [row[1:] for row in invocation_rows] == [
+            ("direct_scrape", acquisition_revision, "acquiring", acquisition_revision),
+            ("fsearch", acquisition_revision, "acquiring", acquisition_revision),
+        ]
+        invocation_ids = [row[0] for row in invocation_rows]
+        cursor.execute(
+            """SELECT event_type,payload->>'lifecycle_state',
+                      (payload->>'lifecycle_revision')::bigint
+                 FROM research_events
+                WHERE invocation_id=ANY(%s)
+                  AND event_type IN ('invocation_started','direct_scrape_started')
+                ORDER BY event_type""",
+            (invocation_ids,),
+        )
+        assert cursor.fetchall() == [
+            ("direct_scrape_started", "acquiring", acquisition_revision),
+            ("invocation_started", "acquiring", acquisition_revision),
+        ]
 
     subjects = [item for item in promotions.list_assets(started.run.id) if item["id"]]
     assert len(subjects) == 4
     assert len({item["snapshot_id"] for item in subjects}) == 4
+
+    other_external_id = f"fr_{uuid4().hex}"
+    curated.start("cross-run guard", other_external_id, run_mode="curated")
+    curated.prepare(other_external_id)
+    first_subject_id = UUID(str(subjects[0]["id"]))
+    with pytest.raises(AssetPromotionError, match="not requested run"):
+        curated.retain(other_external_id, first_subject_id)
+    assert next(
+        item for item in promotions.list_assets(started.run.id)
+        if item["id"] == str(first_subject_id)
+    )["current_stage"] == "extracted"
+
     for subject in subjects:
         retained = curated.retain(external_id, UUID(str(subject["id"])))
         assert retained["current_stage"] == "retained"
@@ -108,30 +189,13 @@ def test_curated_four_ap_asset_lifecycle_is_exact_and_idempotent(
     assert first_seal["state"] == "indexing"
     assert first_seal["expected_asset_count"] == 4
     assert first_seal["expected_chunk_count"] >= 4
-
-    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute(
-            """SELECT operation,lifecycle_revision,
-                      metadata->>'lifecycle_state',
-                      (metadata->>'lifecycle_revision')::bigint
-                 FROM research_invocations
-                WHERE external_invocation_id IN (%s,%s)
-                ORDER BY operation""",
-            (search_id, scrape_id),
-        )
-        provenance = cursor.fetchall()
-        assert provenance == [
-            ("fscrape", acquisition_revision, "acquiring", acquisition_revision),
-            ("fsearch", acquisition_revision, "acquiring", acquisition_revision),
-        ]
+    assert curated.resume(external_id)["next_action"] == "resume index checkpoint"
 
     _mark_run_index_complete(started.run.id)
     first_finish = curated.finish(external_id, outcome="satisfied")
     second_finish = curated.finish(external_id, outcome="satisfied")
     assert first_finish.run.state == second_finish.run.state == "completed"
-    resumed = curated.resume(external_id)
-    assert resumed["state"] == "completed"
-    assert resumed["next_action"] == "none"
+    assert curated.resume(external_id)["next_action"] == "none"
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -153,3 +217,65 @@ def test_curated_four_ap_asset_lifecycle_is_exact_and_idempotent(
         "validating": 1,
         "completed": 1,
     }
+
+
+def test_direct_invocation_lock_prevents_lifecycle_interleaving(
+    promotion_config: StoreConfig,
+) -> None:
+    runs, _workflow, _promotions, curated = _curated(promotion_config)
+    external_id = f"fr_{uuid4().hex}"
+    started = curated.start("locked direct invocation", external_id, run_mode="curated")
+    prepared = curated.prepare(external_id)
+    locked = Event()
+    release = Event()
+    transition_done = Event()
+    errors: list[BaseException] = []
+    records = []
+    invocation_external_id = f"fc_{uuid4().hex}"
+    service = _PausingDirectInvocationService(runs.uow_factory, locked, release)
+
+    def begin_invocation() -> None:
+        try:
+            records.append(
+                service.begin(
+                    started.run.id,
+                    invocation_external_id,
+                    "fsearch",
+                    {"query": "locked provenance"},
+                    actor_type="wrapper",
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def transition_run() -> None:
+        try:
+            runs.transition(
+                started.run.id,
+                "extracting",
+                expected_revision=prepared.run.lifecycle_revision,
+                idempotency_key=f"test:concurrent-transition:{external_id}",
+                actor_type="integration-test",
+            )
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+        finally:
+            transition_done.set()
+
+    begin_thread = Thread(target=begin_invocation)
+    transition_thread = Thread(target=transition_run)
+    begin_thread.start()
+    assert locked.wait(5)
+    transition_thread.start()
+    assert not transition_done.wait(0.25)
+    release.set()
+    begin_thread.join(5)
+    transition_thread.join(5)
+
+    assert not begin_thread.is_alive()
+    assert not transition_thread.is_alive()
+    assert errors == []
+    assert len(records) == 1
+    assert records[0].metadata["lifecycle_state"] == "acquiring"
+    assert records[0].metadata["lifecycle_revision"] == prepared.run.lifecycle_revision
+    assert runs.status(run_id=started.run.id).state == "extracting"

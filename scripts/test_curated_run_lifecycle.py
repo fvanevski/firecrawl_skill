@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import pytest
 from research_store.curated_run_service import CuratedRunError, CuratedRunService
 from research_store.direct_invocation_service import DirectInvocationService
+from research_store.invocation_service import InvocationError
 from research_store.run_service import PERMITTED_TRANSITIONS, RunStatus
 from research_store.workflow_service import RunIndexProgress, WorkflowOperationService
 
@@ -127,13 +128,16 @@ class _Workflow(WorkflowOperationService):
 
 
 class _PromotionService:
-    def __init__(self, runs, subjects):
+    def __init__(self, runs, subjects, *, fail_seal_once=False):
         self.runs = runs
         self.stages = {subject: "extracted" for subject in subjects}
         self.seal = None
         self.prepare_calls = 0
+        self.fail_seal_once = fail_seal_once
+        self.failed_seal = False
 
-    def promote(self, subject_id, target_stage, **_metadata):
+    def promote(self, subject_id, target_stage, **metadata):
+        assert metadata["expected_run_id"] == self.runs.run_id
         assert self.runs.current.state == "acquiring"
         current = self.stages[subject_id]
         if current == target_stage:
@@ -143,7 +147,8 @@ class _PromotionService:
         self.stages[subject_id] = target_stage
         return {"id": subject_id, "current_stage": target_stage}
 
-    def reject(self, subject_id, **_metadata):
+    def reject(self, subject_id, **metadata):
+        assert metadata["expected_run_id"] == self.runs.run_id
         assert self.runs.current.state == "acquiring"
         self.stages[subject_id] = "rejected"
         return {"id": subject_id, "current_stage": "rejected"}
@@ -154,14 +159,21 @@ class _PromotionService:
         assert lifecycle_revision == self.runs.current.lifecycle_revision
         assert set(self.stages.values()) == {"retained"}
         self.prepare_calls += 1
+        if self.fail_seal_once and not self.failed_seal:
+            self.failed_seal = True
+            raise RuntimeError("injected membership seal interruption")
         if self.seal is None:
             self.seal = SimpleNamespace(
                 id=uuid4(),
                 seal_revision=1,
                 membership_sha256="a" * 64,
-                expected_asset_count=4,
-                expected_chunk_count=4,
+                expected_asset_count=len(self.stages),
+                expected_chunk_count=len(self.stages),
             )
+        return self.seal
+
+    def get_active_seal(self, run_id):
+        assert run_id == self.runs.run_id
         return self.seal
 
 
@@ -171,19 +183,25 @@ class _CuratedService(CuratedRunService):
         return self.run_service.run_mode
 
 
-def test_curated_four_asset_flow_completes_without_smart_expansion():
+def _service(*, subject_count=4, fail_seal_once=False):
     runs = _RunService()
     invocations = _InvocationService(runs)
     workflow = _Workflow(runs, invocations)
-    subjects = [uuid4() for _ in range(4)]
-    promotions = _PromotionService(runs, subjects)
-    service = _CuratedService(runs, workflow, promotions)
-
-    started = service.start(
-        "four AP assets",
-        runs.external_id,
-        run_mode="curated",
+    subjects = [uuid4() for _ in range(subject_count)]
+    promotions = _PromotionService(
+        runs,
+        subjects,
+        fail_seal_once=fail_seal_once,
     )
+    return runs, workflow, subjects, promotions, _CuratedService(
+        runs, workflow, promotions
+    )
+
+
+def test_curated_four_asset_flow_completes_without_smart_expansion():
+    runs, workflow, subjects, promotions, service = _service()
+
+    started = service.start("four AP assets", runs.external_id, run_mode="curated")
     assert started.run_mode == "curated"
     prepared = service.prepare(runs.external_id)
     assert prepared.run.state == "acquiring"
@@ -225,6 +243,7 @@ def test_curated_four_asset_flow_completes_without_smart_expansion():
     second_seal = service.seal_acquisition(runs.external_id)
     assert first_seal["seal_id"] == second_seal["seal_id"]
     assert first_seal["expected_asset_count"] == 4
+    assert promotions.prepare_calls == 2
 
     first_finish = service.finish(runs.external_id, outcome="satisfied")
     second_finish = service.finish(runs.external_id, outcome="satisfied")
@@ -243,17 +262,43 @@ def test_curated_four_asset_flow_completes_without_smart_expansion():
     ]
 
 
-def test_curated_commands_reject_autonomous_or_legacy_modes():
-    runs = _RunService()
-    runs.run_mode = "autonomous"
-    service = _CuratedService(
-        runs,
-        _Workflow(runs, _InvocationService(runs)),
-        _PromotionService(runs, [uuid4()]),
+def test_interrupted_seal_resumes_sealing_before_checkpoint():
+    runs, _workflow, subjects, promotions, service = _service(
+        subject_count=1,
+        fail_seal_once=True,
+    )
+    service.start("recoverable curated seal", runs.external_id, run_mode="curated")
+    service.prepare(runs.external_id)
+    service.retain(runs.external_id, subjects[0])
+
+    with pytest.raises(RuntimeError, match="seal interruption"):
+        service.seal_acquisition(runs.external_id)
+
+    assert runs.current.state == "indexing"
+    assert promotions.get_active_seal(runs.run_id) is None
+    resume = service.resume(runs.external_id)
+    assert resume["membership_sealed"] is False
+    assert resume["next_action"] == f"frun seal-acquisition {runs.external_id}"
+    with pytest.raises(CuratedRunError, match="no active completion membership"):
+        service.finish(runs.external_id, outcome="satisfied")
+
+    repaired = service.seal_acquisition(runs.external_id)
+    assert repaired["state"] == "indexing"
+    assert repaired["expected_asset_count"] == 1
+    assert runs.transitions.count("extracting") == 1
+    assert runs.transitions.count("indexing") == 1
+    assert service.resume(runs.external_id)["next_action"] == (
+        "resume index checkpoint"
     )
 
+
+def test_curated_commands_reject_autonomous_or_legacy_modes():
+    runs, workflow, subjects, promotions, _service_value = _service(subject_count=1)
+    runs.run_mode = "autonomous"
+    service = _CuratedService(runs, workflow, promotions)
+
     with pytest.raises(CuratedRunError, match="not curated"):
-        service.retain(runs.external_id, uuid4())
+        service.retain(runs.external_id, subjects[0])
 
 
 class _DirectCursor:
@@ -264,11 +309,11 @@ class _DirectCursor:
     def execute(self, query, params=None):
         normalized = " ".join(query.split())
         self.connection.statements.append((normalized, params))
-        if normalized.startswith("SELECT id,run_id,operation,status,input"):
-            self.row = None
-        elif normalized.startswith("SELECT state,lifecycle_revision"):
+        if normalized.startswith("SELECT state,lifecycle_revision"):
             assert "FOR SHARE" in normalized
-            self.row = ("acquiring", 7)
+            self.row = (self.connection.state, self.connection.revision)
+        elif normalized.startswith("SELECT id,run_id,operation,status,input"):
+            self.row = None
         elif normalized.startswith("INSERT INTO research_invocations"):
             self.connection.insert_metadata = json.loads(params[-1])
             self.row = (self.connection.invocation_id,)
@@ -296,7 +341,7 @@ class _DirectRuns:
             "external_invocation_id": "fc_direct",
             "operation": "fsearch",
             "status": "running",
-            "lifecycle_revision": 7,
+            "lifecycle_revision": self.connection.revision,
             "input": {"query": "exact"},
             "output": None,
             "error": None,
@@ -308,9 +353,11 @@ class _DirectRuns:
 
 
 class _DirectConnection:
-    def __init__(self):
+    def __init__(self, *, state="acquiring", revision=7):
         self.run_id = uuid4()
         self.invocation_id = uuid4()
+        self.state = state
+        self.revision = revision
         self.statements = []
         self.insert_metadata = None
         self.event = None
@@ -358,17 +405,43 @@ def test_direct_invocation_locks_and_persists_exact_state_revision():
     )
     assert select_index < insert_index
     assert connection.event[1]["payload"]["lifecycle_state"] == "acquiring"
+    assert connection.event[1]["payload"]["lifecycle_revision"] == 7
 
 
-def test_public_contract_is_additive_and_contains_no_smart_expansion():
+def test_direct_invocation_rejects_locked_ineligible_state_without_side_effects():
+    connection = _DirectConnection(state="indexing")
+    service = DirectInvocationService(lambda: _DirectUow(connection))
+
+    with pytest.raises(InvocationError, match="state indexing"):
+        service.begin(
+            connection.run_id,
+            "fc_direct",
+            "fsearch",
+            {"query": "exact"},
+            actor_type="wrapper",
+        )
+
+    assert not any(
+        statement.startswith("INSERT INTO research_invocations")
+        for statement, _params in connection.statements
+    )
+    assert connection.event is None
+
+
+def test_public_contract_wires_production_boundaries_and_no_smart_expansion():
     frun = (SCRIPTS / "frun").read_text(encoding="utf-8")
     service = (STORE / "curated_run_service.py").read_text(encoding="utf-8")
     invocation = (STORE / "direct_invocation_service.py").read_text(encoding="utf-8")
+    container = (STORE / "container.py").read_text(encoding="utf-8")
+    scrape = (STORE / "direct_scrape_service.py").read_text(encoding="utf-8")
     for command in ("--run-mode", "prepare", "retain", "reject", "seal-acquisition"):
         assert command in frun
     assert "--mode" in frun
     assert "legacy_unspecified" in service
+    assert "get_active_seal" in service
     assert "FOR SHARE" in invocation
+    assert "DirectInvocationService" in container
+    assert '"lifecycle_state": lifecycle_state' in scrape
     assert "smart_search" not in service
     assert "smart expansion" not in service.lower()
     workflow = (
