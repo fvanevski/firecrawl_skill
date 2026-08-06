@@ -34,9 +34,7 @@ class _EmptySearchAdapter:
     def search(self, _query_text: str, **_kwargs) -> SearchAdapterResult:
         self.calls += 1
         return SearchAdapterResult(
-            raw_payload=json.dumps(
-                {"success": True, "data": {"web": []}}
-            ).encode(),
+            raw_payload=json.dumps({"success": True, "data": {"web": []}}).encode(),
             http_status=200,
             provider_request_id="curated-empty-search",
             transport_error=None,
@@ -174,13 +172,15 @@ def test_curated_four_asset_lifecycle_uses_real_direct_wrappers(
     curated.prepare(other_external_id)
     first_subject_id = UUID(str(subjects[0]["id"]))
     stage_before = next(
-        item for item in promotions.list_assets(started.run.id)
+        item
+        for item in promotions.list_assets(started.run.id)
         if item["id"] == str(first_subject_id)
     )["current_stage"]
     with pytest.raises(AssetPromotionError, match="not requested run"):
         curated.retain(other_external_id, first_subject_id)
     stage_after = next(
-        item for item in promotions.list_assets(started.run.id)
+        item
+        for item in promotions.list_assets(started.run.id)
         if item["id"] == str(first_subject_id)
     )["current_stage"]
     assert stage_after == stage_before

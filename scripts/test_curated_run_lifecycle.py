@@ -193,8 +193,12 @@ def _service(*, subject_count=4, fail_seal_once=False):
         subjects,
         fail_seal_once=fail_seal_once,
     )
-    return runs, workflow, subjects, promotions, _CuratedService(
-        runs, workflow, promotions
+    return (
+        runs,
+        workflow,
+        subjects,
+        promotions,
+        _CuratedService(runs, workflow, promotions),
     )
 
 
