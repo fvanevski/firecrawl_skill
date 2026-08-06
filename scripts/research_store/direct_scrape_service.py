@@ -1,9 +1,9 @@
 """PostgreSQL-authoritative direct Firecrawl scrape ingestion.
 
-The service performs the pre-network authority check before constructing the
-transport, captures provider bytes in memory, persists them in ``BLOB_ROOT``,
-and returns corpus identifiers only after the matching PostgreSQL transaction
-commits.
+The service performs the pre-network authority check before constructing or
+invoking transport, captures provider bytes in memory, persists them in
+``BLOB_ROOT``, and returns corpus identifiers only after the matching
+PostgreSQL transaction commits.
 """
 
 from __future__ import annotations
@@ -794,7 +794,7 @@ class DirectScrapeService:
         run_id = self._require_context_run(context)
         input_payload = self._invocation_input(requests)
         with self.uow_factory() as uow:
-            self._revalidate_run(uow, context)
+            lifecycle_state, lifecycle_revision = self._revalidate_run(uow, context)
             with uow.connection.cursor() as cur:
                 cur.execute(
                     """SELECT id,status,input,output FROM research_invocations
@@ -829,7 +829,7 @@ class DirectScrapeService:
                         run_id,
                         parent_invocation_id,
                         external_invocation_id,
-                        context.lifecycle_revision,
+                        lifecycle_revision,
                         idempotency_key,
                         json.dumps(input_payload),
                         json.dumps({"schema_version": "direct-scrape-v1", "items": []}),
@@ -837,6 +837,8 @@ class DirectScrapeService:
                             {
                                 "authority": "postgresql",
                                 "payload_store": "blob",
+                                "lifecycle_state": lifecycle_state,
+                                "lifecycle_revision": lifecycle_revision,
                                 "retry_of_invocation_id": (
                                     str(parent_invocation_id)
                                     if parent_invocation_id is not None
@@ -891,7 +893,11 @@ class DirectScrapeService:
                 "system",
                 f"{idempotency_key}:started",
                 invocation_id=invocation_id,
-                payload={"item_count": len(requests)},
+                payload={
+                    "item_count": len(requests),
+                    "lifecycle_state": lifecycle_state,
+                    "lifecycle_revision": lifecycle_revision,
+                },
             )
             return invocation_id, {}, None
 
@@ -1466,7 +1472,10 @@ class DirectScrapeService:
         return context.run_id
 
     @staticmethod
-    def _revalidate_run(uow: Any, context: AuthoritativeAcquisitionContext) -> None:
+    def _revalidate_run(
+        uow: Any,
+        context: AuthoritativeAcquisitionContext,
+    ) -> tuple[str, int]:
         run_id = DirectScrapeService._require_context_run(context)
         with uow.connection.cursor() as cur:
             cur.execute(
@@ -1491,6 +1500,7 @@ class DirectScrapeService:
                     "research run lifecycle revision changed before persistence: "
                     f"expected {context.lifecycle_revision}, current {revision}"
                 )
+            return state, revision
 
     def _notify_jobs(self, chunk_ids: Sequence[UUID]) -> None:
         if self.queue is None:
