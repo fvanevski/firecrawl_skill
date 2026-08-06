@@ -29,7 +29,11 @@ from research_store.acquisition_service import (
     FirecrawlSearchAdapter,
 )
 from research_store.config import StoreConfig
-from research_store.container import build_acquisition_service, build_run_service
+from research_store.container import (
+    build_acquisition_service,
+    build_run_service,
+    build_workflow_operation_service,
+)
 from research_store.domain import SearchAdapterResult, utcnow
 from research_store.postgres import (
     connect,
@@ -752,6 +756,7 @@ def _create_run(config: StoreConfig, objective: str):
     run_service = build_run_service(config)
     external_id = f"fr_{uuid4().hex}"
     run_service.create(objective=objective, external_id=external_id)
+    build_workflow_operation_service(config).prepare_run(external_id)
     return run_service, run_service.status(external_id=external_id)
 
 
