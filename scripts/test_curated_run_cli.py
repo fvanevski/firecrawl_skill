@@ -25,9 +25,7 @@ def test_asset_promotion_failure_is_rendered_without_traceback(
         lambda: _FailingPromotionService(),
     )
 
-    status = curated_run_cli.main(
-        ["retain", f"fr_{uuid4().hex}", str(uuid4())]
-    )
+    status = curated_run_cli.main(["retain", f"fr_{uuid4().hex}", str(uuid4())])
 
     captured = capsys.readouterr()
     assert status == 1
