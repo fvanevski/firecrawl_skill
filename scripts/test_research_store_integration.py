@@ -103,6 +103,8 @@ def test_wrapper_workflow_runs_entirely_from_postgresql(service):
         external_run_id,
         execution_mode="autonomous_local",
     )
+    prepared = workflow.prepare_run(external_run_id)
+    assert prepared.state == "acquiring"
 
     invocation = workflow.begin_operation(
         external_run_id,
@@ -111,7 +113,7 @@ def test_wrapper_workflow_runs_entirely_from_postgresql(service):
         {"urls": ["https://integration.example/wrapper"]},
     )
     assert invocation.run_id == created.id
-    assert runs.status(run_id=created.id).state == "extracting"
+    assert runs.status(run_id=created.id).state == "acquiring"
 
     manifest = service.ingest_batch(
         external_invocation_id,
@@ -130,7 +132,9 @@ def test_wrapper_workflow_runs_entirely_from_postgresql(service):
         succeeded=True,
         output=manifest,
     )
-    assert runs.status(run_id=created.id).state == "indexing"
+    assert runs.status(run_id=created.id).state == "acquiring"
+    sealed = workflow.seal_acquisition(external_run_id)
+    assert sealed.state == "indexing"
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(

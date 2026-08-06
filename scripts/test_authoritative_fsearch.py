@@ -506,7 +506,10 @@ class _SuccessfulSearchAdapter:
 def test_repeated_idempotency_key_reuses_response_and_candidates(
     tmp_path, prepared_database
 ):
-    from research_store.container import build_run_service
+    from research_store.container import (
+        build_run_service,
+        build_workflow_operation_service,
+    )
 
     config = replace(
         StoreConfig.from_env(),
@@ -519,6 +522,7 @@ def test_repeated_idempotency_key_reuses_response_and_candidates(
         objective="authoritative fsearch idempotency",
         external_id=external_run_id,
     )
+    build_workflow_operation_service(config).prepare_run(external_run_id)
     adapter = _SuccessfulSearchAdapter()
     service = build_fsearch_service(
         config,

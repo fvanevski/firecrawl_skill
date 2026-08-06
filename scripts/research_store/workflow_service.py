@@ -1,9 +1,8 @@
 """PostgreSQL-only workflow boundaries for command-line wrappers.
 
-The high-level orchestrator owns its complete stage machine. Lower-level
-``fsearch`` and ``fscrape`` wrappers use this service to register authoritative
-invocations and to advance only the stages their work actually reaches.
-Filesystem records are not read or written by this service.
+Direct ``fsearch`` and ``fscrape`` calls attach work only to a run that an
+explicit lifecycle command has already prepared. Beginning or completing a
+provider invocation never advances the run state implicitly.
 """
 
 from __future__ import annotations
@@ -55,24 +54,14 @@ class RunIndexProgress:
 
 
 class WorkflowOperationService:
-    """Coordinate wrapper invocations with the PostgreSQL run state machine."""
+    """Coordinate explicit run commands and direct wrapper invocations."""
 
-    _BEGIN_PATHS: ClassVar[dict[str, dict[str, tuple[str, ...]]]] = {
-        "fsearch": {
-            "created": ("planning", "corpus_review", "acquiring"),
-            "planning": ("corpus_review", "acquiring"),
-            "corpus_review": ("acquiring",),
-            "coverage_review": ("acquiring",),
-            "acquiring": (),
-        },
-        "fscrape": {
-            "created": ("planning", "corpus_review", "acquiring", "extracting"),
-            "planning": ("corpus_review", "acquiring", "extracting"),
-            "corpus_review": ("acquiring", "extracting"),
-            "coverage_review": ("extracting",),
-            "acquiring": ("extracting",),
-            "extracting": (),
-        },
+    _DIRECT_OPERATIONS: ClassVar[frozenset[str]] = frozenset({"fsearch", "fscrape"})
+    _PREPARE_PATHS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "created": ("planning", "corpus_review", "acquiring"),
+        "planning": ("corpus_review", "acquiring"),
+        "corpus_review": ("acquiring",),
+        "acquiring": (),
     }
 
     def __init__(
@@ -142,6 +131,58 @@ class WorkflowOperationService:
             )
         return current
 
+    def prepare_run(
+        self,
+        external_run_id: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> RunStatus:
+        """Explicitly move a new run to the sole direct-acquisition state."""
+        status = self._status(external_run_id)
+        path = self._PREPARE_PATHS.get(status.state)
+        if path is None:
+            raise WorkflowBoundaryError(
+                f"cannot prepare run {external_run_id} from state {status.state}; "
+                "finish or explicitly reopen the current lifecycle phase first"
+            )
+        command_key = idempotency_key or f"run:prepare:{external_run_id}"
+        return self._advance_path(
+            status,
+            path,
+            command_key=command_key,
+            reason="operator explicitly prepared direct acquisition",
+        )
+
+    def seal_acquisition(
+        self,
+        external_run_id: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> RunStatus:
+        """Explicitly close direct acquisition and enter indexing."""
+        status = self._status(external_run_id)
+        command_key = idempotency_key or f"run:seal-acquisition:{external_run_id}"
+        if status.state == "acquiring":
+            status = self._transition(
+                status,
+                "extracting",
+                command_key=command_key,
+                reason="operator explicitly sealed direct acquisition",
+            )
+        if status.state == "extracting":
+            status = self._transition(
+                status,
+                "indexing",
+                command_key=command_key,
+                reason="explicit acquisition set is ready for indexing",
+            )
+        if status.state != "indexing":
+            raise WorkflowBoundaryError(
+                f"cannot seal acquisition while run {external_run_id} is in "
+                f"state {status.state}; prepare and complete acquisition first"
+            )
+        return status
+
     def begin_operation(
         self,
         external_run_id: str,
@@ -149,68 +190,35 @@ class WorkflowOperationService:
         operation: str,
         input_data: dict[str, Any],
     ) -> InvocationRecord:
-        if operation not in self._BEGIN_PATHS:
+        if operation not in self._DIRECT_OPERATIONS:
             raise WorkflowBoundaryError(f"unsupported wrapper operation: {operation}")
+        if (
+            not isinstance(external_invocation_id, str)
+            or not external_invocation_id.strip()
+        ):
+            raise WorkflowBoundaryError("external_invocation_id is required")
+        if not isinstance(input_data, dict):
+            raise WorkflowBoundaryError("wrapper input_data must be an object")
+
         status = self._status(external_run_id)
-        if status.state == "indexing":
-            progress = self.index_progress(status.id)
-            if progress.assets == 0 or progress.complete == 0:
-                raise WorkflowBoundaryError(
-                    f"cannot begin {operation}: run {external_run_id} has no "
-                    "completed indexed assets"
-                )
-            if progress.unfinished or progress.dead:
-                raise WorkflowBoundaryError(
-                    "cannot resume acquisition while indexing is incomplete: "
-                    + str(progress.to_dict())
-                )
-            status = self._transition(
-                status,
-                "coverage_review",
-                command_key=f"wrapper:{external_invocation_id}:resume",
-                reason="completed indexing before additional acquisition",
-            )
-        path = self._BEGIN_PATHS[operation].get(status.state)
-        if path is None:
+        if status.state != "acquiring":
             raise WorkflowBoundaryError(
-                f"cannot begin {operation} while run {external_run_id} is "
-                f"in state {status.state}"
+                f"cannot begin {operation} while run {external_run_id} is in "
+                f"state {status.state}; run 'frun prepare {external_run_id}' "
+                "before direct acquisition"
             )
         command_key = f"wrapper:{external_invocation_id}:begin"
-        status = self._advance_path(
-            status,
-            path,
-            command_key=command_key,
-            reason=f"begin {operation} wrapper operation",
-        )
-        return self.invocation_service.begin(
-            status.id,
-            external_invocation_id,
-            operation,
-            input_data,
-            idempotency_key=f"{command_key}:invocation",
-            actor_type="wrapper",
-        )
-
-    @staticmethod
-    def _persisted_count(output: Any) -> int:
-        if isinstance(output, list):
-            return sum(
-                bool(item.get("persisted")) for item in output if isinstance(item, dict)
+        try:
+            return self.invocation_service.begin(
+                status.id,
+                external_invocation_id,
+                operation,
+                input_data,
+                idempotency_key=f"{command_key}:invocation",
+                actor_type="wrapper",
             )
-        if isinstance(output, dict):
-            if isinstance(output.get("records"), list):
-                return WorkflowOperationService._persisted_count(output["records"])
-            if isinstance(output.get("assets"), list):
-                return sum(
-                    item.get("status") == "complete"
-                    for item in output["assets"]
-                    if isinstance(item, dict)
-                )
-            value = output.get("persisted_count")
-            if isinstance(value, int) and value >= 0:
-                return value
-        return 0
+        except InvocationError as exc:
+            raise WorkflowBoundaryError(str(exc)) from exc
 
     def complete_operation(
         self,
@@ -238,48 +246,23 @@ class WorkflowOperationService:
         if invocation.status != "running":
             if invocation.status != desired:
                 raise WorkflowBoundaryError(
-                    f"invocation {external_invocation_id} is already {invocation.status}"
+                    f"invocation {external_invocation_id} is already "
+                    f"{invocation.status}"
                 )
-            completed = invocation
-        else:
-            try:
-                completed = self.invocation_service.complete(
-                    status.id,
-                    invocation.id,
-                    "succeeded" if succeeded else "failed",
-                    output=(
-                        output
-                        if isinstance(output, dict)
-                        else {"records": output or []}
-                    ),
-                    error=error,
-                    actor_type="wrapper",
-                )
-            except InvocationError as exc:
-                raise WorkflowBoundaryError(str(exc)) from exc
-
-        if not succeeded or self._persisted_count(output) == 0:
-            return completed
-
-        status = self.run_service.status(run_id=status.id)
-        path: tuple[str, ...]
-        if status.state == "acquiring":
-            path = ("extracting", "indexing")
-        elif status.state == "extracting":
-            path = ("indexing",)
-        elif status.state in {"indexing", "coverage_review"}:
-            path = ()
-        else:
-            raise WorkflowBoundaryError(
-                f"successful persisted operation ended in unexpected state {status.state}"
+            return invocation
+        try:
+            return self.invocation_service.complete(
+                status.id,
+                invocation.id,
+                "succeeded" if succeeded else "failed",
+                output=(
+                    output if isinstance(output, dict) else {"records": output or []}
+                ),
+                error=error,
+                actor_type="wrapper",
             )
-        self._advance_path(
-            status,
-            path,
-            command_key=f"wrapper:{external_invocation_id}:complete",
-            reason="wrapper persisted assets and queued vector indexing",
-        )
-        return completed
+        except InvocationError as exc:
+            raise WorkflowBoundaryError(str(exc)) from exc
 
     def index_progress(self, run_id: UUID) -> RunIndexProgress:
         with self.uow_factory() as uow, uow.connection.cursor() as cur:
@@ -370,9 +353,7 @@ class WorkflowOperationService:
                     command_key=command_key,
                     reason="initialize run before terminal failure",
                 )
-            if current.state == "validating":
-                pass
-            current = self._transition(
+            return self._transition(
                 current,
                 "failed",
                 command_key=command_key,
@@ -384,7 +365,6 @@ class WorkflowOperationService:
                     "answer_sha256": answer_sha256,
                 },
             )
-            return current
 
         progress = self.index_progress(current.id)
         if current.state in {
@@ -396,7 +376,7 @@ class WorkflowOperationService:
         }:
             raise WorkflowBoundaryError(
                 f"run {external_run_id} cannot finish from {current.state}; "
-                "complete a persisted acquisition first"
+                "seal acquisition and complete indexing first"
             )
         if progress.assets == 0 or progress.complete == 0:
             raise WorkflowBoundaryError(

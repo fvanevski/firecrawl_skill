@@ -45,12 +45,10 @@ class AcquisitionPreflightError(RuntimeError):
     """The authoritative acquisition readiness contract is not satisfied."""
 
 
-# Minimum privileges exercised by the current authoritative search-acquisition
-# service. Keep this alongside the preflight and update it whenever the service
-# adds another mandatory PostgreSQL write.
-ACQUISITION_ENTRY_STATES = frozenset(
-    {"created", "planning", "corpus_review", "coverage_review", "acquiring"}
-)
+# Direct provider acquisition is valid only after an explicit lifecycle command
+# has prepared the run. Wrapper calls must never move a run into this state as a
+# side effect of beginning a provider invocation.
+ACQUISITION_ENTRY_STATES = frozenset({"acquiring"})
 
 ACQUISITION_TABLE_PRIVILEGES: Mapping[str, frozenset[str]] = {
     "research_runs": frozenset({"SELECT", "UPDATE"}),
@@ -259,8 +257,9 @@ def require_authoritative_acquisition(
                         )
                     if run_state not in ACQUISITION_ENTRY_STATES:
                         raise AcquisitionPreflightError(
-                            f"research run state is not acquisition-eligible: "
-                            f"{run_state}"
+                            "research run state is not acquisition-eligible: "
+                            f"{run_state}; explicitly prepare the run before "
+                            "direct acquisition"
                         )
             connection.rollback()
     except AcquisitionPreflightError:

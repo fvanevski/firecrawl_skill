@@ -214,7 +214,7 @@ def test_drain_helper_fails_at_max_batch_bound() -> None:
     )
 
 
-def test_workflow_rejects_finish_and_followup_before_drain() -> None:
+def test_workflow_rejects_finish_and_direct_followup_during_indexing() -> None:
     from research_store.workflow_service import (
         RunIndexProgress,
         WorkflowBoundaryError,
@@ -227,27 +227,36 @@ def test_workflow_rejects_finish_and_followup_before_drain() -> None:
         status=lambda **_kwargs: SimpleNamespace(id=run_id, state="indexing")
     )
     service.invocation_service = SimpleNamespace()
-    service.index_progress = lambda _run_id: RunIndexProgress(
-        assets=1,
-        chunks=2,
-        pending=1,
-        running=0,
-        failed=0,
-        dead=0,
-        complete=1,
-    )
+    progress_calls = 0
+
+    def incomplete_progress(_run_id):
+        nonlocal progress_calls
+        progress_calls += 1
+        return RunIndexProgress(
+            assets=1,
+            chunks=2,
+            pending=1,
+            running=0,
+            failed=0,
+            dead=0,
+            complete=1,
+        )
+
+    service.index_progress = incomplete_progress
 
     with pytest.raises(
         WorkflowBoundaryError,
-        match="cannot resume acquisition while indexing is incomplete",
+        match="cannot begin fscrape.*state indexing.*frun prepare",
     ):
         service.begin_operation(RUN_ID, INVOCATION_ID, "fscrape", {})
+    assert progress_calls == 0
 
     with pytest.raises(
         WorkflowBoundaryError,
         match="run indexing is not complete",
     ):
         service.finish_run(RUN_ID, outcome="satisfied")
+    assert progress_calls == 1
 
 
 def test_failed_blob_write_never_opens_metadata_transaction() -> None:

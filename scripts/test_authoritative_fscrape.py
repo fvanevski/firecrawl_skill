@@ -15,7 +15,10 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store.config import StoreConfig
-from research_store.container import build_run_service
+from research_store.container import (
+    build_run_service,
+    build_workflow_operation_service,
+)
 from research_store.direct_scrape_service import (
     DirectScrapeBatchResult,
     DirectScrapeItemResult,
@@ -532,6 +535,7 @@ def test_postgres_wrapper_persists_structured_outcomes_and_replays_identity(
         objective="authoritative fscrape integration",
         external_id=run_external_id,
     )
+    build_workflow_operation_service(config).prepare_run(run_external_id)
     schema = {
         "type": "object",
         "properties": {"answer": {"type": "integer"}},

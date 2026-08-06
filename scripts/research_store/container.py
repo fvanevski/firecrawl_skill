@@ -90,11 +90,11 @@ def build_run_service(config: StoreConfig | None = None) -> ResearchRunService:
 
 
 def build_invocation_service(config: StoreConfig | None = None):
-    """Build the authoritative PostgreSQL invocation service."""
-    from .invocation_service import InvocationService
+    """Build invocation persistence with exact locked lifecycle provenance."""
+    from .direct_invocation_service import DirectInvocationService
 
     run_service = build_run_service(config)
-    return InvocationService(run_service.uow_factory)
+    return DirectInvocationService(run_service.uow_factory)
 
 
 def build_workflow_operation_service(config: StoreConfig | None = None):

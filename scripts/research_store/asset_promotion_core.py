@@ -8,6 +8,7 @@ from uuid import UUID
 from .asset_promotion_models import (
     AssetMembershipSeal,
     AssetMembershipSealedError,
+    AssetPromotionError,
 )
 
 DEFAULT_POLICY_VERSION = "completion-membership-v1"
@@ -99,6 +100,7 @@ class _AssetPromotionCoreMixin:
         target_stage: str,
         *,
         expected_lifecycle_revision: int,
+        expected_run_id: UUID | None = None,
         actor_type: str,
         actor_identifier: str | None,
         policy_version: str,
@@ -118,6 +120,11 @@ class _AssetPromotionCoreMixin:
             if row is None:
                 raise KeyError(subject_id)
             run_id = UUID(str(row[0]))
+            if expected_run_id is not None and run_id != expected_run_id:
+                raise AssetPromotionError(
+                    f"asset promotion subject {subject_id} belongs to run {run_id}, "
+                    f"not requested run {expected_run_id}"
+                )
             self._lock_run(
                 uow,
                 cursor,
@@ -178,6 +185,7 @@ class _AssetPromotionCoreMixin:
         subject_id: UUID,
         *,
         expected_lifecycle_revision: int,
+        expected_run_id: UUID | None = None,
         actor_type: str,
         actor_identifier: str | None,
         policy_version: str,
@@ -188,6 +196,7 @@ class _AssetPromotionCoreMixin:
             subject_id,
             "rejected",
             expected_lifecycle_revision=expected_lifecycle_revision,
+            expected_run_id=expected_run_id,
             actor_type=actor_type,
             actor_identifier=actor_identifier,
             policy_version=policy_version,

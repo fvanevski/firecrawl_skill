@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from research_store.invocation_service import InvocationRecord
 from research_store.run_service import PERMITTED_TRANSITIONS, RunStatus
 from research_store.workflow_service import (
     RunIndexProgress,
@@ -26,26 +25,6 @@ def _run_status(run_id, external_id, state="created", revision=0):
         declared_outcome=None,
         completed_at=None,
         error=None,
-    )
-
-
-def _invocation(run_id, external_id, operation, status="running"):
-    now = datetime.now(timezone.utc)
-    return InvocationRecord(
-        id=uuid4(),
-        run_id=run_id,
-        parent_invocation_id=None,
-        external_invocation_id=external_id,
-        operation=operation,
-        status=status,
-        lifecycle_revision=0,
-        input={},
-        output=None,
-        error=None,
-        metadata={},
-        started_at=now,
-        completed_at=now if status != "running" else None,
-        created_at=now,
     )
 
 
@@ -93,6 +72,7 @@ class FakeInvocationService:
     def __init__(self, run_service):
         self.run_service = run_service
         self.records = {}
+        self.begin_calls = 0
         self.complete_calls = 0
 
     def begin(
@@ -103,15 +83,28 @@ class FakeInvocationService:
         input_data,
         **_metadata,
     ):
+        self.begin_calls += 1
         record = self.records.get(external_invocation_id)
         if record is None:
-            record = _invocation(run_id, external_invocation_id, operation)
-            record = InvocationRecord(
-                **{
-                    **record.__dict__,
-                    "lifecycle_revision": self.run_service.current.lifecycle_revision,
-                    "input": input_data,
-                }
+            now = datetime.now(timezone.utc)
+            current = self.run_service.current
+            record = SimpleNamespace(
+                id=uuid4(),
+                run_id=run_id,
+                external_invocation_id=external_invocation_id,
+                operation=operation,
+                status="running",
+                lifecycle_revision=current.lifecycle_revision,
+                input=input_data,
+                output=None,
+                error=None,
+                metadata={
+                    "lifecycle_state": current.state,
+                    "lifecycle_revision": current.lifecycle_revision,
+                },
+                started_at=now,
+                completed_at=None,
+                created_at=now,
             )
             self.records[external_invocation_id] = record
         return record
@@ -126,7 +119,7 @@ class FakeInvocationService:
         current = next(
             item for item in self.records.values() if item.id == invocation_id
         )
-        completed = InvocationRecord(
+        completed = SimpleNamespace(
             **{
                 **current.__dict__,
                 "status": "complete" if status == "succeeded" else "failed",
@@ -153,19 +146,28 @@ class WorkflowServiceHarness(WorkflowOperationService):
         return self.progress
 
 
-def test_fsearch_begin_advances_to_acquiring():
+def test_direct_begin_requires_explicit_prepare_without_mutation():
     service = WorkflowServiceHarness()
-    invocation_id = f"fc_{uuid4().hex}"
 
-    record = service.begin_operation(
-        service.fake_run_service.external_id,
-        invocation_id,
-        "fsearch",
-        {"query": "postgres authority"},
-    )
+    with pytest.raises(WorkflowBoundaryError, match="frun prepare"):
+        service.begin_operation(
+            service.fake_run_service.external_id,
+            f"fc_{uuid4().hex}",
+            "fsearch",
+            {"query": "postgres authority"},
+        )
 
-    assert record.status == "running"
-    assert service.fake_run_service.current.state == "acquiring"
+    assert service.fake_run_service.transitions == []
+    assert service.fake_invocation_service.begin_calls == 0
+
+
+def test_prepare_advances_once_to_acquiring_and_is_idempotent():
+    service = WorkflowServiceHarness()
+
+    first = service.prepare_run(service.fake_run_service.external_id)
+    second = service.prepare_run(service.fake_run_service.external_id)
+
+    assert first.state == second.state == "acquiring"
     assert [item[1] for item in service.fake_run_service.transitions] == [
         "planning",
         "corpus_review",
@@ -173,26 +175,37 @@ def test_fsearch_begin_advances_to_acquiring():
     ]
 
 
-def test_fscrape_begin_advances_to_extracting():
+@pytest.mark.parametrize("operation", ["fsearch", "fscrape"])
+def test_prepared_direct_invocation_records_exact_state_and_revision(operation):
     service = WorkflowServiceHarness()
-    service.begin_operation(
+    prepared = service.prepare_run(service.fake_run_service.external_id)
+    transitions_before = list(service.fake_run_service.transitions)
+
+    record = service.begin_operation(
         service.fake_run_service.external_id,
         f"fc_{uuid4().hex}",
-        "fscrape",
-        {"urls": ["https://example.com"]},
+        operation,
+        {"query": "postgres authority"},
     )
-    assert service.fake_run_service.current.state == "extracting"
+
+    assert record.status == "running"
+    assert record.lifecycle_revision == prepared.lifecycle_revision
+    assert record.metadata["lifecycle_state"] == "acquiring"
+    assert record.metadata["lifecycle_revision"] == prepared.lifecycle_revision
+    assert service.fake_run_service.transitions == transitions_before
 
 
-def test_persisted_completion_advances_to_indexing_and_retry_is_idempotent():
+def test_completion_is_idempotent_and_does_not_advance_lifecycle():
     service = WorkflowServiceHarness()
+    service.prepare_run(service.fake_run_service.external_id)
     invocation_id = f"fc_{uuid4().hex}"
     service.begin_operation(
         service.fake_run_service.external_id,
         invocation_id,
-        "fsearch",
-        {"query": "postgres authority"},
+        "fscrape",
+        {"urls": ["https://example.com"]},
     )
+    transitions_before = list(service.fake_run_service.transitions)
     output = {"records": [{"persisted": True}]}
 
     first = service.complete_operation(
@@ -210,37 +223,40 @@ def test_persisted_completion_advances_to_indexing_and_retry_is_idempotent():
 
     assert first.status == second.status == "complete"
     assert service.fake_invocation_service.complete_calls == 1
-    assert service.fake_run_service.current.state == "indexing"
+    assert service.fake_run_service.current.state == "acquiring"
+    assert service.fake_run_service.transitions == transitions_before
 
 
-def test_new_acquisition_after_indexing_requires_complete_index_then_resumes():
-    service = WorkflowServiceHarness(state="indexing")
-    service.begin_operation(
-        service.fake_run_service.external_id,
-        f"fc_{uuid4().hex}",
-        "fsearch",
-        {"query": "more evidence"},
-    )
+def test_seal_acquisition_is_explicit_and_idempotent():
+    service = WorkflowServiceHarness()
+    service.prepare_run(service.fake_run_service.external_id)
+
+    first = service.seal_acquisition(service.fake_run_service.external_id)
+    second = service.seal_acquisition(service.fake_run_service.external_id)
+
+    assert first.state == second.state == "indexing"
     assert [item[1] for item in service.fake_run_service.transitions] == [
-        "coverage_review",
+        "planning",
+        "corpus_review",
         "acquiring",
+        "extracting",
+        "indexing",
     ]
 
 
-def test_new_acquisition_rejects_incomplete_indexing():
-    service = WorkflowServiceHarness(
-        state="indexing",
-        progress=RunIndexProgress(
-            assets=1, chunks=2, pending=1, running=0, failed=0, dead=0, complete=1
-        ),
-    )
-    with pytest.raises(WorkflowBoundaryError, match="indexing is incomplete"):
+def test_direct_acquisition_rejects_indexing_without_checkpoint_side_effects():
+    service = WorkflowServiceHarness(state="indexing")
+
+    with pytest.raises(WorkflowBoundaryError, match="state indexing"):
         service.begin_operation(
             service.fake_run_service.external_id,
             f"fc_{uuid4().hex}",
             "fsearch",
             {"query": "more evidence"},
         )
+
+    assert service.fake_run_service.transitions == []
+    assert service.fake_invocation_service.begin_calls == 0
 
 
 def test_finish_requires_persisted_indexed_assets():
@@ -265,15 +281,21 @@ def test_finish_rejects_missing_index_job():
         service.finish_run(service.fake_run_service.external_id, outcome="satisfied")
 
 
-def test_finish_advances_valid_terminal_path():
+def test_finish_advances_valid_terminal_path_and_retry_is_idempotent():
     service = WorkflowServiceHarness(state="indexing")
-    result = service.finish_run(
+    first = service.finish_run(
         service.fake_run_service.external_id,
         outcome="satisfied",
         source_manifest_sha256="a" * 64,
         answer_sha256="b" * 64,
     )
-    assert result.state == "completed"
+    second = service.finish_run(
+        service.fake_run_service.external_id,
+        outcome="satisfied",
+        source_manifest_sha256="a" * 64,
+        answer_sha256="b" * 64,
+    )
+    assert first.state == second.state == "completed"
     assert [item[1] for item in service.fake_run_service.transitions] == [
         "coverage_review",
         "synthesizing",

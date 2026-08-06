@@ -91,16 +91,20 @@ def test_orchestrator_resumable_adapter_does_not_terminalize_checkpoint_work():
     assert "INDEX_CHECKPOINT_PENDING_PREFIX" in source
 
 
-def test_wrapper_validates_operation_before_checkpoint_mutation():
-    source = _source(STORE / "checkpoint_workflow_service.py")
-    validation = source.index("if operation not in self._BEGIN_PATHS")
-    finalization = source.index("self._finalize_indexing(", validation)
-    assert validation < finalization
-    assert "external_invocation_id is required" in source
-    assert "wrapper input_data must be an object" in source
-    assert "service.ensure(" in source
-    assert "service.finalize(" in source
-    assert "super().finish_run" in source
+def test_wrapper_direct_start_does_not_mutate_or_finalize_checkpoint():
+    workflow = _source(STORE / "workflow_service.py")
+    checkpoint = _source(STORE / "checkpoint_workflow_service.py")
+    begin_section = workflow.split("def complete_operation", 1)[0]
+    checkpoint_begin_section = checkpoint.split("def finish_run", 1)[0]
+    assert 'status.state != "acquiring"' in begin_section
+    assert "frun prepare" in begin_section
+    assert "self._transition(" not in begin_section.split("def begin_operation", 1)[1]
+    assert "def begin_operation" not in checkpoint
+    assert "self._finalize_indexing(" not in checkpoint_begin_section
+    assert (
+        "self._finalize_indexing(external_run_id"
+        in checkpoint.split("def finish_run", 1)[1]
+    )
 
 
 def test_guarded_terminal_writer_uses_conflict_safe_idempotent_insert():

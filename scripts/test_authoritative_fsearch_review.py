@@ -90,11 +90,15 @@ class CountingSearchAdapter:
 
 
 def _new_run(config: StoreConfig, objective: str = "review regression"):
-    from research_store.container import build_run_service
+    from research_store.container import (
+        build_run_service,
+        build_workflow_operation_service,
+    )
 
     external_id = f"fr_{uuid4().hex}"
     service = build_run_service(config)
     run = service.create(objective=objective, external_id=external_id)
+    build_workflow_operation_service(config).prepare_run(external_id)
     return service, run, external_id
 
 
