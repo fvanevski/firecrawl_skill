@@ -40,6 +40,11 @@ frun finish <fr_id> --outcome satisfied
 before provider execution and reports the current state together with the
 `frun prepare` remediation.
 
+Regression and integration fixtures follow the same contract: creating a run
+does not prepare it. Tests that exercise a real direct wrapper must invoke the
+explicit preparation boundary instead of relying on an implicit wrapper
+transition.
+
 Each direct invocation locks the run row with `FOR SHARE` and records the exact
 start state and lifecycle revision in PostgreSQL invocation metadata and the
 append-only `invocation_started` event before the lock is released. Historical
