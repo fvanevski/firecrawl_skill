@@ -96,14 +96,15 @@ def test_wrapper_direct_start_does_not_mutate_or_finalize_checkpoint():
     checkpoint = _source(STORE / "checkpoint_workflow_service.py")
     begin_section = workflow.split("def complete_operation", 1)[0]
     checkpoint_begin_section = checkpoint.split("def finish_run", 1)[0]
-    assert "status.state != \"acquiring\"" in begin_section
+    assert 'status.state != "acquiring"' in begin_section
     assert "frun prepare" in begin_section
     assert "self._transition(" not in begin_section.split("def begin_operation", 1)[1]
     assert "def begin_operation" not in checkpoint
     assert "self._finalize_indexing(" not in checkpoint_begin_section
-    assert "self._finalize_indexing(external_run_id" in checkpoint.split(
-        "def finish_run", 1
-    )[1]
+    assert (
+        "self._finalize_indexing(external_run_id"
+        in checkpoint.split("def finish_run", 1)[1]
+    )
 
 
 def test_guarded_terminal_writer_uses_conflict_safe_idempotent_insert():

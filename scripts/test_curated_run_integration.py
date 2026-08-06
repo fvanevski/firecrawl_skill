@@ -24,8 +24,7 @@ def _ap_request(index: int) -> IngestRequest:
     return IngestRequest(
         f"https://apnews.com/article/curated-lifecycle-{index}-{token}",
         (
-            f"# AP asset {index}\n\n"
-            f"PostgreSQL-authoritative curated evidence {token}."
+            f"# AP asset {index}\n\nPostgreSQL-authoritative curated evidence {token}."
         ).encode(),
     )
 

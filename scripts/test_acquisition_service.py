@@ -17,7 +17,11 @@ from research_store.acquisition_service import (
     FirecrawlSearchAdapter,
 )
 from research_store.config import StoreConfig
-from research_store.container import build_acquisition_service, build_run_service
+from research_store.container import (
+    build_acquisition_service,
+    build_run_service,
+    build_workflow_operation_service,
+)
 from research_store.domain import SearchAdapterResult, utcnow
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 
@@ -161,6 +165,13 @@ def test_execute_search_invalid_query():
 # --- Integration Tests (requires PostgreSQL) ---
 
 
+def _prepared_run(config: StoreConfig, objective: str, external_id: str):
+    run_service = build_run_service(config)
+    run_service.create(objective=objective, external_id=external_id)
+    build_workflow_operation_service(config).prepare_run(external_id)
+    return run_service, run_service.status(external_id=external_id)
+
+
 @pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -169,11 +180,13 @@ def test_acquisition_service_normal_flow(tmp_path, prepared_database):
     config = replace(
         StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
     )
-    run_svc = build_run_service(config)
 
     ext_id = f"run-acq-{uuid4()}"
-    run_svc.create(objective="test acquisition service", external_id=ext_id)
-    status = run_svc.status(external_id=ext_id)
+    run_svc, status = _prepared_run(
+        config,
+        "test acquisition service",
+        ext_id,
+    )
     run_id = status.id
 
     mock_adapter = MockSuccessSearchAdapter()
@@ -210,11 +223,13 @@ def test_acquisition_service_idempotent_retry(tmp_path, prepared_database):
     config = replace(
         StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
     )
-    run_svc = build_run_service(config)
 
     ext_id = f"run-acq-retry-{uuid4()}"
-    run_svc.create(objective="test search retries", external_id=ext_id)
-    status = run_svc.status(external_id=ext_id)
+    run_svc, status = _prepared_run(
+        config,
+        "test search retries",
+        ext_id,
+    )
     run_id = status.id
 
     mock_adapter = MockSuccessSearchAdapter()
@@ -258,10 +273,13 @@ def test_acquisition_service_conflicting_retry_fails_before_provider(
     config = replace(
         StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
     )
-    run_svc = build_run_service(config)
     ext_id = f"run-acq-conflict-{uuid4()}"
-    run_svc.create(objective="test search idempotency conflict", external_id=ext_id)
-    run_id = run_svc.status(external_id=ext_id).id
+    run_svc, status = _prepared_run(
+        config,
+        "test search idempotency conflict",
+        ext_id,
+    )
+    run_id = status.id
     adapter = MockSuccessSearchAdapter()
     service = build_acquisition_service(config, search_adapter=adapter)
     key = f"key-{uuid4()}"
@@ -286,11 +304,13 @@ def test_acquisition_service_transport_error_persistence(tmp_path, prepared_data
     config = replace(
         StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
     )
-    run_svc = build_run_service(config)
 
     ext_id = f"run-acq-trans-err-{uuid4()}"
-    run_svc.create(objective="test transport error recording", external_id=ext_id)
-    status = run_svc.status(external_id=ext_id)
+    run_svc, status = _prepared_run(
+        config,
+        "test transport error recording",
+        ext_id,
+    )
     run_id = status.id
 
     mock_adapter = MockTransportErrorSearchAdapter()
