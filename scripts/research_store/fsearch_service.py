@@ -38,7 +38,6 @@ from .direct_scrape_service import (
     DirectScrapeError,
     DirectScrapePersistenceError,
     DirectScrapeRequest,
-    build_direct_scrape_service,
 )
 from .domain import SearchAdapterResult, utcnow
 
