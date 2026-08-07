@@ -7,9 +7,9 @@ rankings and fail-closed corpus-budget gates around selected extraction.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -230,16 +230,27 @@ class PolicyFSearchService(FSearchService):
         )
         if not acquisition.postgres_committed:
             raise FSearchError(
-                "ingestion", "search response was not committed to PostgreSQL", result=searched
+                "ingestion",
+                "search response was not committed to PostgreSQL",
+                result=searched,
             )
         if acquisition.status == "provider_error":
-            error = acquisition.search_response.get("error_message") or "Firecrawl search transport failed"
+            error = (
+                acquisition.search_response.get("error_message")
+                or "Firecrawl search transport failed"
+            )
             raise FSearchError("search_transport", str(error), result=searched)
         if acquisition.status == "parse_error":
-            error = acquisition.search_response.get("error_message") or "Firecrawl search response could not be parsed"
+            error = (
+                acquisition.search_response.get("error_message")
+                or "Firecrawl search response could not be parsed"
+            )
             raise FSearchError("candidate_parsing", str(error), result=searched)
         if acquisition.status not in {"succeeded", "empty"}:
-            error = acquisition.search_response.get("error_message") or f"unexpected search response status: {acquisition.status}"
+            error = (
+                acquisition.search_response.get("error_message")
+                or f"unexpected search response status: {acquisition.status}"
+            )
             raise FSearchError("candidate_parsing", str(error), result=searched)
         if acquisition.status == "empty":
             return FSearchResult(**{**asdict(searched), "status": "empty"})
@@ -266,13 +277,19 @@ class PolicyFSearchService(FSearchService):
                 self.candidate_budget,
             )
         except CandidatePolicyError as exc:
-            raise FSearchError("ingestion", f"candidate policy persistence failed: {exc}", result=searched) from exc
+            raise FSearchError(
+                "ingestion",
+                f"candidate policy persistence failed: {exc}",
+                result=searched,
+            ) from exc
         self._require_budget(pre, searched)
 
         if request.scrape_limit == 0 or not selected:
             return FSearchResult(**{**asdict(searched), "status": "complete"})
 
-        requests = tuple(self._scrape_request(item.candidate, request.profile) for item in selected)
+        requests = tuple(
+            self._scrape_request(item.candidate, request.profile) for item in selected
+        )
         try:
             extraction: DirectScrapeBatchResult = self.direct_scrape_factory().execute(
                 searched.run_id,
@@ -290,7 +307,11 @@ class PolicyFSearchService(FSearchService):
         error = None
         if status != "complete":
             failed = [item for item in outcomes if item.status != "succeeded"]
-            error = failed[0].error if failed and failed[0].error else "one or more selected extractions failed"
+            error = (
+                failed[0].error
+                if failed and failed[0].error
+                else "one or more selected extractions failed"
+            )
         extracted = FSearchResult(
             **{
                 **asdict(searched),
@@ -336,7 +357,9 @@ class PolicyFSearchService(FSearchService):
                     "ingestion",
                     f"persisted candidate lookup failed for {candidate_id}: {exc}",
                 ) from exc
-            url = str(persisted.get("canonical_url") or candidate.get("canonical_url") or "")
+            url = str(
+                persisted.get("canonical_url") or candidate.get("canonical_url") or ""
+            )
             title = str(persisted.get("title") or candidate.get("title") or "")
             snippet = str(persisted.get("snippet") or candidate.get("snippet") or "")
             url_type = classify_url(url, title, snippet)
@@ -374,7 +397,11 @@ class PolicyFSearchService(FSearchService):
                 )
             )
         ranked.sort(
-            key=lambda item: (-item.score.total, item.source_rank, str(item.candidate_id))
+            key=lambda item: (
+                -item.score.total,
+                item.source_rank,
+                str(item.candidate_id),
+            )
         )
         return ranked
 
@@ -493,7 +520,11 @@ def _published_at(
     if value is None:
         raw_item = occurrence.get("raw_item") or {}
         if isinstance(raw_item, Mapping):
-            value = raw_item.get("published_at") or raw_item.get("publishedDate") or raw_item.get("date")
+            value = (
+                raw_item.get("published_at")
+                or raw_item.get("publishedDate")
+                or raw_item.get("date")
+            )
     return _parse_datetime(value)
 
 
@@ -528,7 +559,12 @@ def _expected_char_count(
     if isinstance(raw_item, Mapping):
         containers.append(raw_item)
     for data in containers:
-        for key in ("expected_char_count", "content_length", "contentLength", "char_count"):
+        for key in (
+            "expected_char_count",
+            "content_length",
+            "contentLength",
+            "char_count",
+        ):
             raw = data.get(key)
             try:
                 value = int(raw) if raw is not None else None
