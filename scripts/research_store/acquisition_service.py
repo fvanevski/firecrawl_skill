@@ -23,9 +23,7 @@ from .ports import SearchAdapter
 class FirecrawlSearchAdapter:
     """Execute Firecrawl search queries and classify transport errors."""
 
-    def __init__(
-        self, runner: Callable[..., tuple[int, bytes, str]] | None = None
-    ):
+    def __init__(self, runner: Callable[..., tuple[int, bytes, str]] | None = None):
         self.runner = runner or self._default_runner
 
     @staticmethod
@@ -307,9 +305,7 @@ class AcquisitionService:
     ) -> AcquisitionResult:
         run_id = UUID(str(run_id))
         plan_id = UUID(str(plan_id)) if plan_id is not None else None
-        plan_query_id = (
-            UUID(str(plan_query_id)) if plan_query_id is not None else None
-        )
+        plan_query_id = UUID(str(plan_query_id)) if plan_query_id is not None else None
         if (plan_id is None) != (plan_query_id is None):
             raise SearchProvenanceError(
                 "planned search provenance requires both plan_id and plan_query_id"
