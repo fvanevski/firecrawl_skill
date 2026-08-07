@@ -599,9 +599,8 @@ def validate_override_justification(
     justification: OverrideJustification,
     allowed_limits: Sequence[str] | None = None,
 ) -> None:
-    if (
-        allowed_limits is not None
-        and justification.limit_name not in set(allowed_limits)
+    if allowed_limits is not None and justification.limit_name not in set(
+        allowed_limits
     ):
         raise ValueError(
             f"override limit '{justification.limit_name}' not in allowed limits"
