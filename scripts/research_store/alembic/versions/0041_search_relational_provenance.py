@@ -7,7 +7,7 @@ incomplete history remains explicitly unresolved.
 
 from alembic import op
 
-revision = "0041_search_relational_provenance"
+revision = "0041_search_provenance"
 down_revision = "0040_asset_promotion_membership"
 branch_labels = None
 depends_on = None

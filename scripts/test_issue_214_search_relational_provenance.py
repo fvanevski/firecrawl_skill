@@ -11,7 +11,6 @@ from uuid import UUID, uuid4
 
 import pytest
 from psycopg.errors import ForeignKeyViolation, UniqueViolation
-
 from research_store.config import StoreConfig
 from research_store.container import (
     build_acquisition_service,
@@ -322,40 +321,46 @@ def test_constraints_reject_orphaned_and_duplicate_resolved_attempts(
     result = service.execute_search(status.id, "constraint source")
     stored = _response_provenance(run_service, result.search_response_id)
 
-    with pytest.raises(ForeignKeyViolation) as orphan:
-        with run_service.uow_factory() as uow, uow.connection.cursor() as cur:
-            cur.execute(
-                """INSERT INTO search_responses(
-                     run_id,query_text,backend,status,parser_version,
-                     raw_blob_sha256,raw_blob_bytes,mime_type,content_sha256,
-                     result_count,transport_metadata,payload_summary,idempotency_key,
-                     invocation_id,attempt_ordinal,provenance_status)
-                   SELECT run_id,'orphan',backend,status,parser_version,
-                          raw_blob_sha256,raw_blob_bytes,mime_type,content_sha256,
-                          result_count,transport_metadata,payload_summary,%s,
-                          %s,1,'resolved'
-                   FROM search_responses WHERE id=%s""",
-                (f"orphan:{uuid4()}", uuid4(), result.search_response_id),
-            )
-            uow.commit()
+    with (
+        pytest.raises(ForeignKeyViolation) as orphan,
+        run_service.uow_factory() as uow,
+        uow.connection.cursor() as cur,
+    ):
+        cur.execute(
+            """INSERT INTO search_responses(
+                 run_id,query_text,backend,status,parser_version,
+                 raw_blob_sha256,raw_blob_bytes,mime_type,content_sha256,
+                 result_count,transport_metadata,payload_summary,idempotency_key,
+                 invocation_id,attempt_ordinal,provenance_status)
+               SELECT run_id,'orphan',backend,status,parser_version,
+                      raw_blob_sha256,raw_blob_bytes,mime_type,content_sha256,
+                      result_count,transport_metadata,payload_summary,%s,
+                      %s,1,'resolved'
+               FROM search_responses WHERE id=%s""",
+            (f"orphan:{uuid4()}", uuid4(), result.search_response_id),
+        )
+        uow.commit()
     assert "search_responses_invocation_run_fk" in str(orphan.value)
 
-    with pytest.raises(UniqueViolation) as duplicate:
-        with run_service.uow_factory() as uow, uow.connection.cursor() as cur:
-            cur.execute(
-                """INSERT INTO search_responses(
-                     run_id,query_text,backend,status,parser_version,
-                     raw_blob_sha256,raw_blob_bytes,mime_type,content_sha256,
-                     result_count,transport_metadata,payload_summary,idempotency_key,
-                     invocation_id,attempt_ordinal,provenance_status)
-                   SELECT run_id,'duplicate',backend,status,parser_version,
-                          raw_blob_sha256,raw_blob_bytes,mime_type,content_sha256,
-                          result_count,transport_metadata,payload_summary,%s,
-                          invocation_id,attempt_ordinal,'resolved'
-                   FROM search_responses WHERE id=%s""",
-                (f"duplicate:{uuid4()}", result.search_response_id),
-            )
-            uow.commit()
+    with (
+        pytest.raises(UniqueViolation) as duplicate,
+        run_service.uow_factory() as uow,
+        uow.connection.cursor() as cur,
+    ):
+        cur.execute(
+            """INSERT INTO search_responses(
+                 run_id,query_text,backend,status,parser_version,
+                 raw_blob_sha256,raw_blob_bytes,mime_type,content_sha256,
+                 result_count,transport_metadata,payload_summary,idempotency_key,
+                 invocation_id,attempt_ordinal,provenance_status)
+               SELECT run_id,'duplicate',backend,status,parser_version,
+                      raw_blob_sha256,raw_blob_bytes,mime_type,content_sha256,
+                      result_count,transport_metadata,payload_summary,%s,
+                      invocation_id,attempt_ordinal,'resolved'
+               FROM search_responses WHERE id=%s""",
+            (f"duplicate:{uuid4()}", result.search_response_id),
+        )
+        uow.commit()
     assert "search_responses_invocation_attempt_uidx" in str(duplicate.value)
     assert stored["provenance_status"] == "resolved"
 
