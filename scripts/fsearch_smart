@@ -314,9 +314,11 @@ def execute(
     stop_after_state: str | None,
 ):
     from research_store.orchestrator import OrchestratorConfig
-    from research_store.smart_orchestrator import ResumableResearchOrchestrator
+    from research_store.search_provenance import (
+        ProvenanceResumableResearchOrchestrator,
+    )
 
-    orchestrator = ResumableResearchOrchestrator.build(
+    orchestrator = ProvenanceResumableResearchOrchestrator.build(
         config,
         orchestrator_config=OrchestratorConfig(
             execution_mode="autonomous_local",
