@@ -6,8 +6,6 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-import pytest
-
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 

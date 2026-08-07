@@ -181,6 +181,11 @@ def test_only_completion_critical_assets_contribute_to_sealed_chunks(
     excluded = _subject_id_for_snapshot(status.id, snapshots[1])
 
     _promote(service, included, "evidence_eligible", status.lifecycle_revision)
+    service.candidate_policy_service.evaluate_completion_admission(
+        status.id,
+        status.lifecycle_revision,
+        service.candidate_budget,
+    )
     _promote(service, included, "completion_critical", status.lifecycle_revision)
     service.reject(
         excluded,
@@ -258,6 +263,11 @@ def test_database_rejects_non_addressing_membership_rows(
     service = AssetPromotionService(runs.uow_factory)
     subject_id = _subject_id_for_snapshot(status.id, snapshot_id)
     _promote(service, subject_id, "evidence_eligible", status.lifecycle_revision)
+    service.candidate_policy_service.evaluate_completion_admission(
+        status.id,
+        status.lifecycle_revision,
+        service.candidate_budget,
+    )
     _promote(service, subject_id, "completion_critical", status.lifecycle_revision)
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
