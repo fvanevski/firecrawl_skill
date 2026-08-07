@@ -198,12 +198,12 @@ def test_soft_override_is_exact_auditable_and_reusable_on_identical_retry(policy
         search_adapter_factory=lambda: adapter,
     )
 
-    request = dict(
-        query="generic hub audit",
-        research_run_id=external_id,
-        scrape_limit=0,
-        idempotency_key="issue-215-soft-budget",
-    )
+    request = {
+        "query": "generic hub audit",
+        "research_run_id": external_id,
+        "scrape_limit": 0,
+        "idempotency_key": "issue-215-soft-budget",
+    }
     with pytest.raises(PolicyFSearchError) as first:
         service.execute(
             FSearchRequest(

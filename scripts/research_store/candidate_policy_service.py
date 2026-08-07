@@ -513,7 +513,7 @@ def _measure(uow, cursor, run_id, *, table, include_evidence=False) -> BudgetMet
     params = [uow.parser_version, uow.normalization_version, uow.chunker_version, run_id]
     if table != "research_run_assets":
         params.append(stages)
-    cursor.execute(" ".join((prefix, joins, where, group)), tuple(params))
+    cursor.execute(f"{prefix} {joins} {where} {group}", tuple(params))
     rows = cursor.fetchall()
     counts = {str(row[0]): int(row[3] or 0) for row in rows}
     return BudgetMetrics(

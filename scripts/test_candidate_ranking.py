@@ -223,15 +223,15 @@ def test_budget_is_deterministic_and_environment_configurable(monkeypatch):
     budget = CandidateBudget.from_env()
     assert budget.max_candidates == 3
     assert budget.max_generic_page_share == 0.5
-    args = dict(
-        candidates=["a", "b"],
-        total_bytes=100,
-        total_chunks=2,
-        generic_page_count=0,
-        extraction_attempts=1,
-        per_asset_chunk_counts={"a": 1, "b": 1},
-        budget=budget,
-    )
+    args = {
+        "candidates": ["a", "b"],
+        "total_bytes": 100,
+        "total_chunks": 2,
+        "generic_page_count": 0,
+        "extraction_attempts": 1,
+        "per_asset_chunk_counts": {"a": 1, "b": 1},
+        "budget": budget,
+    }
     assert check_corpus_budget(**args).to_dict() == check_corpus_budget(**args).to_dict()
 
 

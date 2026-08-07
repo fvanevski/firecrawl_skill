@@ -78,11 +78,11 @@ def test_completion_hard_limit_rejects_and_cannot_be_overridden(promotion_config
             lifecycle_revision=status.lifecycle_revision,
             actor_type="integration-test",
         )
-    check = [
+    check = next(
         item
         for item in service.candidate_policy_service.list_checks(status.id)
         if item["phase"] == "completion_admission"
-    ][0]
+    )
     with pytest.raises(CandidatePolicyError, match="hard limit"):
         service.candidate_policy_service.record_override(
             status.id,

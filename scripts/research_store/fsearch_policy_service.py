@@ -7,9 +7,10 @@ rankings and fail-closed corpus-budget gates around selected extraction.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any
 from uuid import UUID
 
 from candidate_ranking import (

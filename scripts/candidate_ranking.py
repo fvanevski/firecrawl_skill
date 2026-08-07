@@ -199,7 +199,7 @@ class RankingScore:
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"{name} must be numeric")
+                raise TypeError(f"{name} must be numeric")
             if not 0.0 <= float(value) <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1]")
         computed = self.base_score - (
@@ -253,7 +253,7 @@ class RankingPolicy:
             raise ValueError("small size threshold cannot exceed large size threshold")
 
     @classmethod
-    def from_env(cls, environ: Mapping[str, str] | None = None) -> "RankingPolicy":
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> RankingPolicy:
         env = os.environ if environ is None else environ
         defaults = cls()
 
@@ -281,7 +281,7 @@ class RankingPolicy:
 DEFAULT_RANKING_POLICY = RankingPolicy()
 
 
-def rank_to_base_score(rank: int | float | str | None, candidate_count: int) -> float:
+def rank_to_base_score(rank: float | str | None, candidate_count: int) -> float:
     """Translate a provider ordinal rank to a deterministic [0, 1] score."""
 
     if candidate_count <= 0:
@@ -378,7 +378,7 @@ class CandidateBudget:
         return asdict(self)
 
     @classmethod
-    def from_env(cls, environ: Mapping[str, str] | None = None) -> "CandidateBudget":
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> CandidateBudget:
         env = os.environ if environ is None else environ
         defaults = cls()
         return cls(
@@ -487,7 +487,7 @@ def check_corpus_budget(
     soft: list[BudgetViolation] = []
     hard: list[BudgetViolation] = []
 
-    def add(name: str, limit: float | int, observed: float | int, *, is_hard: bool) -> None:
+    def add(name: str, limit: float, observed: float, *, is_hard: bool) -> None:
         violation = BudgetViolation(
             limit_name=name,
             limit_value=limit,
