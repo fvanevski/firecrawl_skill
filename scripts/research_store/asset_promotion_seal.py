@@ -11,6 +11,7 @@ from .asset_promotion_models import (
     _canonical_sha256,
     _member_payload,
 )
+from .candidate_policy_service import CandidatePolicyError
 
 
 class _AssetPromotionSealMixin:
@@ -42,6 +43,23 @@ class _AssetPromotionSealMixin:
                 raise AssetPromotionError(
                     f"run {run_id} has no completion-critical assets to seal"
                 )
+
+            # Recompute the exact locked completion set and require that it still
+            # matches an accepted PostgreSQL budget check. This is deliberately
+            # inside the same run-row transaction as seal creation so a concurrent
+            # membership mutation cannot bypass the policy after admission.
+            try:
+                self.candidate_policy_service.require_matching_completion_check(
+                    uow,
+                    cursor,
+                    run_id,
+                    lifecycle_revision,
+                    self.candidate_budget,
+                    include_evidence=False,
+                )
+            except CandidatePolicyError as exc:
+                raise AssetPromotionError(str(exc)) from exc
+
             membership_sha256 = _canonical_sha256(
                 [
                     _member_payload(

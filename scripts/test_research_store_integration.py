@@ -89,7 +89,7 @@ def prepared_database():
         )
         assert all(cursor.fetchone())
         cursor.execute("SELECT version_num FROM alembic_version")
-        assert cursor.fetchone()[0] == "0041_search_provenance"
+        assert cursor.fetchone()[0] == "0042_candidate_ranking_budgets"
 
 
 def test_wrapper_workflow_runs_entirely_from_postgresql(service):

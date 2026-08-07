@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from candidate_ranking import CandidateBudget
+
 from .asset_promotion_core import _AssetPromotionCoreMixin
 from .asset_promotion_models import (
     AssetMembershipMember,
@@ -13,6 +15,7 @@ from .asset_promotion_models import (
 )
 from .asset_promotion_seal import _AssetPromotionSealMixin
 from .asset_promotion_store import _AssetPromotionStoreMixin
+from .candidate_policy_service import CandidatePolicyService
 
 
 class AssetPromotionService(
@@ -24,8 +27,10 @@ class AssetPromotionService(
 
     DEFAULT_POLICY_VERSION = "completion-membership-v1"
 
-    def __init__(self, uow_factory):
+    def __init__(self, uow_factory, *, candidate_budget: CandidateBudget | None = None):
         self.uow_factory = uow_factory
+        self.candidate_budget = candidate_budget or CandidateBudget.from_env()
+        self.candidate_policy_service = CandidatePolicyService(uow_factory)
 
 
 __all__ = [

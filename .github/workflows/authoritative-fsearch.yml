@@ -70,7 +70,7 @@ jobs:
           PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -lqt \
             | grep -q firecrawl_fsearch_test
 
-      - name: Run authoritative fsearch and RC-7 acceptance tests
+      - name: Run authoritative fsearch and candidate-policy acceptance tests
         env:
           RESEARCH_STORE_TEST_DATABASE_URL: >-
             postgresql://postgres:postgres@127.0.0.1/firecrawl_fsearch_test
@@ -81,7 +81,11 @@ jobs:
             -p no:cacheprovider \
             scripts/test_authoritative_fsearch.py \
             scripts/test_authoritative_fsearch_review.py \
-            scripts/test_issue_213_search_empty_telemetry.py
+            scripts/test_issue_213_search_empty_telemetry.py \
+            scripts/test_candidate_ranking.py \
+            scripts/test_issue_215_authoritative_fsearch.py \
+            scripts/test_issue_215_completion_budget.py \
+            scripts/test_issue_215_migration_contract.py
           python -m pytest \
             -q \
             -p no:cacheprovider \

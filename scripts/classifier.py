@@ -3,6 +3,8 @@
 import argparse
 import json
 
+from candidate_ranking import classify_url
+
 # ── Heuristic Profiles ──────────────────────────────────────────────────────
 PROFILES = {
     "ecommerce": {
@@ -455,48 +457,49 @@ PROFILES = {
 }
 
 
+def classify_url_type(url: str, title: str = "", snippet: str = "") -> str:
+    """Return the canonical structural URL classification used by ranking."""
+
+    return classify_url(url, title, snippet).value
+
+
 def classify_target(url, title="", snippet=""):
-    """
-    Applies Layer 1 static heuristics to classify a target source.
-    Returns: (category, profile_matched)
-    """
+    """Apply Layer 1 profile heuristics for structured schema extraction."""
+
     url_lower = url.lower()
     text_to_scan = f"{title} {snippet}".lower()
-
-    # Check each profile in order of preference
     for profile_name, rules in PROFILES.items():
-        # Match URL patterns
-        if any(pat in url_lower for pat in rules["url_patterns"]):
+        if any(pattern in url_lower for pattern in rules["url_patterns"]):
             return profile_name, True
-
-        # Match high-confidence keywords in snippet or title
-        if any(kw in text_to_scan for kw in rules["keywords"]):
+        if any(keyword in text_to_scan for keyword in rules["keywords"]):
             return profile_name, True
-
-    # Default fallback to unstructured Markdown
     return "editorial_markdown", False
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="classifier.py — Heuristic URL pre-classification for structured schema extraction."
+        description=(
+            "classifier.py — Heuristic URL pre-classification for structured "
+            "schema extraction."
+        )
     )
-    parser.add_argument(
-        "target",
-        help="URL to evaluate.",
-    )
+    parser.add_argument("target", help="URL to evaluate.")
     parser.add_argument("-t", "--title", default="", help="Page title.")
     parser.add_argument("-s", "--snippet", default="", help="Snippet context.")
-
     args = parser.parse_args()
 
     category, is_match = classify_target(args.target, args.title, args.snippet)
-    result = {
-        "url": args.target,
-        "is_candidate": is_match,
-        "classified_category": category,
-    }
-    print(json.dumps(result, indent=2))
+    print(
+        json.dumps(
+            {
+                "url": args.target,
+                "is_candidate": is_match,
+                "classified_category": category,
+                "url_type": classify_url_type(args.target, args.title, args.snippet),
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

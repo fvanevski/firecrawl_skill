@@ -760,7 +760,7 @@ def test_migration_safely_classifies_uncertain_and_out_of_range_history():
                 )
             connection.commit()
 
-        assert migrate(isolated_dsn) == 41
+        assert migrate(isolated_dsn) == 42
         with connect(isolated_dsn) as connection, connection.cursor() as cur:
             cur.execute(
                 """SELECT idempotency_key,invocation_id,attempt_ordinal,

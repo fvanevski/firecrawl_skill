@@ -96,6 +96,11 @@ def test_post_seal_addition_requires_reopen_then_reseal_with_revision_cas(
         )
         assert cursor.fetchone() == ("invalidated", "asset_membership_reopened")
 
+    checkpoints.asset_promotions.candidate_policy_service.evaluate_completion_admission(
+        status.id,
+        status.lifecycle_revision,
+        checkpoints.asset_promotions.candidate_budget,
+    )
     _promote(
         checkpoints.asset_promotions,
         late_subject,
@@ -177,14 +182,45 @@ class _BlockingSealService(AssetPromotionService):
 def test_seal_and_completion_promotion_are_serialized_in_both_race_orders(
     promotion_config: StoreConfig,
 ):
-    _corpus, runs, status, manifest = _seed_retained_assets(promotion_config, count=2)
+    _corpus, runs, status, _manifest = _seed_retained_assets(promotion_config, count=2)
     service = AssetPromotionService(runs.uow_factory)
-    snapshots = [UUID(str(asset["snapshot_id"])) for asset in manifest["assets"]]
-    first = _subject_id_for_snapshot(status.id, snapshots[0])
-    second = _subject_id_for_snapshot(status.id, snapshots[1])
-    for subject_id in (first, second):
-        _promote(service, subject_id, "evidence_eligible", status.lifecycle_revision)
-    _promote(service, first, "completion_critical", status.lifecycle_revision)
+
+    # prepare_for_indexing records the full-set budget check and seals both
+    # retained assets so subsequent reopen + race exercises the gated path.
+    seal = service.prepare_for_indexing(
+        status.id, lifecycle_revision=status.lifecycle_revision
+    )
+    assert seal.expected_asset_count == 2
+
+    # ------------------------------------------------------------------
+    # First race: seal wins against a late completion promotion.
+    # ------------------------------------------------------------------
+    service.reopen_completion_membership(
+        status.id,
+        expected_lifecycle_revision=status.lifecycle_revision,
+        actor_type="integration-test",
+        actor_identifier="race-reset",
+        policy_version="test-race-v1",
+        reason_code="race_reset",
+        reason="prepare the first race ordering",
+    )
+
+    late = _corpus.ingest_batch(
+        f"fc_late_race1_{uuid4().hex}",
+        "scrape",
+        [_request("late-race1")],
+        research_run_external_id=status.external_id,
+    )
+    assert late["failure_count"] == 0
+    late_subject = _subject_id_for_snapshot(
+        status.id, UUID(str(late["assets"][0]["snapshot_id"]))
+    )
+    _promote(service, late_subject, "evidence_eligible", status.lifecycle_revision)
+    service.candidate_policy_service.evaluate_completion_admission(
+        status.id,
+        status.lifecycle_revision,
+        service.candidate_budget,
+    )
 
     locked = Event()
     release = Event()
@@ -195,7 +231,7 @@ def test_seal_and_completion_promotion_are_serialized_in_both_race_orders(
         promotion_started.set()
         return _promote(
             AssetPromotionService(runs.uow_factory),
-            second,
+            late_subject,
             "completion_critical",
             status.lifecycle_revision,
         )
@@ -218,17 +254,24 @@ def test_seal_and_completion_promotion_are_serialized_in_both_race_orders(
         sealed = seal_future.result(timeout=10)
         with pytest.raises(AssetMembershipSealedError):
             promotion_future.result(timeout=10)
-    assert sealed.expected_asset_count == 1
+    # The seal captures the membership at lock time: the late asset is still
+    # in evidence_eligible because the concurrent promotion is blocked on the
+    # run lock. Only the two originally-sealed assets are completion-critical.
+    assert sealed.expected_asset_count == 2
 
+    # ------------------------------------------------------------------
+    # Second race (inverse order): promotion commits before the seal.
+    # ------------------------------------------------------------------
     service.reopen_completion_membership(
         status.id,
         expected_lifecycle_revision=status.lifecycle_revision,
         actor_type="integration-test",
-        actor_identifier="race-reset",
+        actor_identifier="race-reset-2",
         policy_version="test-race-v1",
-        reason_code="race_reset",
+        reason_code="race_reset_2",
         reason="prepare the inverse race ordering",
     )
+
     promotion_locked = Event()
     permit_commit = Event()
     seal_started = Event()
@@ -249,7 +292,7 @@ def test_seal_and_completion_promotion_are_serialized_in_both_race_orders(
                           reason_code='promotion_wins',
                           reason='promotion commits before sealing'
                     WHERE id=%s""",
-                (status.lifecycle_revision, second),
+                (status.lifecycle_revision, late_subject),
             )
             promotion_locked.set()
             if not permit_commit.wait(timeout=10):
@@ -257,7 +300,13 @@ def test_seal_and_completion_promotion_are_serialized_in_both_race_orders(
 
     def seal_after_promotion():
         seal_started.set()
-        return AssetPromotionService(runs.uow_factory).seal_completion_membership(
+        svc = AssetPromotionService(runs.uow_factory)
+        svc.candidate_policy_service.evaluate_completion_admission(
+            status.id,
+            status.lifecycle_revision,
+            svc.candidate_budget,
+        )
+        return svc.seal_completion_membership(
             status.id,
             lifecycle_revision=status.lifecycle_revision,
             actor_type="integration-test",
@@ -275,4 +324,4 @@ def test_seal_and_completion_promotion_are_serialized_in_both_race_orders(
         permit_commit.set()
         promotion_future.result(timeout=10)
         resealed = seal_future.result(timeout=10)
-    assert resealed.expected_asset_count == 2
+    assert resealed.expected_asset_count == 3
