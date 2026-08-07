@@ -158,10 +158,7 @@ class CandidatePolicyService:
             len(rankings),
             current.total_bytes,
             current.total_chunks,
-            sum(
-                is_generic_url_type(UrlType(str(row["url_type"])))
-                for row in rankings
-            ),
+            sum(is_generic_url_type(UrlType(str(row["url_type"]))) for row in rankings),
             attempts,
             current.per_asset_chunk_counts,
         )
@@ -303,11 +300,15 @@ class CandidatePolicyService:
             )
             row = cursor.fetchone()
             if row is None:
-                raise CandidatePolicyError("budget check does not belong to requested run")
+                raise CandidatePolicyError(
+                    "budget check does not belong to requested run"
+                )
             soft = {str(item.get("limit_name")) for item in (row[0] or [])}
             hard = {str(item.get("limit_name")) for item in (row[1] or [])}
             if limit_name in hard:
-                raise CandidatePolicyError(f"hard limit {limit_name!r} cannot be overridden")
+                raise CandidatePolicyError(
+                    f"hard limit {limit_name!r} cannot be overridden"
+                )
             if limit_name not in soft:
                 raise CandidatePolicyError(f"{limit_name!r} is not a soft violation")
             digest = _sha256(
@@ -350,11 +351,22 @@ class CandidatePolicyService:
                 (run_id,),
             )
             names = (
-                "id", "phase", "invocation_id", "lifecycle_revision",
-                "candidate_count", "total_bytes", "total_chunks",
-                "generic_page_count", "extraction_attempts",
-                "per_asset_chunk_counts", "scope", "budget", "hard_violations",
-                "soft_violations", "accepted_without_override", "content_sha256",
+                "id",
+                "phase",
+                "invocation_id",
+                "lifecycle_revision",
+                "candidate_count",
+                "total_bytes",
+                "total_chunks",
+                "generic_page_count",
+                "extraction_attempts",
+                "per_asset_chunk_counts",
+                "scope",
+                "budget",
+                "hard_violations",
+                "soft_violations",
+                "accepted_without_override",
+                "content_sha256",
                 "created_at",
             )
             result = []
@@ -443,7 +455,9 @@ class CandidatePolicyService:
 
     @staticmethod
     def _attempts(cursor, run_id: UUID) -> int:
-        cursor.execute("SELECT count(*) FROM extraction_attempts WHERE run_id=%s", (run_id,))
+        cursor.execute(
+            "SELECT count(*) FROM extraction_attempts WHERE run_id=%s", (run_id,)
+        )
         return int(cursor.fetchone()[0] or 0)
 
     @staticmethod
@@ -510,7 +524,12 @@ def _measure(uow, cursor, run_id, *, table, include_evidence=False) -> BudgetMet
              AND document.parser_version=%s AND document.normalization_version=%s
              LEFT JOIN chunks chunk ON chunk.document_id=document.id
              AND chunk.chunker_version=%s"""
-    params = [uow.parser_version, uow.normalization_version, uow.chunker_version, run_id]
+    params = [
+        uow.parser_version,
+        uow.normalization_version,
+        uow.chunker_version,
+        run_id,
+    ]
     if table != "research_run_assets":
         params.append(stages)
     cursor.execute(f"{prefix} {joins} {where} {group}", tuple(params))
@@ -575,9 +594,7 @@ def _jsonable(value):
 
 
 def _sha256(value: Mapping[str, Any]) -> str:
-    raw = json.dumps(
-        value, sort_keys=True, separators=(",", ":"), default=str
-    ).encode()
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
     return hashlib.sha256(raw).hexdigest()
 
 
