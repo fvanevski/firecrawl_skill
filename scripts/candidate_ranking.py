@@ -82,17 +82,26 @@ def classify_url(url: str, title: str = "", snippet: str = "") -> UrlType:
 
     if any(marker in path for marker in ("/live-blog", "/live-updates", "/liveblog")):
         return UrlType.LIVE_BLOG
-    if any(marker in text_scan for marker in ("liveblog", "live coverage", "live blog")):
+    if any(
+        marker in text_scan for marker in ("liveblog", "live coverage", "live blog")
+    ):
         return UrlType.LIVE_BLOG
 
     if any(
         marker in path
-        for marker in ("/press-release/", "/press_releases/", "/releases/", "/newsroom/")
+        for marker in (
+            "/press-release/",
+            "/press_releases/",
+            "/releases/",
+            "/newsroom/",
+        )
     ):
         return UrlType.OFFICIAL_RELEASE
     if registered_domain in _RELEASE_DOMAINS:
         return UrlType.OFFICIAL_RELEASE
-    if any(marker in text_scan for marker in ("prnewswire", "business wire", "release.pr")):
+    if any(
+        marker in text_scan for marker in ("prnewswire", "business wire", "release.pr")
+    ):
         return UrlType.OFFICIAL_RELEASE
 
     if any(marker in path for marker in ("/search", "/query", "/results")):
@@ -168,7 +177,9 @@ def assess_freshness(
     try:
         age_days = (retrieved_at - published_at).days
     except TypeError as exc:
-        raise ValueError("published_at and retrieved_at must use compatible timezones") from exc
+        raise ValueError(
+            "published_at and retrieved_at must use compatible timezones"
+        ) from exc
     if age_days < 0:
         return FreshnessStatus.SATISFIED, f"published in the future ({age_days} days)"
     if age_days <= stale_after_days:
@@ -239,7 +250,11 @@ class RankingPolicy:
             "extreme_size_penalty",
         ):
             value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, float) or not 0.0 <= value <= 1.0:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, float)
+                or not 0.0 <= value <= 1.0
+            ):
                 raise ValueError(f"{name} must be a float in [0, 1]")
         for name in (
             "extreme_size_large_threshold",
@@ -264,17 +279,41 @@ class RankingPolicy:
             return int(env.get(name, current))
 
         return cls(
-            generic_page_penalty=f("FIRECRAWL_RANK_GENERIC_PAGE_PENALTY", defaults.generic_page_penalty),
-            home_page_penalty=f("FIRECRAWL_RANK_HOME_PAGE_PENALTY", defaults.home_page_penalty),
-            reference_page_penalty=f("FIRECRAWL_RANK_REFERENCE_PAGE_PENALTY", defaults.reference_page_penalty),
-            search_page_penalty=f("FIRECRAWL_RANK_SEARCH_PAGE_PENALTY", defaults.search_page_penalty),
-            unknown_page_penalty=f("FIRECRAWL_RANK_UNKNOWN_PAGE_PENALTY", defaults.unknown_page_penalty),
-            stale_date_penalty=f("FIRECRAWL_RANK_STALE_DATE_PENALTY", defaults.stale_date_penalty),
-            duplication_penalty=f("FIRECRAWL_RANK_DUPLICATION_PENALTY", defaults.duplication_penalty),
-            extreme_size_penalty=f("FIRECRAWL_RANK_EXTREME_SIZE_PENALTY", defaults.extreme_size_penalty),
-            extreme_size_large_threshold=i("FIRECRAWL_RANK_LARGE_CHAR_THRESHOLD", defaults.extreme_size_large_threshold),
-            extreme_size_small_threshold=i("FIRECRAWL_RANK_SMALL_CHAR_THRESHOLD", defaults.extreme_size_small_threshold),
-            stale_after_days=i("FIRECRAWL_RANK_STALE_AFTER_DAYS", defaults.stale_after_days),
+            generic_page_penalty=f(
+                "FIRECRAWL_RANK_GENERIC_PAGE_PENALTY", defaults.generic_page_penalty
+            ),
+            home_page_penalty=f(
+                "FIRECRAWL_RANK_HOME_PAGE_PENALTY", defaults.home_page_penalty
+            ),
+            reference_page_penalty=f(
+                "FIRECRAWL_RANK_REFERENCE_PAGE_PENALTY", defaults.reference_page_penalty
+            ),
+            search_page_penalty=f(
+                "FIRECRAWL_RANK_SEARCH_PAGE_PENALTY", defaults.search_page_penalty
+            ),
+            unknown_page_penalty=f(
+                "FIRECRAWL_RANK_UNKNOWN_PAGE_PENALTY", defaults.unknown_page_penalty
+            ),
+            stale_date_penalty=f(
+                "FIRECRAWL_RANK_STALE_DATE_PENALTY", defaults.stale_date_penalty
+            ),
+            duplication_penalty=f(
+                "FIRECRAWL_RANK_DUPLICATION_PENALTY", defaults.duplication_penalty
+            ),
+            extreme_size_penalty=f(
+                "FIRECRAWL_RANK_EXTREME_SIZE_PENALTY", defaults.extreme_size_penalty
+            ),
+            extreme_size_large_threshold=i(
+                "FIRECRAWL_RANK_LARGE_CHAR_THRESHOLD",
+                defaults.extreme_size_large_threshold,
+            ),
+            extreme_size_small_threshold=i(
+                "FIRECRAWL_RANK_SMALL_CHAR_THRESHOLD",
+                defaults.extreme_size_small_threshold,
+            ),
+            stale_after_days=i(
+                "FIRECRAWL_RANK_STALE_AFTER_DAYS", defaults.stale_after_days
+            ),
         )
 
 
@@ -342,7 +381,8 @@ def compute_ranking_score(
         freshness_penalty=freshness_penalty,
         duplication_penalty=dup_penalty,
         size_penalty=size_penalty,
-        total=base_score - (url_penalty + freshness_penalty + dup_penalty + size_penalty),
+        total=base_score
+        - (url_penalty + freshness_penalty + dup_penalty + size_penalty),
         rationale="; ".join(rationale_parts),
     )
 
@@ -382,7 +422,9 @@ class CandidateBudget:
         env = os.environ if environ is None else environ
         defaults = cls()
         return cls(
-            max_candidates=int(env.get("FIRECRAWL_BUDGET_MAX_CANDIDATES", defaults.max_candidates)),
+            max_candidates=int(
+                env.get("FIRECRAWL_BUDGET_MAX_CANDIDATES", defaults.max_candidates)
+            ),
             max_bytes=int(env.get("FIRECRAWL_BUDGET_MAX_BYTES", defaults.max_bytes)),
             max_chunks=int(env.get("FIRECRAWL_BUDGET_MAX_CHUNKS", defaults.max_chunks)),
             max_per_asset_contribution_chunks=int(
@@ -392,7 +434,10 @@ class CandidateBudget:
                 )
             ),
             max_generic_page_share=float(
-                env.get("FIRECRAWL_BUDGET_MAX_GENERIC_PAGE_SHARE", defaults.max_generic_page_share)
+                env.get(
+                    "FIRECRAWL_BUDGET_MAX_GENERIC_PAGE_SHARE",
+                    defaults.max_generic_page_share,
+                )
             ),
             max_exploratory_extraction_attempts=int(
                 env.get(
@@ -526,8 +571,14 @@ def check_corpus_budget(
             )
 
     for asset_id, chunk_count in sorted(per_asset_chunk_counts.items()):
-        if isinstance(chunk_count, bool) or not isinstance(chunk_count, int) or chunk_count < 0:
-            raise ValueError(f"chunk count for {asset_id} must be a non-negative integer")
+        if (
+            isinstance(chunk_count, bool)
+            or not isinstance(chunk_count, int)
+            or chunk_count < 0
+        ):
+            raise ValueError(
+                f"chunk count for {asset_id} must be a non-negative integer"
+            )
         if chunk_count > budget.max_per_asset_contribution_chunks:
             add(
                 "max_per_asset_contribution_chunks",
@@ -548,8 +599,13 @@ def validate_override_justification(
     justification: OverrideJustification,
     allowed_limits: Sequence[str] | None = None,
 ) -> None:
-    if allowed_limits is not None and justification.limit_name not in set(allowed_limits):
-        raise ValueError(f"override limit '{justification.limit_name}' not in allowed limits")
+    if (
+        allowed_limits is not None
+        and justification.limit_name not in set(allowed_limits)
+    ):
+        raise ValueError(
+            f"override limit '{justification.limit_name}' not in allowed limits"
+        )
 
 
 __all__ = [
