@@ -235,9 +235,9 @@ def test_acquisition_preflight_rejects_terminal_run(
     tmp_path: Path,
     terminal_state: str,
 ):
+    assert terminal_state not in ACQUISITION_ENTRY_STATES
     _, connect_factory = _connect_with(_FakeCursor(run_state=terminal_state))
-    terminal_pattern = rf"terminal \({terminal_state}\)"
-    with pytest.raises(AcquisitionPreflightError, match=terminal_pattern):
+    with pytest.raises(AcquisitionPreflightError, match=f"terminal \({terminal_state}\)"):
         require_authoritative_acquisition(
             run_id=uuid4(),
             config=_config(tmp_path, "postgresql://research@test/research"),
@@ -845,7 +845,8 @@ def test_commit_failure_never_returns_success_and_retry_recovers(
             (idempotency_key,),
         )
         assert cursor.fetchone()[0] == 0
-    assert any(path.is_file() for path in config.blob_root.rglob("*"))
+    assert adapter.call_count == 0
+    assert not any(path.is_file() for path in config.blob_root.rglob("*"))
 
     require_authoritative_acquisition(run_id=status.id, config=config)
     recovered = normal_service.execute_search(
@@ -855,6 +856,8 @@ def test_commit_failure_never_returns_success_and_retry_recovers(
     )
     assert recovered.postgres_committed is True
     assert len(run_service.list_search_responses(status.id)) == 1
+    assert adapter.call_count == 1
+    assert any(path.is_file() for path in config.blob_root.rglob("*"))
 
 
 def _database_url_for_role(database_url: str, role: str, password: str) -> str:

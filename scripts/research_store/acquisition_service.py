@@ -23,7 +23,9 @@ from .ports import SearchAdapter
 class FirecrawlSearchAdapter:
     """Execute Firecrawl search queries and classify transport errors."""
 
-    def __init__(self, runner: Callable[..., tuple[int, bytes, str]] | None = None):
+    def __init__(
+        self, runner: Callable[..., tuple[int, bytes, str]] | None = None
+    ):
         self.runner = runner or self._default_runner
 
     @staticmethod
