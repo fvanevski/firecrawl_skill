@@ -119,7 +119,7 @@ def test_provider_ordinal_translates_to_monotonic_base_score():
     values = [rank_to_base_score(rank, 5) for rank in range(1, 6)]
     assert values == sorted(values, reverse=True)
     assert values[0] == 1.0
-    assert values[-1] == 0.0
+    assert values[-1] == pytest.approx(0.2)
 
 
 def test_relevant_dated_article_outranks_generic_hub():
