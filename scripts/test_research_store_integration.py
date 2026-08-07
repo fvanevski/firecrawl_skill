@@ -2419,7 +2419,7 @@ def _seed_completed_indexed_asset(service, external_run_id):
                SET status='complete', completed_at=now(), error=NULL
                FROM embedding_manifests m
                JOIN chunks c ON c.id=m.chunk_id
-               JOIN documents d ON d.snapshot_id=d.snapshot_id
+               JOIN documents d ON d.id=c.document_id
                JOIN research_run_assets ra ON ra.snapshot_id=d.snapshot_id
                WHERE j.manifest_id=m.id AND ra.run_id=%s""",
             (run_id,),
