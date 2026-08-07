@@ -94,7 +94,9 @@ def test_completion_hard_limit_rejects_and_cannot_be_overridden(promotion_config
     assert service.get_active_seal(status.id) is None
 
 
-def test_direct_completion_promotion_cannot_bypass_missing_budget_check(promotion_config):
+def test_direct_completion_promotion_cannot_bypass_missing_budget_check(
+    promotion_config,
+):
     _corpus, runs, status, _manifest = _seed_retained_assets(promotion_config, count=1)
     service = AssetPromotionService(runs.uow_factory)
     asset = service.list_assets(status.id)[0]

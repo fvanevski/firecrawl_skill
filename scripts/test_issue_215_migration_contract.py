@@ -34,7 +34,9 @@ def _dsn_for_database(dsn: str, database: str) -> str:
     )
 
 
-def test_migration_adds_relational_append_only_policy_without_inferred_history(tmp_path):
+def test_migration_adds_relational_append_only_policy_without_inferred_history(
+    tmp_path,
+):
     from psycopg import sql
 
     database = f"firecrawl_candidate_policy_test_{uuid4().hex}"
@@ -43,7 +45,9 @@ def test_migration_adds_relational_append_only_policy_without_inferred_history(t
     with connect(admin_dsn) as admin:
         admin.autocommit = True
         with admin.cursor() as cursor:
-            cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
+            cursor.execute(
+                sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database))
+            )
     try:
         assert migrate(isolated_dsn, "0041_search_provenance") == 41
         config = replace(

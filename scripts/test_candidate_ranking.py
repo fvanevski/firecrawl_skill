@@ -232,7 +232,9 @@ def test_budget_is_deterministic_and_environment_configurable(monkeypatch):
         "per_asset_chunk_counts": {"a": 1, "b": 1},
         "budget": budget,
     }
-    assert check_corpus_budget(**args).to_dict() == check_corpus_budget(**args).to_dict()
+    assert (
+        check_corpus_budget(**args).to_dict() == check_corpus_budget(**args).to_dict()
+    )
 
 
 def test_ranking_policy_is_environment_configurable(monkeypatch):
