@@ -1332,7 +1332,7 @@ class TestKnownLimitations:
 # ---------------------------------------------------------------------------
 
 
-class TestRealWorkflowExecution:
+class TestRealWorkflowIntegration:
     """Integration tests for real workflow execution with dry_run=False."""
 
     def test_runner_with_real_evidence_packets_and_transitions(self):
