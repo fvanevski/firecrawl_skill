@@ -1,8 +1,8 @@
 """Add relational search-attempt provenance and terminal plan-query states.
 
 Historical rows are backfilled only when the existing transport metadata proves a
-same-run invocation and a positive provider-attempt ordinal.  Ambiguous or
-incomplete history remains explicitly unresolved.
+same-run invocation and a positive provider-attempt ordinal. Ambiguous,
+malformed, or out-of-range history remains explicitly unresolved.
 """
 
 from alembic import op
@@ -21,9 +21,11 @@ def upgrade():
           ADD COLUMN attempt_ordinal integer,
           ADD COLUMN provenance_status text;
 
-        -- Existing rows begin unresolved.  The CTE below promotes only
-        -- uniquely proved relationships; it never matches on query text,
-        -- timestamps, ordering, or other fuzzy signals.
+        -- Existing rows begin unresolved. The CTE below promotes only uniquely
+        -- proved relationships; it never matches on query text, timestamps,
+        -- ordering, or other fuzzy signals. Attempt text is range-checked as
+        -- numeric before the integer cast so malformed or oversized historical
+        -- metadata cannot abort the migration.
         UPDATE search_responses
            SET provenance_status = CASE
              WHEN backend = 'orchestrator' THEN 'not_applicable'
@@ -42,14 +44,36 @@ def upgrade():
               ELSE NULL
             END AS invocation_id,
             CASE
+              WHEN NULLIF(sr.transport_metadata->>'attempt','') IS NOT NULL
+               AND NULLIF(sr.transport_metadata->>'attempts','') IS NOT NULL
+              THEN CASE
+                WHEN sr.transport_metadata->>'attempt' ~ '^[1-9][0-9]{0,9}$'
+                 AND sr.transport_metadata->>'attempts' ~ '^[1-9][0-9]{0,9}$'
+                THEN CASE
+                  WHEN (sr.transport_metadata->>'attempt')::numeric <= 2147483647
+                   AND (sr.transport_metadata->>'attempts')::numeric <= 2147483647
+                   AND (sr.transport_metadata->>'attempt')::numeric
+                       = (sr.transport_metadata->>'attempts')::numeric
+                  THEN (sr.transport_metadata->>'attempt')::integer
+                  ELSE NULL
+                END
+                ELSE NULL
+              END
               WHEN COALESCE(
                      NULLIF(sr.transport_metadata->>'attempt',''),
                      NULLIF(sr.transport_metadata->>'attempts','')
-                   ) ~ '^[1-9][0-9]*$'
-              THEN COALESCE(
-                     NULLIF(sr.transport_metadata->>'attempt',''),
-                     NULLIF(sr.transport_metadata->>'attempts','')
-                   )::integer
+                   ) ~ '^[1-9][0-9]{0,9}$'
+              THEN CASE
+                WHEN COALESCE(
+                       NULLIF(sr.transport_metadata->>'attempt',''),
+                       NULLIF(sr.transport_metadata->>'attempts','')
+                     )::numeric <= 2147483647
+                THEN COALESCE(
+                       NULLIF(sr.transport_metadata->>'attempt',''),
+                       NULLIF(sr.transport_metadata->>'attempts','')
+                     )::integer
+                ELSE NULL
+              END
               ELSE NULL
             END AS attempt_ordinal
           FROM search_responses sr
@@ -119,7 +143,7 @@ def upgrade():
           DROP CONSTRAINT search_plan_queries_status_check;
 
         -- Preserve any historical 'executed' rows as a read-only compatibility
-        -- state.  New application transitions use the explicit terminal states.
+        -- state. New application transitions use the explicit terminal states.
         ALTER TABLE search_plan_queries
           ADD CONSTRAINT search_plan_queries_status_check
             CHECK(status IN (
