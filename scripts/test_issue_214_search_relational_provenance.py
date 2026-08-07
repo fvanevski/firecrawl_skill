@@ -597,7 +597,7 @@ def test_idempotency_contention_has_bounded_wait_and_no_second_provider_call(
                 "bounded lock",
                 idempotency_key=key,
             )
-        except BaseException as exc:  # pragma: no cover - diagnostic capture
+        except Exception as exc:  # pragma: no cover - diagnostic capture
             failures.append(exc)
 
     thread = threading.Thread(target=run_first, daemon=True)
