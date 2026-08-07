@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -588,37 +589,31 @@ def test_idempotency_contention_has_bounded_wait_and_no_second_provider_call(
     second_service.idempotency_lock_timeout_seconds = 0.15
     second_service.idempotency_lock_poll_seconds = 0.01
     key = f"issue214:bounded-lock:{uuid4()}"
-    failures: list[BaseException] = []
 
-    def run_first() -> None:
-        try:
-            first_service.execute_search(
-                status.id,
-                "bounded lock",
-                idempotency_key=key,
-            )
-        except Exception as exc:  # pragma: no cover - diagnostic capture
-            failures.append(exc)
-
-    thread = threading.Thread(target=run_first, daemon=True)
-    thread.start()
-    assert entered.wait(timeout=2)
-    started = time.monotonic()
-    with pytest.raises(AcquisitionConcurrencyError) as timeout:
-        second_service.execute_search(
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_future = executor.submit(
+            first_service.execute_search,
             status.id,
             "bounded lock",
             idempotency_key=key,
         )
-    elapsed = time.monotonic() - started
-    assert timeout.value.reason_code == "search_idempotency_lock_timeout"
-    assert elapsed < 1.0
-    assert second_adapter.calls == 0
+        assert entered.wait(timeout=2)
+        started = time.monotonic()
+        with pytest.raises(AcquisitionConcurrencyError) as timeout:
+            second_service.execute_search(
+                status.id,
+                "bounded lock",
+                idempotency_key=key,
+            )
+        elapsed = time.monotonic() - started
+        assert timeout.value.reason_code == "search_idempotency_lock_timeout"
+        assert elapsed < 1.0
+        assert second_adapter.calls == 0
 
-    release.set()
-    thread.join(timeout=5)
-    assert not thread.is_alive()
-    assert failures == []
+        release.set()
+        first_result = first_future.result(timeout=5)
+
+    assert first_result.postgres_committed is True
     assert first_adapter.calls == 1
 
 
