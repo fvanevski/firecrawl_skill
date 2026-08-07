@@ -310,6 +310,7 @@ Exports are never replay, retry, selection, ingestion, or workflow inputs.
 - `references/recovery-drill-checklist.md`: executable recovery drills.
 - `references/cli-script-disambiguation.md`: Node CLI, Python SDK, and MCP boundaries.
 - `references/coding-agent-guide.md`: implementation and testing constraints.
+- `references/search-relational-provenance.md`: relational provider invocation/attempt and smart-plan provenance, migration compatibility, bounded idempotency, and failure cleanup.
 - `references/workflow-state-schema.md`: complete lifecycle and invocation contracts.
 - `references/release-notes-rc9.md`: breaking runtime and legacy-migration compatibility boundary retained by RC-10.
 - `references/release-candidate-gate-rc10.md`: aggregate exact-head gate and mandatory post-merge campaign boundary.
