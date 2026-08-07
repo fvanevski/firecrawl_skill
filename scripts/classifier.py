@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 
 # ── Heuristic Profiles ──────────────────────────────────────────────────────
 PROFILES = {
@@ -453,6 +454,106 @@ PROFILES = {
         },
     },
 }
+
+
+def classify_url_type(url: str, title: str = "", snippet: str = "") -> str:
+    """Classify a candidate URL into a structural type.
+
+    Returns one of: article, live_blog, official_release, topic_hub,
+    home_page, reference_page, search_page, unknown.
+    """
+    url_lower = url.lower()
+    text_scan = f"{title} {snippet}".lower()
+
+    # Live blog.
+    for pattern in ("/live-blog/", "/live-updates/", "/liveblog/"):
+        if pattern in url_lower:
+            return "live_blog"
+    for keyword in ("liveblog", "live coverage", "live blog"):
+        if keyword in text_scan:
+            return "live_blog"
+
+    # Official release.
+    for pattern in ("/press-release/", "/press_releases/", "/releases/", "/newsroom/"):
+        if pattern in url_lower:
+            return "official_release"
+    for domain in ("prnewswire.com", "businesswire.com", "globenewswire.com"):
+        if domain in url_lower:
+            return "official_release"
+
+    # Search page.
+    for pattern in ("/search", "/search/", "/query", "/results", "/results/"):
+        if pattern in url_lower:
+            return "search_page"
+    for param in ("?q=", "?search=", "?query="):
+        if param in url_lower:
+            return "search_page"
+
+    # Topic hub.
+    for pattern in (
+        "/topics/",
+        "/topic/",
+        "/category/",
+        "/categories/",
+        "/tag/",
+        "/tags/",
+        "/section/",
+        "/sections/",
+        "/hub/",
+        "/hub",
+    ):
+        if pattern in url_lower:
+            return "topic_hub"
+    registered_domain = _registered_domain(url_lower)
+    if registered_domain in (
+        "reddit.com",
+        "medium.com",
+        "hubspot.com",
+        "forbes.com",
+        "linkedin.com",
+    ):
+        return "topic_hub"
+
+    # Home page.
+    path_match = re.match(r"https?://[^/]+(/.*)?", url_lower)
+    path = path_match.group(1) if path_match else "/"
+    if path in ("/", "/index.html", "/index.htm", "/default.aspx"):
+        return "home_page"
+
+    # Reference page.
+    for pattern in (
+        "/faq",
+        "/faq/",
+        "/help",
+        "/help/",
+        "/support",
+        "/support/",
+        "/terms",
+        "/privacy",
+        "/cookies",
+        "/about",
+        "/about/",
+        "/contact",
+        "/sitemap",
+        "/disclaimer",
+        "/legal",
+    ):
+        if path.endswith(pattern) or path == pattern:
+            return "reference_page"
+
+    return "article"
+
+
+def _registered_domain(url: str) -> str:
+    """Extract registered domain from a URL for heuristic matching."""
+    m = re.match(r"https?://([^/]+)", url)
+    if not m:
+        return ""
+    host = m.group(1).lower()
+    parts = host.split(".")
+    if len(parts) >= 2:
+        return ".".join(parts[-2:])
+    return host
 
 
 def classify_target(url, title="", snippet=""):

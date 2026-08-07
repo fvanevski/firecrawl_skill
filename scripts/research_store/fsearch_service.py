@@ -42,6 +42,21 @@ from .direct_scrape_service import (
 )
 from .domain import SearchAdapterResult, utcnow
 
+try:
+    from candidate_ranking import (
+        DEFAULT_RANKING_POLICY,
+        UrlType,
+        assess_freshness,
+        classify_url,
+        compute_ranking_score,
+    )
+except ImportError:  # pragma: no cover
+    UrlType = None
+    compute_ranking_score = None
+    classify_url = None
+    assess_freshness = None
+    DEFAULT_RANKING_POLICY = None
+
 _MAX_DIAGNOSTIC_CHARS = 500
 _MAX_SEARCH_RESULTS = 100
 _MAX_SCRAPE_COUNT = 20
@@ -552,7 +567,8 @@ class FSearchService:
                 }
             )
 
-        selected = _ordered_candidates(acquisition.candidates)[: request.scrape_limit]
+        ranked_candidates = self._rank_candidates(acquisition.candidates)
+        selected = ranked_candidates[: request.scrape_limit]
         requests = tuple(
             self._scrape_request(candidate, request.profile) for candidate in selected
         )
@@ -592,6 +608,61 @@ class FSearchService:
                 "error": error,
             }
         )
+
+    def _rank_candidates(
+        self, candidates: Sequence[Mapping[str, Any]]
+    ) -> list[Mapping[str, Any]]:
+        """Rank candidates by relevance score with URL-type penalties.
+
+        Returns candidates sorted by computed ranking score descending.
+        """
+        if compute_ranking_score is None or UrlType is None:
+            return _ordered_candidates(candidates)
+
+        scored: list[tuple[float, int, Mapping[str, Any]]] = []
+        for idx, candidate in enumerate(candidates):
+            url = str(
+                candidate.get("original_url")
+                or candidate.get("canonical_url")
+                or candidate.get("url")
+                or ""
+            )
+            title = str(candidate.get("title") or "")
+            snippet = str(
+                candidate.get("snippet") or candidate.get("description") or ""
+            )
+            try:
+                url_type = classify_url(url, title, snippet)
+            except Exception:  # noqa: BLE001
+                url_type = UrlType.ARTICLE
+            try:
+                base_score_raw = candidate.get("rank")
+                base_score = (
+                    float(base_score_raw) if base_score_raw is not None else 0.5
+                )
+                base_score = max(0.0, min(1.0, base_score))
+            except (TypeError, ValueError):
+                base_score = 0.5
+            score = compute_ranking_score(
+                base_score=base_score,
+                url_type=url_type,
+                freshness_status=assess_freshness(
+                    candidate.get("published_at"), utcnow()
+                )[0]
+                if candidate.get("published_at")
+                else assess_freshness(None, utcnow())[0],
+                is_duplicate=bool(candidate.get("duplicate", False)),
+                expected_char_count=candidate.get("expected_char_count"),
+                policy=DEFAULT_RANKING_POLICY,
+            )
+            try:
+                rank_val = float(candidate.get("rank") or 0)
+            except (TypeError, ValueError):
+                rank_val = _MAX_SEARCH_RESULTS
+            scored.append((score.total, rank_val, candidate))
+
+        scored.sort(key=lambda x: (x[0], -x[1]), reverse=True)
+        return [item[2] for item in scored]
 
     def _scrape_request(
         self, candidate: Mapping[str, Any], profile: str | None
