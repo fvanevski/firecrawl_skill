@@ -10,6 +10,7 @@ from .asset_promotion_models import (
     AssetMembershipSealedError,
     AssetPromotionError,
 )
+from .candidate_policy_service import CandidatePolicyError, decision_error_message
 
 DEFAULT_POLICY_VERSION = "completion-membership-v1"
 
@@ -107,7 +108,7 @@ class _AssetPromotionCoreMixin:
         reason_code: str,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        """Apply one legal stage transition with lifecycle CAS metadata."""
+        """Apply one legal stage transition with lifecycle CAS and budget gates."""
         self._require_text(actor_type, "actor_type")
         self._require_text(policy_version, "policy_version")
         self._require_text(reason_code, "reason_code")
@@ -143,10 +144,7 @@ class _AssetPromotionCoreMixin:
             current_stage = str(row[0])
             if current_stage == target_stage:
                 return self._subject_by_id(cursor, subject_id)
-            if (
-                current_stage == "completion_critical"
-                or target_stage == "completion_critical"
-            ):
+            if current_stage == "completion_critical" or target_stage == "completion_critical":
                 cursor.execute(
                     """SELECT 1 FROM run_asset_membership_seals
                         WHERE run_id=%s AND status='sealed'""",
@@ -154,9 +152,20 @@ class _AssetPromotionCoreMixin:
                 )
                 if cursor.fetchone() is not None:
                     raise AssetMembershipSealedError(
-                        "completion membership is sealed; reopen it before "
-                        "changing membership"
+                        "completion membership is sealed; reopen it before changing membership"
                     )
+            if target_stage == "completion_critical":
+                try:
+                    self.candidate_policy_service.require_matching_completion_check(
+                        uow,
+                        cursor,
+                        run_id,
+                        expected_lifecycle_revision,
+                        self.candidate_budget,
+                        include_evidence=True,
+                    )
+                except CandidatePolicyError as exc:
+                    raise AssetPromotionError(str(exc)) from exc
             cursor.execute(
                 """UPDATE run_asset_promotion_subjects
                       SET current_stage=%s,actor_type=%s,actor_identifier=%s,
@@ -213,24 +222,83 @@ class _AssetPromotionCoreMixin:
         actor_identifier: str | None = "IndexCheckpointService",
         policy_version: str = DEFAULT_POLICY_VERSION,
     ) -> AssetMembershipSeal:
-        """Explicitly admit retained assets, then seal exact chunk membership.
+        """Admit retained assets only after an auditable full-set budget check.
 
-        The compatibility policy admits every retained run asset because candidate
-        ranking is outside issue #211. Each promotion commits separately, so an
-        interrupted run resumes from the last durable stage.
+        Retained assets first become ``evidence_eligible``.  The exact proposed
+        evidence set is then checked and persisted. Hard-limit violations fail
+        closed. Soft-limit violations remain blocked until an override tied to
+        that exact check is recorded. Only an accepted check permits promotion
+        to ``completion_critical`` and sealing.
         """
         self._assert_no_unknown_run_assets(run_id)
+
         while True:
-            step = self._advance_one_indexing_admission(
-                run_id,
-                lifecycle_revision=lifecycle_revision,
+            retained = next(
+                (
+                    item
+                    for item in self.list_assets(run_id)
+                    if item.get("id") and item.get("current_stage") == "retained"
+                ),
+                None,
+            )
+            if retained is None:
+                break
+            promoted = self.promote(
+                UUID(str(retained["id"])),
+                "evidence_eligible",
+                expected_lifecycle_revision=lifecycle_revision,
+                expected_run_id=run_id,
                 actor_type=actor_type,
                 actor_identifier=actor_identifier,
                 policy_version=policy_version,
+                reason_code="retained_asset_admitted_as_evidence",
+                reason="Retained asset admitted for candidate-budget evaluation",
             )
-            if step is None:
+            self._after_promotion_step(
+                (UUID(str(promoted["id"])), str(promoted["current_stage"]))
+            )
+
+        try:
+            decision = self.candidate_policy_service.evaluate_completion_admission(
+                run_id,
+                lifecycle_revision,
+                self.candidate_budget,
+            )
+        except CandidatePolicyError as exc:
+            raise AssetPromotionError(str(exc)) from exc
+        if not decision.accepted:
+            raise AssetPromotionError(decision_error_message(decision))
+
+        while True:
+            evidence = next(
+                (
+                    item
+                    for item in self.list_assets(run_id)
+                    if item.get("id")
+                    and item.get("current_stage") == "evidence_eligible"
+                ),
+                None,
+            )
+            if evidence is None:
                 break
-            self._after_promotion_step(step)
+            promoted = self.promote(
+                UUID(str(evidence["id"])),
+                "completion_critical",
+                expected_lifecycle_revision=lifecycle_revision,
+                expected_run_id=run_id,
+                actor_type=actor_type,
+                actor_identifier=actor_identifier,
+                policy_version=policy_version,
+                reason_code="candidate_budget_admitted_to_completion_barrier",
+                reason=(
+                    "Exact proposed completion set passed the persisted candidate "
+                    "budget check or explicit soft-limit override"
+                ),
+            )
+            self._after_promotion_step(
+                (UUID(str(promoted["id"])), str(promoted["current_stage"]))
+            )
+
         return self.seal_completion_membership(
             run_id,
             lifecycle_revision=lifecycle_revision,
@@ -239,7 +307,7 @@ class _AssetPromotionCoreMixin:
             policy_version=policy_version,
             reason_code="completion_membership_sealed",
             reason=(
-                "Exact completion-critical PostgreSQL membership was sealed for "
-                "indexing"
+                "Exact completion-critical PostgreSQL membership was budget-checked "
+                "and sealed for indexing"
             ),
         )
