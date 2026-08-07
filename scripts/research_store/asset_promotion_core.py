@@ -144,7 +144,10 @@ class _AssetPromotionCoreMixin:
             current_stage = str(row[0])
             if current_stage == target_stage:
                 return self._subject_by_id(cursor, subject_id)
-            if current_stage == "completion_critical" or target_stage == "completion_critical":
+            if (
+                current_stage == "completion_critical"
+                or target_stage == "completion_critical"
+            ):
                 cursor.execute(
                     """SELECT 1 FROM run_asset_membership_seals
                         WHERE run_id=%s AND status='sealed'""",
