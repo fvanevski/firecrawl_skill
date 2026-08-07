@@ -3357,10 +3357,21 @@ class TestIndexRebuildRecovery:
         import httpx
 
         with contextlib.suppress(httpx.RequestError, KeyError, ValueError):
-            r = httpx.get("http://localhost:6333/collections", timeout=2.0)
+            r = httpx.get(
+                "http://localhost:6333/collections",
+                timeout=2.0,
+                headers={
+                    "Authorization": f"Bearer {os.environ.get('QDRANT_API_KEY', '')}"
+                },
+            )
             if r.status_code == 200:
                 for c in r.json().get("result", {}).get("collections", []):
-                    httpx.delete(f"http://localhost:6333/collections/{c['name']}")
+                    httpx.delete(
+                        f"http://localhost:6333/collections/{c['name']}",
+                        headers={
+                            "Authorization": f"Bearer {os.environ.get('QDRANT_API_KEY', '')}"
+                        },
+                    )
 
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
         """Every eligible chunk gets a manifest AND a pending job."""
