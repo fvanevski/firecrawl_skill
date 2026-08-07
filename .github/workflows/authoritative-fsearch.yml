@@ -80,7 +80,8 @@ jobs:
             -q \
             -p no:cacheprovider \
             scripts/test_authoritative_fsearch.py \
-            scripts/test_authoritative_fsearch_review.py
+            scripts/test_authoritative_fsearch_review.py \
+            scripts/test_issue_213_search_empty_telemetry.py
           python -m pytest \
             -q \
             -p no:cacheprovider \

@@ -144,6 +144,22 @@ empty-result envelopes as `empty` with `result_count=0`; malformed or unknown
 contracts remain `parse_error`, while HTTP or provider-declared failures remain
 `provider_error`. The existing four search-response statuses are unchanged.
 
+Result aliases are resolved in the established precedence order
+(`data`, `results`, `candidates`, `items`), but an unusable earlier alias does
+not mask a later supported collection. This preserves the pre-#213 compatibility
+path in which, for example, `data: null` can fall through to a valid `results`
+list. Provider-declared no-result envelopes use a stricter rule: every declared
+result alias must itself be a supported empty collection. A nonempty secondary
+collection, or an unusable declared collection beside the no-results marker,
+makes the envelope contract-breaking and therefore `parse_error`; candidate
+material can never be silently discarded as an empty success.
+
+`scripts/test_issue_213_search_empty_telemetry.py` freezes those cross-alias
+contracts together with invocation-status behavior. It is executed by both the
+dedicated audit-regression workflow and the authoritative-fsearch workflow, so
+the issue-specific regression file cannot drift outside CI while the RC-08 and
+RC-09 production-seam tests remain in `test_audit_regression_baseline.py`.
+
 The public orchestrator stage boundary records duration through structured
 logging and relies on each stage's existing PostgreSQL lifecycle transitions and
 append-only events. It does not synthesize `stage:*` provider queries or write

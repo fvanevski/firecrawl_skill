@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from research_store.fsearch_service import (
     FSearchRequest,
     FSearchService,
 )
+from research_store.parsing import parse_raw_search_response
 
 RUN_EXTERNAL_ID = "fr_" + "a" * 32
 
@@ -95,3 +97,89 @@ def test_search_failures_remain_failed_invocations(
     assert caught.value.result is not None
     assert caught.value.result.search_response_id is not None
     assert [terminal for terminal, _kwargs in invocations.completed] == ["failed"]
+
+
+def test_no_results_marker_rejects_nonempty_secondary_collection() -> None:
+    status, count, summary, error = parse_raw_search_response(
+        json.dumps(
+            {
+                "error": "No results found",
+                "data": [],
+                "results": [{"url": "https://example.test/result"}],
+            }
+        )
+    )
+
+    assert status == "parse_error"
+    assert count == 0
+    assert summary["keys"] == ["data", "error", "results"]
+    assert error == (
+        "Provider no-results response violated the supported empty-result contract"
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_status", "expected_count"),
+    [
+        (
+            {
+                "success": True,
+                "data": None,
+                "results": [{"url": "https://example.test/result"}],
+            },
+            "succeeded",
+            1,
+        ),
+        (
+            {"success": True, "data": None, "results": []},
+            "empty",
+            0,
+        ),
+    ],
+)
+def test_result_envelope_falls_through_unusable_earlier_alias(
+    payload: dict,
+    expected_status: str,
+    expected_count: int,
+) -> None:
+    status, count, _summary, error = parse_raw_search_response(json.dumps(payload))
+
+    assert status == expected_status
+    assert count == expected_count
+    assert error is None
+
+
+def test_no_results_marker_requires_every_declared_collection_to_be_valid() -> None:
+    status, count, summary, error = parse_raw_search_response(
+        json.dumps(
+            {
+                "error": "No results found",
+                "data": None,
+                "results": [],
+            }
+        )
+    )
+
+    assert status == "parse_error"
+    assert count == 0
+    assert summary["keys"] == ["data", "error", "results"]
+    assert error == (
+        "Provider no-results response violated the supported empty-result contract"
+    )
+
+
+def test_no_results_marker_accepts_multiple_explicitly_empty_collections() -> None:
+    status, count, summary, error = parse_raw_search_response(
+        json.dumps(
+            {
+                "error": "No results found",
+                "data": [],
+                "results": [],
+            }
+        )
+    )
+
+    assert status == "empty"
+    assert count == 0
+    assert summary == {"result_count": 0, "sample_candidates": []}
+    assert error is None

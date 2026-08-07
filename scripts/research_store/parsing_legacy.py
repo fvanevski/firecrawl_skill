@@ -13,25 +13,41 @@ _LIST = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+")
 _QUOTE = re.compile(r"^\s*>\s?")
 _NO_RESULTS = re.compile(r"^\s*no results found\.?\s*$", re.IGNORECASE)
 _RESULT_KEYS = ("data", "results", "candidates", "items")
+_GROUPED_RESULT_KEYS = ("web", "news", "images")
+
+
+def _result_collection_items(key: str, value: Any) -> list[Any] | None:
+    """Return one supported result collection, or None for an unusable alias."""
+    if isinstance(value, list):
+        return value
+    if key == "data" and isinstance(value, dict):
+        known_sources = set(_GROUPED_RESULT_KEYS)
+        if not set(value).issubset(known_sources):
+            return None
+        if not all(isinstance(source_items, list) for source_items in value.values()):
+            return None
+
+        items: list[Any] = []
+        for source in _GROUPED_RESULT_KEYS:
+            source_items = value.get(source)
+            if isinstance(source_items, list):
+                items.extend(source_items)
+        return items
+    return None
 
 
 def extract_search_response_items(data: Any) -> list[Any]:
-    """Return ordered candidates from supported Firecrawl search envelopes."""
+    """Return ordered candidates from the first supported Firecrawl result alias."""
     if isinstance(data, list):
         return data
     if not isinstance(data, dict):
         return []
 
     for key in _RESULT_KEYS:
-        value = data.get(key)
-        if isinstance(value, list):
-            return value
-        if key == "data" and isinstance(value, dict):
-            items: list[Any] = []
-            for source in ("web", "news", "images"):
-                source_items = value.get(source)
-                if isinstance(source_items, list):
-                    items.extend(source_items)
+        if key not in data:
+            continue
+        items = _result_collection_items(key, data[key])
+        if items is not None:
             return items
     return []
 
@@ -45,13 +61,13 @@ def _is_no_results_message(value: Any) -> bool:
 
 
 def _provider_declared_empty(data: Any) -> bool:
-    """Return whether a JSON provider envelope explicitly declares no results."""
+    """Return whether every declared result collection is valid and empty."""
     if not isinstance(data, dict):
         return False
     message = data.get("error") or data.get("message") or data.get("detail")
     if not _is_no_results_message(message):
         return False
-    if data.get("success") is True or extract_search_response_items(data):
+    if data.get("success") is True:
         return False
 
     found_result_collection = False
@@ -59,16 +75,9 @@ def _provider_declared_empty(data: Any) -> bool:
         if key not in data:
             continue
         found_result_collection = True
-        value = data[key]
-        if isinstance(value, list):
-            continue
-        if key == "data" and isinstance(value, dict):
-            known_sources = {"web", "news", "images"}
-            if set(value).issubset(known_sources) and all(
-                isinstance(source_items, list) for source_items in value.values()
-            ):
-                continue
-        return False
+        items = _result_collection_items(key, data[key])
+        if items is None or items:
+            return False
     return found_result_collection
 
 
@@ -78,19 +87,11 @@ def _has_supported_result_envelope(data: Any) -> bool:
     if not isinstance(data, dict):
         return False
 
-    for key in _RESULT_KEYS:
-        if key not in data:
-            continue
-        value = data[key]
-        if isinstance(value, list):
-            return True
-        if key == "data" and isinstance(value, dict):
-            known_sources = {"web", "news", "images"}
-            return set(value).issubset(known_sources) and all(
-                isinstance(source_items, list) for source_items in value.values()
-            )
-        return False
-    return False
+    return any(
+        _result_collection_items(key, data[key]) is not None
+        for key in _RESULT_KEYS
+        if key in data
+    )
 
 
 def structural_blocks(markdown: str) -> list[Block]:
