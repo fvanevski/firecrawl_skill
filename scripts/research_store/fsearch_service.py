@@ -713,23 +713,17 @@ def build_fsearch_service(
     *,
     search_adapter_factory: Callable[[], Any] = MetadataOnlyFirecrawlSearchAdapter,
 ) -> FSearchService:
-    """Build the authoritative service without constructing Firecrawl early."""
-    from .container import (
-        build_acquisition_service,
-        build_invocation_service,
-        build_run_service,
-    )
+    """Build the policy-complete authoritative fsearch service.
 
-    resolved = config or StoreConfig.from_env()
-    resolved.require_database()
-    return FSearchService(
-        resolved,
-        build_run_service(resolved),
-        build_invocation_service(resolved),
-        acquisition_factory=lambda: build_acquisition_service(
-            resolved, search_adapter=search_adapter_factory()
-        ),
-        direct_scrape_factory=lambda: build_direct_scrape_service(resolved),
+    The implementation is imported lazily to avoid a module-initialization cycle:
+    ``fsearch_policy_service`` subclasses the compatibility service and imports
+    the request/result/CLI helpers defined above.
+    """
+    from .fsearch_policy_service import build_policy_fsearch_service
+
+    return build_policy_fsearch_service(
+        config,
+        search_adapter_factory=search_adapter_factory,
     )
 
 
