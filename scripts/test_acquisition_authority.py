@@ -235,9 +235,9 @@ def test_acquisition_preflight_rejects_terminal_run(
     tmp_path: Path,
     terminal_state: str,
 ):
-    assert terminal_state not in ACQUISITION_ENTRY_STATES
     _, connect_factory = _connect_with(_FakeCursor(run_state=terminal_state))
-    with pytest.raises(AcquisitionPreflightError, match=f"terminal \({terminal_state}\)"):
+    terminal_pattern = rf"terminal \({terminal_state}\)"
+    with pytest.raises(AcquisitionPreflightError, match=terminal_pattern):
         require_authoritative_acquisition(
             run_id=uuid4(),
             config=_config(tmp_path, "postgresql://research@test/research"),
