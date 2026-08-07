@@ -148,8 +148,7 @@ def list_search_responses(
                        sr.raw_blob_sha256,sr.raw_blob_bytes,sr.mime_type,
                        sr.content_sha256,sr.result_count,sr.error_message,
                        sr.idempotency_key,sr.requested_at,sr.responded_at,
-                       sr.created_at,
-                       sr.transport_metadata->>'invocation_id' AS invocation_id
+                       sr.created_at,sr.invocation_id
                 FROM search_responses sr
                 WHERE sr.run_id=%s {where}
                 ORDER BY sr.created_at DESC,sr.id DESC
@@ -201,8 +200,7 @@ def replay_search(
                       sr.mime_type,sr.content_sha256,sr.result_count,
                       sr.error_message,sr.transport_metadata,sr.payload_summary,
                       sr.idempotency_key,sr.requested_at,sr.responded_at,
-                      sr.created_at,
-                      sr.transport_metadata->>'invocation_id' AS invocation_id
+                      sr.created_at,sr.invocation_id
                FROM search_responses sr
                JOIN research_runs r ON r.id=sr.run_id
                WHERE sr.id=%s""",
