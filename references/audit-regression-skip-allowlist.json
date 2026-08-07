@@ -2,18 +2,6 @@
   "schema_version": "pytest-skip-allowlist-v1",
   "entries": [
     {
-      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_08_provider_declared_no_results_are_empty",
-      "reason_contains": "RC-08 tracked by #213",
-      "classification": "audit-regression-expected-failure",
-      "replacement_gate": "Issue #213 remediation"
-    },
-    {
-      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_09_stage_execution_does_not_write_provider_response",
-      "reason_contains": "RC-09 tracked by #213",
-      "classification": "audit-regression-expected-failure",
-      "replacement_gate": "Issue #213 remediation"
-    },
-    {
       "node_id": "scripts/test_audit_regression_baseline.py::test_rc_11_batch_completion_uses_latest_constituent_terminal_time",
       "reason_contains": "RC-11 tracked by #217",
       "classification": "audit-regression-expected-failure",

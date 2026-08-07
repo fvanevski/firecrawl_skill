@@ -2,14 +2,15 @@
 
 ## Purpose
 
-This release-candidate baseline freezes five remaining defects observed during
-the audited run as deterministic strict expected failures. RC-01, RC-02, and
-RC-04 are now ordinary passing regressions after issues #208, #209, and #212
-added the exact PostgreSQL index-job census, the lease-aware drain barrier, and
-explicit direct-acquisition lifecycle boundaries. The remaining entries are
-intentionally test-only: they describe required corrected behavior while
-preserving their current defects until the dedicated remediation issues are
-implemented.
+This release-candidate baseline freezes three remaining defects observed during
+the audited run as deterministic strict expected failures. RC-01, RC-02, RC-04,
+RC-08, and RC-09 are now ordinary passing regressions after issues #208, #209,
+#212, and #213 added the exact PostgreSQL index-job census, the lease-aware
+drain barrier, explicit direct-acquisition lifecycle boundaries, provider
+no-result normalization, and separation of lifecycle-stage telemetry from
+provider search responses. The remaining entries are intentionally test-only:
+they describe required corrected behavior while preserving their current
+defects until the dedicated remediation issues are implemented.
 
 The audited indexing fixture is exact:
 
@@ -23,7 +24,10 @@ the lease-aware drain barrier implemented by issue #209 and records that the
 final 32 manifest completions appear in the observation immediately following
 the first observation with no newly claimed work. RC-04 exercises the
 acquisition preflight, direct wrapper boundary, and normal finish boundary
-remediated by issue #212.
+remediated by issue #212. RC-08 exercises the provider-response parser against
+the exact audited plaintext payload and supported JSON empty-result envelopes.
+RC-09 exercises the public orchestrator stage-execution boundary and verifies
+that lifecycle execution does not write provider-response rows.
 
 ## Finding map
 
@@ -32,16 +36,17 @@ remediated by issue #212.
 | RC-01 | `test_rc_01_exact_index_job_census_preserves_sealed_membership` | The real worker/census boundary reports a mutually exclusive, count-conserving census for the sealed 1,376-member set: 1,344 complete, 32 running-live, zero claimable, and zero in every other census class. | #208 remediated; ordinary passing regression |
 | RC-02 | `test_rc_02_drain_reobserves_final_32_completions` | The real drain boundary reobserves state after the first `claimed=0`; the next observation contains the final 32 completions. | #209 remediated; ordinary passing regression |
 | RC-04 | `test_rc_04_direct_acquisition_obeys_lifecycle_boundaries` | A `created` run is rejected consistently by the authoritative acquisition preflight and direct wrapper operation, and the normal finish boundary cannot bypass preparation, start, persistence, or revision transitions. | #212 remediated; ordinary passing regression |
-| RC-08 | `test_rc_08_provider_declared_no_results_are_empty` | A valid provider-declared no-result payload is an empty successful search, not a provider failure. | #213 |
-| RC-09 | `test_rc_09_stage_execution_does_not_write_provider_response` | Executing a lifecycle stage does not call `record_search_response()` or create provider-response records; lifecycle telemetry must use a separate persistence channel. | #213 |
+| RC-08 | `test_rc_08_provider_declared_no_results_are_empty` | A valid provider-declared no-result payload is an empty successful search, not a provider failure. | #213 remediated; ordinary passing regression |
+| RC-09 | `test_rc_09_stage_execution_does_not_write_provider_response` | Executing a lifecycle stage does not call `record_search_response()` or create provider-response records; lifecycle telemetry must use a separate persistence channel. | #213 remediated; ordinary passing regression |
 | RC-11 | `test_rc_11_batch_completion_uses_latest_constituent_terminal_time` | Batch `completed_at` is the maximum terminal `extraction_attempts.end_time` linked through the exact batch's assets and snapshots, excluding nonterminal attempts and unrelated batches. | #217 |
 | RC-16 | `test_rc_16_zero_blob_verification_is_inconclusive` | Zero eligible or referenced blobs produce an inconclusive result, never a positive integrity proof. | #219 |
 | RC-17 | `test_rc_17_orphans_do_not_fail_referenced_blob_integrity` | Unrelated orphan inventory is reported separately and does not fail healthy referenced-blob integrity. | #220 |
 
-Five controls are ordinary passing tests: exact membership conservation,
-successful classification of a valid nonempty provider response, the remediated
-RC-01 census boundary, the remediated RC-02 drain barrier, and the remediated
-RC-04 lifecycle boundary.
+Passing controls cover exact membership conservation, valid nonempty and empty
+provider responses, distinct malformed/contract-breaking/provider-error
+classification, the remediated RC-01 census boundary, the remediated RC-02 drain
+barrier, the remediated RC-04 lifecycle boundary, and the remediated RC-09
+stage-execution boundary.
 
 ## Remediation-fidelity requirements
 
@@ -60,7 +65,9 @@ boundary-faithful:
 - The RC-04 fixtures execute the real authoritative preflight, direct-operation
   service, and finish boundary while recording lifecycle revision and
   invocation side effects.
-- The RC-09 fixture executes the real
+- The RC-08 fixture executes the production search-response parser using the
+  exact retained `No results found.\n` bytes and supported JSON envelopes.
+- The RC-09 fixture executes the public
   `ResearchOrchestrator._execute_stage()` producer and observes
   provider-response writes directly.
 - The RC-11 relational fake models batch membership, batch assets,
@@ -129,6 +136,35 @@ the append-only start event. `frun seal-acquisition` is the explicit curated
 transition out of acquisition and into exact PostgreSQL membership sealing and
 indexing. No direct command invokes autonomous candidate expansion.
 
+### RC-08/RC-09 search and lifecycle telemetry contract
+
+The immutable raw provider payload is stored before classification. The parser
+recognizes the exact audited plaintext no-result marker and supported JSON
+empty-result envelopes as `empty` with `result_count=0`; malformed or unknown
+contracts remain `parse_error`, while HTTP or provider-declared failures remain
+`provider_error`. The existing four search-response statuses are unchanged.
+
+Result aliases are resolved in the established precedence order
+(`data`, `results`, `candidates`, `items`), but an unusable earlier alias does
+not mask a later supported collection. This preserves the pre-#213 compatibility
+path in which, for example, `data: null` can fall through to a valid `results`
+list. Provider-declared no-result envelopes use a stricter rule: every declared
+result alias must itself be a supported empty collection. A nonempty secondary
+collection, or an unusable declared collection beside the no-results marker,
+makes the envelope contract-breaking and therefore `parse_error`; candidate
+material can never be silently discarded as an empty success.
+
+`scripts/test_issue_213_search_empty_telemetry.py` freezes those cross-alias
+contracts together with invocation-status behavior. It is executed by both the
+dedicated audit-regression workflow and the authoritative-fsearch workflow, so
+the issue-specific regression file cannot drift outside CI while the RC-08 and
+RC-09 production-seam tests remain in `test_audit_regression_baseline.py`.
+
+The public orchestrator stage boundary records duration through structured
+logging and relies on each stage's existing PostgreSQL lifecycle transitions and
+append-only events. It does not synthesize `stage:*` provider queries or write
+stage messages through `record_search_response()`.
+
 ## Strict expected-failure policy
 
 Each unresolved defect test uses
@@ -142,18 +178,21 @@ dedicated workflow until the corresponding remediation PR deliberately:
 2. removes the matching entry from
    `references/audit-regression-skip-allowlist.json`.
 
-Issues #208, #209, and #212 performed both steps for RC-01, RC-02, and RC-04.
-The allowlist remains isolated from the repository-wide skip allowlist so each
-later remediation can remove its classification independently without creating
-stale entries elsewhere.
+Issues #208, #209, #212, and #213 performed both steps for RC-01, RC-02, RC-04,
+RC-08, and RC-09. The allowlist remains isolated from the repository-wide skip
+allowlist so each later remediation can remove its classification independently
+without creating stale entries elsewhere.
 
 ## Change boundary
 
 The RC-01 remediation added an observational PostgreSQL census and worker result
 evidence. The RC-02 remediation added a bounded run-scoped consumer of that
-census and a structured resumable command result. The RC-04 remediation adds
+census and a structured resumable command result. The RC-04 remediation added
 explicit run-mode metadata, direct-acquisition lifecycle commands, and exact
 invocation start provenance using existing PostgreSQL columns and JSONB
-metadata; it adds no database migration and does not infer historical mode or
-state. PostgreSQL remains authoritative, immutable provider payloads remain in
-`BLOB_ROOT`, and Qdrant remains a rebuildable projection.
+metadata. The RC-08/RC-09 remediation adds provider no-result normalization and
+keeps lifecycle-stage observability on existing transition/event/logging
+surfaces. It adds no database migration, does not rewrite historical rows, and
+does not infer missing provenance. PostgreSQL remains authoritative, immutable
+provider payloads remain in `BLOB_ROOT`, and Qdrant remains a rebuildable
+projection.

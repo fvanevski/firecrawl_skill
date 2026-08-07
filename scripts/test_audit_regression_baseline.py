@@ -507,6 +507,29 @@ def test_valid_nonempty_provider_response_remains_successful() -> None:
     assert error is None
 
 
+@pytest.mark.parametrize(
+    ("raw_payload", "http_status", "expected_status"),
+    [
+        (b"{not-json", 200, "parse_error"),
+        (json.dumps({"success": False, "error": "rate limit"}), 200, "provider_error"),
+        (b"\xff\xfe", 503, "provider_error"),
+    ],
+)
+def test_search_response_failures_remain_distinct(
+    raw_payload: bytes | str,
+    http_status: int,
+    expected_status: str,
+) -> None:
+    status, count, _summary, error = parse_raw_search_response(
+        raw_payload,
+        http_status=http_status,
+    )
+
+    assert status == expected_status
+    assert count == 0
+    assert error is not None
+
+
 def test_rc_01_exact_index_job_census_preserves_sealed_membership() -> None:
     sealed_entity_ids = [UUID(int=index + 1) for index in range(AUDITED_TOTAL)]
     repository = _IndexCensusRepository(sealed_entity_ids)
@@ -657,30 +680,34 @@ def test_rc_04_direct_acquisition_obeys_lifecycle_boundaries(
     assert finish_run_service.lifecycle_revision == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="RC-08 tracked by #213: provider-declared no-results must be empty",
+@pytest.mark.parametrize(
+    "raw_payload",
+    [
+        pytest.param(b"No results found.\n", id="audited-plaintext"),
+        pytest.param(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": "No results found",
+                    "data": [],
+                }
+            ),
+            id="generic-json-envelope",
+        ),
+        pytest.param(
+            json.dumps({"success": True, "data": []}),
+            id="successful-empty-envelope",
+        ),
+    ],
 )
-def test_rc_08_provider_declared_no_results_are_empty() -> None:
-    status, count, summary, error = parse_raw_search_response(
-        json.dumps(
-            {
-                "success": False,
-                "error": "No results found",
-                "data": [],
-            }
-        )
-    )
+def test_rc_08_provider_declared_no_results_are_empty(
+    raw_payload: bytes | str,
+) -> None:
+    status, count, summary, error = parse_raw_search_response(raw_payload)
 
     assert (status, count, error) == ("empty", 0, None), summary
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="RC-09 tracked by #213: lifecycle stages must not write provider responses",
-)
 def test_rc_09_stage_execution_does_not_write_provider_response() -> None:
     run_service = _ProviderResponseRecordingRunService()
     orchestrator = object.__new__(ResearchOrchestrator)

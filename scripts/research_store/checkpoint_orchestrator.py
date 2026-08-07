@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 from uuid import UUID
 
@@ -10,6 +12,9 @@ from .checkpoint_indexing_stage import (
     CheckpointIndexingStage,
 )
 from .orchestrator import OrchestratorResult, ResearchOrchestrator
+from .stages import StageResult
+
+logger = logging.getLogger(__name__)
 
 
 class CheckpointResearchOrchestrator(ResearchOrchestrator):
@@ -24,6 +29,47 @@ class CheckpointResearchOrchestrator(ResearchOrchestrator):
                 corpus_service=self.corpus_service,
             )
             self._stages["indexing"] = self._indexing
+
+    def _execute_stage(
+        self,
+        stage_name: str,
+        run_id: UUID,
+        run_revision: int,
+        coverage_revision: int | None,
+        run_state: str,
+        context: dict[str, Any],
+    ) -> StageResult:
+        """Execute a stage without fabricating a provider search response."""
+        stage = self._stages.get(stage_name)
+        if stage is None:
+            return StageResult.failed("unknown", f"unknown stage: {stage_name}")
+
+        start = time.monotonic()
+        result = stage.execute(
+            run_id, run_revision, coverage_revision, run_state, context
+        )
+        duration_ms = int((time.monotonic() - start) * 1000)
+
+        details = dict(result.details or {})
+        details["duration_ms"] = duration_ms
+
+        logger.info(
+            "stage %s: outcome=%s summary=%s duration=%dms",
+            stage_name,
+            result.outcome.value,
+            result.summary,
+            duration_ms,
+        )
+
+        return StageResult(
+            stage=result.stage,
+            outcome=result.outcome,
+            summary=result.summary,
+            details=details,
+            events=result.events,
+            warnings=result.warnings,
+            error=result.error,
+        )
 
     def _failed_result(self, run_id: UUID, error: str) -> OrchestratorResult:
         if error.startswith(INDEX_CHECKPOINT_PENDING_PREFIX):
