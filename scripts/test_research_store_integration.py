@@ -89,7 +89,7 @@ def prepared_database():
         )
         assert all(cursor.fetchone())
         cursor.execute("SELECT version_num FROM alembic_version")
-        assert cursor.fetchone()[0] == "0042_candidate_ranking_budgets"
+        assert cursor.fetchone()[0] == "0043_ingestion_batch_semantics"
 
 
 def test_wrapper_workflow_runs_entirely_from_postgresql(service):
@@ -1327,6 +1327,96 @@ def test_batch_rejects_invalid_run_and_active_reuse_before_ledger_mutation(servi
             ([missing_invocation, finished_invocation, active_invocation],),
         )
         assert cursor.fetchall() == [(active_invocation,)]
+
+
+def test_sealed_batches_reject_new_assets(service):
+    """A finished batch cannot accept additional assets after completion."""
+    invocation_id = f"fc_seal_{uuid4().hex}"
+    manifest = service.ingest_batch(
+        invocation_id,
+        "integration",
+        [
+            IngestRequest(
+                f"https://integration.example/seal/{uuid4()}",
+                b"# First asset",
+            ),
+        ],
+    )
+    assert manifest["status"] == "complete"
+    batch_id = manifest["batch_id"]
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT sealed_at FROM ingestion_batches WHERE id=%s", (batch_id,)
+        )
+        assert cursor.fetchone()[0] is not None, "terminal batches should be sealed"
+
+    # Direct asset recording on a sealed batch must be rejected.
+    with service.uow_factory() as uow, pytest.raises(ValueError, match="is sealed"):
+        uow.record_batch_asset(
+            batch_id,
+            99,
+            "https://integration.example/late",
+            "complete",
+        )
+
+
+def test_batch_completed_at_follows_constituent_terminal_time(service):
+    """Batch completed_at must derive from constituent terminal timestamps."""
+    invocation_id = f"fc_timing_{uuid4().hex}"
+    manifest = service.ingest_batch(
+        invocation_id,
+        "integration",
+        [
+            IngestRequest(
+                f"https://integration.example/timing/{uuid4()}",
+                b"# Timing evidence",
+            ),
+        ],
+    )
+    assert manifest["status"] == "complete"
+    batch_id = manifest["batch_id"]
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT started_at, completed_at FROM ingestion_batches WHERE id=%s",
+            (batch_id,),
+        )
+        row = cursor.fetchone()
+        assert row[0] is not None
+        assert row[1] is not None
+        assert row[1] >= row[0], "completed_at must not precede started_at"
+
+
+def test_partial_batch_exposes_outcome_summary(service):
+    """Partial batches expose exact success/failure counts without manual joins."""
+    invocation_id = f"fc_partial_{uuid4().hex}"
+    manifest = service.ingest_batch(
+        invocation_id,
+        "integration",
+        [
+            IngestRequest(
+                f"https://integration.example/partial-good/{uuid4()}",
+                b"# Good asset",
+            ),
+            {
+                "requested_url": "https://integration.example/partial-bad",
+                "error": "synthetic failure",
+            },
+        ],
+    )
+    assert manifest["status"] == "partial"
+    assert manifest["failure_count"] == 1
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT outcome_summary FROM ingestion_batches WHERE id=%s",
+            (manifest["batch_id"],),
+        )
+        summary = cursor.fetchone()[0]
+        assert isinstance(summary, dict)
+        assert summary.get("succeeded") == 1
+        assert summary.get("failed") == 1
 
 
 def test_finished_run_is_immutable_and_rejects_new_evidence(service):

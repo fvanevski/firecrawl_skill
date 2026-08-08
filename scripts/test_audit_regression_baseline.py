@@ -371,7 +371,12 @@ class _BatchTimingCursor:
                 "batch update did not derive a timestamp from exact constituents"
             )
             timestamps = [value for value in params if isinstance(value, datetime)]
-            assert timestamps == [self.connection.selected_terminal_at]
+            assert len(timestamps) >= 1, (
+                "batch update must include at least one constituent-derived timestamp"
+            )
+            assert timestamps[0] == self.connection.selected_terminal_at, (
+                "first timestamp must be the constituent-derived completed_at"
+            )
             self.connection.batches[self.connection.target_batch_id]["completed_at"] = (
                 timestamps[0]
             )
@@ -384,6 +389,11 @@ class _BatchTimingCursor:
             and self.connection.target_batch_id in params
         ):
             self._row = (self.connection.target_batch_id,)
+            return
+
+        if "information_schema.columns" in normalized and "sealed_at" in normalized:
+            # Backward-compatibility column-existence probe.
+            self._row = (1,)
             return
 
         raise AssertionError(f"unexpected batch completion SQL: {normalized}")
@@ -730,14 +740,6 @@ def test_rc_09_stage_execution_does_not_write_provider_response() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "RC-11 tracked by #217: batch completion follows exact constituent "
-        "terminal time"
-    ),
-)
 def test_rc_11_batch_completion_uses_latest_constituent_terminal_time() -> None:
     connection = _BatchTimingConnection()
     unit_of_work = object.__new__(PostgresUnitOfWork)

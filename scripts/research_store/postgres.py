@@ -3323,7 +3323,7 @@ class PostgresUnitOfWork:
                 batch_id = existing[0]
                 cur.execute(
                     """UPDATE ingestion_batches SET status='running',completed_at=NULL,
-                    error=NULL,metadata=metadata || %s WHERE id=%s""",
+                    error=NULL,sealed_at=NULL,metadata=metadata || %s WHERE id=%s""",
                     (json.dumps(metadata or {}), batch_id),
                 )
             else:
@@ -3348,6 +3348,25 @@ class PostgresUnitOfWork:
             )
             return batch_id
 
+    @staticmethod
+    def _has_sealed_at_column(connection):
+        """Return True if the ingestion_batches table has a sealed_at column."""
+        with connection.cursor() as cur:
+            cur.execute(
+                """SELECT 1 FROM information_schema.columns
+                WHERE table_name='ingestion_batches'
+                  AND column_name='sealed_at'
+                LIMIT 1"""
+            )
+            return cur.fetchone() is not None
+
+    @staticmethod
+    def _load_batch_seal(cur, batch_id):
+        """Return sealed_at for the batch, or None if the column is absent."""
+        cur.execute("SELECT sealed_at FROM ingestion_batches WHERE id=%s", (batch_id,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
     def record_batch_asset(
         self,
         batch_id,
@@ -3358,6 +3377,15 @@ class PostgresUnitOfWork:
         error=None,
         metadata=None,
     ):
+        # Check seal status only when the column exists; skip on pre-migration
+        # schemas to preserve backward compatibility.
+        if self._has_sealed_at_column(self.connection):
+            with self.connection.cursor() as cur:
+                sealed_at = self._load_batch_seal(cur, batch_id)
+                if sealed_at is not None:
+                    raise ValueError(
+                        f"batch {batch_id} is sealed; no new assets may be recorded"
+                    )
         with self.connection.cursor() as cur:
             cur.execute(
                 """INSERT INTO ingestion_batch_assets(
@@ -3383,12 +3411,51 @@ class PostgresUnitOfWork:
             )
 
     def finish_ingestion_batch(self, batch_id, status, error=None):
+        has_seal = self._has_sealed_at_column(self.connection)
         with self.connection.cursor() as cur:
             cur.execute(
-                """UPDATE ingestion_batches SET status=%s,error=%s,completed_at=now()
-                WHERE id=%s""",
-                (status, error, batch_id),
+                """SELECT MAX(ea.end_time) AS terminal_at
+                FROM ingestion_batch_assets iba
+                JOIN asset_snapshots ass ON ass.id = iba.snapshot_id
+                JOIN extraction_attempts ea
+                  ON ea.id = ass.extraction_attempt_id
+                WHERE iba.batch_id = %s
+                  AND ea.exit_status IN ('succeeded','partial','failed','cancelled')
+                  AND ea.end_time IS NOT NULL""",
+                (batch_id,),
             )
+            row = cur.fetchone()
+            terminal_at = row[0] if row else None
+            completed_at = terminal_at or utcnow()
+            if has_seal:
+                sealed_at = utcnow()
+                cur.execute(
+                    """WITH asset_counts AS MATERIALIZED (
+                        SELECT
+                          count(*) FILTER(WHERE status='complete') AS succeeded,
+                          count(*) FILTER(WHERE status='failed')   AS failed
+                        FROM ingestion_batch_assets
+                        WHERE batch_id = %s
+                    )
+                    UPDATE ingestion_batches
+                    SET status=%s, error=%s,
+                        completed_at=%s,
+                        sealed_at=%s,
+                        outcome_summary=jsonb_build_object(
+                            'succeeded', COALESCE(ac.succeeded, 0),
+                            'failed',   COALESCE(ac.failed, 0))
+                    FROM asset_counts ac
+                    WHERE id=%s""",
+                    (batch_id, status, error, completed_at, sealed_at, batch_id),
+                )
+            else:
+                # Pre-migration path: preserve original semantics.
+                cur.execute(
+                    """UPDATE ingestion_batches
+                    SET status=%s, error=%s, completed_at=%s
+                    WHERE id=%s""",
+                    (status, error, completed_at, batch_id),
+                )
 
     def export_invocation(self, invocation_id):
         with self.connection.cursor() as cur:
