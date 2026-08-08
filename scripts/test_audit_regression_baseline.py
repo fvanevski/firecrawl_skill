@@ -24,6 +24,7 @@ from research_store.indexing import IndexWorker
 from research_store.orchestrator import ResearchOrchestrator
 from research_store.parsing_legacy import parse_raw_search_response
 from research_store.postgres import PostgresUnitOfWork
+from research_store.run_service import ResearchRunService
 from research_store.stages import ContextKeys, StageResult
 from research_store.workflow_service import (
     RunIndexProgress,
@@ -691,21 +692,33 @@ def test_rc_11_batch_completion_uses_exact_constituent_start_and_terminal_times(
     assert connection.batches[connection.unrelated_batch_id]["completed_at"] is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="RC-16 tracked by #219: zero eligible blobs must be inconclusive",
-)
-def test_rc_16_zero_blob_verification_is_inconclusive(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    health = _blob_health(monkeypatch, tmp_path, [])
+def test_rc_16_zero_blob_verification_is_inconclusive(tmp_path: Path) -> None:
+    run_id = UUID(int=16)
 
-    assert health.get("ok") is not True, (
-        "zero referenced and zero examined blobs were presented as a positive "
-        "integrity assertion"
-    )
+    class Runs:
+        def list_invocations(self, requested_run_id: UUID) -> list[dict[str, Any]]:
+            assert requested_run_id == run_id
+            return []
+
+    class UnitOfWork:
+        runs = Runs()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    report = ResearchRunService(
+        lambda: UnitOfWork(),
+        blob_store=ContentAddressedBlobStore(tmp_path),
+    ).verify(run_id)
+
+    assert report["status"] == "inconclusive"
+    assert report["total"] == 0
+    assert report["available"] == 0
+    assert report["missing"] == 0
+    assert report["hash_mismatch"] == 0
 
 
 @pytest.mark.xfail(

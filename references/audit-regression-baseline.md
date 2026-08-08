@@ -2,15 +2,16 @@
 
 ## Purpose
 
-This release-candidate baseline freezes three remaining defects observed during
+This release-candidate baseline freezes two remaining defects observed during
 the audited run as deterministic strict expected failures. RC-01, RC-02, RC-04,
-RC-08, and RC-09 are now ordinary passing regressions after issues #208, #209,
-#212, and #213 added the exact PostgreSQL index-job census, the lease-aware
-drain barrier, explicit direct-acquisition lifecycle boundaries, provider
-no-result normalization, and separation of lifecycle-stage telemetry from
-provider search responses. The remaining entries are intentionally test-only:
-they describe required corrected behavior while preserving their current
-defects until the dedicated remediation issues are implemented.
+RC-08, RC-09, and RC-16 are now ordinary passing regressions after issues #208,
+#209, #212, #213, and #219 added the exact PostgreSQL index-job census, the
+lease-aware drain barrier, explicit direct-acquisition lifecycle boundaries,
+provider no-result normalization, separation of lifecycle-stage telemetry from
+provider search responses, and explicit run-level blob-verification outcomes.
+The remaining entries are intentionally test-only: they describe required
+corrected behavior while preserving their current defects until the dedicated
+remediation issues are implemented.
 
 The audited indexing fixture is exact:
 
@@ -27,7 +28,10 @@ acquisition preflight, direct wrapper boundary, and normal finish boundary
 remediated by issue #212. RC-08 exercises the provider-response parser against
 the exact audited plaintext payload and supported JSON empty-result envelopes.
 RC-09 exercises the public orchestrator stage-execution boundary and verifies
-that lifecycle execution does not write provider-response rows.
+that lifecycle execution does not write provider-response rows. RC-16 exercises
+`ResearchRunService.verify()` directly and verifies that zero eligible
+path/hash pairs produce an explicit inconclusive result rather than a positive
+integrity assertion.
 
 ## Finding map
 
@@ -39,14 +43,14 @@ that lifecycle execution does not write provider-response rows.
 | RC-08 | `test_rc_08_provider_declared_no_results_are_empty` | A valid provider-declared no-result payload is an empty successful search, not a provider failure. | #213 remediated; ordinary passing regression |
 | RC-09 | `test_rc_09_stage_execution_does_not_write_provider_response` | Executing a lifecycle stage does not call `record_search_response()` or create provider-response records; lifecycle telemetry must use a separate persistence channel. | #213 remediated; ordinary passing regression |
 | RC-11 | `test_rc_11_batch_completion_uses_latest_constituent_terminal_time` | Batch `completed_at` is the maximum terminal `extraction_attempts.end_time` linked through the exact batch's assets and snapshots, excluding nonterminal attempts and unrelated batches. | #217 |
-| RC-16 | `test_rc_16_zero_blob_verification_is_inconclusive` | Zero eligible or referenced blobs produce an inconclusive result, never a positive integrity proof. | #219 |
+| RC-16 | `test_rc_16_zero_blob_verification_is_inconclusive` | Zero eligible or referenced blobs produce an inconclusive result, never a positive integrity proof. | #219 remediated; ordinary passing regression |
 | RC-17 | `test_rc_17_orphans_do_not_fail_referenced_blob_integrity` | Unrelated orphan inventory is reported separately and does not fail healthy referenced-blob integrity. | #220 |
 
 Passing controls cover exact membership conservation, valid nonempty and empty
 provider responses, distinct malformed/contract-breaking/provider-error
 classification, the remediated RC-01 census boundary, the remediated RC-02 drain
-barrier, the remediated RC-04 lifecycle boundary, and the remediated RC-09
-stage-execution boundary.
+barrier, the remediated RC-04 lifecycle boundary, the remediated RC-09
+stage-execution boundary, and the remediated RC-16 run-verifier boundary.
 
 ## Remediation-fidelity requirements
 
@@ -74,6 +78,10 @@ boundary-faithful:
   snapshot-to-attempt linkage, terminal-state filtering, unrelated rows, and
   the exact timestamp aggregation. It does not accept SQL merely because it
   contains `MAX`, `GREATEST`, or a datetime parameter.
+- The RC-16 fixture executes `ResearchRunService.verify()` with an empty
+  invocation set and a real `ContentAddressedBlobStore`, proving the zero-object
+  behavior at the production verifier boundary rather than at the neighboring
+  doctor/blob-health boundary.
 
 A remediation is complete only when the corresponding assertion passes because
 the responsible production behavior changed. A neighboring fix must not make a
@@ -165,6 +173,35 @@ logging and relies on each stage's existing PostgreSQL lifecycle transitions and
 append-only events. It does not synthesize `stage:*` provider queries or write
 stage messages through `record_search_response()`.
 
+### RC-16 run-verifier contract
+
+`ResearchRunService.verify()` examines only invocation-output `snapshot` and
+`artifacts` values that contain both a `path` and expected `sha256`. Each such
+eligible pair contributes to exactly one integrity class: `available` when the
+content-addressed blob exists and verifies, `missing` when the expected digest
+is absent from `BLOB_ROOT`, or `hash_mismatch` when the digest path exists but
+its bytes do not hash to the expected value. Therefore
+`total == available + missing + hash_mismatch` for every report.
+
+The structured status is `inconclusive` when `total == 0`, `failed` when any
+eligible pair is missing or hash-mismatched, and `passed` only when at least one
+eligible pair was examined and all are available. File-only legacy paths remain
+`file_based_unverified`; they do not create a positive integrity proof and do
+not make a zero-eligible report conclusive.
+
+For backward compatibility, the CLI exit code is not itself the integrity
+verdict. Conclusive `passed` and `failed` reports retain exit code `0`;
+`inconclusive` exits `1` by default; and `--allow-empty` changes only an
+inconclusive result to exit `0`. Automation that needs integrity truth must read
+the JSON `status` and detailed counters rather than infer it from exit code
+alone.
+
+`scripts/test_issue_219_verifier_inconclusive.py` covers zero eligible objects,
+all-valid objects, a referenced-but-absent blob, a present-but-corrupt blob,
+mixed classes, legacy file-only references, and the stable CLI exit-code
+mapping. The dedicated audit-regression workflow executes this suite on Python
+3.11 and 3.12.
+
 ## Strict expected-failure policy
 
 Each unresolved defect test uses
@@ -178,10 +215,10 @@ dedicated workflow until the corresponding remediation PR deliberately:
 2. removes the matching entry from
    `references/audit-regression-skip-allowlist.json`.
 
-Issues #208, #209, #212, and #213 performed both steps for RC-01, RC-02, RC-04,
-RC-08, and RC-09. The allowlist remains isolated from the repository-wide skip
-allowlist so each later remediation can remove its classification independently
-without creating stale entries elsewhere.
+Issues #208, #209, #212, #213, and #219 performed both steps for RC-01, RC-02,
+RC-04, RC-08, RC-09, and RC-16. The allowlist remains isolated from the
+repository-wide skip allowlist so each later remediation can remove its
+classification independently without creating stale entries elsewhere.
 
 ## Change boundary
 
@@ -192,7 +229,9 @@ explicit run-mode metadata, direct-acquisition lifecycle commands, and exact
 invocation start provenance using existing PostgreSQL columns and JSONB
 metadata. The RC-08/RC-09 remediation adds provider no-result normalization and
 keeps lifecycle-stage observability on existing transition/event/logging
-surfaces. It adds no database migration, does not rewrite historical rows, and
-does not infer missing provenance. PostgreSQL remains authoritative, immutable
-provider payloads remain in `BLOB_ROOT`, and Qdrant remains a rebuildable
-projection.
+surfaces. RC-16 adds a structured run-verifier outcome plus disjoint
+available/missing/hash-mismatch accounting over invocation-referenced immutable
+blobs; it does not change database schema, infer historical provenance, consult
+Qdrant for integrity, or implement the independent doctor-domain work reserved
+for RC-17/#220. PostgreSQL remains authoritative, immutable provider payloads
+remain in `BLOB_ROOT`, and Qdrant remains a rebuildable projection.

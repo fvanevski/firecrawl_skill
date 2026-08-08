@@ -1026,8 +1026,8 @@ class ResearchRunService:
             run_id: Research run UUID.
 
         Returns:
-            Verification report with available, missing, hash_mismatch,
-            and file_based counts.
+            Verification report with status (passed/failed/inconclusive),
+            disjoint available, missing, hash_mismatch, and file_based counts.
         """
         with self.uow_factory() as uow:
             # Get all invocations for this run
@@ -1040,31 +1040,33 @@ class ResearchRunService:
             artifacts = []
 
             def _check_artifact(inv_id, artifact):
-                """Recursively check an artifact for path/hash pairs."""
+                """Recursively classify an artifact path/hash pair."""
                 nonlocal total, available, missing, hash_mismatch, file_based
                 if isinstance(artifact, dict):
                     path = artifact.get("path")
                     expected_hash = artifact.get("sha256")
                     if path and expected_hash:
                         total += 1
-                        if self.blob_store and self.blob_store.verify(expected_hash):
+                        store = self.blob_store
+                        exists = getattr(store, "exists", None) if store else None
+                        if store is None or (
+                            callable(exists) and not exists(expected_hash)
+                        ):
+                            missing += 1
+                            state = "missing"
+                        elif store.verify(expected_hash):
                             available += 1
-                            artifacts.append(
-                                {
-                                    "invocation_id": str(inv_id),
-                                    "path": path,
-                                    "state": "available",
-                                }
-                            )
+                            state = "available"
                         else:
                             hash_mismatch += 1
-                            artifacts.append(
-                                {
-                                    "invocation_id": str(inv_id),
-                                    "path": path,
-                                    "state": "hash_mismatch",
-                                }
-                            )
+                            state = "hash_mismatch"
+                        artifacts.append(
+                            {
+                                "invocation_id": str(inv_id),
+                                "path": path,
+                                "state": state,
+                            }
+                        )
                     elif path:
                         # File-based snapshot without hash — cannot verify
                         file_based += 1
@@ -1100,9 +1102,21 @@ class ResearchRunService:
                         if artifact is not None:
                             _check_artifact(inv["id"], artifact)
 
+            # Determine verification status:
+            # - inconclusive: no eligible path/hash pairs were examined
+            # - passed: all eligible pairs are available
+            # - failed: at least one eligible pair is missing or hash-mismatched
+            if total == 0:
+                status = "inconclusive"
+            elif missing > 0 or hash_mismatch > 0:
+                status = "failed"
+            else:
+                status = "passed"
+
             return {
                 "target": str(run_id),
                 "verified_at": datetime.now(timezone.utc).isoformat(),
+                "status": status,
                 "total": total,
                 "available": available,
                 "missing": missing,

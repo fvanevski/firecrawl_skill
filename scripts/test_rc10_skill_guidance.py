@@ -293,7 +293,7 @@ def test_skill_describes_verify_as_blob_integrity_reporting_only() -> None:
         "invocation output `results`",
         "`snapshot` or `artifacts`",
         "It does not validate terminal state",
-        "`total: 0` and exit status `0`",
+        "inconclusive",
         "it is not evidence that the run completed or passed",
     ):
         assert required in section
@@ -332,6 +332,7 @@ def test_verify_allows_zero_total_report_without_completion_evidence() -> None:
     report = service.verify(run_uuid)
 
     assert report["target"] == str(run_uuid)
+    assert report["status"] == "inconclusive"
     assert report["total"] == 0
     assert report["available"] == 0
     assert report["missing"] == 0

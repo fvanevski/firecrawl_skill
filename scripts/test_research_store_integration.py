@@ -2794,15 +2794,15 @@ def test_run_annotate_handler_executes_through_service(monkeypatch, capsys):
     assert status["state"] == "created"
 
 
-def test_run_verify_handler_executes_through_service(monkeypatch, capsys):
-    """Verify that research-db run-verify actually invokes the service method.
+def test_run_verify_handler_returns_inconclusive_without_blob_root(monkeypatch, capsys):
+    """Verify that research-db run-verify returns inconclusive without blob store.
 
-    Exercises the verify handler path to ensure it returns a valid report
-    even when no blob store is configured (total=0 case).
+    Exercises the verify handler path to ensure it returns an explicit
+    inconclusive status when no blob store is configured (total=0 case).
     """
     external_id = f"fr_verify_{uuid4().hex}"
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-    # No BLOB_ROOT configured — verify should return total=0 report
+    # No BLOB_ROOT configured — verify should return inconclusive
     monkeypatch.delenv("BLOB_ROOT", raising=False)
 
     # Start a run
@@ -2820,15 +2820,245 @@ def test_run_verify_handler_executes_through_service(monkeypatch, capsys):
     )
     capsys.readouterr()  # discard run-start output
 
-    # Verify the run
-    assert store_cli.main(["run-verify", external_id]) == 0
+    # Verify the run — should exit nonzero for inconclusive
+    assert store_cli.main(["run-verify", external_id]) == 1
     result = json.loads(capsys.readouterr().out)
     assert "target" in result
     assert "verified_at" in result
+    assert result["status"] == "inconclusive"
     assert result["total"] == 0
     assert result["available"] == 0
-    # N4: file_based_unverified field should be present
     assert "file_based_unverified" in result
+
+
+def test_run_verify_handler_allows_empty_flag(monkeypatch, capsys):
+    """Verify that --allow-empty exits 0 for inconclusive results."""
+    external_id = f"fr_verify_empty_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.delenv("BLOB_ROOT", raising=False)
+
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Verify allow-empty test",
+                "--mode",
+                "deterministic_debug",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    # With --allow-empty, inconclusive should exit 0
+    assert store_cli.main(["run-verify", "--allow-empty", external_id]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "inconclusive"
+
+
+def test_run_verify_service_passed_status(monkeypatch):
+    """Unit test: verify returns passed when all blobs are available."""
+    from research_store.run_service import ResearchRunService
+
+    run_uuid = UUID(int=1)
+    test_digest = "a" * 64
+
+    class MockBlobStore:
+        def verify(self, digest):
+            return digest == test_digest
+
+    class Runs:
+        def list_invocations(self, run_id):
+            return [
+                {
+                    "id": "inv1",
+                    "output": {
+                        "results": [
+                            {
+                                "snapshot": {
+                                    "path": "/blob/" + test_digest,
+                                    "sha256": test_digest,
+                                }
+                            }
+                        ]
+                    },
+                }
+            ]
+
+    class UnitOfWork:
+        runs = Runs()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    service = ResearchRunService(lambda: UnitOfWork(), blob_store=MockBlobStore())
+    report = service.verify(run_uuid)
+
+    assert report["status"] == "passed"
+    assert report["total"] == 1
+    assert report["available"] == 1
+    assert report["hash_mismatch"] == 0
+
+
+def test_run_verify_service_failed_status(monkeypatch):
+    """Unit test: verify returns failed when a blob hash mismatches."""
+    from research_store.run_service import ResearchRunService
+
+    run_uuid = UUID(int=2)
+    test_digest = "b" * 64
+
+    class MockBlobStore:
+        def verify(self, digest):
+            return False  # All verifications fail
+
+    class Runs:
+        def list_invocations(self, run_id):
+            return [
+                {
+                    "id": "inv1",
+                    "output": {
+                        "results": [
+                            {
+                                "snapshot": {
+                                    "path": "/blob/" + test_digest,
+                                    "sha256": test_digest,
+                                }
+                            }
+                        ]
+                    },
+                }
+            ]
+
+    class UnitOfWork:
+        runs = Runs()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    service = ResearchRunService(lambda: UnitOfWork(), blob_store=MockBlobStore())
+    report = service.verify(run_uuid)
+
+    assert report["status"] == "failed"
+    assert report["total"] == 1
+    assert report["available"] == 0
+    assert report["hash_mismatch"] == 1
+
+
+def test_run_verify_service_mixed_status(monkeypatch):
+    """Unit test: verify returns failed when some blobs mismatch."""
+    from research_store.run_service import ResearchRunService
+
+    run_uuid = UUID(int=3)
+    good_digest = "c" * 64
+    bad_digest = "d" * 64
+
+    class MockBlobStore:
+        def verify(self, digest):
+            return digest == good_digest
+
+    class Runs:
+        def list_invocations(self, run_id):
+            return [
+                {
+                    "id": "inv1",
+                    "output": {
+                        "results": [
+                            {
+                                "snapshot": {
+                                    "path": "/blob/" + good_digest,
+                                    "sha256": good_digest,
+                                }
+                            },
+                            {
+                                "artifacts": [
+                                    {
+                                        "path": "/blob/" + bad_digest,
+                                        "sha256": bad_digest,
+                                    }
+                                ]
+                            },
+                        ]
+                    },
+                }
+            ]
+
+    class UnitOfWork:
+        runs = Runs()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    service = ResearchRunService(lambda: UnitOfWork(), blob_store=MockBlobStore())
+    report = service.verify(run_uuid)
+
+    assert report["status"] == "failed"
+    assert report["total"] == 2
+    assert report["available"] == 1
+    assert report["hash_mismatch"] == 1
+
+
+def test_run_verify_handler_with_available_blob(monkeypatch, capsys, tmp_path):
+    """Integration test: verify exits 0 for inconclusive without --allow-empty."""
+    external_id = f"fr_verify_blob_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    blob_root = str(tmp_path / "blobs")
+    os.makedirs(blob_root)
+    monkeypatch.setenv("BLOB_ROOT", blob_root)
+
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Verify blob test",
+                "--mode",
+                "deterministic_debug",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    # Without invocation output containing snapshots, verify is inconclusive
+    assert store_cli.main(["run-verify", external_id]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "inconclusive"
+
+
+def test_run_verify_handler_with_missing_blob(monkeypatch, capsys, tmp_path):
+    """Integration test: verify exits nonzero when no blob store is present."""
+    external_id = f"fr_verify_missing_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.delenv("BLOB_ROOT", raising=False)
+
+    assert (
+        store_cli.main(
+            [
+                "run-start",
+                external_id,
+                "Verify missing blob test",
+                "--mode",
+                "deterministic_debug",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    # Without any blob store, verify is inconclusive
+    assert store_cli.main(["run-verify", external_id]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "inconclusive"
 
 
 def test_run_audit_handler_executes_through_service(monkeypatch, capsys):

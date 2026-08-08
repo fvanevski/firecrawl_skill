@@ -394,6 +394,12 @@ def parser():
     run_verify = sub.add_parser("run-verify")
     run_verify.add_argument("external_id")
     run_verify.add_argument("--output", default="-")
+    run_verify.add_argument(
+        "--allow-empty",
+        action="store_true",
+        default=False,
+        help="Exit 0 even when verification is inconclusive (no eligible objects)",
+    )
     run_audit = sub.add_parser("run-audit")
     run_audit.add_argument("external_id")
     run_audit.add_argument("--target-hash")
@@ -2717,6 +2723,11 @@ def main(argv=None):
                 json.dump(result, f, indent=2, sort_keys=True)
                 f.write("\n")
             print(dumps({"status": "written", "path": f.name}))
+        # Inconclusive means no eligible artifacts were examined;
+        # default to nonzero exit so automation cannot mistake total=0
+        # for a successful integrity proof. Use --allow-empty to opt out.
+        if result["status"] == "inconclusive" and not args.allow_empty:
+            return 1
         return 0
     if args.command == "run-audit":
         run_service = build_run_service(config)
