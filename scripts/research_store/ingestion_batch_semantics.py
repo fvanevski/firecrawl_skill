@@ -1,7 +1,7 @@
 """Issue #217 authoritative ingestion-batch contract.
 
 The repository already uses explicit package-level production extension points
-for release-candidate corrections (see ``research_store.__init__``).  This
+for release-candidate corrections (see ``research_store.__init__``). This
 module installs the RC-11/RC-12/RC-13 contract on those canonical classes while
 keeping PostgreSQL as the only lifecycle, provenance, timing, and exact
 membership authority.
@@ -20,7 +20,7 @@ New v43 batches are strict:
 
 Pre-v43 schemas retain their legacy timing semantics without ever referencing
 v43-only columns, which keeps rolling code deployment compatible with revision
-0042.  Historical promotion rows remain unknown unless PostgreSQL contains an
+0042. Historical promotion rows remain unknown unless PostgreSQL contains an
 explicit promotion event.
 """
 
@@ -31,11 +31,9 @@ from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-_TERMINAL_EXTRACTION_STATES = frozenset(
-    {"succeeded", "partial", "failed", "cancelled"}
-)
+_TERMINAL_EXTRACTION_STATES = frozenset({"succeeded", "partial", "failed", "cancelled"})
 
 _ORIGINAL_PROMOTION_LIST_ASSETS = None
 
@@ -173,6 +171,21 @@ def _record_batch_asset(
                 "constituent timing columns"
             )
         if has_attempt and has_timing:
+            # A raw repository-level direct member has no separate extraction
+            # attempt. In that narrow case, recording the authoritative member
+            # is itself the observed constituent event, so a zero-duration
+            # interval at the recording instant is truthful. CorpusService
+            # supplies the richer prepare/persist interval for ordinary direct
+            # ingestion; extraction-backed members always derive timing from
+            # their exact extraction attempt instead.
+            if extraction_attempt_id is None and (
+                constituent_started_at is None or constituent_completed_at is None
+            ):
+                from .domain import utcnow
+
+                observed_at = utcnow()
+                constituent_started_at = constituent_started_at or observed_at
+                constituent_completed_at = constituent_completed_at or observed_at
             cur.execute(
                 """INSERT INTO ingestion_batch_assets(
                        batch_id,ordinal,requested_url,status,source_id,snapshot_id,
@@ -660,7 +673,7 @@ def _get_trace(self, execution_id):
     )
     with self.connection.cursor() as cur:
         cur.execute(
-            f"""SELECT {','.join(fields)}
+            f"""SELECT {",".join(fields)}
                   FROM retrieval_events
                  WHERE retrieval_execution_id=%s
                  ORDER BY created_at,
@@ -814,8 +827,14 @@ def _corpus_finalize_ingestion_batch(
 
 def _manifest_ordinal(raw_ordinal: int, metadata: Mapping[str, Any]) -> int:
     firecrawl = metadata.get("firecrawl")
-    result_index = firecrawl.get("result_index") if isinstance(firecrawl, Mapping) else None
-    return result_index if isinstance(result_index, int) and result_index >= 0 else raw_ordinal
+    result_index = (
+        firecrawl.get("result_index") if isinstance(firecrawl, Mapping) else None
+    )
+    return (
+        result_index
+        if isinstance(result_index, int) and result_index >= 0
+        else raw_ordinal
+    )
 
 
 def _bounded_extraction_execute(
@@ -919,7 +938,9 @@ def _bounded_extraction_execute(
                     )
                     bounded._apply_preflight_metadata(metadata, outcome)
                 else:
-                    provider_metadata = extract_response_metadata(json.loads(provider_data))
+                    provider_metadata = extract_response_metadata(
+                        json.loads(provider_data)
+                    )
                     request = IngestRequest(
                         requested_url=str(requested_url),
                         final_url=provider_metadata.get("url")
@@ -968,7 +989,9 @@ def _bounded_extraction_execute(
                 )[:500],
                 error_message=bounded._audit_message(outcome),
                 end_time=(
-                    provider_result.responded_at if provider_result is not None else None
+                    provider_result.responded_at
+                    if provider_result is not None
+                    else None
                 ),
             )
             terminalized = True
@@ -1088,7 +1111,9 @@ def _bounded_extraction_execute(
             normalized_blob=attempt["normalized_blob"],
             parser_used=self.config.parser_version if succeeded else None,
             failure_class=(
-                "none" if succeeded else bounded._extraction_failure_class(asset.get("error"))
+                "none"
+                if succeeded
+                else bounded._extraction_failure_class(asset.get("error"))
             ),
             http_status=attempt["metadata"].get("firecrawl", {}).get("status_code"),
             backend_status=asset.get("status"),
@@ -1171,7 +1196,7 @@ def _bounded_extraction_execute(
                 run_id,
                 "indexing",
                 expected_revision=run_revision,
-                idempotency_key=f"stage:extraction_done:{run_id}:{UUID(int=0)}:{wave_count}",
+                idempotency_key=f"stage:extraction_done:{run_id}:{uuid4()}",
                 actor_type="orchestrator",
                 actor_identifier="BoundedExtractionStage",
                 triggering_event="run.indexing",
@@ -1185,7 +1210,7 @@ def _bounded_extraction_execute(
                 run_id,
                 "coverage_review",
                 expected_revision=run_revision,
-                idempotency_key=f"stage:extraction_empty:{run_id}:{UUID(int=0)}:{wave_count}",
+                idempotency_key=f"stage:extraction_empty:{run_id}:{uuid4()}",
                 actor_type="orchestrator",
                 actor_identifier="BoundedExtractionStage",
                 triggering_event="run.coverage_review",
@@ -1262,7 +1287,9 @@ def install_issue_217_contract(postgres_module, service_module, bounded_module) 
     uow.get_trace = _get_trace
 
     service_module.CorpusService.ingest_batch = _corpus_ingest_batch
-    service_module.CorpusService.finalize_ingestion_batch = _corpus_finalize_ingestion_batch
+    service_module.CorpusService.finalize_ingestion_batch = (
+        _corpus_finalize_ingestion_batch
+    )
     bounded_module.BoundedExtractionStage.execute = _bounded_extraction_execute
 
     from .asset_promotion_service import AssetPromotionService
