@@ -424,28 +424,35 @@ if (( START_WORKER )) && (( doctor_rc != 0 )); then
 fi
 
 jq -e '
-  .schema.at_head == true
-  and .blobs.ok == true
-  and .blobs.referenced == 0
-  and (.blobs.missing_or_corrupt | length) == 0
-  and (.blobs.unreferenced | length) == 0
-  and .qdrant.ok == true
-  and .qdrant.query_embedding_compatible == true
-  and .qdrant.coverage.missing == 0
-  and .qdrant.coverage.orphaned == 0
-  and .index_reconcile.ok == true
-  and .index_reconcile.total_active_chunks == 0
-  and .index_reconcile.definitions == 1
-  and (.index_reconcile.discrepancies | length) == 0
-  and .valkey.ok == true
-  and .embedding.ok == true
-  and .reranker.ok == true
+  .schema_version == "doctor-diagnostics-v1"
+  and .schema.at_head == true
+  and .postgres_authority.status == "pass"
+  and .referenced_blob_integrity.status == "pass"
+  and .referenced_blob_integrity.referenced == 0
+  and (.referenced_blob_integrity.missing_or_corrupt | length) == 0
+  and .unreferenced_blob_inventory.status == "pass"
+  and .unreferenced_blob_inventory.orphan_count == 0
+  and (.unreferenced_blob_inventory.unreferenced | length) == 0
+  and .qdrant_projection.status == "pass"
+  and .qdrant_projection.query_embedding_compatible == true
+  and .qdrant_projection.coverage.missing == 0
+  and .qdrant_projection.coverage.orphaned == 0
+  and .index_job_health.status == "pass"
+  and .index_job_health.total_active_chunks == 0
+  and .index_job_health.definitions == 1
+  and (.index_job_health.discrepancies | length) == 0
+  and .environment_connectivity.status == "pass"
+  and .environment_connectivity.components.valkey.status == "pass"
+  and .environment_connectivity.components.embedding.status == "pass"
+  and .environment_connectivity.components.reranker.status == "pass"
 ' <<<"$doctor_json" >/dev/null ||
   die "final doctor report did not satisfy the clean-state contract"
 
 if (( START_WORKER )); then
-  jq -e '.worker.current_worker_available == true' \
-    <<<"$doctor_json" >/dev/null ||
+  jq -e '
+    .worker_health.status == "pass"
+    and .worker_health.current_worker_available == true
+  ' <<<"$doctor_json" >/dev/null ||
     die "doctor does not report an available persistent worker"
 fi
 
@@ -485,9 +492,9 @@ PostgreSQL:
   corpus rows: 0
 
 Qdrant:
-  alias:      $(jq -r '.qdrant.alias' <<<"$doctor_json")
-  collection: $(jq -r '.qdrant.collection' <<<"$doctor_json")
-  dimension:  $(jq -r '.embedding.dimension' <<<"$doctor_json")
+  alias:      $(jq -r '.qdrant_projection.alias' <<<"$doctor_json")
+  collection: $(jq -r '.qdrant_projection.collection' <<<"$doctor_json")
+  dimension:  $(jq -r '.environment_connectivity.components.embedding.dimension' <<<"$doctor_json")
   points:     0
 
 Valkey:

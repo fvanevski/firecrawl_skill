@@ -5,4 +5,9 @@ if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env
   source "$SCRIPT_DIR/research-env"
 fi
 RESEARCH_PYTHON="${FIRECRAWL_RESEARCH_PYTHON:-python3}"
+if [[ "${1:-}" == "doctor" ]]; then
+  shift
+  exec env PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    "$RESEARCH_PYTHON" -m research_store.doctor_command "$@"
+fi
 exec env PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$RESEARCH_PYTHON" -m research_store.cli "$@"

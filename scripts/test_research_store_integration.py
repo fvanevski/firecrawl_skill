@@ -4687,9 +4687,9 @@ class TestIndexRebuildRecovery:
         )
         _index_build(config)
         checks, _failed = _doctor(config)
-        assert "index_reconcile" in checks
-        assert checks["index_reconcile"]["ok"] is True
-        assert checks["index_reconcile"]["total_active_chunks"] >= 1
+        assert "index_job_health" in checks
+        assert checks["index_job_health"]["status"] == "pass"
+        assert checks["index_job_health"]["total_active_chunks"] >= 1
 
     def test_index_reconcile_repair_flag(self, service):
         """Repair manifest/job discrepancies through an explicit rebuild."""

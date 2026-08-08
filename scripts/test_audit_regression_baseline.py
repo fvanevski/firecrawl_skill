@@ -721,11 +721,6 @@ def test_rc_16_zero_blob_verification_is_inconclusive(tmp_path: Path) -> None:
     assert report["hash_mismatch"] == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="RC-17 tracked by #220: orphan inventory must not fail referenced integrity",
-)
 def test_rc_17_orphans_do_not_fail_referenced_blob_integrity(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -740,9 +735,100 @@ def test_rc_17_orphans_do_not_fail_referenced_blob_integrity(
         [(UUID(int=2), referenced.sha256)],
     )
 
-    assert orphan.sha256 in health["unreferenced"]
+    assert orphan.sha256 in health["unreferenced_inventory"]
     assert health["missing_or_corrupt"] == []
-    assert health["ok"] is True, (
+    assert health["integrity"] == "pass", (
         "an unrelated orphan blob invalidated otherwise healthy referenced-blob "
         "integrity"
     )
+    assert health["orphan_count"] == 1
+
+
+def test_rc_17_connectivity_failure_classifies_network_policy_denial() -> None:
+    from research_store.cli import _classify_connectivity_failure
+
+    exc = PermissionError("Operation not permitted")
+    result = _classify_connectivity_failure(exc)
+    assert result["status"] == "failure"
+    assert result["reason_code"] == "network_policy_denial"
+
+
+def test_rc_17_connectivity_failure_classifies_server_unavailable() -> None:
+    from research_store.cli import _classify_connectivity_failure
+
+    exc = ConnectionRefusedError("Connection refused")
+    result = _classify_connectivity_failure(exc)
+    assert result["status"] == "failure"
+    assert result["reason_code"] == "server_unavailable"
+
+
+def test_rc_17_connectivity_failure_classifies_credential_failure() -> None:
+    from research_store.cli import _classify_connectivity_failure
+
+    exc = RuntimeError("authentication failed: invalid password")
+    result = _classify_connectivity_failure(exc)
+    assert result["status"] == "failure"
+    assert result["reason_code"] == "credential_failure"
+
+
+def test_rc_17_connectivity_failure_classifies_network_namespace_denial() -> None:
+    from research_store.cli import _classify_connectivity_failure
+
+    exc = OSError("No route to host")
+    result = _classify_connectivity_failure(exc)
+    assert result["status"] == "failure"
+    assert result["reason_code"] == "network_namespace_denial"
+
+
+def test_rc_17_connectivity_failure_classifies_database_rejection() -> None:
+    from research_store.cli import _classify_connectivity_failure
+
+    exc = RuntimeError("database connection failed: psycopg error")
+    result = _classify_connectivity_failure(exc)
+    assert result["status"] == "failure"
+    assert result["reason_code"] == "database_rejection"
+
+
+def test_rc_17_connectivity_failure_classifies_query_runtime_failure() -> None:
+    from research_store.cli import _classify_connectivity_failure
+
+    exc = RuntimeError("unexpected query runtime error")
+    result = _classify_connectivity_failure(exc)
+    assert result["status"] == "failure"
+    assert result["reason_code"] == "query_runtime_failure"
+
+
+def test_rc_17_orphan_inventory_is_separate_domain_from_integrity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Orphan blobs are reported in their own domain without affecting integrity."""
+    store = ContentAddressedBlobStore(tmp_path)
+    referenced = store.put(BytesIO(b"referenced payload"))
+    orphan = store.put(BytesIO(b"unrelated orphan payload"))
+
+    health = _blob_health(
+        monkeypatch,
+        tmp_path,
+        [(UUID(int=2), referenced.sha256)],
+    )
+
+    assert health["integrity"] == "pass"
+    assert health["missing_or_corrupt"] == []
+    assert len(health["unreferenced_inventory"]) == 1
+    assert health["orphan_count"] == 1
+    assert orphan.sha256 in health["unreferenced_inventory"]
+
+
+def test_rc_17_sandbox_denial_not_reported_as_database_failure() -> None:
+    from research_store.cli import _classify_connectivity_failure
+
+    sandbox_exc = PermissionError("Operation not permitted")
+    db_exc = RuntimeError("database connection failed: psycopg error")
+
+    sandbox_result = _classify_connectivity_failure(sandbox_exc)
+    db_result = _classify_connectivity_failure(db_exc)
+
+    assert sandbox_result["reason_code"] == "network_policy_denial"
+    assert db_result["reason_code"] == "database_rejection"
+    assert sandbox_result["reason_code"] != db_result["reason_code"]
