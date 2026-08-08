@@ -15,7 +15,7 @@ fi
 "$SCRIPT_DIR/research-db" ingest-ready >/dev/null
 
 usage() {
-  cat >&2 <<'EOF'
+  cat >&2 <<'USAGE'
 Usage:
   frun start <objective> [--run-mode autonomous|curated]
        [--mode agent_led|autonomous_local|deterministic_debug]
@@ -34,10 +34,11 @@ Usage:
   frun annotate <fr_id> --type pivot|retry|decision --reason TEXT
   frun status <fr_id>
   frun verify <fr_id>
+  frun integrity <fr_id> [--output FILE]
   frun audit <fr_id> [audit options]
   frun audit-status <fr_id>
   frun compare <fr_id> [fr_id ...]
-EOF
+USAGE
   exit 2
 }
 
@@ -198,6 +199,28 @@ print(data["run_mode"], int(data.get("next_action") == "resume index checkpoint"
   verify)
     shift
     exec "$SCRIPT_DIR/research-db" run-verify "$@"
+    ;;
+  integrity)
+    shift
+    run_id="${1:-}"
+    [[ -n "$run_id" ]] || usage
+    shift
+    output=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --output)
+          [[ $# -ge 2 ]] || { echo "ERROR: --output requires a value" >&2; exit 2; }
+          output="$2"
+          shift 2
+          ;;
+        *) echo "ERROR: unknown integrity option: $1" >&2; exit 2 ;;
+      esac
+    done
+    if [[ -z "$output" ]]; then
+      safe_run_id="${run_id//[^A-Za-z0-9_.-]/_}"
+      output="./${safe_run_id}.integrity.json"
+    fi
+    exec "$SCRIPT_DIR/research-db" integrity "$run_id" --output "$output"
     ;;
   audit)
     shift
