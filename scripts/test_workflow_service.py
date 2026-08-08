@@ -325,3 +325,80 @@ def test_failed_finish_uses_permitted_path_from_created():
         "planning",
         "failed",
     ]
+
+
+def test_finish_rejects_missing_source_manifest_hash():
+    service = WorkflowServiceHarness(state="indexing")
+    with pytest.raises(WorkflowBoundaryError, match="source_manifest_sha256"):
+        service.finish_run(
+            service.fake_run_service.external_id,
+            outcome="satisfied",
+            answer_sha256="b" * 64,
+        )
+
+
+def test_finish_rejects_missing_answer_hash():
+    service = WorkflowServiceHarness(state="indexing")
+    with pytest.raises(WorkflowBoundaryError, match="answer_sha256"):
+        service.finish_run(
+            service.fake_run_service.external_id,
+            outcome="satisfied",
+            source_manifest_sha256="a" * 64,
+        )
+
+
+def test_finish_rejects_external_provenance_type():
+    service = WorkflowServiceHarness(state="indexing")
+    with pytest.raises(WorkflowBoundaryError, match="provenance_type"):
+        service.finish_run(
+            service.fake_run_service.external_id,
+            outcome="satisfied",
+            source_manifest_sha256="a" * 64,
+            answer_sha256="b" * 64,
+            provenance_type="external",
+        )
+
+
+def test_finish_rejects_provisional_provenance_type():
+    service = WorkflowServiceHarness(state="indexing")
+    with pytest.raises(WorkflowBoundaryError, match="provenance_type"):
+        service.finish_run(
+            service.fake_run_service.external_id,
+            outcome="satisfied",
+            source_manifest_sha256="a" * 64,
+            answer_sha256="b" * 64,
+            provenance_type="provisional",
+        )
+
+
+def test_finish_accepts_authoritative_provenance_type():
+    service = WorkflowServiceHarness(state="indexing")
+    result = service.finish_run(
+        service.fake_run_service.external_id,
+        outcome="satisfied",
+        source_manifest_sha256="a" * 64,
+        answer_sha256="b" * 64,
+        provenance_type="authoritative",
+    )
+    assert result.state == "completed"
+
+
+def test_partial_finish_does_not_require_hashes():
+    """Partial outcome is reserved for intentional incomplete research."""
+    service = WorkflowServiceHarness(state="coverage_review")
+    result = service.finish_run(
+        service.fake_run_service.external_id,
+        outcome="partial",
+    )
+    assert result.state == "partial"
+
+
+def test_failed_finish_does_not_require_hashes():
+    """Failed outcome does not require synthesis provenance."""
+    service = WorkflowServiceHarness(state="indexing")
+    result = service.finish_run(
+        service.fake_run_service.external_id,
+        outcome="infrastructure lag",
+        status_name="failed",
+    )
+    assert result.state == "failed"

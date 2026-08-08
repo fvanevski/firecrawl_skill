@@ -158,7 +158,46 @@ def test_wrapper_workflow_runs_entirely_from_postgresql(service):
             (created.id,),
         )
 
-    finished = workflow.finish_run(external_run_id, outcome="satisfied")
+    # Insert a validation synthesis stage so completion gates pass.
+    now = _utcnow()
+    stage_id = uuid4()
+    with service.uow_factory() as uow:
+        uow.insert_synthesis_stage(
+            {
+                "id": stage_id,
+                "run_id": created.id,
+                "stage_name": "validation",
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "local",
+                "prompt_version": "synthesis-v1",
+                "schema_version": 1,
+                "artifact": {
+                    "report_hash": "test-hash",
+                    "current_packet_revision": 1,
+                    "stale_packet": False,
+                    "validation_status": "valid",
+                    "is_complete": True,
+                    "claim_manifest": [],
+                    "validation_errors_count": 0,
+                    "validation_warnings_count": 0,
+                    "summary": "All claims supported.",
+                },
+                "error": None,
+                "attempts": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    finished = workflow.finish_run(
+        external_run_id,
+        outcome="satisfied",
+        source_manifest_sha256="a" * 64,
+        answer_sha256="b" * 64,
+    )
     assert finished.state == "completed"
     assert finished.declared_outcome == "satisfied"
     assert finished.lifecycle_revision == 9
@@ -2864,6 +2903,43 @@ def _seed_completed_indexed_asset(service, external_run_id):
         )
 
 
+def _seed_validation_synthesis_stage(service, external_run_id):
+    """Persist a completed validation synthesis stage for the run."""
+    run_id = build_run_service(service.config).status(external_id=external_run_id).id
+    now = _utcnow()
+    stage_id = uuid4()
+    with service.uow_factory() as uow:
+        uow.insert_synthesis_stage(
+            {
+                "id": stage_id,
+                "run_id": run_id,
+                "stage_name": "validation",
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "local",
+                "prompt_version": "synthesis-v1",
+                "schema_version": 1,
+                "artifact": {
+                    "report_hash": "test-hash",
+                    "current_packet_revision": 1,
+                    "stale_packet": False,
+                    "validation_status": "valid",
+                    "is_complete": True,
+                    "claim_manifest": [],
+                    "validation_errors_count": 0,
+                    "validation_warnings_count": 0,
+                    "summary": "All claims supported.",
+                },
+                "error": None,
+                "attempts": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+
 def test_run_finish_handler_executes_through_service(monkeypatch, capsys, service):
     """Verify that research-db run-finish actually invokes the service method.
 
@@ -2889,6 +2965,7 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys, servic
     )
     capsys.readouterr()  # discard run-start output
     _seed_completed_indexed_asset(service, external_id)
+    _seed_validation_synthesis_stage(service, external_id)
 
     # Advance through all states to validating (required before completed)
     svc = build_run_service()
@@ -2910,7 +2987,7 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys, servic
         )
         revision += 1
 
-    # Finish the run
+    # Finish the run with required provenance hashes
     assert (
         store_cli.main(
             [
@@ -2918,6 +2995,10 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys, servic
                 external_id,
                 "--outcome",
                 "satisfied",
+                "--source-manifest-sha256",
+                "a" * 64,
+                "--answer-sha256",
+                "b" * 64,
             ]
         )
         == 0
@@ -2959,6 +3040,7 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
     )
     capsys.readouterr()  # discard run-start output
     _seed_completed_indexed_asset(service, external_id)
+    _seed_validation_synthesis_stage(service, external_id)
 
     # Advance through all states to validating (required before completed)
     svc = build_run_service()
@@ -2980,7 +3062,7 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
         )
         revision += 1
 
-    # Finish the run with a unique idempotency key
+    # Finish the run with a unique idempotency key and required hashes
     finish_key = f"finish-idem:complete:{external_id}"
     assert (
         store_cli.main(
@@ -2989,6 +3071,10 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
                 external_id,
                 "--outcome",
                 "satisfied",
+                "--source-manifest-sha256",
+                "a" * 64,
+                "--answer-sha256",
+                "b" * 64,
                 "--idempotency-key",
                 finish_key,
             ]
@@ -3009,6 +3095,10 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
                 external_id,
                 "--outcome",
                 "satisfied",
+                "--source-manifest-sha256",
+                "a" * 64,
+                "--answer-sha256",
+                "b" * 64,
                 "--idempotency-key",
                 finish_key,
             ]
@@ -3044,6 +3134,7 @@ def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
     )
     capsys.readouterr()  # discard run-start output
     _seed_completed_indexed_asset(service, external_id)
+    _seed_validation_synthesis_stage(service, external_id)
 
     # Advance through all states to validating (required before completed)
     svc = build_run_service()
@@ -3065,7 +3156,7 @@ def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
         )
         revision += 1
 
-    # Finish the run
+    # Finish the run with required provenance hashes
     assert (
         store_cli.main(
             [
@@ -3073,6 +3164,10 @@ def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
                 external_id,
                 "--outcome",
                 "satisfied",
+                "--source-manifest-sha256",
+                "a" * 64,
+                "--answer-sha256",
+                "b" * 64,
             ]
         )
         == 0

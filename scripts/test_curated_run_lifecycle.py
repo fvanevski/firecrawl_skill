@@ -249,8 +249,18 @@ def test_curated_four_asset_flow_completes_without_smart_expansion():
     assert first_seal["expected_asset_count"] == 4
     assert promotions.prepare_calls == 2
 
-    first_finish = service.finish(runs.external_id, outcome="satisfied")
-    second_finish = service.finish(runs.external_id, outcome="satisfied")
+    first_finish = service.finish(
+        runs.external_id,
+        outcome="satisfied",
+        source_manifest_sha256="a" * 64,
+        answer_sha256="b" * 64,
+    )
+    second_finish = service.finish(
+        runs.external_id,
+        outcome="satisfied",
+        source_manifest_sha256="a" * 64,
+        answer_sha256="b" * 64,
+    )
     assert first_finish.run.state == second_finish.run.state == "completed"
     assert service.resume(runs.external_id)["next_action"] == "none"
     assert runs.transitions == [
