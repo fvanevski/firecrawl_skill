@@ -1,5 +1,6 @@
 """Persistent research asset store for the Firecrawl skill."""
 
+from . import acquisition_service as _acquisition_service
 from . import orchestrator as _orchestrator
 from . import run_service as _run_service
 from . import workflow_service as _workflow_service
@@ -8,7 +9,10 @@ from .acquisition_authority import (
     AuthoritativeAcquisitionContext,
     require_authoritative_acquisition,
 )
-from .acquisition_service import AcquisitionService, FirecrawlSearchAdapter
+from .acquisition_service import AcquisitionService
+from .blob import ContentAddressedBlobStore
+from .bounded_acquisition import BoundedFirecrawlSearchAdapter
+from .bounded_orchestrator import BoundedAcquisitionStage, BoundedExtractionStage
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
 from .config import StoreConfig
 from .direct_scrape_service import (
@@ -36,6 +40,11 @@ from .extraction_repository import ExtractionAttemptRepository
 from .extraction_service import ExtractionError, ExtractionService
 from .lifecycle_guard import GuardedResearchRunService
 from .orchestrator import OrchestratorConfig, OrchestratorResult
+from .provider_preflight import (
+    CandidatePreflightChecker,
+    CandidatePreflightResult,
+    ExtractionDeadlinePolicy,
+)
 from .quality_config import QualityConfig
 from .quality_evaluator import evaluate_quality
 from .quality_service import QualityEvaluationError, QualityService
@@ -55,6 +64,17 @@ _workflow_service.ResearchRunService = GuardedResearchRunService
 _orchestrator.ResearchOrchestrator = CheckpointResearchOrchestrator
 ResearchOrchestrator = CheckpointResearchOrchestrator
 
+# Issue #216 canonical provider/stage routing.  ``AcquisitionService`` resolves
+# its default adapter from the module global at construction time, and
+# ``ResearchOrchestrator.__init__`` resolves its stage classes the same way.
+# Rebinding those established extension points keeps every public builder,
+# checkpoint orchestrator, and smart-resume subclass on the bounded production
+# seam without duplicating lifecycle or transaction machinery.
+_acquisition_service.FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
+FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
+_orchestrator.AcquisitionStage = BoundedAcquisitionStage
+_orchestrator.ExtractionStage = BoundedExtractionStage
+
 __all__ = [
     "VALID_NORMALIZATION_DISPOSITIONS",
     "VALID_NORMALIZATION_RULE_IDS",
@@ -62,6 +82,9 @@ __all__ = [
     "AcquisitionService",
     "AuthoritativeAcquisitionContext",
     "BlobReference",
+    "CandidatePreflightChecker",
+    "CandidatePreflightResult",
+    "ContentAddressedBlobStore",
     "ContextKeys",
     "CorpusService",
     "DirectScrapeBatchResult",
@@ -73,6 +96,7 @@ __all__ = [
     "ExecutionModePolicy",
     "ExtractionAttempt",
     "ExtractionAttemptRepository",
+    "ExtractionDeadlinePolicy",
     "ExtractionError",
     "ExtractionQualityMetrics",
     "ExtractionService",

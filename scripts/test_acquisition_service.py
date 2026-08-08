@@ -124,8 +124,9 @@ def test_firecrawl_search_adapter_success_runner():
     assert res.http_status == 200
     assert res.transport_error is None
     assert res.raw_payload == payload
-    assert "--scrape" in commands[0]
-    assert commands[0][commands[0].index("--scrape-formats") + 1] == "markdown"
+    assert commands[0][1] == "search"
+    assert "--scrape" not in commands[0]
+    assert "--scrape-formats" not in commands[0]
 
 
 def test_firecrawl_direct_scrape_is_wrapped_as_real_candidate():

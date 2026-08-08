@@ -81,3 +81,10 @@ desktop.ini
 opencode.json
 AGENTS.md
 QWEN.md
+
+# --- Serena MCP Server ---
+# Semantic code-understanding workspace; generated caches and local overrides
+# are ignored. Canonical project config (project.yml) and its .gitignore are
+# preserved so the project remains activatable on checkout.
+.serena/cache/
+.serena/project.local.yml
