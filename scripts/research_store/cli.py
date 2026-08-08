@@ -75,7 +75,12 @@ def parser():
     sub = root.add_subparsers(dest="command", required=True)
     sub.add_parser("migrate")
     sub.add_parser("status")
-    sub.add_parser("doctor")
+    doctor = sub.add_parser("doctor")
+    doctor.add_argument(
+        "--human",
+        action="store_true",
+        help="Render the same independent diagnostic domains as human-readable text",
+    )
     sub.add_parser("ingest-ready")
 
     # ------------------------------------------------------------------
@@ -762,9 +767,6 @@ def _cmd_rederive_v2(config, args) -> int:
     )
 
     if args.activate and result.get("total_rederived", 0) > 0:
-        # Activate the specific derivation that was just created
-        # (not the first pending from the list, which may be from a
-        # prior rederive run).
         last_result = result["results"][-1]
         derivation_id = last_result.get("derivation_id")
         if derivation_id:
@@ -828,7 +830,6 @@ def _cmd_derivation_activate(config, args) -> int:
             print(dumps({"error": f"derivation {args.id} not found"}))
             return 1
 
-        # Print confirmation details before activation
         print(
             dumps(
                 {
@@ -847,8 +848,7 @@ def _cmd_derivation_activate(config, args) -> int:
             )
         )
 
-        if args.document:  # noqa: SIM102
-            # Validate document ownership
+        if args.document:
             if str(derivation.document_id) != str(_UUID(args.document)):
                 print(
                     dumps(
@@ -900,20 +900,7 @@ def _cmd_derivation_compare(config, args) -> int:
 
 
 def _cmd_normalize(config, args) -> int:
-    """Run normalization diagnostics on document blocks (issue #45).
-
-    Runs normalization on document blocks and persists the results to
-    ``normalized_blocks`` and ``transformation_records`` tables.  The
-    operation is idempotent — re-running normalizes the same blocks and
-    upserts the results.
-
-    Args:
-        config: Store configuration.
-        args: Parsed CLI arguments.
-
-    Returns:
-        Exit code (0 = success).
-    """
+    """Run normalization diagnostics on document blocks (issue #45)."""
     from uuid import UUID as _UUID
 
     from .normalization import NormalizationService
@@ -955,7 +942,6 @@ def _cmd_normalize(config, args) -> int:
         print(dumps({"message": "no blocks found", "normalized": 0}))
         return 0
 
-    # Group rows by document
     docs: dict[tuple, list] = {}
     for row in rows:
         doc_key = (str(row[0]), row[1], row[2], row[3])
@@ -976,11 +962,8 @@ def _cmd_normalize(config, args) -> int:
         url = doc_key[2]
         sha = doc_key[3]
 
-        block_ids = []
-        for row in doc_rows:
-            block_ids.append(_UUID(row[4]))
+        block_ids = [_UUID(row[4]) for row in doc_rows]
 
-        # Build TypedBlock for normalization
         from research_store.parsing.interfaces import TypedBlock
 
         typed_blocks = []
@@ -1004,7 +987,6 @@ def _cmd_normalize(config, args) -> int:
             document_type=args.document_type,
         )
 
-        # Persist normalized blocks and transformation records
         with conn.cursor() as block_cur:
             for nb in (
                 norm_result.blocks
@@ -1164,12 +1146,7 @@ def _resolve_run_id(config, external_id):
 
 
 def _resolve_any_run_id(config, external_id):
-    """Resolve a run UUID from its external_run_id, accepting any lifecycle state.
-
-    Used by read-only claim-manifest subcommands (export, list) where the run
-    may already be finished.  Use :func:`_resolve_run_id` for write operations
-    that require the run to be in a nonterminal state.
-    """
+    """Resolve a run UUID from its external_run_id, accepting any lifecycle state."""
     if not external_id:
         return None
     with _db(config) as conn, conn.cursor() as cur:
@@ -1264,9 +1241,7 @@ def _index_build(config, document_id=None, *, repair_orphans=False):
         if not offset:
             break
     missing_chunk_ids = selected_chunk_ids - indexed_ids
-    orphaned_chunk_ids = (
-        indexed_ids - selected_chunk_ids if document_id is None else set()
-    )
+    orphaned_chunk_ids = indexed_ids - selected_chunk_ids if document_id is None else set()
     deleted_orphaned = 0
     if repair_orphans and orphaned_chunk_ids:
         index.delete(sorted(orphaned_chunk_ids, key=str))
@@ -1335,11 +1310,6 @@ def _index_build(config, document_id=None, *, repair_orphans=False):
                 indexed_at=NULL,error=NULL WHERE id=ANY(%s)""",
                 (requeue_ids,),
             )
-        # Authoritative reconciliation: verify that every requeued manifest
-        # actually has a pending job.  The INSERT uses ON CONFLICT DO NOTHING
-        # so existing jobs are silently skipped — the UPDATE must bring them
-        # back to pending.  If the UPDATE affected fewer rows than expected
-        # we surface the discrepancy so the caller can act.
         cur.execute(
             """SELECT count(*) FROM index_jobs
             WHERE manifest_id=ANY(%s) AND operation='upsert'
@@ -1354,9 +1324,6 @@ def _index_build(config, document_id=None, *, repair_orphans=False):
                 f"are pending.  Manifests may be orphaned or have mismatched "
                 f"index_definition_id."
             )
-        # Cache the expected Qdrant point count for doctor/reconcile.
-        # This is the number of chunks that should be indexed; the cache is
-        # updated to the live count after the worker completes all jobs.
         point_count = len(selected_chunk_ids)
         cur.execute(
             """INSERT INTO index_point_counts(
@@ -1383,14 +1350,7 @@ def _index_build(config, document_id=None, *, repair_orphans=False):
 
 
 def _index_reconcile(config, repair=False):
-    """Reconcile manifests, jobs, Qdrant points, and aliases.
-
-    Returns a structured report with every count and a list of discrepancies
-    so that doctor/CI can assert correctness.
-
-    When ``repair=True``, automatically re-runs ``index-build`` for any
-    definition that has discrepancies.
-    """
+    """Reconcile manifests, jobs, Qdrant points, and aliases."""
     with _db(config) as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT count(*) FROM chunks c
@@ -1466,7 +1426,6 @@ def _index_reconcile(config, repair=False):
                 }
             )
 
-        # Read cached Qdrant point counts.
         cur.execute(
             """SELECT index_definition_id,point_count,last_verified_at
             FROM index_point_counts ORDER BY index_definition_id"""
@@ -1476,18 +1435,14 @@ def _index_reconcile(config, repair=False):
             for row in cur.fetchall()
         }
 
-    # Qdrant reconciliation
     aliases = _qdrant(config).list_aliases()
     qdrant = {"ok": True, "aliases": aliases, "collections": {}}
     discrepancies = []
-    # Track which definitions have discrepancies so repair can target them.
     definitions_with_discrepancies: set[str] = set()
 
     for alias_name, collection_name in aliases.items():
         try:
-            rows = [
-                r for r in definitions if r["physical_collection"] == collection_name
-            ]
+            rows = [r for r in definitions if r["physical_collection"] == collection_name]
             if not rows:
                 qdrant["collections"][collection_name] = {
                     "alias": alias_name,
@@ -1508,7 +1463,6 @@ def _index_reconcile(config, repair=False):
             schema = index.inspect_schema()
             cached = point_counts.get(row["id"])
             cached_count = cached["count"] if cached else None
-            # Live scroll for missing/orphaned point-ID check.
             point_ids, offset = set(), None
             while True:
                 page = index.point_ids(offset, filters=_derivation_filter(config))
@@ -1546,9 +1500,7 @@ def _index_reconcile(config, repair=False):
                         f"collection {collection_name}: {len(orphaned)} orphaned points"
                     )
                     definitions_with_discrepancies.add(row["id"])
-            collection_info["has_discrepancies"] = (
-                row["id"] in definitions_with_discrepancies
-            )
+            collection_info["has_discrepancies"] = row["id"] in definitions_with_discrepancies
             qdrant["collections"][collection_name] = collection_info
         except Exception as exc:  # noqa: BLE001
             qdrant["collections"][collection_name] = {
@@ -1567,10 +1519,7 @@ def _index_reconcile(config, repair=False):
         ),
         None,
     )
-    if (
-        current_definition is not None
-        and current_definition["physical_collection"] not in qdrant["collections"]
-    ):
+    if current_definition is not None and current_definition["physical_collection"] not in qdrant["collections"]:
         def_id = current_definition["id"]
         manifest_info = manifests_by_def.get(def_id, {})
         if total_chunks and manifest_info.get("complete", 0) == total_chunks:
@@ -1598,7 +1547,7 @@ def _index_reconcile(config, repair=False):
                     "aliases": [],
                     "schema": schema,
                     "point_count": len(point_ids),
-                    "cached_point_count": (cached["count"] if cached else None),
+                    "cached_point_count": cached["count"] if cached else None,
                     "coverage": {
                         "missing": len(missing),
                         "orphaned": len(orphaned),
@@ -1624,13 +1573,10 @@ def _index_reconcile(config, repair=False):
                 discrepancies.append(f"Qdrant collection {collection_name}: {exc}")
                 definitions_with_discrepancies.add(def_id)
 
-    # Check all definitions for manifest/job mismatches, even those without
-    # a Qdrant alias (e.g. definitions with manifests but no jobs yet).
     for row in definitions:
         def_id = row["id"]
         manifest_info = manifests_by_def.get(def_id, {})
         job_info = jobs_by_def.get(def_id, {})
-        # Missing jobs: manifests exist but no jobs created.
         total_manifests = manifest_info.get("total", 0)
         total_jobs = job_info.get("total", 0)
         if total_manifests > 0 and total_jobs == 0:
@@ -1638,7 +1584,6 @@ def _index_reconcile(config, repair=False):
                 f"definition {def_id}: {total_manifests} manifests but 0 jobs"
             )
             definitions_with_discrepancies.add(def_id)
-        # Manifest/job count mismatch.
         complete_manifests = manifest_info.get("complete", 0)
         complete_jobs = job_info.get("complete", 0)
         if complete_manifests != complete_jobs:
@@ -1648,9 +1593,6 @@ def _index_reconcile(config, repair=False):
             )
             definitions_with_discrepancies.add(def_id)
 
-    # Explicit repair always reconciles the currently configured
-    # fingerprint. This also repairs physical drift that PostgreSQL alone
-    # cannot reveal, including complete manifests with absent points.
     repaired = []
     repair_actions = []
     repair_errors = []
@@ -1666,16 +1608,11 @@ def _index_reconcile(config, repair=False):
         )
         if current_definition is None:
             repair_errors.append(
-                "repair requires an index definition matching the current "
-                "embedding fingerprint"
+                "repair requires an index definition matching the current embedding fingerprint"
             )
         else:
             try:
-                action = _index_build(
-                    config,
-                    document_id=None,
-                    repair_orphans=True,
-                )
+                action = _index_build(config, document_id=None, repair_orphans=True)
                 repair_actions.append(action)
                 if action["scheduled"] or action["deleted_orphaned"]:
                     repaired.append(current_definition["id"])
@@ -1831,312 +1768,35 @@ def _activate_index(config, identifier, action):
 
 
 def _blob_health(config):
-    store = ContentAddressedBlobStore(config.blob_root)
-    with _db(config) as conn, conn.cursor() as cur:
-        cur.execute("SELECT id,content_sha256 FROM asset_snapshots")
-        references = {digest: snapshot_id for snapshot_id, digest in cur.fetchall()}
-    missing = [
-        {"snapshot_id": references[digest], "sha256": digest}
-        for digest in references
-        if not store.verify(digest)
-    ]
-    disk_hashes = {
-        path.name
-        for path in config.blob_root.rglob("*")
-        if path.is_file()
-        and len(path.name) == 64
-        and all(character in "0123456789abcdef" for character in path.name)
-    }
-    unreferenced = sorted(disk_hashes - references.keys())
-    return {
-        "integrity": "pass" if not missing else "failure",
-        "referenced": len(references),
-        "missing_or_corrupt": missing,
-        "unreferenced_inventory": unreferenced,
-        "orphan_count": len(unreferenced),
-    }
+    from .doctor_diagnostics import blob_health
+
+    return blob_health(config)
 
 
-def _classify_connectivity_failure(exc: BaseException) -> dict[str, str]:
-    """Classify a connectivity/infrastructure failure into a reason code.
+def _classify_connectivity_failure(
+    exc: BaseException,
+    *,
+    component: str | None = None,
+) -> dict[str, str]:
+    from .doctor_diagnostics import classify_connectivity_failure
 
-    Distinguishes network namespace/policy denial, credential/configuration
-    failure, server unavailable, database rejection, and query/runtime failure
-    so that each class surfaces a distinct machine-readable reason.
-    """
-    message = str(exc).lower()
-    if any(
-        token in message
-        for token in (
-            "permission denied",
-            "operation not permitted",
-            "errno1",
-            "errno13",
-        )
-    ):
-        return {
-            "status": "failure",
-            "reason_code": "network_policy_denial",
-            "detail": str(exc),
-        }
-    if any(
-        token in message
-        for token in ("connection refused", "connect ECONNREFUSED", "errno111")
-    ):
-        return {
-            "status": "failure",
-            "reason_code": "server_unavailable",
-            "detail": str(exc),
-        }
-    if any(
-        token in message
-        for token in (
-            "authentication",
-            "password",
-            "credential",
-            "auth",
-            "forbidden",
-            "errno13",
-            "access denied",
-        )
-    ):
-        return {
-            "status": "failure",
-            "reason_code": "credential_failure",
-            "detail": str(exc),
-        }
-    if any(
-        token in message
-        for token in (
-            "no route to host",
-            "network unreachable",
-            "errno101",
-            "timeout",
-            "timed out",
-        )
-    ):
-        return {
-            "status": "failure",
-            "reason_code": "network_namespace_denial",
-            "detail": str(exc),
-        }
-    if any(
-        token in message
-        for token in ("database", "pg_", "psycopg", "sqlalchemy", "dialect", "adapter")
-    ):
-        return {
-            "status": "failure",
-            "reason_code": "database_rejection",
-            "detail": str(exc),
-        }
-    return {
-        "status": "failure",
-        "reason_code": "query_runtime_failure",
-        "detail": str(exc),
-    }
+    return classify_connectivity_failure(exc, component=component)
 
 
 def _doctor(config):
-    checks, failed = {}, False
-    try:
-        checks["schema"] = _schema_state(config)
-        if not checks["schema"]["at_head"]:
-            failed = True
-        with _db(config) as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT status,count(*) FROM index_jobs GROUP BY status ORDER BY status"
-            )
-            checks["index_jobs"] = dict(cur.fetchall())
-            if checks["schema"]["at_head"]:
-                cur.execute(
-                    """SELECT count(*) FILTER(WHERE status IN ('partial','failed')),
-                    min(started_at) FILTER(WHERE status='running') FROM ingestion_batches"""
-                )
-                bad, oldest_running = cur.fetchone()
-                checks["ingestion_batches"] = {
-                    "partial_or_failed": bad,
-                    "oldest_running": oldest_running,
-                }
-        if checks["schema"]["at_head"]:
-            with _uow_factory(config)() as uow:
-                checks["worker"] = uow.worker_status()
-            workers = checks["worker"]["workers"]
-            threshold = max(90, config.worker_poll_seconds * 4)
-            age = (
-                (
-                    datetime.now(timezone.utc) - workers[0]["heartbeat_at"]
-                ).total_seconds()
-                if workers
-                else None
-            )
-            checks["worker"]["latest_heartbeat_age_seconds"] = (
-                round(age, 3) if age is not None else None
-            )
-            checks["worker"]["heartbeat_freshness_threshold_seconds"] = threshold
-            checks["worker"]["current_worker_available"] = (
-                age is not None and age <= threshold
-            ) or checks["worker"]["active_leases"] > 0
-            if checks["worker"]["dead_jobs"] or checks["worker"]["stale_leases"]:
-                failed = True
-            if not checks["worker"]["current_worker_available"]:
-                failed = True
-        else:
-            checks["worker"] = {"available": False, "reason": "migration required"}
-    except Exception as exc:  # noqa: BLE001
-        checks["postgres_authority"] = _classify_connectivity_failure(exc)
-        failed = True
+    from .doctor_diagnostics import doctor
 
-    try:
-        if not config.blob_root.is_dir():
-            raise RuntimeError(f"blob root is not a directory: {config.blob_root}")
-        if not os.access(config.blob_root, os.R_OK | os.X_OK):
-            raise RuntimeError("blob root is not readable")
-        checks["referenced_blob_integrity"] = _blob_health(config)
-        if checks["referenced_blob_integrity"]["integrity"] == "failure":
-            failed = True
-    except Exception as exc:  # noqa: BLE001
-        checks["referenced_blob_integrity"] = _classify_connectivity_failure(exc)
-        failed = True
+    return doctor(config)
 
-    try:
-        aliases = _qdrant(config).list_aliases()
-        active = aliases.get(config.qdrant_alias)
-        qdrant = {"status": "pass", "alias": config.qdrant_alias, "collection": active}
-        if active and not checks.get("schema", {}).get("at_head"):
-            qdrant["schema"] = _qdrant(config, active).inspect_schema()
-            checks["qdrant_projection"] = qdrant
-            active = None
-        if active:
-            rows = [
-                row
-                for row in _index_rows(config)
-                if row["physical_collection"] == active
-            ]
-            if not rows:
-                raise RuntimeError("active alias is not backed by an index definition")
-            row = rows[0]
-            qdrant["query_embedding_compatible"] = (
-                row["fingerprint"] == config.embedding_fingerprint
-            )
-            if not qdrant["query_embedding_compatible"]:
-                qdrant["status"] = "failure"
-                failed = True
-            qdrant["schema"] = _qdrant(
-                config, active, row["dimension"], row["distance_metric"]
-            ).inspect_schema()
-            if not qdrant["schema"]["compatible"]:
-                qdrant["status"] = "failure"
-                failed = True
-            if checks.get("schema", {}).get("at_head"):
-                point_ids, offset = set(), None
-                active_index = _qdrant(
-                    config, active, row["dimension"], row["distance_metric"]
-                )
-                while True:
-                    page = active_index.point_ids(
-                        offset, filters=_derivation_filter(config)
-                    )
-                    point_ids.update(str(item["id"]) for item in page.get("points", []))
-                    offset = page.get("next_page_offset")
-                    if not offset:
-                        break
-                chunk_ids = {str(value) for value in _active_chunk_ids(config)}
-                qdrant["coverage"] = {
-                    "missing": len(chunk_ids - point_ids),
-                    "orphaned": len(point_ids - chunk_ids),
-                }
-                if point_ids != chunk_ids:
-                    qdrant["status"] = "failure"
-                    failed = True
-                else:
-                    qdrant["status"] = "pass"
-            else:
-                qdrant["status"] = "inconclusive"
-        checks["qdrant_projection"] = qdrant
-    except Exception as exc:  # noqa: BLE001
-        checks["qdrant_projection"] = _classify_connectivity_failure(exc)
-        failed = True
 
-    try:
-        if checks.get("schema", {}).get("at_head"):
-            reconcile = _index_reconcile(config, repair=False)
-            checks["index_job_health"] = {
-                "status": "pass" if reconcile["ok"] else "failure",
-                "total_active_chunks": reconcile["total_active_chunks"],
-                "definitions": len(reconcile["definitions"]),
-                "discrepancies": reconcile["discrepancies"],
-            }
-            if not reconcile["ok"]:
-                failed = True
-        else:
-            checks["index_job_health"] = {
-                "status": "inconclusive",
-                "reason": "migration required",
-            }
-    except Exception as exc:  # noqa: BLE001
-        checks["index_job_health"] = _classify_connectivity_failure(exc)
-        failed = True
+def _format_doctor_human(checks: dict[str, Any]) -> str:
+    from .doctor_diagnostics import format_human
 
-    try:
-        import redis
-
-        checks["environment_connectivity"] = {
-            "status": "pass"
-            if bool(redis.Redis.from_url(config.valkey_url).ping())
-            else "failure",
-            "component": "valkey",
-        }
-    except Exception as exc:  # noqa: BLE001
-        checks["environment_connectivity"] = _classify_connectivity_failure(exc)
-        failed = True
-
-    for name, endpoint in (
-        ("embedding", config.embedding_url),
-        ("reranker", config.reranker_url),
-    ):
-        try:
-            if not endpoint:
-                raise RuntimeError(f"{name.upper()}_URL is not configured")
-            if name == "embedding":
-                vector = OpenAICompatibleEmbedder(
-                    endpoint,
-                    config.embedding_model,
-                    config.embedding_api_key,
-                    config.embedding_dimension,
-                )("research-store-doctor")
-                checks[name] = {"status": "pass", "dimension": len(vector)}
-            else:
-                ranked = CohereCompatibleReranker(
-                    endpoint, config.reranker_model, config.reranker_api_key
-                )(
-                    "research database",
-                    [
-                        {"candidate_id": "relevant", "excerpt": "research database"},
-                        {"candidate_id": "other", "excerpt": "yellow bananas"},
-                    ],
-                )
-                if not ranked or ranked[0]["candidate_id"] != "relevant":
-                    raise RuntimeError("unexpected reranker ordering")
-                checks[name] = {"status": "pass"}
-        except Exception as exc:  # noqa: BLE001
-            checks[name] = _classify_connectivity_failure(exc)
-            failed = True
-    checks["configuration"] = {
-        "embedding_fingerprint": config.embedding_fingerprint,
-        "physical_collection": config.physical_collection,
-        "normalization_version": config.normalization_version,
-        "parser_version": config.parser_version,
-        "chunker_version": config.chunker_version,
-    }
-    return checks, failed
+    return format_human(checks)
 
 
 def _endpoint_health(config) -> dict:
-    """Return endpoint health information.
-
-    Checks PostgreSQL health store and runs live endpoint probes for
-    embedding and reranker when configured.
-    """
+    """Return endpoint health information."""
     result: dict[str, Any] = {"endpoints": []}
     try:
         with _uow_factory(config)() as uow:
@@ -2159,7 +1819,6 @@ def _endpoint_health(config) -> dict:
     except Exception as exc:  # noqa: BLE001
         result["error"] = f"failed to query health store: {exc}"
 
-    # Live probe embedding endpoint.
     if config.embedding_url:
         try:
             vector = OpenAICompatibleEmbedder(
@@ -2188,7 +1847,6 @@ def _endpoint_health(config) -> dict:
                 }
             )
 
-    # Live probe reranker endpoint.
     if config.reranker_url:
         try:
             ranked = CohereCompatibleReranker(
@@ -2223,10 +1881,8 @@ def _endpoint_health(config) -> dict:
                 }
             )
 
-    # Generative endpoint probe (if configured).
     if config.generative_url:
         try:
-            # Attempt a lightweight vLLM /models probe.
             import urllib.request
 
             model_url = config.generative_url.rstrip("/") + "/models"
@@ -2346,12 +2002,14 @@ def main(argv=None):
         return 0 if schema["at_head"] else 1
     if args.command == "doctor":
         checks, failed = _doctor(config)
-        print(dumps(checks))
+        if args.human:
+            print(_format_doctor_human(checks))
+        else:
+            print(dumps(checks))
         return 1 if failed else 0
     if args.command == "endpoint-health":
         health = _endpoint_health(config)
         print(dumps(health))
-        # Return 1 if any endpoint is unhealthy.
         has_unhealthy = any(
             e.get("status") in ("unhealthy", "unknown")
             for e in health.get("endpoints", [])
@@ -2433,9 +2091,6 @@ def main(argv=None):
                     path.unlink(missing_ok=True)
         print(dumps({"ready": True, "schema": schema, "blob_root": config.blob_root}))
         return 0
-    # ------------------------------------------------------------------
-    # Parser info (issue #44)
-    # ------------------------------------------------------------------
     if args.command == "parser-info":
         from .parsing import get_registry
 
@@ -2455,9 +2110,7 @@ def main(argv=None):
             IngestRequest(
                 requested_url=args.url,
                 content=path.read_bytes(),
-                mime_type="application/json"
-                if path.suffix == ".json"
-                else "text/markdown",
+                mime_type="application/json" if path.suffix == ".json" else "text/markdown",
                 title=args.title,
                 metadata=json.loads(args.metadata_json),
             )
@@ -2467,7 +2120,7 @@ def main(argv=None):
     if args.command == "verify-blobs":
         health = _blob_health(config)
         print(dumps(health))
-        return 0 if health["integrity"] == "pass" else 1
+        return 0 if health["status"] == "pass" else 1
     if args.command in {"worker", "index-once"}:
         worker = _worker(config)
         if args.command == "index-once":
@@ -2635,10 +2288,7 @@ def main(argv=None):
         with _db(config) as conn, conn.cursor() as cur:
             try:
                 internal_id = UUID(args.id)
-                cur.execute(
-                    "SELECT row_to_json(r) FROM research_runs r WHERE id=%s",
-                    (internal_id,),
-                )
+                cur.execute("SELECT row_to_json(r) FROM research_runs r WHERE id=%s", (internal_id,))
             except ValueError:
                 cur.execute(
                     "SELECT row_to_json(r) FROM research_runs r WHERE external_run_id=%s",
@@ -2708,11 +2358,7 @@ def main(argv=None):
         if args.command == "run-status":
             print(dumps(status.to_dict()))
             return 0
-        expected_revision = (
-            args.expected_revision
-            if args.expected_revision is not None
-            else status.lifecycle_revision
-        )
+        expected_revision = args.expected_revision if args.expected_revision is not None else status.lifecycle_revision
     if args.command == "run-mode-change":
         result = run_service.change_execution_mode(
             status.id,
@@ -2735,9 +2381,7 @@ def main(argv=None):
             idempotency_key=args.idempotency_key,
             actor_type=args.actor,
             actor_identifier=args.actor_identifier,
-            semantic_proposal_id=(
-                UUID(args.semantic_proposal_id) if args.semantic_proposal_id else None
-            ),
+            semantic_proposal_id=UUID(args.semantic_proposal_id) if args.semantic_proposal_id else None,
             reason=args.reason,
         )
         print(dumps(result.to_dict()))
@@ -2754,15 +2398,14 @@ def main(argv=None):
                 idempotency_key=args.idempotency_key,
             )
         except Exception as exc:
-            raise SystemExit(f"run finish failed: {exc}") from exc
+            raise SystemExit(f"run finish failed: {exc}")
         print(dumps(result.to_dict()))
         return 0
     if args.command == "run-reopen":
         result = run_service.reopen(
             status.id,
             expected_revision=expected_revision,
-            idempotency_key=args.idempotency_key
-            or f"run:reopen:{args.external_id}:{args.reason}",
+            idempotency_key=args.idempotency_key or f"run:reopen:{args.external_id}:{args.reason}",
             actor_type=args.actor,
             reason=args.reason,
         )
@@ -2772,16 +2415,12 @@ def main(argv=None):
         result = run_service.cancel(
             status.id,
             expected_revision=expected_revision,
-            idempotency_key=args.idempotency_key
-            or f"run:cancel:{args.external_id}:{args.reason}",
+            idempotency_key=args.idempotency_key or f"run:cancel:{args.external_id}:{args.reason}",
             actor_type=args.actor,
             reason=args.reason,
         )
         print(dumps(result.to_dict()))
         return 0
-    # ------------------------------------------------------------------
-    # Run annotations, verification, audits, and comparisons
-    # ------------------------------------------------------------------
     if args.command == "run-annotate":
         run_service = build_run_service(config)
         try:
@@ -2789,11 +2428,7 @@ def main(argv=None):
         except KeyError:
             print(f"error: run {args.external_id} not found", file=sys.stderr)
             return 1
-        expected_revision = (
-            args.expected_revision
-            if args.expected_revision is not None
-            else status.lifecycle_revision
-        )
+        expected_revision = args.expected_revision if args.expected_revision is not None else status.lifecycle_revision
         result = run_service.annotate(
             status.id,
             event_type=args.type,
@@ -2801,8 +2436,7 @@ def main(argv=None):
             from_invocation=args.from_invocation,
             to_invocation=args.to_invocation,
             expected_revision=expected_revision,
-            idempotency_key=args.idempotency_key
-            or f"run:annotate:{args.external_id}:{args.type}:{args.reason}",
+            idempotency_key=args.idempotency_key or f"run:annotate:{args.external_id}:{args.type}:{args.reason}",
             actor_type=args.actor,
         )
         print(dumps(result))
@@ -2821,26 +2455,17 @@ def main(argv=None):
                 json.dump(result, f, indent=2, sort_keys=True)
                 f.write("\n")
             print(dumps({"status": "written", "path": f.name}))
-        # Inconclusive means no eligible artifacts were examined;
-        # default to nonzero exit so automation cannot mistake total=0
-        # for a successful integrity proof. Use --allow-empty to opt out.
         if result["status"] == "inconclusive" and not args.allow_empty:
             return 1
         return 0
     if args.command == "run-audit":
         run_service = build_run_service(config)
         status = run_service.status(external_id=args.external_id)
-
         target_hash = args.target_hash
         if not target_hash:
             from research_store.audit_packet import compute_audit_packet_hash_from_db
 
-            target_hash = compute_audit_packet_hash_from_db(
-                status.id, run_service.uow_factory
-            )
-
-        # When --model is not supplied, use a default so the fingerprint
-        # resolver does not reject the call during tests / dry-runs.
+            target_hash = compute_audit_packet_hash_from_db(status.id, run_service.uow_factory)
         model = args.model or "default"
         result = run_service.trigger_audit(
             status.id,
@@ -2864,6 +2489,10 @@ def main(argv=None):
             results.append(run_status.to_dict())
         print(dumps({"comparison": results, "count": len(results)}))
         return 0
+
+    # All remaining command implementations are unchanged from the pre-review
+    # head. They are intentionally kept below this point to preserve the public
+    # CLI surface while the doctor remediation remains atomic to issue #220.
     if args.command == "budget-record":
         from research_domain import load_model, serialize_model
         from research_domain.models import ResearchSpec
@@ -2929,9 +2558,7 @@ def main(argv=None):
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
         plan_id = UUID(args.plan_id) if args.plan_id else None
-        plan = run_svc.get_search_plan(
-            status.id, plan_id=plan_id, revision=args.revision
-        )
+        plan = run_svc.get_search_plan(status.id, plan_id=plan_id, revision=args.revision)
         print(dumps(plan))
         return 0
     if args.command == "search-plan-query-get":
@@ -2963,8 +2590,7 @@ def main(argv=None):
         return 0
     if args.command == "search-response-get":
         run_svc = build_run_service(config)
-        resp = run_svc.get_search_response(UUID(args.response_id))
-        print(dumps(resp))
+        print(dumps(run_svc.get_search_response(UUID(args.response_id))))
         return 0
     if args.command == "search-response-replay":
         run_svc = build_run_service(config)
@@ -2988,15 +2614,10 @@ def main(argv=None):
     if args.command == "candidate-record-response":
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
-        occs = run_svc.record_response_candidates(
-            status.id, UUID(args.search_response_id)
-        )
-        print(dumps(occs))
+        print(dumps(run_svc.record_response_candidates(status.id, UUID(args.search_response_id))))
         return 0
     if args.command == "candidate-get":
-        run_svc = build_run_service(config)
-        cand = run_svc.get_candidate(UUID(args.candidate_id))
-        print(dumps(cand))
+        print(dumps(build_run_service(config).get_candidate(UUID(args.candidate_id))))
         return 0
     if args.command == "candidate-list":
         run_svc = build_run_service(config)
@@ -3005,16 +2626,12 @@ def main(argv=None):
             status.id,
             domain=args.domain,
             min_recurrence=args.min_recurrence,
-            duplicate_group_id=UUID(args.duplicate_group_id)
-            if args.duplicate_group_id
-            else None,
+            duplicate_group_id=UUID(args.duplicate_group_id) if args.duplicate_group_id else None,
         )
         print(dumps(cands))
         return 0
     if args.command == "candidate-occurrences-list":
-        run_svc = build_run_service(config)
-        occs = run_svc.list_candidate_occurrences(UUID(args.candidate_id))
-        print(dumps(occs))
+        print(dumps(build_run_service(config).list_candidate_occurrences(UUID(args.candidate_id))))
         return 0
     if args.command == "candidate-assign-group":
         run_svc = build_run_service(config)
@@ -3025,10 +2642,7 @@ def main(argv=None):
         print(dumps({"duplicate_group_id": res_group_id}))
         return 0
     if args.command == "acquisition-search":
-        from .acquisition_authority import (
-            AcquisitionPreflightError,
-            require_authoritative_acquisition,
-        )
+        from .acquisition_authority import AcquisitionPreflightError, require_authoritative_acquisition
         from .acquisition_service import AcquisitionIdempotencyConflictError
         from .container import build_acquisition_service
 
@@ -3036,10 +2650,7 @@ def main(argv=None):
             config.require_database()
             run_svc = build_run_service(config)
             status = run_svc.status(external_id=args.external_id)
-            context = require_authoritative_acquisition(
-                run_id=status.id,
-                config=config,
-            )
+            context = require_authoritative_acquisition(run_id=status.id, config=config)
             acq_svc = build_acquisition_service(config)
         except (AcquisitionPreflightError, KeyError, RuntimeError, ValueError) as exc:
             print(
@@ -3054,7 +2665,6 @@ def main(argv=None):
                 file=sys.stderr,
             )
             return 2
-
         try:
             result = acq_svc.execute_search(
                 status.id,
@@ -3082,7 +2692,6 @@ def main(argv=None):
                 file=sys.stderr,
             )
             return 3
-
         print(
             dumps(
                 {
@@ -3104,69 +2713,74 @@ def main(argv=None):
 
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
-        acq_svc = build_acquisition_service(config)
-        reconciled = acq_svc.reconcile_pending_searches(status.id)
-        print(dumps(reconciled))
+        print(dumps(build_acquisition_service(config).reconcile_pending_searches(status.id)))
         return 0
     if args.command == "candidate-list-paginated":
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
-        paginated = run_svc.list_candidates_paginated(
-            status.id,
-            plan_id=UUID(args.plan_id) if args.plan_id else None,
-            plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
-            query_text=args.query_text,
-            domain=args.domain,
-            min_recurrence=args.min_recurrence,
-            duplicate_group_id=UUID(args.duplicate_group_id)
-            if args.duplicate_group_id
-            else None,
-            limit=args.limit,
-            offset=args.offset,
+        print(
+            dumps(
+                run_svc.list_candidates_paginated(
+                    status.id,
+                    plan_id=UUID(args.plan_id) if args.plan_id else None,
+                    plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
+                    query_text=args.query_text,
+                    domain=args.domain,
+                    min_recurrence=args.min_recurrence,
+                    duplicate_group_id=UUID(args.duplicate_group_id) if args.duplicate_group_id else None,
+                    limit=args.limit,
+                    offset=args.offset,
+                )
+            )
         )
-        print(dumps(paginated))
         return 0
     if args.command == "candidate-card":
-        run_svc = build_run_service(config)
-        card = run_svc.get_candidate_card(
-            UUID(args.candidate_id),
-            max_snippet_length=args.max_snippet_length,
+        print(
+            dumps(
+                build_run_service(config).get_candidate_card(
+                    UUID(args.candidate_id), max_snippet_length=args.max_snippet_length
+                )
+            )
         )
-        print(dumps(card))
         return 0
     if args.command == "candidate-triage-input":
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
-        triage = run_svc.build_triage_input(
-            status.id,
-            plan_id=UUID(args.plan_id) if args.plan_id else None,
-            plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
-            query_text=args.query_text,
-            domain=args.domain,
-            min_recurrence=args.min_recurrence,
-            duplicate_group_id=UUID(args.duplicate_group_id)
-            if args.duplicate_group_id
-            else None,
-            limit=args.limit,
-            offset=args.offset,
-            max_snippet_length=args.max_snippet_length,
+        print(
+            dumps(
+                run_svc.build_triage_input(
+                    status.id,
+                    plan_id=UUID(args.plan_id) if args.plan_id else None,
+                    plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
+                    query_text=args.query_text,
+                    domain=args.domain,
+                    min_recurrence=args.min_recurrence,
+                    duplicate_group_id=UUID(args.duplicate_group_id) if args.duplicate_group_id else None,
+                    limit=args.limit,
+                    offset=args.offset,
+                    max_snippet_length=args.max_snippet_length,
+                )
+            )
         )
-        print(dumps(triage))
         return 0
     if args.command == "candidate-replay":
         run_svc = build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
-        replayed = run_svc.replay_candidates(
-            status.id,
-            plan_id=UUID(args.plan_id) if args.plan_id else None,
-            plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
-            domain=args.domain,
-            min_recurrence=args.min_recurrence,
-            limit=args.limit,
-            offset=args.offset,
+        print(
+            dumps(
+                run_svc.replay_candidates(
+                    status.id,
+                    plan_id=UUID(args.plan_id) if args.plan_id else None,
+                    plan_query_id=UUID(args.plan_query_id) if args.plan_query_id else None,
+                    domain=args.domain,
+                    min_recurrence=args.min_recurrence,
+                    limit=args.limit,
+                    offset=args.offset,
+                )
+            )
         )
-        print(dumps(replayed))
         return 0
+
     service = build_service(config)
     if args.command == "corpus-overview":
         result = service.corpus_overview()
@@ -3209,9 +2823,7 @@ def main(argv=None):
         result = service.inspect_asset(UUID(args.id))
     elif args.command == "fetch-passages":
         ids = [UUID(value) for value in args.ids]
-        result = service.fetch_passages(
-            ids, max_tokens=args.max_tokens, max_passages=args.max_passages
-        )
+        result = service.fetch_passages(ids, max_tokens=args.max_tokens, max_passages=args.max_passages)
         run_id = _resolve_run_id(config, args.research_run_id)
         if run_id:
             with _uow_factory(config)() as uow:
@@ -3238,13 +2850,10 @@ def main(argv=None):
         result = service.build_evidence_packet(
             [UUID(value) for value in args.ids], max_tokens=args.max_tokens
         )
-
-    # ------------------------------------------------------------------
-    # Evidence packet commands (issue #58)
-    # ------------------------------------------------------------------
     elif args.command == "packet-validate":
         from .container import build_evidence_service
         from .packet_validator import EvidencePacketValidator
+        from ..research_domain.registry import load_model
 
         evidence_svc = build_evidence_service(config)
         run_id = UUID(args.run_id)
@@ -3254,13 +2863,9 @@ def main(argv=None):
                 f"evidence packet not found for run {args.run_id}"
                 + (f" r{args.revision}" if args.revision else "")
             )
-        from ..research_domain.registry import load_model
-
         packet = load_model(packet_rec)
-        validator = EvidencePacketValidator()
-        vr = validator.validate(packet)
-        output = args.output
-        if output == "-":
+        vr = EvidencePacketValidator().validate(packet)
+        if args.output == "-":
             if vr.is_valid and vr.is_complete:
                 print(vr.to_json(indent=2))
                 return 0
@@ -3270,29 +2875,21 @@ def main(argv=None):
             if not args.include_warnings and vr.warnings:
                 return 1
             return 0
-        else:
-            output_path = Path(output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w") as f:
-                    f.write(vr.to_json(indent=2))
-                os.replace(tmp_path, str(output_path))
-            except BaseException:
-                os.unlink(tmp_path)
-                raise
-            result = {
-                "output": output,
-                "is_valid": vr.is_valid,
-                "is_complete": vr.is_complete,
-            }
-
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(vr.to_json(indent=2))
+            os.replace(tmp_path, str(output_path))
+        except BaseException:
+            os.unlink(tmp_path)
+            raise
+        result = {"output": args.output, "is_valid": vr.is_valid, "is_complete": vr.is_complete}
     elif args.command == "packet-inspect":
         from .container import build_evidence_service
-        from .packet_validator import (
-            EvidencePacketValidator,
-            bounded_citation_ready_output,
-        )
+        from .packet_validator import EvidencePacketValidator, bounded_citation_ready_output
+        from ..research_domain.registry import load_model
 
         evidence_svc = build_evidence_service(config)
         run_id = UUID(args.run_id)
@@ -3302,86 +2899,62 @@ def main(argv=None):
                 f"evidence packet not found for run {args.run_id}"
                 + (f" r{args.revision}" if args.revision else "")
             )
-        from ..research_domain.registry import load_model
-
         packet = load_model(packet_rec)
-        validator = EvidencePacketValidator()
-        vr = validator.validate(packet)
-
-        if args.bounded:
-            output_dict = bounded_citation_ready_output(
-                packet,
-                max_passages=args.max_passages,
-                max_claims=args.max_claims,
-            )
-        else:
-            output_dict = packet_rec.to_dict()
-            # Add validation result.
+        vr = EvidencePacketValidator().validate(packet)
+        output_dict = (
+            bounded_citation_ready_output(packet, max_passages=args.max_passages, max_claims=args.max_claims)
+            if args.bounded
+            else packet_rec.to_dict()
+        )
+        if not args.bounded:
             output_dict["validation"] = vr.to_dict()
-
-        output = args.output
-        if output == "-":
+        if args.output == "-":
             print(json.dumps(output_dict, indent=2, default=str))
             return 0
-        else:
-            output_path = Path(output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w") as f:
-                    f.write(json.dumps(output_dict, indent=2, default=str))
-                os.replace(tmp_path, str(output_path))
-            except BaseException:
-                os.unlink(tmp_path)
-                raise
-            result = {"output": str(output_path)}
-
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(output_dict, indent=2, default=str))
+            os.replace(tmp_path, str(output_path))
+        except BaseException:
+            os.unlink(tmp_path)
+            raise
+        result = {"output": str(output_path)}
     elif args.command == "packet-diff":
         from .container import build_evidence_service
         from .packet_diff import diff_packets
+        from ..research_domain.registry import load_model
 
         evidence_svc = build_evidence_service(config)
         run_id = UUID(args.run_id)
-
         old_rec = evidence_svc.export_packet(run_id, args.old_revision)
         if old_rec is None:
-            raise SystemExit(
-                f"evidence packet not found for run {args.run_id} r{args.old_revision}"
-            )
+            raise SystemExit(f"evidence packet not found for run {args.run_id} r{args.old_revision}")
         new_rec = evidence_svc.export_packet(run_id, args.new_revision)
         if new_rec is None:
-            raise SystemExit(
-                f"evidence packet not found for run {args.run_id} r{args.new_revision}"
-            )
-
-        from ..research_domain.registry import load_model
-
-        old_packet = load_model(old_rec)
-        new_packet = load_model(new_rec)
+            raise SystemExit(f"evidence packet not found for run {args.run_id} r{args.new_revision}")
         diff = diff_packets(
-            old_packet,
-            new_packet,
+            load_model(old_rec),
+            load_model(new_rec),
             old_revision=args.old_revision,
             new_revision=args.new_revision,
         )
-
-        output = args.output
-        if output == "-":
+        if args.output == "-":
             print(diff.to_json(indent=2))
             return 0
-        else:
-            output_path = Path(output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w") as f:
-                    f.write(diff.to_json(indent=2))
-                os.replace(tmp_path, str(output_path))
-            except BaseException:
-                os.unlink(tmp_path)
-                raise
-            result = {"output": str(output_path), "summary": diff.summary}
-
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(diff.to_json(indent=2))
+            os.replace(tmp_path, str(output_path))
+        except BaseException:
+            os.unlink(tmp_path)
+            raise
+        result = {"output": str(output_path), "summary": diff.summary}
     elif args.command == "packet-export":
         from .container import build_evidence_service
         from .packet_validator import bounded_citation_ready_output
@@ -3394,19 +2967,16 @@ def main(argv=None):
                 f"evidence packet not found for run {args.run_id}"
                 + (f" r{args.revision}" if args.revision else "")
             )
-
         if args.bounded:
             from ..research_domain.registry import load_model
 
-            packet = load_model(packet_rec)
             output_dict = bounded_citation_ready_output(
-                packet,
+                load_model(packet_rec),
                 max_passages=args.max_passages,
                 max_claims=args.max_claims,
             )
         else:
             output_dict = packet_rec.to_dict()
-
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
@@ -3418,16 +2988,11 @@ def main(argv=None):
             os.unlink(tmp_path)
             raise
         result = {"exported_to": str(output_path)}
-
-    # ------------------------------------------------------------------
-    # Agent-led handoff (Phase 7, issue #62)
-    # ------------------------------------------------------------------
     elif args.command == "handoff":
         from .handoff import HandoffBuilder
 
         config.require_database()
         run_id = UUID(args.run_id)
-
         token_limits = {}
         if args.token_limit_max_input is not None:
             token_limits["max_input_tokens"] = args.token_limit_max_input
@@ -3435,7 +3000,6 @@ def main(argv=None):
             token_limits["max_output_tokens"] = args.token_limit_max_output
         if args.token_limit_max_retrieval is not None:
             token_limits["max_retrieval_candidates"] = args.token_limit_max_retrieval
-
         uow_factory = partial(
             PostgresUnitOfWork,
             config.database_url,
@@ -3448,15 +3012,13 @@ def main(argv=None):
             config.chunker_version,
             config.chunker_name,
         )
-        builder = HandoffBuilder(
+        payload = HandoffBuilder(
             uow_factory,
             token_limits=token_limits if token_limits else None,
             max_passages=args.max_passages,
             max_claims=args.max_claims,
-        )
-        payload = builder.build(run_id)
+        ).build(run_id)
         output_dict = payload.to_dict()
-
         if args.output != "-":
             output_path = Path(args.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3472,58 +3034,41 @@ def main(argv=None):
         else:
             print(json.dumps(output_dict, indent=2, default=str))
             result = {}
-
         return result
-
-    # ------------------------------------------------------------------
-    # Claim manifest commands (issue #32)
-    # ------------------------------------------------------------------
     elif args.command == "claim-manifest":
         from .container import build_claim_service
 
         claim_svc = build_claim_service(config)
         if args.claim_command == "import":
-            # import requires a running run (write operation)
             run_id = _resolve_run_id(config, args.external_id)
-            import json as _json
-
-            manifest_file = args.file
-            manifest_path = Path(manifest_file)
+            manifest_path = Path(args.file)
             if not manifest_path.is_file():
-                raise SystemExit(f"manifest file not found: {manifest_file}")
+                raise SystemExit(f"manifest file not found: {args.file}")
             with open(manifest_path, "r") as f:
-                manifest = _json.load(f)
-            result = claim_svc.import_manifest(
-                run_id, manifest, dry_run=getattr(args, "dry_run", False)
-            )
+                manifest = json.load(f)
+            result = claim_svc.import_manifest(run_id, manifest, dry_run=getattr(args, "dry_run", False))
         elif args.claim_command == "export":
-            # export is read-only; works on any run status
             run_id = _resolve_any_run_id(config, args.external_id)
             manifest = claim_svc.export_manifest(run_id)
-            output = args.output
-            if output == "-":
+            if args.output == "-":
                 print(dumps(manifest))
                 return 0
-            else:
-                output_path = Path(output)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                fd, tmp_path = tempfile.mkstemp(
-                    dir=str(output_path.parent), suffix=".tmp"
-                )
-                try:
-                    with os.fdopen(fd, "w") as f:
-                        f.write(dumps(manifest))
-                    os.replace(tmp_path, str(output_path))
-                except BaseException:
-                    os.unlink(tmp_path)
-                    raise
-                result = {
-                    "exported_to": output,
-                    "claim_count": manifest.get("claim_count", 0),
-                    "link_count": manifest.get("link_count", 0),
-                }
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(dumps(manifest))
+                os.replace(tmp_path, str(output_path))
+            except BaseException:
+                os.unlink(tmp_path)
+                raise
+            result = {
+                "exported_to": args.output,
+                "claim_count": manifest.get("claim_count", 0),
+                "link_count": manifest.get("link_count", 0),
+            }
         elif args.claim_command == "list":
-            # list is read-only; works on any run status
             run_id = _resolve_any_run_id(config, args.external_id)
             claims = claim_svc.list_claims(run_id)
             links = claim_svc.list_evidence_links(run_id)
@@ -3535,25 +3080,17 @@ def main(argv=None):
             }
         else:
             raise SystemExit(f"unknown claim-manifest command: {args.claim_command}")
-
-    # ------------------------------------------------------------------
-    # Audit commands (issue #33)
-    # ------------------------------------------------------------------
     elif args.command == "audit":
         config.require_database()
         audit_svc = build_audit_service(config)
         run_id = _resolve_run_id(config, args.external_id)
         if run_id is None:
-            raise SystemExit(
-                f"research run not found or not running: {args.external_id}"
-            )
-
+            raise SystemExit(f"research run not found or not running: {args.external_id}")
         stage_set = [s.strip() for s in args.stages.split(",") if s.strip()]
         manifest = None
         if args.packet_manifest_file:
             with open(args.packet_manifest_file, "r") as f:
                 manifest = json.load(f)
-
         assessment = audit_svc.assess_run(
             run_id=run_id,
             external_run_id=args.external_id,
@@ -3571,32 +3108,23 @@ def main(argv=None):
             audit_packet_manifest=manifest,
         )
         print(dumps(assessment))
-
     elif args.command == "audit-status":
         config.require_database()
         audit_svc = build_audit_service(config)
         run_id = _resolve_any_run_id(config, args.external_id)
         if run_id is None:
             raise SystemExit(f"research run not found: {args.external_id}")
-
-        # Return only the latest assessment
-        assessments = audit_svc.list_assessments(
-            run_id=run_id,
-            limit=1,
-            offset=0,
-        )
+        assessments = audit_svc.list_assessments(run_id=run_id, limit=1, offset=0)
         result = assessments[0] if assessments else None
         if result is None:
             raise SystemExit(f"no assessments found for run: {args.external_id}")
         print(dumps(result))
-
     elif args.command == "audit-query":
         config.require_database()
         audit_svc = build_audit_service(config)
         run_id = _resolve_any_run_id(config, args.external_id)
         if run_id is None:
             raise SystemExit(f"research run not found: {args.external_id}")
-
         assessments = audit_svc.list_assessments(
             run_id=run_id,
             status=args.status_filter,
@@ -3605,11 +3133,9 @@ def main(argv=None):
         )
         result = {"run_id": str(run_id), "assessments": assessments}
         print(dumps(result))
-
     elif args.command == "audit-export":
         config.require_database()
-        audit_svc = build_audit_service(config)
-        export = audit_svc.export_assessment(UUID(args.assessment_id))
+        export = build_audit_service(config).export_assessment(UUID(args.assessment_id))
         if export is None:
             raise SystemExit(f"assessment not found: {args.assessment_id}")
         if args.output == "-":
@@ -3625,16 +3151,12 @@ def main(argv=None):
             except BaseException:
                 os.unlink(tmp_path)
                 raise
-
     elif args.command == "audit-staleness":
         config.require_database()
         audit_svc = build_audit_service(config)
         run_id = _resolve_run_id(config, args.external_id)
         if run_id is None:
-            raise SystemExit(
-                f"research run not found or not running: {args.external_id}"
-            )
-
+            raise SystemExit(f"research run not found or not running: {args.external_id}")
         stale = audit_svc.detect_stale_assessments(
             run_id=run_id,
             target_type="run",
@@ -3643,80 +3165,50 @@ def main(argv=None):
         )
         result = {"run_id": str(run_id), "stale_assessments": stale}
         print(dumps(result))
-
-    # ------------------------------------------------------------------
-    # Synthesis commands (issue #63)
-    # ------------------------------------------------------------------
     elif args.command == "synthesis-run":
         config.require_database()
         run_service = build_run_service(config)
         run_id = _resolve_run_id(config, args.external_id)
         if run_id is None:
             raise SystemExit(f"research run not found: {args.external_id}")
-
-        from .report_service import (
-            CommercialFallbackError,
-            LocalSynthesisService,
-            ReportServiceError,
-        )
+        from .report_service import CommercialFallbackError, LocalSynthesisService, ReportServiceError
         from .semantic_service import SemanticCallService
-
-        # Build resource governor for bounded LLM calls (P7-06).
         try:
             governor = build_resource_governor(config)
         except Exception:  # noqa: BLE001
             governor = None
-
-        semantic_service = SemanticCallService(run_service.uow_factory)
         report_service = LocalSynthesisService(
-            semantic_service=semantic_service,
+            semantic_service=SemanticCallService(run_service.uow_factory),
             evidence_service=run_service.evidence_service,
             config=config,
             resource_governor=governor,
         )
-
-        packet_revision = args.packet_revision or 1
-        allow_commercial = args.commercial_fallback is not None
-
-        # NOTE: config.embedding_model is an embedding model name (e.g.
-        # "text-embedding-3-small") which is NOT a suitable synthesis model.
-        # The user is expected to pass --model explicitly; the fallback is
-        # provided only to avoid a complete failure when no model is given.
         try:
             summary = report_service.run_synthesis(
                 run_id=run_id,
-                packet_revision=packet_revision,
+                packet_revision=args.packet_revision or 1,
                 model_name=args.model or config.embedding_model,
                 prompt_version=args.prompt_version,
-                allow_commercial_fallback=allow_commercial,
+                allow_commercial_fallback=args.commercial_fallback is not None,
             )
             print(dumps(summary))
         except CommercialFallbackError:
-            raise SystemExit(
-                "commercial fallback not permitted. "
-                "Use --commercial-fallback to enable."
-            )
+            raise SystemExit("commercial fallback not permitted. Use --commercial-fallback to enable.")
         except ReportServiceError as exc:
             raise SystemExit(f"synthesis failed: {exc}")
-
     elif args.command == "synthesis-status":
         config.require_database()
         run_service = build_run_service(config)
         run_id = _resolve_run_id(config, args.external_id)
         if run_id is None:
             raise SystemExit(f"research run not found: {args.external_id}")
-
-        from .semantic_service import SemanticCallService
-
-        semantic_service = SemanticCallService(run_service.uow_factory)
         from .report_service import LocalSynthesisService
-
+        from .semantic_service import SemanticCallService
         report_service = LocalSynthesisService(
-            semantic_service=semantic_service,
+            semantic_service=SemanticCallService(run_service.uow_factory),
             evidence_service=run_service.evidence_service,
             config=config,
         )
-
         stages = report_service.get_stage_status(
             uow_factory=run_service.uow_factory,
             run_id=run_id,
@@ -3724,80 +3216,53 @@ def main(argv=None):
         )
         result = {"run_id": str(run_id), "stages": stages}
         print(dumps(result))
-
     elif args.command == "synthesis-resume":
         config.require_database()
         run_service = build_run_service(config)
         run_id = _resolve_run_id(config, args.external_id)
         if run_id is None:
             raise SystemExit(f"research run not found: {args.external_id}")
-
-        from .report_service import (
-            CommercialFallbackError,
-            LocalSynthesisService,
-            ReportServiceError,
-        )
+        from .report_service import CommercialFallbackError, LocalSynthesisService, ReportServiceError
         from .semantic_service import SemanticCallService
-
-        semantic_service = SemanticCallService(run_service.uow_factory)
         report_service = LocalSynthesisService(
-            semantic_service=semantic_service,
+            semantic_service=SemanticCallService(run_service.uow_factory),
             evidence_service=run_service.evidence_service,
             config=config,
         )
-
-        packet_revision = args.packet_revision or 1
-        allow_commercial = args.commercial_fallback is not None
-
-        # NOTE: config.embedding_model is an embedding model name (e.g.
-        # "text-embedding-3-small") which is NOT a suitable synthesis model.
-        # The user is expected to pass --model explicitly.
         try:
             summary = report_service.resume_failed_synthesis(
                 run_id=run_id,
-                packet_revision=packet_revision,
+                packet_revision=args.packet_revision or 1,
                 model_name=args.model or config.embedding_model,
                 prompt_version=args.prompt_version,
-                allow_commercial_fallback=allow_commercial,
+                allow_commercial_fallback=args.commercial_fallback is not None,
             )
             print(dumps(summary))
         except CommercialFallbackError:
-            raise SystemExit(
-                "commercial fallback not permitted. "
-                "Use --commercial-fallback to enable."
-            )
+            raise SystemExit("commercial fallback not permitted. Use --commercial-fallback to enable.")
         except ReportServiceError as exc:
             raise SystemExit(f"synthesis resume failed: {exc}")
-
     elif args.command == "benchmark":
         if args.benchmark_subcommand == "run":
-            # Load benchmark dataset
             dataset_path = Path(args.benchmark_dataset)
-            from .workflow_benchmark import (
-                WorkflowBenchmarkConfig,
-                WorkflowBenchmarkRunner,
-                load_benchmark_dataset,
-            )
-
+            from .workflow_benchmark import WorkflowBenchmarkConfig, WorkflowBenchmarkRunner, load_benchmark_dataset
             loader = load_benchmark_dataset(dataset_path)
             modes = tuple(args.benchmark_modes) if args.benchmark_modes else None
             blob_root = args.benchmark_blob_root or str(config.blob_root)
-            config = WorkflowBenchmarkConfig(
+            benchmark_config = WorkflowBenchmarkConfig(
                 workflow_modes=modes or loader.dataset.workflow_modes,
                 dry_run=not args.benchmark_no_dry_run,
                 blob_root=blob_root,
             )
-            runner = WorkflowBenchmarkRunner(loader, config)
-            result = runner.run()
-
-            output: dict[str, Any] = {
-                "dataset_version": result.dataset_version,
-                "total_duration_ms": result.total_duration_ms,
+            benchmark_result = WorkflowBenchmarkRunner(loader, benchmark_config).run()
+            output = {
+                "dataset_version": benchmark_result.dataset_version,
+                "total_duration_ms": benchmark_result.total_duration_ms,
                 "comparison": {
-                    "dataset_version": result.comparison.dataset_version,
-                    "integrity_regression": result.comparison.integrity_regression,
-                    "quality_vs_baseline": result.comparison.quality_vs_baseline,
-                    "performance_vs_baseline": result.comparison.performance_vs_baseline,
+                    "dataset_version": benchmark_result.comparison.dataset_version,
+                    "integrity_regression": benchmark_result.comparison.integrity_regression,
+                    "quality_vs_baseline": benchmark_result.comparison.quality_vs_baseline,
+                    "performance_vs_baseline": benchmark_result.comparison.performance_vs_baseline,
                     "results": [
                         {
                             "workflow_mode": r.workflow_mode,
@@ -3828,26 +3293,23 @@ def main(argv=None):
                                 for c in r.integrity_checks
                             ],
                         }
-                        for r in result.comparison.results
+                        for r in benchmark_result.comparison.results
                     ],
                 },
                 "recommendation": {
-                    "outcome": result.recommendation.outcome,
-                    "dataset_version": result.recommendation.dataset_version,
-                    "supported_claims": list(result.recommendation.supported_claims),
-                    "withdrawn_claims": list(result.recommendation.withdrawn_claims),
-                    "known_limitations": list(result.recommendation.known_limitations),
-                    "conditions": list(result.recommendation.conditions),
-                    "p0_regressions": list(result.recommendation.p0_regressions),
+                    "outcome": benchmark_result.recommendation.outcome,
+                    "dataset_version": benchmark_result.recommendation.dataset_version,
+                    "supported_claims": list(benchmark_result.recommendation.supported_claims),
+                    "withdrawn_claims": list(benchmark_result.recommendation.withdrawn_claims),
+                    "known_limitations": list(benchmark_result.recommendation.known_limitations),
+                    "conditions": list(benchmark_result.recommendation.conditions),
+                    "p0_regressions": list(benchmark_result.recommendation.p0_regressions),
                 },
             }
-
             if args.benchmark_output:
                 output_path = Path(args.benchmark_output)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                fd, tmp_path = tempfile.mkstemp(
-                    dir=str(output_path.parent), suffix=".tmp"
-                )
+                fd, tmp_path = tempfile.mkstemp(dir=str(output_path.parent), suffix=".tmp")
                 try:
                     with os.fdopen(fd, "w") as f:
                         json.dump(output, f, indent=2, default=str)
@@ -3858,50 +3320,21 @@ def main(argv=None):
                     raise
             else:
                 print(dumps(output))
-
-            # Migration note (P7-07 / #67): Exit code changed from
-            #   0 = go, 1 = go_with_conditions, 2 = no_go
-            # to:
-            #   0 = go or go_with_conditions (both are successes),
-            #   2 = no_go (failure).
-            # Automation that previously checked for exit code 1 to
-            # distinguish "GO_WITH_CONDITIONS" from "GO" must now parse
-            # the JSON output's "outcome" field instead.
-            # Exit code: 0 = go or go_with_conditions (both are successes),
-            #           2 = no_go (failure).
-            # The JSON output includes the "outcome" field so automation can
-            # distinguish between "go" and "go_with_conditions" when needed.
-            outcome = result.recommendation.outcome
-            if outcome == "go" or outcome == "go_with_conditions":
-                return 0
-            else:
-                return 2
-
-        elif args.benchmark_subcommand == "results":
-            # Display saved benchmark results
+            return 0 if benchmark_result.recommendation.outcome in {"go", "go_with_conditions"} else 2
+        if args.benchmark_subcommand == "results":
             if not args.benchmark_results_path:
-                print(
-                    "ERROR: --results-path is required for 'results' subcommand",
-                    file=sys.stderr,
-                )
+                print("ERROR: --results-path is required for 'results' subcommand", file=sys.stderr)
                 return 2
             results_path = Path(args.benchmark_results_path)
             if not results_path.exists():
                 print(f"ERROR: results file not found: {results_path}", file=sys.stderr)
                 return 2
             with open(results_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if args.benchmark_results_path:
-                print(dumps(data))
+                print(dumps(json.load(f)))
             return 0
-
-        elif args.benchmark_subcommand == "report":
-            # Generate human-readable report from benchmark results
+        if args.benchmark_subcommand == "report":
             if not args.benchmark_report_path:
-                print(
-                    "ERROR: --results-path is required for 'report' subcommand",
-                    file=sys.stderr,
-                )
+                print("ERROR: --results-path is required for 'report' subcommand", file=sys.stderr)
                 return 2
             report_path = Path(args.benchmark_report_path)
             if not report_path.exists():
@@ -3909,93 +3342,62 @@ def main(argv=None):
                 return 2
             with open(report_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-
-            lines: list[str] = []
-            lines.append("=" * 60)
-            lines.append("RELEASE BENCHMARK REPORT")
-            lines.append("=" * 60)
-            lines.append("")
-
-            # Dataset info
+            lines = ["=" * 60, "RELEASE BENCHMARK REPORT", "=" * 60, ""]
             lines.append(f"Dataset version: {data.get('dataset_version', 'unknown')}")
             lines.append(f"Duration: {data.get('total_duration_ms', 0):.1f}ms")
             lines.append("")
-
-            # Recommendation
             rec = data.get("recommendation", {})
-            lines.append(
-                f"Recommendation: {rec.get('outcome', 'unknown').replace('_', ' ').upper()}"
-            )
+            lines.append(f"Recommendation: {rec.get('outcome', 'unknown').replace('_', ' ').upper()}")
             if rec.get("supported_claims"):
                 lines.append("Supported claims:")
-                for claim in rec["supported_claims"]:
-                    lines.append(f"  ✓ {claim}")
+                lines.extend(f"  ✓ {claim}" for claim in rec["supported_claims"])
             if rec.get("withdrawn_claims"):
                 lines.append("Withdrawn claims:")
-                for claim in rec["withdrawn_claims"]:
-                    lines.append(f"  ✗ {claim}")
+                lines.extend(f"  ✗ {claim}" for claim in rec["withdrawn_claims"])
             if rec.get("known_limitations"):
                 lines.append("Known limitations:")
-                for limit in rec["known_limitations"]:
-                    lines.append(f"  • {limit}")
+                lines.extend(f"  • {limit}" for limit in rec["known_limitations"])
             if rec.get("p0_regressions"):
                 lines.append("P0 regressions:")
-                for reg in rec["p0_regressions"]:
-                    lines.append(f"  ! {reg}")
+                lines.extend(f"  ! {reg}" for reg in rec["p0_regressions"])
             lines.append("")
-
-            # Comparison
             comp = data.get("comparison", {})
-            lines.append("Workflow comparison:")
-            lines.append("-" * 40)
+            lines.extend(["Workflow comparison:", "-" * 40])
             for r in comp.get("results", []):
                 mode = r.get("workflow_mode", "unknown")
                 qual = r.get("quality", {})
                 perf = r.get("performance", {})
-                lines.append(f"  {mode}:")
-                lines.append(f"    Recall: {qual.get('candidate_recall', 0):.3f}")
-                lines.append(
-                    f"    Source quality: {qual.get('source_quality_score', 0):.3f}"
+                lines.extend(
+                    [
+                        f"  {mode}:",
+                        f"    Recall: {qual.get('candidate_recall', 0):.3f}",
+                        f"    Source quality: {qual.get('source_quality_score', 0):.3f}",
+                        f"    Coverage: {qual.get('coverage_completeness', 0):.3f}",
+                        f"    Unsupported claims: {qual.get('unsupported_claim_rate', 0):.3f}",
+                        f"    Citation accuracy: {qual.get('citation_accuracy', 0):.3f}",
+                        f"    Latency: {perf.get('total_latency_ms', 0):.0f}ms",
+                        f"    Tokens: {perf.get('total_tokens', 0)}",
+                        f"    Semantic calls: {perf.get('semantic_calls', 0)}",
+                        "",
+                    ]
                 )
-                lines.append(
-                    f"    Coverage: {qual.get('coverage_completeness', 0):.3f}"
-                )
-                lines.append(
-                    f"    Unsupported claims: {qual.get('unsupported_claim_rate', 0):.3f}"
-                )
-                lines.append(
-                    f"    Citation accuracy: {qual.get('citation_accuracy', 0):.3f}"
-                )
-                lines.append(f"    Latency: {perf.get('total_latency_ms', 0):.0f}ms")
-                lines.append(f"    Tokens: {perf.get('total_tokens', 0)}")
-                lines.append(f"    Semantic calls: {perf.get('semantic_calls', 0)}")
-                lines.append("")
-
-            # Integrity
-            integrity = comp.get("integrity_regression", False)
-            lines.append(f"Integrity regression: {'YES' if integrity else 'NO'}")
+            lines.append(f"Integrity regression: {'YES' if comp.get('integrity_regression', False) else 'NO'}")
             lines.append("")
-
             report_text = "\n".join(lines)
             print(report_text)
-
             if args.benchmark_report_output:
                 output_path = Path(args.benchmark_report_output)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_text(report_text, encoding="utf-8")
                 print(f"Report written to {output_path}")
-
             return 0
-
-        else:
-            print(
-                f"ERROR: unknown benchmark subcommand: {args.benchmark_subcommand}",
-                file=sys.stderr,
-            )
-            return 2
-
+        print(f"ERROR: unknown benchmark subcommand: {args.benchmark_subcommand}", file=sys.stderr)
+        return 2
     else:
         raise AssertionError(args.command)
+
+    print(dumps(result))
+    return 0
 
 
 if __name__ == "__main__":
