@@ -1,446 +1,610 @@
-"""Tests for issue #216: extraction preflight, timeouts, and cancellation.
+"""Production-seam regression tests for issue #216.
 
-These tests verify that:
-- Empty markdown, anti-bot pages, unsupported content types, slow provider
-  jobs, and transient failures follow distinct policies.
-- The audited empty-content cases finish within configured bounded deadlines.
-- Cancellation leaves no orphaned active provider task in test doubles.
+The tests deliberately distinguish search discovery from candidate extraction,
+exercise real bounded child-process cancellation, and verify that only suitable
+content reaches corpus ingestion. PostgreSQL-backed coverage verifies that the
+durable extraction-attempt taxonomy and audit text match the bounded outcome.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import UUID, uuid4
+
+import pytest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.acquisition_service import (
-    CandidatePreflightChecker,
+import research_store
+from research_store.bounded_acquisition import BoundedFirecrawlSearchAdapter
+from research_store.bounded_orchestrator import BoundedExtractionStage
+from research_store.config import StoreConfig
+from research_store.container import (
+    build_acquisition_service,
+    build_extraction_service,
+    build_run_service,
+    build_workflow_operation_service,
 )
 from research_store.domain import SearchAdapterResult
+from research_store.postgres import migrate
+from research_store.provider_preflight import (
+    BoundedSubprocessRunner,
+    CandidatePreflightChecker,
+    CandidatePreflightResult,
+    ExtractionDeadlinePolicy,
+)
 
-# ---------------------------------------------------------------------------
-# Preflight classification unit tests
-# ---------------------------------------------------------------------------
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
 
-def _make_result(
+def _wrapped_result(
+    markdown: str,
     *,
-    markdown: str | None = None,
-    http_status: int | None = None,
-    transport_error: str | None = None,
-    elapsed_seconds: float | None = None,
+    classification: str = "suitable",
+    reason_code: str | None = None,
+    failure_stage: str = "content_suitability",
+    status: int = 200,
+    content_type: str = "text/html",
+    elapsed: float = 0.025,
+    cancelled: bool = False,
+    terminal: bool | None = None,
 ) -> SearchAdapterResult:
-    """Build a minimal SearchAdapterResult for preflight testing."""
-    payload: dict = {}
-    if markdown is not None:
-        payload = {"data": {"web": [{"markdown": markdown}]}}
+    if terminal is None:
+        terminal = classification != "suitable"
+    outcome = CandidatePreflightResult(
+        classification=classification,
+        reason_code=reason_code or classification,
+        reason=f"test outcome {classification}",
+        failure_stage=failure_stage,
+        http_status=status,
+        content_type=content_type,
+        elapsed_seconds=elapsed,
+        first_byte_seconds=min(0.005, elapsed),
+        provider_operation_seconds=elapsed,
+        cancelled=cancelled,
+        retryable=False,
+        terminal=terminal,
+    )
+    payload = {
+        "success": True,
+        "data": {
+            "web": [
+                {
+                    "url": "https://example.test/item",
+                    "markdown": markdown,
+                    "metadata": {
+                        "url": "https://example.test/item",
+                        "statusCode": status,
+                        "contentType": content_type,
+                    },
+                }
+            ]
+        },
+    }
     return SearchAdapterResult(
-        raw_payload=json.dumps(payload).encode("utf-8"),
-        http_status=http_status,
-        transport_error=transport_error,
-        elapsed_seconds=elapsed_seconds,
+        raw_payload=json.dumps(payload).encode(),
+        http_status=status,
+        transport_metadata={
+            "elapsed_seconds": elapsed,
+            "first_byte_seconds": min(0.005, elapsed),
+            "provider_operation_seconds": elapsed,
+            "content_type": content_type,
+            "preflight": outcome.to_metadata(),
+        },
     )
 
 
-class TestCandidatePreflightChecker:
-    """Unit tests for CandidatePreflightChecker."""
+class TestCanonicalRouting:
+    def test_public_adapter_is_bounded(self):
+        from research_store import acquisition_service, orchestrator
 
-    def test_suitable_content_passes(self):
-        checker = CandidatePreflightChecker()
-        result = _make_result(markdown="# Hello\n\nSome useful content here.")
-        outcome = checker.check(result)
-        assert outcome.classification == "suitable"
-        assert not outcome.is_hard_rejection
-        assert not outcome.cancelled
+        assert acquisition_service.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
+        assert research_store.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
+        assert orchestrator.AcquisitionStage.__name__ == "BoundedAcquisitionStage"
+        assert orchestrator.ExtractionStage.__name__ == "BoundedExtractionStage"
 
-    def test_empty_markdown_rejected(self):
+
+class TestSuitabilityPolicy:
+    def test_empty_markdown_is_terminal_empty_content(self):
         checker = CandidatePreflightChecker()
-        result = _make_result(markdown="")
+        result = SearchAdapterResult(raw_payload=b'{"markdown":""}', http_status=200)
         outcome = checker.check(result)
         assert outcome.classification == "empty_content"
-        assert outcome.is_hard_rejection
+        assert outcome.reason_code == "empty_markdown"
+        assert outcome.terminal
         assert outcome.cancelled
 
-    def test_whitespace_only_markdown_rejected(self):
-        checker = CandidatePreflightChecker()
-        result = _make_result(markdown="   \n  \t  ")
-        outcome = checker.check(result)
-        assert outcome.classification == "empty_content"
-        assert outcome.is_hard_rejection
-
-    def test_anti_bot_page_detected(self):
-        checker = CandidatePreflightChecker()
-        result = _make_result(
-            markdown=(
-                "<html><body>"
-                "Please verify you are human. This page is protected by Cloudflare."
-                "</body></html>"
-            )
-        )
-        outcome = checker.check(result)
-        assert outcome.classification == "anti_bot"
-        assert outcome.is_hard_rejection
-        assert outcome.cancelled
-
-    def test_captcha_signature_detected(self):
-        checker = CandidatePreflightChecker()
-        result = _make_result(markdown="Please complete this captcha to continue.")
-        outcome = checker.check(result)
-        assert outcome.classification == "anti_bot"
-        assert outcome.is_hard_rejection
-
-    def test_hcaptcha_detected(self):
-        checker = CandidatePreflightChecker()
-        result = _make_result(markdown="hCaptcha challenge detected.")
-        outcome = checker.check(result)
-        assert outcome.classification == "anti_bot"
-        assert outcome.is_hard_rejection
-
-    def test_http_error_hard_rejects(self):
-        checker = CandidatePreflightChecker()
-        result = _make_result(http_status=403)
-        outcome = checker.check(result)
-        assert outcome.classification == "http_error"
-        assert outcome.is_hard_rejection
-        assert outcome.cancelled
-
-    def test_http_500_hard_rejects(self):
-        checker = CandidatePreflightChecker()
-        result = _make_result(http_status=500)
-        outcome = checker.check(result)
-        assert outcome.classification == "http_error"
-        assert outcome.is_hard_rejection
-
-    def test_transient_transport_error_not_hard_rejected(self):
-        checker = CandidatePreflightChecker()
-        result = _make_result(transport_error="Network error: EAI_AGAIN")
-        outcome = checker.check(result)
-        assert outcome.classification == "transient"
-        assert not outcome.is_hard_rejection
-        assert not outcome.cancelled
-
-    def test_timed_out_transport_error_not_hard_rejected(self):
-        checker = CandidatePreflightChecker()
-        result = _make_result(transport_error="ETIMEDOUT during request")
-        outcome = checker.check(result)
-        assert outcome.classification == "transient"
-        assert not outcome.is_hard_rejection
-
-    def test_provider_deadline_exceeded_rejects(self):
-        checker = CandidatePreflightChecker(max_elapsed_seconds=5.0)
-        result = _make_result(markdown="# Content", elapsed_seconds=10.0)
-        outcome = checker.check(result)
-        assert outcome.classification == "empty_content"
-        assert outcome.is_hard_rejection
-        assert outcome.cancelled
-        assert "deadline exceeded" in outcome.reason
-
-    def test_within_deadline_allows_content(self):
-        checker = CandidatePreflightChecker(max_elapsed_seconds=5.0)
-        result = _make_result(markdown="# Content", elapsed_seconds=2.0)
-        outcome = checker.check(result)
-        assert outcome.classification == "suitable"
-        assert not outcome.is_hard_rejection
-
-    def test_no_markdown_triggers_empty_content(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(raw_payload=b'{"success": false}')
-        outcome = checker.check(result)
-        assert outcome.classification == "empty_content"
-        assert outcome.is_hard_rejection
-
-    def test_short_markdown_below_minimum_rejected(self):
-        checker = CandidatePreflightChecker(min_markdown_length=100)
-        result = _make_result(markdown="Hi")
-        outcome = checker.check(result)
-        assert outcome.classification == "empty_content"
-        assert outcome.is_hard_rejection
-
-    def test_custom_anti_bot_patterns_accepted(self):
-        import re
-
-        custom_patterns = [re.compile(r"(?i)custom-block")]
-        checker = CandidatePreflightChecker(anti_bot_patterns=custom_patterns)
-        result = _make_result(markdown="This is custom-block protection.")
-        outcome = checker.check(result)
-        assert outcome.classification == "anti_bot"
-        assert outcome.is_hard_rejection
-
-    def test_normal_content_with_anti_bot_false_positive_not_flagged(self):
-        checker = CandidatePreflightChecker()
-        result = _make_result(
-            markdown=(
-                "# Research Article\n\n"
-                "The study examined bot detection mechanisms "
-                "and found they were effective."
-            )
-        )
-        outcome = checker.check(result)
-        # "bot detection" appears but should not trigger because it's in
-        # a different context — however the pattern r"(?i)bot detection" would
-        # match. Let's use content that avoids all patterns.
-        result = _make_result(
-            markdown="# Normal Article\n\nThis is a normal article about science."
-        )
-        outcome = checker.check(result)
-        assert outcome.classification == "suitable"
-        assert not outcome.is_hard_rejection
-
-
-# ---------------------------------------------------------------------------
-# Integration with AcquisitionStage
-# ---------------------------------------------------------------------------
-
-
-class TestAcquisitionStagePreflight:
-    """Integration tests for preflight in AcquisitionStage."""
-
-    def test_rejected_candidate_skipped_in_ingest_requests(self):
-        """Empty-content candidates must not appear as ingest requests."""
-        from research_store.orchestrator import AcquisitionStage
-
-        mock_run_svc = MagicMock()
-        mock_acq_svc = MagicMock()
-        mock_cov_svc = MagicMock()
-        mock_strat_svc = MagicMock()
-        mock_config = MagicMock()
-
-        stage = AcquisitionStage(
-            run_service=mock_run_svc,
-            acquisition_service=mock_acq_svc,
-            coverage_service=mock_cov_svc,
-            strategy_service=mock_strat_svc,
-            config=mock_config,
-        )
-
-        # Simulate a search result with one suitable and one empty candidate.
-        suitable_candidate = {
-            "id": "c1",
-            "candidate_id": "c1",
-            "canonical_url": "https://example.com/good",
-            "raw_item": {"markdown": "# Good content\n\nUseful text here."},
-        }
-        empty_candidate = {
-            "id": "c2",
-            "candidate_id": "c2",
-            "canonical_url": "https://example.com/empty",
-            "raw_item": {"markdown": ""},
-        }
-
-        mock_result = MagicMock()
-        mock_result.search_response_id = "resp-1"
-        mock_result.candidate_count = 2
-        mock_result.candidates = [suitable_candidate, empty_candidate]
-        mock_acq_svc.execute_search.return_value = mock_result
-
-        # We can't fully execute without more mocking, but we can verify the
-        # preflight logic is wired by checking the stage was created successfully.
-        assert stage.preflight_checker is not None
-        assert isinstance(stage.preflight_checker, CandidatePreflightChecker)
-
-
-# ---------------------------------------------------------------------------
-# Timeout / deadline enforcement
-# ---------------------------------------------------------------------------
-
-
-class TestProviderDeadlineEnforcement:
-    """Tests that slow provider responses are bounded."""
-
-    def test_elapsed_seconds_populated_on_success(self):
-        runner_calls = []
-
-        def fake_runner(cmd, timeout=60):
-            runner_calls.append({"cmd": cmd, "timeout": timeout})
-            import time
-
-            time.sleep(0.01)
-            # _scrape_url expects top-level markdown and metadata keys.
-            payload = {
-                "markdown": "# Test\n\nContent.",
-                "metadata": {"scrapeId": "sid-1", "statusCode": 200},
-            }
-            return 0, json.dumps(payload).encode(), ""
-
-        from research_store.acquisition_service import FirecrawlSearchAdapter
-
-        adapter = FirecrawlSearchAdapter(runner=fake_runner)
-        result = adapter._scrape_url("https://example.com", retries=0)
-        assert result.elapsed_seconds is not None
-        assert result.elapsed_seconds > 0
-        assert result.http_status == 200
-
-    def test_elapsed_seconds_populated_on_failure(self):
-        def fake_runner(cmd, timeout=60):
-            import time
-
-            time.sleep(0.01)
-            return 1, b"", "scrape failed"
-
-        from research_store.acquisition_service import FirecrawlSearchAdapter
-
-        adapter = FirecrawlSearchAdapter(runner=fake_runner)
-        result = adapter._scrape_url("https://example.com", retries=0)
-        assert result.elapsed_seconds is not None
-        assert result.elapsed_seconds > 0
-        assert result.transport_error is not None
-
-
-# ---------------------------------------------------------------------------
-# Cancellation — no orphaned tasks
-# ---------------------------------------------------------------------------
-
-
-class TestCancellationNoOrphans:
-    """Verify that hard rejections do not leave dangling provider work."""
-
-    def test_empty_content_rejection_does_not_create_ingest_request(self):
-        """A preflight-rejected candidate must not produce an IngestRequest."""
-        from research_store.acquisition_service import CandidatePreflightChecker
-        from research_store.domain import SearchAdapterResult
-
+    def test_whitespace_markdown_is_terminal_empty_content(self):
         checker = CandidatePreflightChecker()
         result = SearchAdapterResult(
-            raw_payload=json.dumps({"data": {"web": [{"markdown": ""}]}}).encode(
-                "utf-8"
+            raw_payload=json.dumps({"markdown": "  \n\t  "}).encode(), http_status=200
+        )
+        assert checker.check(result).classification == "empty_content"
+
+    def test_anti_bot_challenge_is_rejected(self):
+        checker = CandidatePreflightChecker()
+        result = SearchAdapterResult(
+            raw_payload=json.dumps(
+                {"markdown": "Cloudflare verification challenge: verify you are human"}
+            ).encode(),
+            http_status=200,
+            transport_metadata={"content_type": "text/html"},
+        )
+        outcome = checker.check(result)
+        assert outcome.classification == "anti_bot"
+        assert outcome.failure_stage == "content_suitability"
+
+    def test_legitimate_bot_detection_article_is_not_false_positive(self):
+        checker = CandidatePreflightChecker()
+        result = SearchAdapterResult(
+            raw_payload=json.dumps(
+                {
+                    "markdown": (
+                        "# Security research\n\n"
+                        "This article compares bot detection mechanisms and "
+                        "Cloudflare products in ordinary prose."
+                    )
+                }
+            ).encode(),
+            http_status=200,
+            transport_metadata={"content_type": "text/markdown"},
+        )
+        outcome = checker.check(result)
+        assert outcome.classification == "suitable"
+        assert not outcome.terminal
+
+    def test_unsupported_content_type_is_distinct(self):
+        checker = CandidatePreflightChecker()
+        result = SearchAdapterResult(
+            raw_payload=json.dumps({"markdown": "binary representation"}).encode(),
+            http_status=200,
+            transport_metadata={"content_type": "image/png"},
+        )
+        outcome = checker.check(result)
+        assert outcome.classification == "unsupported_content_type"
+        assert outcome.failure_stage == "content_type"
+
+    def test_transient_transport_is_retryable_and_redacted(self):
+        checker = CandidatePreflightChecker()
+        result = SearchAdapterResult(
+            raw_payload=b"{}",
+            transport_error="token=super-secret EAI_AGAIN",
+        )
+        outcome = checker.check(result)
+        assert outcome.classification == "transient"
+        assert outcome.retryable
+        assert not outcome.terminal
+        assert "super-secret" not in outcome.reason
+        assert "[REDACTED]" in outcome.reason
+
+    def test_timeout_is_not_misclassified_as_empty_content(self):
+        checker = CandidatePreflightChecker(max_elapsed_seconds=2.0)
+        result = SearchAdapterResult(
+            raw_payload=b"{}",
+            transport_metadata={
+                "elapsed_seconds": 2.1,
+                "provider_operation_seconds": 2.1,
+                "timeout_reason": "provider_operation_timeout",
+            },
+        )
+        outcome = checker.check(result)
+        assert outcome.classification == "timeout"
+        assert outcome.reason_code == "provider_operation_timeout"
+        assert outcome.failure_stage == "provider_operation"
+
+
+class TestBoundedProviderExecution:
+    def test_search_is_discovery_only(self):
+        calls: list[list[str]] = []
+        payload = json.dumps(
+            {"success": True, "data": [{"url": "https://example.test/a"}]}
+        ).encode()
+
+        def runner(cmd, timeout=None):
+            calls.append(list(cmd))
+            return 0, payload, ""
+
+        adapter = BoundedFirecrawlSearchAdapter(
+            runner=runner,
+            deadline_policy=ExtractionDeadlinePolicy(
+                first_byte_timeout_seconds=1,
+                provider_operation_timeout_seconds=2,
+                overall_candidate_timeout_seconds=3,
             ),
+        )
+        result = adapter.search("bounded extraction")
+        assert result.raw_payload == payload
+        assert calls[0][1] == "search"
+        assert "--scrape" not in calls[0]
+        assert "--scrape-formats" not in calls[0]
+
+    def test_empty_content_has_separate_zero_retry_default(self):
+        calls = 0
+
+        def runner(cmd, timeout=None):
+            nonlocal calls
+            calls += 1
+            return (
+                0,
+                json.dumps(
+                    {
+                        "markdown": "",
+                        "metadata": {
+                            "statusCode": 200,
+                            "contentType": "text/html",
+                        },
+                    }
+                ).encode(),
+                "",
+            )
+
+        adapter = BoundedFirecrawlSearchAdapter(
+            runner=runner,
+            deadline_policy=ExtractionDeadlinePolicy(
+                first_byte_timeout_seconds=1,
+                provider_operation_timeout_seconds=2,
+                overall_candidate_timeout_seconds=3,
+                transient_retries=2,
+                empty_content_retries=0,
+            ),
+        )
+        result = adapter.scrape_url("https://example.test/empty")
+        assert calls == 1
+        assert result.transport_metadata["preflight"]["classification"] == "empty_content"
+
+    def test_transient_failure_retries_then_succeeds(self):
+        responses = [
+            (1, b"", "EAI_AGAIN"),
+            (
+                0,
+                json.dumps(
+                    {
+                        "markdown": "# useful",
+                        "metadata": {
+                            "statusCode": 200,
+                            "contentType": "text/html",
+                        },
+                    }
+                ).encode(),
+                "",
+            ),
+        ]
+
+        def runner(cmd, timeout=None):
+            return responses.pop(0)
+
+        adapter = BoundedFirecrawlSearchAdapter(
+            runner=runner,
+            deadline_policy=ExtractionDeadlinePolicy(
+                first_byte_timeout_seconds=1,
+                provider_operation_timeout_seconds=2,
+                overall_candidate_timeout_seconds=3,
+                transient_retries=2,
+            ),
+        )
+        result = adapter.scrape_url("https://example.test/transient")
+        assert result.transport_metadata["attempts"] == 2
+        assert result.transport_metadata["preflight"]["classification"] == "suitable"
+
+    def test_first_byte_timeout_reaps_provider_process(self, tmp_path):
+        pid_path = tmp_path / "provider.pid"
+        command = [
+            "/bin/sh",
+            "-c",
+            f"echo $$ > {pid_path}; exec sleep 5",
+        ]
+        result = BoundedSubprocessRunner().run(
+            command,
+            first_byte_timeout_seconds=0.75,
+            operation_timeout_seconds=2.0,
+        )
+        assert result.timeout_reason == "first_byte_timeout"
+        assert result.cancelled
+        assert pid_path.exists()
+        pid = int(pid_path.read_text().strip())
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+
+    def test_provider_operation_timeout_after_first_byte(self):
+        result = BoundedSubprocessRunner().run(
+            [sys.executable, "-c", "import sys,time;print('x',flush=True);time.sleep(5)"],
+            first_byte_timeout_seconds=2.0,
+            operation_timeout_seconds=0.75,
+        )
+        assert result.first_byte_seconds is not None
+        assert result.timeout_reason == "provider_operation_timeout"
+        assert result.cancelled
+
+
+class _FakeExtractionService:
+    def __init__(self):
+        self.created: list[tuple[UUID, dict]] = []
+        self.completed: list[dict] = []
+        self.selected: list[dict] = []
+
+    def create_attempt(self, **kwargs):
+        attempt_id = uuid4()
+        self.created.append((attempt_id, kwargs))
+        return attempt_id
+
+    def complete_attempt(self, **kwargs):
+        self.completed.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    def store_raw_blob(self, content):
+        return SimpleNamespace(sha256="a" * 64, uri="blob:raw", byte_length=len(content))
+
+    def store_normalized_blob(self, content):
+        return SimpleNamespace(
+            sha256="b" * 64, uri="blob:normalized", byte_length=len(content)
+        )
+
+    def select_final_attempt(self, **kwargs):
+        self.selected.append(kwargs)
+
+
+class _FakeCorpusService:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def ingest_batch(self, **kwargs):
+        self.calls.append(kwargs)
+        assets = []
+        for fallback, item in enumerate(kwargs["requests"]):
+            ordinal = item.get("metadata", {}).get("firecrawl", {}).get(
+                "result_index", fallback
+            )
+            assets.append(
+                {
+                    "ordinal": ordinal,
+                    "status": "complete",
+                    "requested_url": item["request"].requested_url,
+                    "snapshot_id": str(uuid4()),
+                    "chunk_ids": [str(uuid4())],
+                }
+            )
+        return {"assets": assets, "failure_count": 0}
+
+
+class _FakeScrapeAdapter:
+    def __init__(self, by_url):
+        self.by_url = by_url
+        self.calls: list[str] = []
+
+    def scrape_url(self, url):
+        self.calls.append(url)
+        return self.by_url[url]
+
+
+class TestProductionExtractionSeam:
+    def _stage(self):
+        run_service = MagicMock()
+        run_service.status.return_value = SimpleNamespace(external_id="fr_test")
+        extraction = _FakeExtractionService()
+        corpus = _FakeCorpusService()
+        stage = BoundedExtractionStage(
+            run_service=run_service,
+            coverage_service=MagicMock(),
+            config=SimpleNamespace(parser_version="parser-v1"),
+            corpus_service=corpus,
+            extraction_service=extraction,
+        )
+        return stage, run_service, extraction, corpus
+
+    def test_suitable_candidate_ingests_while_empty_candidate_is_cancelled(self):
+        stage, _run_service, extraction, corpus = self._stage()
+        good = "https://example.test/good"
+        empty = "https://example.test/empty"
+        context = {
+            "raw_ingest_requests": [
+                {
+                    "requested_url": good,
+                    "metadata": {
+                        "candidate_id": str(uuid4()),
+                        "firecrawl": {"result_index": 0},
+                    },
+                },
+                {
+                    "requested_url": empty,
+                    "metadata": {
+                        "candidate_id": str(uuid4()),
+                        "firecrawl": {"result_index": 1},
+                    },
+                },
+            ]
+        }
+        context["_candidate_scrape_adapter"] = _FakeScrapeAdapter(
+            {
+                good: _wrapped_result("# useful evidence"),
+                empty: _wrapped_result(
+                    "",
+                    classification="empty_content",
+                    reason_code="empty_markdown",
+                    cancelled=True,
+                ),
+            }
+        )
+        result = stage.execute(uuid4(), 4, 1, "extracting", context)
+        assert result.error is None
+        assert len(corpus.calls) == 1
+        assert len(corpus.calls[0]["requests"]) == 1
+        assert corpus.calls[0]["requests"][0]["requested_url"] == good
+        assert any(item["exit_status"] == "succeeded" for item in extraction.completed)
+        rejected = [
+            item
+            for item in extraction.completed
+            if item.get("failure_class") == "empty_content"
+        ]
+        assert len(rejected) == 1
+        assert rejected[0]["exit_status"] == "cancelled"
+        assert "reason_code=empty_markdown" in rejected[0]["error_message"]
+        assert "stage=content_suitability" in rejected[0]["error_message"]
+
+    def test_unsupported_content_type_uses_existing_durable_enum(self):
+        stage, _run_service, extraction, corpus = self._stage()
+        url = "https://example.test/image"
+        context = {
+            "raw_ingest_requests": [
+                {
+                    "requested_url": url,
+                    "metadata": {
+                        "candidate_id": str(uuid4()),
+                        "firecrawl": {"result_index": 0},
+                    },
+                }
+            ],
+            "_candidate_scrape_adapter": _FakeScrapeAdapter(
+                {
+                    url: _wrapped_result(
+                        "binary",
+                        classification="unsupported_content_type",
+                        reason_code="unsupported_content_type",
+                        failure_stage="content_type",
+                        content_type="image/png",
+                        cancelled=True,
+                    )
+                }
+            ),
+        }
+        result = stage.execute(uuid4(), 7, 1, "extracting", context)
+        assert result.error is None
+        assert corpus.calls == []
+        assert extraction.completed[0]["failure_class"] == "unsupported_format"
+        assert extraction.completed[0]["exit_status"] == "cancelled"
+
+
+class _DiscoveryAdapter:
+    def search(self, query_text: str, **kwargs):
+        return SearchAdapterResult(
+            raw_payload=json.dumps(
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "url": "https://example.test/db-empty",
+                            "title": "DB empty",
+                        }
+                    ],
+                }
+            ).encode(),
             http_status=200,
+            transport_metadata={"attempt": 1},
         )
-        outcome = checker.check(result)
-        assert outcome.is_hard_rejection
-        assert outcome.classification == "empty_content"
-        # The caller (AcquisitionStage) should skip adding this to raw_ingest_requests.
-        # This is verified indirectly by the unit tests above.
 
-    def test_anti_bot_rejection_does_not_create_ingest_request(self):
-        from research_store.acquisition_service import CandidatePreflightChecker
-        from research_store.domain import SearchAdapterResult
 
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(
-            raw_payload=json.dumps(
-                {"data": {"web": [{"markdown": "Cloudflare verification required"}]}}
-            ).encode("utf-8"),
-            http_status=200,
+@pytest.mark.skipif(not TEST_DSN, reason="requires disposable PostgreSQL test DSN")
+def test_postgres_audit_readback_preserves_class_stage_elapsed_and_redaction(tmp_path):
+    migrate(TEST_DSN)
+    config = replace(
+        StoreConfig.from_env(), database_url=TEST_DSN, blob_root=tmp_path / "blobs"
+    )
+    external_id = f"fr_{uuid4()}"
+    run_service = build_run_service(config)
+    run_service.create(objective="issue 216 audit readback", external_id=external_id)
+    build_workflow_operation_service(config).prepare_run(external_id)
+    status = run_service.status(external_id=external_id)
+    acquisition = build_acquisition_service(config, search_adapter=_DiscoveryAdapter())
+    discovered = acquisition.execute_search(status.id, "db audit candidate")
+    candidate_id = UUID(str(discovered.candidates[0]["candidate_id"]))
+
+    status = run_service.status(run_id=status.id)
+    run_service.transition(
+        status.id,
+        "extracting",
+        expected_revision=status.lifecycle_revision,
+        idempotency_key=f"issue216:test:extracting:{status.id}",
+        actor_type="test",
+        actor_identifier="test_issue_216",
+        triggering_event="run.extracting",
+        reason="exercise bounded preflight audit persistence",
+    )
+    status = run_service.status(run_id=status.id)
+    rejection = CandidatePreflightResult(
+        classification="timeout",
+        reason_code="provider_operation_timeout",
+        reason="token=secret-value provider operation deadline exceeded",
+        failure_stage="provider_operation",
+        http_status=None,
+        elapsed_seconds=1.25,
+        first_byte_seconds=0.10,
+        provider_operation_seconds=1.25,
+        cancelled=True,
+        terminal=True,
+    )
+    stage = BoundedExtractionStage(
+        run_service=run_service,
+        coverage_service=MagicMock(),
+        config=config,
+        corpus_service=SimpleNamespace(),
+        extraction_service=build_extraction_service(config),
+    )
+    context = {
+        "raw_ingest_requests": [
+            {
+                "requested_url": "https://example.test/db-empty",
+                "metadata": {
+                    "candidate_id": str(candidate_id),
+                    "firecrawl": {"result_index": 0},
+                },
+            }
+        ],
+        "_candidate_scrape_adapter": _FakeScrapeAdapter(
+            {
+                "https://example.test/db-empty": SearchAdapterResult(
+                    raw_payload=b"{}",
+                    transport_metadata={
+                        "elapsed_seconds": 1.25,
+                        "preflight": rejection.to_metadata(),
+                    },
+                )
+            }
+        ),
+    }
+    result = stage.execute(status.id, status.lifecycle_revision, 1, "extracting", context)
+    assert result.error is None
+
+    with run_service.uow_factory() as uow:
+        attempts = uow.extraction_attempts.list_attempts_for_candidate(
+            candidate_id, run_id=status.id
         )
-        outcome = checker.check(result)
-        assert outcome.is_hard_rejection
-        assert outcome.classification == "anti_bot"
+    assert len(attempts) == 1
+    attempt = attempts[0]
+    assert attempt["exit_status"] == "cancelled"
+    assert attempt["failure_class"] == "timeout"
+    assert attempt["backend_status"] == (
+        "preflight:provider_operation:provider_operation_timeout"
+    )
+    assert "elapsed_seconds=1.250000" in attempt["error_message"]
+    assert "stage=provider_operation" in attempt["error_message"]
+    assert "secret-value" not in attempt["error_message"]
+    assert "[REDACTED]" in attempt["error_message"]
+    assert attempt.get("raw_blob") is None
+    assert attempt.get("normalized_blob") is None
 
 
-# ---------------------------------------------------------------------------
-# Distinct policies per failure class
-# ---------------------------------------------------------------------------
-
-
-class TestDistinctFailurePolicies:
-    """Each failure class follows its own policy path."""
-
-    def test_empty_content_is_hard_rejection(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(
-            raw_payload=json.dumps({"data": {"web": [{"markdown": ""}]}}).encode(),
-        )
-        outcome = checker.check(result)
-        assert outcome.is_hard_rejection
-        assert outcome.classification == "empty_content"
-        assert outcome.cancelled
-
-    def test_anti_bot_is_hard_rejection(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(
-            raw_payload=json.dumps(
-                {"data": {"web": [{"markdown": "Please verify you are human"}]}}
-            ).encode(),
-        )
-        outcome = checker.check(result)
-        assert outcome.is_hard_rejection
-        assert outcome.classification == "anti_bot"
-        assert outcome.cancelled
-
-    def test_http_error_is_hard_rejection(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(raw_payload=b"{}", http_status=404)
-        outcome = checker.check(result)
-        assert outcome.is_hard_rejection
-        assert outcome.classification == "http_error"
-        assert outcome.cancelled
-
-    def test_transient_is_not_hard_rejection(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(
-            raw_payload=b"{}",
-            transport_error="EAI_AGAIN network error",
-            http_status=None,
-        )
-        outcome = checker.check(result)
-        assert not outcome.is_hard_rejection
-        assert outcome.classification == "transient"
-        assert not outcome.cancelled
-
-    def test_suitable_is_not_hard_rejection(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(
-            raw_payload=json.dumps(
-                {"data": {"web": [{"markdown": "# Useful content"}]}}
-            ).encode(),
-        )
-        outcome = checker.check(result)
-        assert not outcome.is_hard_rejection
-        assert outcome.classification == "suitable"
-        assert not outcome.cancelled
-
-
-# ---------------------------------------------------------------------------
-# Audit trail — precise failure class, elapsed stage, cancellation reason
-# ---------------------------------------------------------------------------
-
-
-class TestAuditTrailPersistence:
-    """Verify that failure details are preserved for audit."""
-
-    def test_preflight_reason_preserved(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(
-            raw_payload=json.dumps({"data": {"web": [{"markdown": ""}]}}).encode(),
-        )
-        outcome = checker.check(result)
-        assert outcome.reason is not None
-        assert len(outcome.reason) > 0
-
-    def test_http_status_preserved_on_rejection(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(raw_payload=b"{}", http_status=503)
-        outcome = checker.check(result)
-        assert outcome.http_status == 503
-
-    def test_elapsed_seconds_preserved_on_rejection(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(
-            raw_payload=b"{}",
-            elapsed_seconds=42.5,
-        )
-        outcome = checker.check(result)
-        assert outcome.elapsed_seconds == 42.5
-
-    def test_cancelled_flag_set_on_hard_rejection(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(
-            raw_payload=json.dumps({"data": {"web": [{"markdown": ""}]}}).encode(),
-        )
-        outcome = checker.check(result)
-        assert outcome.cancelled is True
-
-    def test_cancelled_flag_false_on_suitable(self):
-        checker = CandidatePreflightChecker()
-        result = SearchAdapterResult(
-            raw_payload=json.dumps(
-                {"data": {"web": [{"markdown": "# Content"}]}}
-            ).encode(),
-        )
-        outcome = checker.check(result)
-        assert outcome.cancelled is False
+def test_issue_216_documentation_and_ci_contract():
+    root = SCRIPTS.parent
+    doc = (root / "references" / "extraction-preflight-timeouts.md").read_text(
+        encoding="utf-8"
+    )
+    workflow = (root / ".github" / "workflows" / "extraction-preflight.yml").read_text(
+        encoding="utf-8"
+    )
+    for setting in (
+        "FIRECRAWL_EXTRACTION_FIRST_BYTE_TIMEOUT_SECONDS",
+        "FIRECRAWL_EXTRACTION_PROVIDER_TIMEOUT_SECONDS",
+        "FIRECRAWL_EXTRACTION_CANDIDATE_TIMEOUT_SECONDS",
+        "FIRECRAWL_EXTRACTION_TRANSIENT_RETRIES",
+        "FIRECRAWL_EXTRACTION_EMPTY_RETRIES",
+    ):
+        assert setting in doc
+    assert "unsupported_content_type" in doc
+    assert "unsupported_format" in doc
+    assert "scripts/test_issue_216_extraction_preflight.py" in workflow
