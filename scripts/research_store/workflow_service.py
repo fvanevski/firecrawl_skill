@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 from uuid import UUID
 
+from .completion_provenance import (
+    CompletionProvenance,
+    CompletionProvenanceError,
+    load_authoritative_completion_provenance,
+    resolve_completion_assertions,
+)
 from .invocation_service import InvocationError, InvocationRecord, InvocationService
 from .run_service import TERMINAL_STATES, ResearchRunService, RunStatus
 
@@ -336,7 +342,21 @@ class WorkflowOperationService:
         source_manifest_sha256: str | None = None,
         answer_sha256: str | None = None,
         idempotency_key: str | None = None,
+        provenance_type: str | None = None,
     ) -> RunStatus:
+        """Finish a run with authoritative synthesis provenance gates.
+
+        ``completed`` derives its answer and source hashes from persisted
+        PostgreSQL authority: the immutable synthesis artifact and active exact
+        membership seal.  Caller-supplied hashes are optional assertions and
+        must match those records.  Current evidence, semantic-call authority,
+        claim/evidence links, citation validation, and complete deterministic
+        validation are all required.  The exact provenance bundle is repeated
+        inside the guarded terminal transaction before commit.
+
+        Partial outcome is reserved for intentional policy-approved incomplete
+        research and does not require authoritative synthesis provenance.
+        """
         current = self.run_service.status(external_id=external_run_id)
         if current.state in TERMINAL_STATES:
             return current
@@ -363,6 +383,7 @@ class WorkflowOperationService:
                 completion={
                     "source_manifest_sha256": source_manifest_sha256,
                     "answer_sha256": answer_sha256,
+                    "provenance_type": provenance_type,
                 },
             )
 
@@ -409,8 +430,16 @@ class WorkflowOperationService:
                     "source_manifest_sha256": source_manifest_sha256,
                     "answer_sha256": answer_sha256,
                     "index_progress": progress.to_dict(),
+                    "provenance_type": provenance_type,
                 },
             )
+
+        provenance = self._assert_completion_gates(
+            run_id=current.id,
+            source_manifest_sha256=source_manifest_sha256,
+            answer_sha256=answer_sha256,
+            provenance_type=provenance_type,
+        )
 
         if current.state == "coverage_review":
             current = self._transition(
@@ -437,8 +466,46 @@ class WorkflowOperationService:
             reason="operator completed the PostgreSQL-authoritative run",
             outcome=outcome,
             completion={
-                "source_manifest_sha256": source_manifest_sha256,
-                "answer_sha256": answer_sha256,
+                **provenance.completion_fields(),
                 "index_progress": progress.to_dict(),
             },
         )
+
+    def _assert_completion_gates(
+        self,
+        run_id: UUID,
+        *,
+        source_manifest_sha256: str | None,
+        answer_sha256: str | None,
+        provenance_type: str | None,
+    ) -> CompletionProvenance:
+        """Load and verify the complete authoritative completion provenance.
+
+        Any lookup, schema, persistence, or validation failure rejects
+        completion.  No missing-UoW or compatibility path is allowed to
+        bypass an authoritative terminal gate.
+        """
+        if provenance_type not in (None, "authoritative"):
+            raise WorkflowBoundaryError(
+                f"completion with provenance_type={provenance_type!r} is rejected; "
+                "authority is derived from persisted semantic provenance"
+            )
+        try:
+            with self.uow_factory() as uow:
+                provenance = load_authoritative_completion_provenance(
+                    uow, run_id, for_update=False
+                )
+            return resolve_completion_assertions(
+                provenance,
+                source_manifest_sha256=source_manifest_sha256,
+                answer_sha256=answer_sha256,
+            )
+        except CompletionProvenanceError as exc:
+            raise WorkflowBoundaryError(
+                f"authoritative completion provenance rejected: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise WorkflowBoundaryError(
+                "authoritative completion provenance is unavailable; "
+                f"completion fails closed ({type(exc).__name__})"
+            ) from exc

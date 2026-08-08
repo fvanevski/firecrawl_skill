@@ -60,6 +60,7 @@ class CheckpointWorkflowOperationService(WorkflowOperationService):
         status_name: str = "complete",
         source_manifest_sha256: str | None = None,
         answer_sha256: str | None = None,
+        provenance_type: str | None = None,
         idempotency_key: str | None = None,
     ):
         command_key = idempotency_key or (
@@ -74,5 +75,6 @@ class CheckpointWorkflowOperationService(WorkflowOperationService):
             status_name=status_name,
             source_manifest_sha256=source_manifest_sha256,
             answer_sha256=answer_sha256,
+            provenance_type=provenance_type,
             idempotency_key=idempotency_key,
         )

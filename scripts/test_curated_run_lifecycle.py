@@ -109,6 +109,22 @@ class _InvocationService:
         return record
 
 
+class _LifecycleCompletion:
+    source_manifest_sha256 = "a" * 64
+    answer_sha256 = "b" * 64
+
+    def completion_fields(self):
+        return {
+            "source_manifest_sha256": self.source_manifest_sha256,
+            "answer_sha256": self.answer_sha256,
+            "provenance_type": "authoritative",
+            "completion_provenance": {
+                "schema_version": "completion-provenance-v1",
+                "source": "issue-212-lifecycle-unit-fixture",
+            },
+        }
+
+
 class _Workflow(WorkflowOperationService):
     def __init__(self, runs, invocations):
         super().__init__(runs, invocations)
@@ -125,6 +141,10 @@ class _Workflow(WorkflowOperationService):
     def index_progress(self, run_id):
         assert run_id == self.run_service.run_id
         return self.progress
+
+    def _assert_completion_gates(self, run_id, **_assertions):
+        assert run_id == self.run_service.run_id
+        return _LifecycleCompletion()
 
 
 class _PromotionService:

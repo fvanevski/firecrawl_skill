@@ -253,6 +253,7 @@ class CuratedRunService:
         status_name: str = "complete",
         source_manifest_sha256: str | None = None,
         answer_sha256: str | None = None,
+        provenance_type: str | None = None,
     ) -> RunModeStatus:
         current = self._require_curated(external_run_id)
         if (
@@ -270,6 +271,7 @@ class CuratedRunService:
             status_name=status_name,
             source_manifest_sha256=source_manifest_sha256,
             answer_sha256=answer_sha256,
+            provenance_type=provenance_type,
             idempotency_key=(
                 f"curated:finish:{external_run_id}:{status_name}:{outcome}:"
                 f"{source_manifest_sha256 or ''}:{answer_sha256 or ''}"

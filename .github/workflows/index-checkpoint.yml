@@ -68,7 +68,7 @@ jobs:
             sleep 1
           done
 
-      - name: Run checkpoint, promotion, and curated-lifecycle tests
+      - name: Run checkpoint, provenance, promotion, and curated-lifecycle tests
         env:
           RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_checkpoint_test"
           RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_checkpoint_test"
@@ -78,6 +78,8 @@ jobs:
             -ra \
             -p no:cacheprovider \
             scripts/test_workflow_service.py \
+            scripts/test_completion_provenance_integration.py \
+            scripts/test_completion_provenance_terminal_guard.py \
             scripts/test_curated_run_lifecycle.py \
             scripts/test_curated_run_integration.py \
             scripts/test_curated_run_documentation.py \
