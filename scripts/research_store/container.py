@@ -9,10 +9,10 @@ from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
 from .extraction_service import ExtractionService
 from .indexing import OpenAICompatibleEmbedder
+from .lifecycle_guard import GuardedResearchRunService as ResearchRunService
 from .postgres import PostgresUnitOfWork
 from .qdrant import QdrantIndex
 from .retrieval import CohereCompatibleReranker
-from .run_service import ResearchRunService
 from .semantic_service import SemanticCallService
 from .service import CorpusService
 from .strategy_service import StrategyRevisionService

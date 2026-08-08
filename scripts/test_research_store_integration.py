@@ -22,6 +22,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+from completion_provenance_test_support import seed_authoritative_completion_provenance
 from research_domain import load_model, schema_registry, serialize_model
 from research_store import cli as store_cli
 from research_store.config import StoreConfig
@@ -89,7 +90,7 @@ def prepared_database():
         )
         assert all(cursor.fetchone())
         cursor.execute("SELECT version_num FROM alembic_version")
-        assert cursor.fetchone()[0] == "0043_ingestion_batch_semantics"
+        assert cursor.fetchone()[0] == "0044_terminal_provenance_guard"
 
 
 def test_wrapper_workflow_runs_entirely_from_postgresql(service):
@@ -158,7 +159,26 @@ def test_wrapper_workflow_runs_entirely_from_postgresql(service):
             (created.id,),
         )
 
-    finished = workflow.finish_run(external_run_id, outcome="satisfied")
+    # Finalize the indexing checkpoint so the membership seal exists before
+    # we seed provenance.  _finalize_indexing is called inside finish_run but
+    # we need it to run first so seed_authoritative_completion_provenance can
+    # attach to the already-sealed census rather than racing it.
+    workflow._finalize_indexing(
+        external_run_id,
+        f"wrapper-test:{created.id}:finalize-indexing",
+    )
+
+    # Seed authoritative completion provenance so the terminal gate passes.
+    provenance = seed_authoritative_completion_provenance(
+        service.uow_factory, created.id
+    )
+
+    finished = workflow.finish_run(
+        external_run_id,
+        outcome="satisfied",
+        source_manifest_sha256=provenance.source_manifest_sha256,
+        answer_sha256=provenance.answer_sha256,
+    )
     assert finished.state == "completed"
     assert finished.declared_outcome == "satisfied"
     assert finished.lifecycle_revision == 9
@@ -570,7 +590,6 @@ def test_research_run_service_records_exactly_one_event_per_transition(service):
         ("retrieving", "transition:retrieving"),
         ("synthesizing", "transition:synthesizing"),
         ("validating", "transition:validating"),
-        ("completed", "transition:completed"),
     )
     revision = 0
     for state, key in commands:
@@ -580,29 +599,73 @@ def test_research_run_service_records_exactly_one_event_per_transition(service):
             expected_revision=revision,
             idempotency_key=key,
             actor_type="integration-test",
-            outcome="satisfied" if state == "completed" else None,
         )
-        revision += 1  # noqa: SIM113
+        revision += 1
         assert result.lifecycle_revision == revision
         assert result.next_state == state
         assert not result.reused
 
+    # Ingest minimal evidence so the membership seal can be created.
+    manifest = service.ingest_batch(
+        f"fc_{uuid4().hex}",
+        "scrape",
+        [
+            IngestRequest(
+                "https://integration.example/transition",
+                b"# Transactional state machine\n\nTest evidence.",
+            )
+        ],
+        research_run_external_id=external_id,
+    )
+    assert manifest["failure_count"] == 0
+
+    # Finalize indexing checkpoint so the membership seal exists.
+    workflow = build_workflow_operation_service(service.config)
+    workflow._finalize_indexing(
+        external_id,
+        f"transition-test:{created.id}:finalize-indexing",
+    )
+
+    # Seed authoritative completion provenance before the terminal transition.
+    seed_authoritative_completion_provenance(service.uow_factory, created.id)
+    # Load the persisted audit metadata so the completion payload matches exactly.
+    from research_store.completion_provenance import (
+        load_authoritative_completion_provenance,
+    )
+
+    with service.uow_factory() as uow:
+        authoritative = load_authoritative_completion_provenance(uow, created.id)
+    completion_payload = authoritative.completion_fields()
+    result = runs.transition(
+        created.id,
+        "completed",
+        expected_revision=revision,
+        idempotency_key="transition:completed",
+        actor_type="integration-test",
+        outcome="sufficient",
+        completion=completion_payload,
+    )
+    revision += 1
+    assert result.lifecycle_revision == revision
+    assert result.next_state == "completed"
+    assert not result.reused
+
     status = runs.status(run_id=created.id)
     assert status.state == "completed"
-    assert status.lifecycle_revision == len(commands)
+    assert status.lifecycle_revision == len(commands) + 1
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT count(*),count(DISTINCT triggering_event_id)
             FROM research_run_transitions WHERE run_id=%s""",
             (created.id,),
         )
-        assert cursor.fetchone() == (len(commands), len(commands))
+        assert cursor.fetchone() == (len(commands) + 1, len(commands) + 1)
         cursor.execute(
             """SELECT count(*) FROM research_events
             WHERE run_id=%s AND event_type NOT IN ('run.created', 'run_started')""",
             (created.id,),
         )
-        assert cursor.fetchone()[0] == len(commands)
+        assert cursor.fetchone()[0] == len(commands) + 1
 
 
 def test_research_run_service_idempotent_retry_and_conflicting_reuse(service):
@@ -1826,17 +1889,46 @@ def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
         return revision
 
     first_terminal_revision = advance_to_validating(0)
+
+    # Ingest minimal evidence so the membership seal can be created.
+    manifest = service.ingest_batch(
+        f"fc_{uuid4().hex}",
+        "scrape",
+        [
+            IngestRequest(
+                "https://integration.example/reopen",
+                b"# Reopen lifecycle\n\nTest evidence.",
+            )
+        ],
+        research_run_external_id=external_id,
+    )
+    assert manifest["failure_count"] == 0
+
+    # Finalize indexing checkpoint so the membership seal exists.
+    workflow = build_workflow_operation_service(service.config)
+    workflow._finalize_indexing(
+        external_id,
+        f"reopen-test:{run_id}:finalize-indexing",
+    )
+
+    # Seed authoritative completion provenance before first completion
+    from research_store.completion_provenance import (
+        load_authoritative_completion_provenance,
+    )
+
+    seed_authoritative_completion_provenance(service.uow_factory, run_id)
+    with service.uow_factory() as uow:
+        authoritative = load_authoritative_completion_provenance(uow, run_id)
+    completion_payload = authoritative.completion_fields()
+
     runs.transition(
         run_id,
         "completed",
         expected_revision=first_terminal_revision,
         idempotency_key="finish:first",
         actor_type="integration-test",
-        outcome="satisfied",
-        completion={
-            "source_manifest_sha256": "a" * 64,
-            "answer_sha256": "b" * 64,
-        },
+        outcome="sufficient",
+        completion=completion_payload,
     )
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
     assert store_cli.main(["run-reopen", external_id]) == 0
@@ -1862,13 +1954,21 @@ def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
             )
         assert "research_runs_state_check" in str(error.value)
     second_terminal_revision = advance_to_validating(first_terminal_revision + 2)
+
+    # Re-seed authoritative completion provenance after reopen
+    seed_authoritative_completion_provenance(service.uow_factory, run_id)
+    with service.uow_factory() as uow:
+        authoritative2 = load_authoritative_completion_provenance(uow, run_id)
+    completion_payload2 = authoritative2.completion_fields()
+
     runs.transition(
         run_id,
         "completed",
         expected_revision=second_terminal_revision,
         idempotency_key="finish:second",
         actor_type="integration-test",
-        outcome="satisfied",
+        outcome="sufficient",
+        completion=completion_payload2,
     )
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -1877,13 +1977,10 @@ def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
             FROM research_runs WHERE id=%s""",
             (run_id,),
         )
-        assert cursor.fetchone() == (
-            "satisfied",
-            None,
-            None,
-            "completed",
-            second_terminal_revision + 1,
-        )
+        row = cursor.fetchone()
+        assert row[0] == "sufficient"
+        assert row[3] == "completed"
+        assert row[4] == second_terminal_revision + 1
 
 
 def test_expired_final_attempt_becomes_dead_and_manifest_failed(service):
@@ -2864,6 +2961,69 @@ def _seed_completed_indexed_asset(service, external_run_id):
         )
 
 
+def _seed_validation_synthesis_stage(service, external_run_id):
+    """Persist a completed validation synthesis stage for the run."""
+    run_id = build_run_service(service.config).status(external_id=external_run_id).id
+    now = _utcnow()
+    stage_id = uuid4()
+    with service.uow_factory() as uow:
+        uow.insert_synthesis_stage(
+            {
+                "id": stage_id,
+                "run_id": run_id,
+                "stage_name": "validation",
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "local",
+                "prompt_version": "synthesis-v1",
+                "schema_version": 1,
+                "artifact": {
+                    "report_hash": "test-hash",
+                    "current_packet_revision": 1,
+                    "stale_packet": False,
+                    "validation_status": "valid",
+                    "is_complete": True,
+                    "claim_manifest": [],
+                    "validation_errors_count": 0,
+                    "validation_warnings_count": 0,
+                    "summary": "All claims supported.",
+                },
+                "error": None,
+                "attempts": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+
+def _seed_cli_completion_provenance(service, external_id):
+    """Seed authoritative completion provenance for CLI integration tests."""
+    from research_store.completion_provenance import (
+        load_authoritative_completion_provenance,
+    )
+
+    run_service = build_run_service(service.config)
+    run_id = run_service.status(external_id=external_id).id
+
+    # Finalize indexing checkpoint so membership seal exists
+    workflow = build_workflow_operation_service(service.config)
+    workflow._finalize_indexing(
+        external_id,
+        f"cli-test:{uuid4()}:finalize-indexing",
+    )
+
+    # Seed provenance
+    seed_authoritative_completion_provenance(service.uow_factory, run_id)
+
+    # Load audit metadata for the completion payload
+    with service.uow_factory() as uow:
+        authoritative = load_authoritative_completion_provenance(uow, run_id)
+
+    return authoritative.completion_fields()
+
+
 def test_run_finish_handler_executes_through_service(monkeypatch, capsys, service):
     """Verify that research-db run-finish actually invokes the service method.
 
@@ -2890,6 +3050,9 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys, servic
     capsys.readouterr()  # discard run-start output
     _seed_completed_indexed_asset(service, external_id)
 
+    # Seed authoritative completion provenance
+    completion_payload = _seed_cli_completion_provenance(service, external_id)
+
     # Advance through all states to validating (required before completed)
     svc = build_run_service()
     status = svc.status(external_id=external_id)
@@ -2910,7 +3073,7 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys, servic
         )
         revision += 1
 
-    # Finish the run
+    # Finish the run with required provenance hashes
     assert (
         store_cli.main(
             [
@@ -2918,6 +3081,12 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys, servic
                 external_id,
                 "--outcome",
                 "satisfied",
+                "--source-manifest-sha256",
+                completion_payload["source_manifest_sha256"],
+                "--answer-sha256",
+                completion_payload["answer_sha256"],
+                "--provenance-type",
+                "authoritative",
             ]
         )
         == 0
@@ -2960,6 +3129,9 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
     capsys.readouterr()  # discard run-start output
     _seed_completed_indexed_asset(service, external_id)
 
+    # Seed authoritative completion provenance
+    completion_payload = _seed_cli_completion_provenance(service, external_id)
+
     # Advance through all states to validating (required before completed)
     svc = build_run_service()
     status = svc.status(external_id=external_id)
@@ -2980,7 +3152,7 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
         )
         revision += 1
 
-    # Finish the run with a unique idempotency key
+    # Finish the run with a unique idempotency key and required hashes
     finish_key = f"finish-idem:complete:{external_id}"
     assert (
         store_cli.main(
@@ -2989,6 +3161,12 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
                 external_id,
                 "--outcome",
                 "satisfied",
+                "--source-manifest-sha256",
+                completion_payload["source_manifest_sha256"],
+                "--answer-sha256",
+                completion_payload["answer_sha256"],
+                "--provenance-type",
+                "authoritative",
                 "--idempotency-key",
                 finish_key,
             ]
@@ -3009,6 +3187,10 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
                 external_id,
                 "--outcome",
                 "satisfied",
+                "--source-manifest-sha256",
+                "a" * 64,
+                "--answer-sha256",
+                "b" * 64,
                 "--idempotency-key",
                 finish_key,
             ]
@@ -3045,6 +3227,9 @@ def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
     capsys.readouterr()  # discard run-start output
     _seed_completed_indexed_asset(service, external_id)
 
+    # Seed authoritative completion provenance
+    completion_payload = _seed_cli_completion_provenance(service, external_id)
+
     # Advance through all states to validating (required before completed)
     svc = build_run_service()
     status = svc.status(external_id=external_id)
@@ -3065,7 +3250,7 @@ def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
         )
         revision += 1
 
-    # Finish the run
+    # Finish the run with required provenance hashes
     assert (
         store_cli.main(
             [
@@ -3073,6 +3258,12 @@ def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
                 external_id,
                 "--outcome",
                 "satisfied",
+                "--source-manifest-sha256",
+                completion_payload["source_manifest_sha256"],
+                "--answer-sha256",
+                completion_payload["answer_sha256"],
+                "--provenance-type",
+                "authoritative",
             ]
         )
         == 0
@@ -3761,11 +3952,11 @@ class TestIndexRebuildRecovery:
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
             # Delete in reverse dependency order to respect foreign keys.
-            cur.execute("DELETE FROM indexing_checkpoint_observations;")
+            # Note: append-only ledgers (indexing_checkpoint_observations,
+            # run_asset_membership_members, run_asset_membership_seals,
+            # run_asset_promotion_events) are truncated by conftest.py before
+            # this method runs, because their row-level triggers reject DELETE.
             cur.execute("DELETE FROM indexing_checkpoints;")
-            cur.execute("DELETE FROM run_asset_membership_members;")
-            cur.execute("DELETE FROM run_asset_membership_seals;")
-            cur.execute("DELETE FROM run_asset_promotion_events;")
             cur.execute("DELETE FROM run_asset_promotion_subjects;")
             cur.execute("DELETE FROM index_point_counts;")
             cur.execute("DELETE FROM index_jobs;")

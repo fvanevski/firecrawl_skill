@@ -363,6 +363,7 @@ def parser():
     )
     run_finish.add_argument("--source-manifest-sha256")
     run_finish.add_argument("--answer-sha256")
+    run_finish.add_argument("--provenance-type")
     run_finish.add_argument("--idempotency-key")
     run_reopen = sub.add_parser("run-reopen")
     run_reopen.add_argument("external_id")
@@ -2645,6 +2646,7 @@ def main(argv=None):
                 status_name=args.status,
                 source_manifest_sha256=args.source_manifest_sha256,
                 answer_sha256=args.answer_sha256,
+                provenance_type=args.provenance_type,
                 idempotency_key=args.idempotency_key,
             )
         except Exception as exc:
