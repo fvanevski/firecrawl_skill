@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 from uuid import UUID
 
 import pytest
@@ -21,7 +21,7 @@ class _Cursor:
         self.blob_rows = blob_rows
         self.query = ""
 
-    def __enter__(self) -> _Cursor:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: object) -> None:
@@ -47,7 +47,7 @@ class _Connection:
     def __init__(self, blob_rows: list[tuple[UUID, str]]) -> None:
         self.blob_rows = blob_rows
 
-    def __enter__(self) -> _Connection:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: object) -> None:
@@ -58,7 +58,7 @@ class _Connection:
 
 
 class _WorkerUow:
-    def __enter__(self) -> _WorkerUow:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: object) -> None:
