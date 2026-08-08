@@ -124,16 +124,58 @@ class GuardedResearchRunService(ResearchRunService):
                         completion=completion_payload,
                     )
                 if next_state == "completed":
-                    try:
-                        authoritative = load_authoritative_completion_provenance(
-                            uow, run_id, for_update=True
+                    # Preserve existing lifecycle diagnostics and idempotent replay:
+                    # an already-committed identical command must be reusable, while a
+                    # genuinely new completion must first be legal at the requested CAS
+                    # revision before expensive provenance validation runs. Recheck the
+                    # transition after taking the run lock so a concurrent identical
+                    # completion that committed while we waited is also recognized.
+                    with uow.connection.cursor() as cursor:
+                        cursor.execute(
+                            """SELECT id FROM research_run_transitions
+                                 WHERE run_id=%s AND idempotency_key=%s""",
+                            (run_id, idempotency_key),
                         )
-                        authoritative.assert_matches_completion(completion_payload)
-                    except CompletionProvenanceError as exc:
-                        raise TerminalDecisionError(
-                            "authoritative completion provenance changed or "
-                            f"failed revalidation: {exc}"
-                        ) from exc
+                        existing_transition = cursor.fetchone()
+                        if existing_transition is None:
+                            cursor.execute(
+                                """SELECT state,lifecycle_revision
+                                     FROM research_runs WHERE id=%s FOR UPDATE""",
+                                (run_id,),
+                            )
+                            run_row = cursor.fetchone()
+                            if run_row is None:
+                                raise KeyError(run_id)
+                            cursor.execute(
+                                """SELECT id FROM research_run_transitions
+                                     WHERE run_id=%s AND idempotency_key=%s""",
+                                (run_id, idempotency_key),
+                            )
+                            existing_transition = cursor.fetchone()
+                            if existing_transition is None:
+                                prior_state, current_revision = run_row
+                                if int(current_revision) != expected_revision:
+                                    raise StaleRunRevisionError(
+                                        "stale research run revision: "
+                                        f"expected {expected_revision}, "
+                                        f"current {current_revision}"
+                                    )
+                                if prior_state not in permitted_prior_states:
+                                    raise RunStateError(
+                                        "research run transition rejected: "
+                                        f"{prior_state} -> {next_state} is not permitted"
+                                    )
+                    if existing_transition is None:
+                        try:
+                            authoritative = load_authoritative_completion_provenance(
+                                uow, run_id, for_update=True
+                            )
+                            authoritative.assert_matches_completion(completion_payload)
+                        except CompletionProvenanceError as exc:
+                            raise TerminalDecisionError(
+                                "authoritative completion provenance changed or "
+                                f"failed revalidation: {exc}"
+                            ) from exc
 
                 expected = (
                     decision_id,

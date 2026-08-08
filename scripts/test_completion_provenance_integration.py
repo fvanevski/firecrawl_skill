@@ -110,8 +110,15 @@ def _mark_run_index_complete(run_id) -> None:
 def _ready(config: StoreConfig):
     _corpus, runs, status = _seed_indexing_run(config)
     _mark_run_index_complete(status.id)
+    workflow = build_workflow_operation_service(config)
+    workflow._finalize_indexing(
+        status.external_id,
+        f"completion-test:{status.id}:finalize-indexing",
+    )
+    status = runs.status(run_id=status.id)
+    assert status.state == "coverage_review"
     provenance = seed_authoritative_completion_provenance(runs.uow_factory, status.id)
-    return runs, status, provenance, build_workflow_operation_service(config)
+    return runs, status, provenance, workflow
 
 
 def test_completed_run_derives_and_persists_exact_authoritative_provenance(
