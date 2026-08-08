@@ -331,6 +331,17 @@ def new_id() -> UUID:
     return uuid4()
 
 
+class PreflightClassification(str, Enum):
+    """Outcome of URL/content suitability preflight on a scrape result."""
+
+    SUITABLE = "suitable"
+    EMPTY_CONTENT = "empty_content"
+    ANTI_BOT = "anti_bot"
+    UNSUPPORTED_CONTENT_TYPE = "unsupported_content_type"
+    HTTP_ERROR = "http_error"
+    TRANSIENT = "transient"
+
+
 @dataclass(frozen=True)
 class SearchAdapterResult:
     raw_payload: bytes
@@ -340,6 +351,9 @@ class SearchAdapterResult:
     transport_metadata: dict[str, Any] = field(default_factory=dict)
     requested_at: datetime = field(default_factory=utcnow)
     responded_at: datetime = field(default_factory=utcnow)
+    first_byte_at: datetime | None = None
+    elapsed_seconds: float | None = None
+    preflight_class: PreflightClassification | None = None
 
 
 @dataclass(frozen=True)

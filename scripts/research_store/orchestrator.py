@@ -20,6 +20,7 @@ machine exists.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -30,7 +31,10 @@ from uuid import UUID, uuid4
 from budget_policy import DEFAULT_POLICY
 from research_domain import load_model
 
-from .acquisition_service import AcquisitionService
+from .acquisition_service import (
+    AcquisitionService,
+    CandidatePreflightChecker,
+)
 from .config import StoreConfig
 from .coverage_service import CoverageService
 from .run_service import (
@@ -414,12 +418,14 @@ class AcquisitionStage:
         coverage_service: CoverageService,
         strategy_service: StrategyRevisionService,
         config: StoreConfig,
+        preflight_checker: CandidatePreflightChecker | None = None,
     ) -> None:
         self.run_service = run_service
         self.acquisition_service = acquisition_service
         self.coverage_service = coverage_service
         self.strategy_service = strategy_service
         self.config = config
+        self.preflight_checker = preflight_checker or CandidatePreflightChecker()
 
     def execute(
         self,
@@ -579,7 +585,39 @@ class AcquisitionStage:
                     if isinstance(markdown, str) and markdown.strip() and cid:
                         if successful_extraction_count >= source_target:
                             continue
-                        from .domain import IngestRequest
+                        # Run suitability preflight before expensive ingestion.
+                        from .domain import IngestRequest, SearchAdapterResult
+
+                        mock_result = SearchAdapterResult(
+                            raw_payload=json.dumps(
+                                {"data": {"web": [{"markdown": markdown}]}}
+                            ).encode("utf-8"),
+                            http_status=metadata.get("statusCode"),
+                        )
+                        preflight = self.preflight_checker.check(mock_result)
+                        if preflight.is_hard_rejection:
+                            raw_ingest_requests.append(
+                                {
+                                    "requested_url": cand.get("canonical_url")
+                                    or cand.get("original_url")
+                                    or "unknown:",
+                                    "error": (
+                                        f"preflight rejection: {preflight.reason}"
+                                    ),
+                                    "metadata": {
+                                        **request_metadata,
+                                        "preflight_classification": (
+                                            preflight.classification
+                                        ),
+                                        "preflight_reason": preflight.reason,
+                                        "preflight_elapsed_seconds": (
+                                            preflight.elapsed_seconds
+                                        ),
+                                    },
+                                }
+                            )
+                            extraction_attempt_count += 1
+                            continue
 
                         raw_ingest_requests.append(
                             {
@@ -601,7 +639,16 @@ class AcquisitionStage:
                                     },
                                     metadata=request_metadata,
                                 ),
-                                "metadata": request_metadata,
+                                "metadata": {
+                                    **request_metadata,
+                                    "preflight_classification": (
+                                        preflight.classification
+                                    ),
+                                    "preflight_reason": preflight.reason,
+                                    "preflight_elapsed_seconds": (
+                                        preflight.elapsed_seconds
+                                    ),
+                                },
                             }
                         )
                         successful_urls += 1
@@ -748,6 +795,7 @@ class ExtractionStage:
         from dataclasses import replace
 
         attempt_by_ordinal: dict[int, dict[str, Any]] = {}
+        cancelled_ordinals: set[int] = set()
         for ordinal, item in enumerate(raw_requests):
             metadata = item.get("metadata", {})
             candidate_raw = metadata.get("candidate_id")
@@ -756,6 +804,52 @@ class ExtractionStage:
                     "extraction", "extraction request is missing candidate provenance"
                 )
             candidate_id = UUID(str(candidate_raw))
+
+            # Detect preflight-rejected candidates — skip ingestion entirely.
+            preflight_class = metadata.get("preflight_classification")
+            preflight_reason = metadata.get("preflight_reason")
+            if preflight_class:
+                failure_class = (
+                    "empty_content"
+                    if preflight_class == "empty_content"
+                    else "anti_bot"
+                    if preflight_class == "anti_bot"
+                    else "http_error"
+                    if preflight_class == "http_error"
+                    else "unsupported_content_type"
+                    if preflight_class == "unsupported_content_type"
+                    else "internal"
+                )
+                attempt_id = self.extraction_service.create_attempt(
+                    candidate_id=candidate_id,
+                    run_id=run_id,
+                    method="firecrawl_main_content",
+                    method_version="cli-1.19.27",
+                    requested_format="markdown",
+                )
+                self.extraction_service.complete_attempt(
+                    attempt_id=attempt_id,
+                    exit_status="cancelled",
+                    failure_class=failure_class,
+                    error_message=(
+                        f"preflight rejection at acquisition stage: {preflight_reason}"
+                        if preflight_reason
+                        else f"preflight rejected ({preflight_class})"
+                    ),
+                    http_status=metadata.get("firecrawl", {}).get("status_code"),
+                    end_time=None,
+                )
+                attempt_by_ordinal[ordinal] = {
+                    "attempt_id": attempt_id,
+                    "candidate_id": candidate_id,
+                    "raw_blob": None,
+                    "normalized_blob": None,
+                    "metadata": metadata,
+                    "cancelled": True,
+                }
+                cancelled_ordinals.add(ordinal)
+                continue
+
             attempt_id = self.extraction_service.create_attempt(
                 candidate_id=candidate_id,
                 run_id=run_id,
@@ -778,6 +872,7 @@ class ExtractionStage:
                 "raw_blob": raw_blob,
                 "normalized_blob": normalized_blob,
                 "metadata": metadata,
+                "cancelled": False,
             }
 
         invocation_id = f"extract:{run_id}:w{context.get(ContextKeys.WAVE_COUNT, 0)}"
@@ -786,11 +881,19 @@ class ExtractionStage:
             return StageResult.failed(
                 "extraction", "research run has no external ID for asset linkage"
             )
+
+        # Exclude preflight-rejected requests from corpus ingestion.
+        active_requests = [
+            item
+            for ordinal, item in enumerate(raw_requests)
+            if ordinal not in cancelled_ordinals
+        ]
+
         try:
             manifest = self.corpus_service.ingest_batch(
                 invocation_id=invocation_id,
                 operation="orchestration_extract",
-                requests=raw_requests,
+                requests=active_requests,
                 research_run_external_id=run_status.external_id,
                 metadata={"run_id": str(run_id), "authority": "firecrawl-cli-1.19.27"},
             )
@@ -804,6 +907,8 @@ class ExtractionStage:
         targets = context.get("candidate_coverage_items", {})
         for asset in manifest.get("assets", []):
             ordinal = int(asset["ordinal"])
+            if ordinal in cancelled_ordinals:
+                continue
             attempt = attempt_by_ordinal[ordinal]
             succeeded = asset.get("status") == "complete"
             self.extraction_service.complete_attempt(
@@ -860,10 +965,12 @@ class ExtractionStage:
                     ),
                 )
 
+        cancelled_count = len(cancelled_ordinals)
         extraction_success_count = len(completed_assets)
         context.setdefault("extracted_assets", []).extend(completed_assets)
         context[ContextKeys.EXTRACTION_SUCCESS_COUNT] = extraction_success_count
         context[ContextKeys.EXTRACTION_ATTEMPTS] = len(raw_requests)
+        context["cancelled_extraction_count"] = cancelled_count
 
         # Transition to indexing if we have content, otherwise to coverage_review
         if extraction_success_count > 0:

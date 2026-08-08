@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -202,6 +203,7 @@ class FirecrawlSearchAdapter:
         requested_at = utcnow()
         last_code = 0
         last_stderr = ""
+        first_byte_at: datetime | None = None
         for attempt in range(retries + 1):
             code, stdout, stderr = self.runner(cmd)
             responded_at = utcnow()
@@ -228,9 +230,7 @@ class FirecrawlSearchAdapter:
                             ]
                         },
                     }
-                except (json.JSONDecodeError, ValueError) as exc:
-                    last_stderr = f"invalid Firecrawl scrape response: {exc}"
-                else:
+                    elapsed = (responded_at - requested_at).total_seconds()
                     return SearchAdapterResult(
                         raw_payload=json.dumps(payload).encode("utf-8"),
                         http_status=200,
@@ -244,7 +244,11 @@ class FirecrawlSearchAdapter:
                         },
                         requested_at=requested_at,
                         responded_at=responded_at,
+                        first_byte_at=first_byte_at,
+                        elapsed_seconds=elapsed,
                     )
+                except (json.JSONDecodeError, ValueError) as exc:
+                    last_stderr = f"invalid Firecrawl scrape response: {exc}"
             if not any(
                 tag in stderr
                 for tag in ("EAI_AGAIN", "ENOTFOUND", "ECONNRESET", "ETIMEDOUT")
@@ -253,6 +257,7 @@ class FirecrawlSearchAdapter:
         error = (
             f"Firecrawl scrape failed (exit {last_code}): {last_stderr.strip()[:300]}"
         )
+        elapsed = (utcnow() - requested_at).total_seconds()
         return SearchAdapterResult(
             raw_payload=json.dumps({"success": False, "error": error}).encode(),
             http_status=500,
@@ -266,7 +271,254 @@ class FirecrawlSearchAdapter:
             },
             requested_at=requested_at,
             responded_at=utcnow(),
+            first_byte_at=first_byte_at,
+            elapsed_seconds=elapsed,
         )
+
+
+# ---------------------------------------------------------------------------
+# Candidate preflight — URL/content suitability checks
+# ---------------------------------------------------------------------------
+
+_ANTI_BOT_PATTERNS = [
+    r"(?i)verify you are human",
+    r"(?i)please complete this captcha",
+    r"(?i)cloudflare",
+    r"(?i)checking your browser",
+    r"(?i)detection completed",
+    r"(?i)security check",
+    r"(?i)ddos protection",
+    r"(?i)bot detection",
+    r"(?i)are you a robot",
+    r"(?i)blocked by cloudflare",
+    r"(?i)ray id",
+    r"(?i)interstitial",
+    r"(?i)turnstile",
+    r"(?i)hCaptcha",
+    r"(?i)reCaptcha",
+]
+
+
+def _build_anti_bot_regexes() -> list[re.Pattern[str]]:
+    return [re.compile(p) for p in _ANTI_BOT_PATTERNS]
+
+
+class CandidatePreflightResult:
+    """Outcome of candidate suitability preflight.
+
+    Attributes:
+        classification: One of suitable, empty_content, anti_bot,
+            unsupported_content_type, http_error, transient.
+        reason: Human-readable explanation.
+        http_status: HTTP status code from the provider, if available.
+        elapsed_seconds: Wall-clock time spent on the provider call.
+        cancelled: Whether downstream work should be cancelled.
+    """
+
+    def __init__(
+        self,
+        classification: str,
+        reason: str,
+        http_status: int | None = None,
+        elapsed_seconds: float | None = None,
+        cancelled: bool = False,
+    ) -> None:
+        self.classification = classification
+        self.reason = reason
+        self.http_status = http_status
+        self.elapsed_seconds = elapsed_seconds
+        self.cancelled = cancelled
+
+    @property
+    def is_hard_rejection(self) -> bool:
+        """Return True when the candidate must not proceed to extraction."""
+        return self.classification in {
+            "empty_content",
+            "anti_bot",
+            "http_error",
+            "unsupported_content_type",
+        }
+
+
+class CandidatePreflightChecker:
+    """Inspect raw scrape results and classify suitability before ingestion.
+
+    The checker runs against the *parsed* provider payload (not the raw bytes)
+    so that callers can apply it uniformly across search and scrape backends.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_elapsed_seconds: float = 30.0,
+        min_markdown_length: int = 1,
+        anti_bot_patterns: list[re.Pattern[str]] | None = None,
+    ) -> None:
+        self.max_elapsed_seconds = max_elapsed_seconds
+        self.min_markdown_length = min_markdown_length
+        self._anti_bot_patterns = anti_bot_patterns or _build_anti_bot_regexes()
+
+    def check(
+        self,
+        result: SearchAdapterResult,
+        raw_payload_bytes: bytes | None = None,
+    ) -> CandidatePreflightResult:
+        """Classify a provider result for suitability.
+
+        Args:
+            result: The parsed search adapter result.
+            raw_payload_bytes: Raw bytes for content inspection; falls back
+                to ``result.raw_payload`` when omitted.
+
+        Returns:
+            A ``CandidatePreflightResult`` describing the classification.
+        """
+        payload = raw_payload_bytes or result.raw_payload
+
+        # Transport-level failures are transient — do not hard-reject.
+        if result.transport_error:
+            is_transient = any(
+                tag in result.transport_error
+                for tag in ("EAI_AGAIN", "ENOTFOUND", "ECONNRESET", "ETIMEDOUT")
+            )
+            if is_transient:
+                return CandidatePreflightResult(
+                    classification="transient",
+                    reason=f"transient transport error: {result.transport_error[:200]}",
+                    http_status=result.http_status,
+                    elapsed_seconds=result.elapsed_seconds,
+                )
+
+        # HTTP-level errors are hard rejections (non-transport).
+        if result.http_status and result.http_status >= 400:
+            return CandidatePreflightResult(
+                classification="http_error",
+                reason=f"http error {result.http_status}",
+                http_status=result.http_status,
+                elapsed_seconds=result.elapsed_seconds,
+                cancelled=True,
+            )
+
+        # Timing budget enforcement.
+        elapsed = result.elapsed_seconds
+        if elapsed is not None and elapsed > self.max_elapsed_seconds:
+            return CandidatePreflightResult(
+                classification="empty_content",
+                reason=(
+                    f"provider deadline exceeded: {elapsed:.1f}s "
+                    f"exceeds {self.max_elapsed_seconds:.1f}s"
+                ),
+                http_status=result.http_status,
+                elapsed_seconds=elapsed,
+                cancelled=True,
+            )
+
+        # Content inspection — parse the payload to find markdown/text.
+        try:
+            data = json.loads(payload) if isinstance(payload, bytes) else payload
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+
+        markdown = self._extract_markdown(data)
+        if markdown is None:
+            # Try to detect anti-bot signatures even when markdown is absent.
+            text_snippet = self._extract_text_snippet(data, payload)
+            if self._detect_anti_bot(text_snippet):
+                return CandidatePreflightResult(
+                    classification="anti_bot",
+                    reason="anti-bot interstitial detected",
+                    http_status=result.http_status,
+                    elapsed_seconds=elapsed,
+                    cancelled=True,
+                )
+            return CandidatePreflightResult(
+                classification="empty_content",
+                reason="no usable markdown or text extracted",
+                http_status=result.http_status,
+                elapsed_seconds=elapsed,
+                cancelled=True,
+            )
+
+        stripped = markdown.strip()
+        if not stripped:
+            return CandidatePreflightResult(
+                classification="empty_content",
+                reason="markdown is present but empty after stripping",
+                http_status=result.http_status,
+                elapsed_seconds=elapsed,
+                cancelled=True,
+            )
+
+        if len(stripped) < self.min_markdown_length:
+            return CandidatePreflightResult(
+                classification="empty_content",
+                reason=(
+                    f"markdown too short ({len(stripped)} chars) "
+                    f"below minimum ({self.min_markdown_length})"
+                ),
+                http_status=result.http_status,
+                elapsed_seconds=elapsed,
+                cancelled=True,
+            )
+
+        # Anti-bot signature check on usable content.
+        if self._detect_anti_bot(stripped):
+            return CandidatePreflightResult(
+                classification="anti_bot",
+                reason="anti-bot signatures found in content",
+                http_status=result.http_status,
+                elapsed_seconds=elapsed,
+                cancelled=True,
+            )
+
+        return CandidatePreflightResult(
+            classification="suitable",
+            reason="content passed suitability checks",
+            http_status=result.http_status,
+            elapsed_seconds=elapsed,
+        )
+
+    def _extract_markdown(self, data: Any) -> str | None:
+        """Pull markdown out of common Firecrawl response shapes."""
+        if not isinstance(data, dict):
+            return None
+        # Direct shape: {"markdown": "..."}
+        md = data.get("markdown")
+        if isinstance(md, str):
+            return md
+        # Firecrawl search/scrape shape: {"data": {"web": [{"markdown": "..."}]}}
+        web = (data.get("data") or {}).get("web")
+        if isinstance(web, list) and web:
+            first = web[0]
+            if isinstance(first, dict):
+                md = first.get("markdown")
+                if isinstance(md, str):
+                    return md
+        return None
+
+    def _extract_text_snippet(self, data: Any, raw: bytes) -> str:
+        """Best-effort text snippet for anti-bot detection."""
+        if isinstance(data, dict):
+            snippets = []
+            for key in ("title", "description", "snippet", "text", "content"):
+                val = data.get(key)
+                if isinstance(val, str) and val.strip():
+                    snippets.append(val.strip())
+            if snippets:
+                return " ".join(snippets)[:500]
+        if isinstance(raw, bytes):
+            try:
+                return raw.decode("utf-8", errors="replace")[:500]
+            except Exception:  # noqa: BLE001, S110
+                pass
+        return ""
+
+    def _detect_anti_bot(self, text: str) -> bool:
+        """Return True when *text* contains anti-bot challenge markers."""
+        for pattern in self._anti_bot_patterns:
+            if pattern.search(text):
+                return True
+        return False
 
 
 class AcquisitionAuthorityChangedError(RuntimeError):
