@@ -991,7 +991,7 @@ class TransformationRecord:
 
     Attributes:
         id: Stable UUID for the transformation record.
-        normalized_block_id: FK to ``normalized_blocks(id)``.
+        normalized_block_id: FK to the source ``document_blocks.id``.
         rule_id: Identifier of the rule that was applied.
         rule_version: Version of the normalization rule.
         reason: Human-readable reason for the transformation.
@@ -1038,7 +1038,7 @@ class TransformationRecord:
             before_text: Text before transformation.
             after_text: Text after transformation.
             confidence: Confidence score in [0, 1].
-            rule_version: Normalization rule version.
+            rule_version: Rule version.
 
         Returns:
             A new ``TransformationRecord`` instance.
