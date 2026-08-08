@@ -266,7 +266,9 @@ class BoundedAcquisitionStage(AcquisitionStage):
                 executed_queries.add(query_text)
                 response_ids.append(str(result.search_response_id))
                 candidate_count += result.candidate_count
-                response_transport = result.search_response.get("transport_metadata", {})
+                response_transport = result.search_response.get(
+                    "transport_metadata", {}
+                )
                 response_preflight = (
                     response_transport.get("preflight")
                     if isinstance(response_transport, Mapping)
@@ -333,7 +335,9 @@ class BoundedAcquisitionStage(AcquisitionStage):
                     preflight: CandidatePreflightResult | None = None
                     raw_preflight = provider_metadata.get("_preflight")
                     if isinstance(raw_preflight, Mapping):
-                        preflight = CandidatePreflightResult.from_metadata(raw_preflight)
+                        preflight = CandidatePreflightResult.from_metadata(
+                            raw_preflight
+                        )
                     elif (
                         isinstance(response_preflight, Mapping)
                         and backend == "firecrawl_scrape"
@@ -742,9 +746,7 @@ class BoundedExtractionStage(ExtractionStage):
                     if succeeded
                     else _extraction_failure_class(asset.get("error"))
                 ),
-                http_status=attempt["metadata"].get("firecrawl", {}).get(
-                    "status_code"
-                ),
+                http_status=attempt["metadata"].get("firecrawl", {}).get("status_code"),
                 backend_status=asset.get("status"),
                 error_message=(
                     redact_error_text(asset.get("error"))
@@ -797,9 +799,10 @@ class BoundedExtractionStage(ExtractionStage):
         context[ContextKeys.EXTRACTION_ATTEMPTS] = len(raw_requests)
         context["cancelled_extraction_count"] = cancelled_count
         context["preflight_terminal_count"] = terminal_count
-        context["successful_extraction_count"] = int(
-            context.get("successful_extraction_count", 0)
-        ) + extraction_success_count
+        context["successful_extraction_count"] = (
+            int(context.get("successful_extraction_count", 0))
+            + extraction_success_count
+        )
 
         if extraction_success_count > 0:
             try:

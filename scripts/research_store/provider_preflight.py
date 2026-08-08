@@ -125,12 +125,8 @@ class ExtractionDeadlinePolicy:
             overall_candidate_timeout_seconds=_env_float(
                 "FIRECRAWL_EXTRACTION_CANDIDATE_TIMEOUT_SECONDS", 35.0
             ),
-            transient_retries=_env_int(
-                "FIRECRAWL_EXTRACTION_TRANSIENT_RETRIES", 2
-            ),
-            empty_content_retries=_env_int(
-                "FIRECRAWL_EXTRACTION_EMPTY_RETRIES", 0
-            ),
+            transient_retries=_env_int("FIRECRAWL_EXTRACTION_TRANSIENT_RETRIES", 2),
+            empty_content_retries=_env_int("FIRECRAWL_EXTRACTION_EMPTY_RETRIES", 0),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -539,7 +535,9 @@ class CandidatePreflightChecker:
                 terminal=True,
             )
 
-        payload = raw_payload_bytes if raw_payload_bytes is not None else result.raw_payload
+        payload = (
+            raw_payload_bytes if raw_payload_bytes is not None else result.raw_payload
+        )
         data = _parse_json(payload)
         markdown = extract_markdown(data)
         if markdown is None:

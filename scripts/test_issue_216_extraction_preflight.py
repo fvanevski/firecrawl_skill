@@ -105,7 +105,9 @@ class TestCanonicalRouting:
     def test_public_adapter_is_bounded(self):
         from research_store import acquisition_service, orchestrator
 
-        assert acquisition_service.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
+        assert (
+            acquisition_service.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
+        )
         assert research_store.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
         assert orchestrator.AcquisitionStage.__name__ == "BoundedAcquisitionStage"
         assert orchestrator.ExtractionStage.__name__ == "BoundedExtractionStage"
@@ -257,7 +259,9 @@ class TestBoundedProviderExecution:
         )
         result = adapter.scrape_url("https://example.test/empty")
         assert calls == 1
-        assert result.transport_metadata["preflight"]["classification"] == "empty_content"
+        assert (
+            result.transport_metadata["preflight"]["classification"] == "empty_content"
+        )
 
     def test_transient_failure_retries_then_succeeds(self):
         responses = [
@@ -314,7 +318,11 @@ class TestBoundedProviderExecution:
 
     def test_provider_operation_timeout_after_first_byte(self):
         result = BoundedSubprocessRunner().run(
-            [sys.executable, "-c", "import sys,time;print('x',flush=True);time.sleep(5)"],
+            [
+                sys.executable,
+                "-c",
+                "import sys,time;print('x',flush=True);time.sleep(5)",
+            ],
             first_byte_timeout_seconds=2.0,
             operation_timeout_seconds=0.75,
         )
@@ -339,7 +347,9 @@ class _FakeExtractionService:
         return SimpleNamespace(**kwargs)
 
     def store_raw_blob(self, content):
-        return SimpleNamespace(sha256="a" * 64, uri="blob:raw", byte_length=len(content))
+        return SimpleNamespace(
+            sha256="a" * 64, uri="blob:raw", byte_length=len(content)
+        )
 
     def store_normalized_blob(self, content):
         return SimpleNamespace(
@@ -358,8 +368,10 @@ class _FakeCorpusService:
         self.calls.append(kwargs)
         assets = []
         for fallback, item in enumerate(kwargs["requests"]):
-            ordinal = item.get("metadata", {}).get("firecrawl", {}).get(
-                "result_index", fallback
+            ordinal = (
+                item.get("metadata", {})
+                .get("firecrawl", {})
+                .get("result_index", fallback)
             )
             assets.append(
                 {
@@ -567,7 +579,9 @@ def test_postgres_audit_readback_preserves_class_stage_elapsed_and_redaction(tmp
             }
         ),
     }
-    result = stage.execute(status.id, status.lifecycle_revision, 1, "extracting", context)
+    result = stage.execute(
+        status.id, status.lifecycle_revision, 1, "extracting", context
+    )
     assert result.error is None
 
     with run_service.uow_factory() as uow:
