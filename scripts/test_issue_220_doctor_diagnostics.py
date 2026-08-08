@@ -174,7 +174,7 @@ def _install_healthy_dependencies(
     monkeypatch.setattr(
         diagnostics,
         "OpenAICompatibleEmbedder",
-        lambda *_args, **_kwargs: (lambda _text: [1.0, 0.0]),
+        lambda *_args, **_kwargs: lambda _text: [1.0, 0.0],
     )
     monkeypatch.setattr(
         diagnostics,
@@ -294,12 +294,16 @@ def test_doctor_distinguishes_sandbox_denial_from_database_rejection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config, _point_id, _orphan_sha = _install_healthy_dependencies(monkeypatch, tmp_path)
+    config, _point_id, _orphan_sha = _install_healthy_dependencies(
+        monkeypatch, tmp_path
+    )
 
     monkeypatch.setattr(
         cli,
         "_schema_state",
-        lambda _config: (_ for _ in ()).throw(PermissionError("Operation not permitted")),
+        lambda _config: (_ for _ in ()).throw(
+            PermissionError("Operation not permitted")
+        ),
     )
     sandbox, _failed = diagnostics.doctor(config)
     assert sandbox["postgres_authority"]["reason_code"] == "network_policy_denial"
@@ -338,8 +342,8 @@ def test_doctor_human_parser_and_shell_route_are_explicit() -> None:
 
 
 def test_reset_clean_state_contract_uses_doctor_v1_domains() -> None:
-    reset = Path(__file__).with_name("reset-firecrawl-research").read_text(
-        encoding="utf-8"
+    reset = (
+        Path(__file__).with_name("reset-firecrawl-research").read_text(encoding="utf-8")
     )
     for expected in (
         '.schema_version == "doctor-diagnostics-v1"',
