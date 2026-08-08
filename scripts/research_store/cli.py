@@ -1847,11 +1847,92 @@ def _blob_health(config):
         and len(path.name) == 64
         and all(character in "0123456789abcdef" for character in path.name)
     }
+    unreferenced = sorted(disk_hashes - references.keys())
     return {
-        "ok": not missing and not (disk_hashes - references.keys()),
+        "integrity": "pass" if not missing else "failure",
         "referenced": len(references),
         "missing_or_corrupt": missing,
-        "unreferenced": sorted(disk_hashes - references.keys()),
+        "unreferenced_inventory": unreferenced,
+        "orphan_count": len(unreferenced),
+    }
+
+
+def _classify_connectivity_failure(exc: BaseException) -> dict[str, str]:
+    """Classify a connectivity/infrastructure failure into a reason code.
+
+    Distinguishes network namespace/policy denial, credential/configuration
+    failure, server unavailable, database rejection, and query/runtime failure
+    so that each class surfaces a distinct machine-readable reason.
+    """
+    message = str(exc).lower()
+    if any(
+        token in message
+        for token in (
+            "permission denied",
+            "operation not permitted",
+            "errno1",
+            "errno13",
+        )
+    ):
+        return {
+            "status": "failure",
+            "reason_code": "network_policy_denial",
+            "detail": str(exc),
+        }
+    if any(
+        token in message
+        for token in ("connection refused", "connect ECONNREFUSED", "errno111")
+    ):
+        return {
+            "status": "failure",
+            "reason_code": "server_unavailable",
+            "detail": str(exc),
+        }
+    if any(
+        token in message
+        for token in (
+            "authentication",
+            "password",
+            "credential",
+            "auth",
+            "forbidden",
+            "errno13",
+            "access denied",
+        )
+    ):
+        return {
+            "status": "failure",
+            "reason_code": "credential_failure",
+            "detail": str(exc),
+        }
+    if any(
+        token in message
+        for token in (
+            "no route to host",
+            "network unreachable",
+            "errno101",
+            "timeout",
+            "timed out",
+        )
+    ):
+        return {
+            "status": "failure",
+            "reason_code": "network_namespace_denial",
+            "detail": str(exc),
+        }
+    if any(
+        token in message
+        for token in ("database", "pg_", "psycopg", "sqlalchemy", "dialect", "adapter")
+    ):
+        return {
+            "status": "failure",
+            "reason_code": "database_rejection",
+            "detail": str(exc),
+        }
+    return {
+        "status": "failure",
+        "reason_code": "query_runtime_failure",
+        "detail": str(exc),
     }
 
 
@@ -1902,7 +1983,7 @@ def _doctor(config):
         else:
             checks["worker"] = {"available": False, "reason": "migration required"}
     except Exception as exc:  # noqa: BLE001
-        checks["postgres"] = {"ok": False, "error": str(exc)}
+        checks["postgres_authority"] = _classify_connectivity_failure(exc)
         failed = True
 
     try:
@@ -1910,19 +1991,20 @@ def _doctor(config):
             raise RuntimeError(f"blob root is not a directory: {config.blob_root}")
         if not os.access(config.blob_root, os.R_OK | os.X_OK):
             raise RuntimeError("blob root is not readable")
-        checks["blobs"] = _blob_health(config)
-        failed |= not checks["blobs"]["ok"]
+        checks["referenced_blob_integrity"] = _blob_health(config)
+        if checks["referenced_blob_integrity"]["integrity"] == "failure":
+            failed = True
     except Exception as exc:  # noqa: BLE001
-        checks["blobs"] = {"ok": False, "error": str(exc)}
+        checks["referenced_blob_integrity"] = _classify_connectivity_failure(exc)
         failed = True
 
     try:
         aliases = _qdrant(config).list_aliases()
         active = aliases.get(config.qdrant_alias)
-        qdrant = {"ok": True, "alias": config.qdrant_alias, "collection": active}
+        qdrant = {"status": "pass", "alias": config.qdrant_alias, "collection": active}
         if active and not checks.get("schema", {}).get("at_head"):
             qdrant["schema"] = _qdrant(config, active).inspect_schema()
-            checks["qdrant"] = qdrant
+            checks["qdrant_projection"] = qdrant
             active = None
         if active:
             rows = [
@@ -1937,11 +2019,13 @@ def _doctor(config):
                 row["fingerprint"] == config.embedding_fingerprint
             )
             if not qdrant["query_embedding_compatible"]:
+                qdrant["status"] = "failure"
                 failed = True
             qdrant["schema"] = _qdrant(
                 config, active, row["dimension"], row["distance_metric"]
             ).inspect_schema()
             if not qdrant["schema"]["compatible"]:
+                qdrant["status"] = "failure"
                 failed = True
             if checks.get("schema", {}).get("at_head"):
                 point_ids, offset = set(), None
@@ -1961,17 +2045,23 @@ def _doctor(config):
                     "missing": len(chunk_ids - point_ids),
                     "orphaned": len(point_ids - chunk_ids),
                 }
-                failed |= point_ids != chunk_ids
-        checks["qdrant"] = qdrant
+                if point_ids != chunk_ids:
+                    qdrant["status"] = "failure"
+                    failed = True
+                else:
+                    qdrant["status"] = "pass"
+            else:
+                qdrant["status"] = "inconclusive"
+        checks["qdrant_projection"] = qdrant
     except Exception as exc:  # noqa: BLE001
-        checks["qdrant"] = {"ok": False, "error": str(exc)}
+        checks["qdrant_projection"] = _classify_connectivity_failure(exc)
         failed = True
 
     try:
         if checks.get("schema", {}).get("at_head"):
             reconcile = _index_reconcile(config, repair=False)
-            checks["index_reconcile"] = {
-                "ok": reconcile["ok"],
+            checks["index_job_health"] = {
+                "status": "pass" if reconcile["ok"] else "failure",
                 "total_active_chunks": reconcile["total_active_chunks"],
                 "definitions": len(reconcile["definitions"]),
                 "discrepancies": reconcile["discrepancies"],
@@ -1979,17 +2069,25 @@ def _doctor(config):
             if not reconcile["ok"]:
                 failed = True
         else:
-            checks["index_reconcile"] = {"ok": False, "reason": "migration required"}
+            checks["index_job_health"] = {
+                "status": "inconclusive",
+                "reason": "migration required",
+            }
     except Exception as exc:  # noqa: BLE001
-        checks["index_reconcile"] = {"ok": False, "error": str(exc)}
+        checks["index_job_health"] = _classify_connectivity_failure(exc)
         failed = True
 
     try:
         import redis
 
-        checks["valkey"] = {"ok": bool(redis.Redis.from_url(config.valkey_url).ping())}
+        checks["environment_connectivity"] = {
+            "status": "pass"
+            if bool(redis.Redis.from_url(config.valkey_url).ping())
+            else "failure",
+            "component": "valkey",
+        }
     except Exception as exc:  # noqa: BLE001
-        checks["valkey"] = {"ok": False, "error": str(exc)}
+        checks["environment_connectivity"] = _classify_connectivity_failure(exc)
         failed = True
 
     for name, endpoint in (
@@ -2006,7 +2104,7 @@ def _doctor(config):
                     config.embedding_api_key,
                     config.embedding_dimension,
                 )("research-store-doctor")
-                checks[name] = {"ok": True, "dimension": len(vector)}
+                checks[name] = {"status": "pass", "dimension": len(vector)}
             else:
                 ranked = CohereCompatibleReranker(
                     endpoint, config.reranker_model, config.reranker_api_key
@@ -2019,9 +2117,9 @@ def _doctor(config):
                 )
                 if not ranked or ranked[0]["candidate_id"] != "relevant":
                     raise RuntimeError("unexpected reranker ordering")
-                checks[name] = {"ok": True}
+                checks[name] = {"status": "pass"}
         except Exception as exc:  # noqa: BLE001
-            checks[name] = {"ok": False, "error": str(exc)}
+            checks[name] = _classify_connectivity_failure(exc)
             failed = True
     checks["configuration"] = {
         "embedding_fingerprint": config.embedding_fingerprint,
@@ -2369,7 +2467,7 @@ def main(argv=None):
     if args.command == "verify-blobs":
         health = _blob_health(config)
         print(dumps(health))
-        return 0 if health["ok"] else 1
+        return 0 if health["integrity"] == "pass" else 1
     if args.command in {"worker", "index-once"}:
         worker = _worker(config)
         if args.command == "index-once":

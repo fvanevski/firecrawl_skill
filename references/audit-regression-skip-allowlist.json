@@ -1,11 +1,4 @@
 {
   "schema_version": "pytest-skip-allowlist-v1",
-  "entries": [
-    {
-      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_17_orphans_do_not_fail_referenced_blob_integrity",
-      "reason_contains": "RC-17 tracked by #220",
-      "classification": "audit-regression-expected-failure",
-      "replacement_gate": "Issue #220 remediation"
-    }
-  ]
+  "entries": []
 }
