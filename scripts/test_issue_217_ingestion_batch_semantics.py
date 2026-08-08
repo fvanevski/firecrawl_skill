@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
@@ -18,12 +19,15 @@ from asset_promotion_test_support import (
     _request,
 )
 from research_store.asset_promotion_service import AssetPromotionService
+from research_store.bounded_orchestrator import BoundedExtractionStage
 from research_store.config import StoreConfig
 from research_store.container import (
     build_extraction_service,
     build_run_service,
     build_service,
+    build_workflow_operation_service,
 )
+from research_store.domain import IngestRequest
 from research_store.ingestion_batch_semantics import _finish_ingestion_batch
 from research_store.postgres import PostgresUnitOfWork, connect, migrate
 
@@ -100,6 +104,13 @@ def test_direct_batch_persists_exact_constituent_min_max_and_member_ids(tmp_path
     assert summary["succeeded_ids"] == member_ids
     assert summary["failed_ids"] == []
     assert summary["cancelled_ids"] == []
+
+    with service.uow_factory() as uow:
+        canonical = uow.export_invocation(invocation_id)
+    assert canonical["batch_id"] == manifest["batch_id"]
+    assert canonical["sealed_at"] == manifest["sealed_at"]
+    assert canonical["outcome_summary"] == summary
+    assert [str(item["batch_asset_id"]) for item in canonical["assets"]] == member_ids
 
 
 @requires_db
@@ -255,6 +266,55 @@ def test_outcome_summary_uses_exact_attempt_outcomes_ids_and_failure_classes(
 
 
 @requires_db
+def test_v43_retry_replaces_exact_member_summary_without_stale_accumulation(
+    tmp_path: Path,
+):
+    migrate(TEST_DSN)
+    service = build_service(_config(tmp_path))
+    invocation_id = f"fc_issue217_retry_{uuid4().hex}"
+    requests = [
+        _request("retry-success"),
+        {
+            "requested_url": "https://example.test/retry-failure",
+            "error": "synthetic retry failure",
+        },
+    ]
+
+    first = service.ingest_batch(invocation_id, "issue217_retry", requests)
+    first = service.finalize_ingestion_batch(first["batch_id"], "partial")
+    first_summary = first["outcome_summary"]
+    first_ids = {str(item["batch_asset_id"]) for item in first["assets"]}
+    assert first_summary["member_count"] == 2
+    assert first_summary["succeeded"] == 1
+    assert first_summary["failed"] == 1
+    assert set(first_summary["succeeded_ids"] + first_summary["failed_ids"]) == first_ids
+
+    second = service.ingest_batch(invocation_id, "issue217_retry", requests)
+    second = service.finalize_ingestion_batch(second["batch_id"], "partial")
+    second_summary = second["outcome_summary"]
+    second_ids = {str(item["batch_asset_id"]) for item in second["assets"]}
+
+    assert second["batch_id"] == first["batch_id"]
+    assert second_summary["member_count"] == 2
+    assert second_summary["succeeded"] == 1
+    assert second_summary["failed"] == 1
+    assert second_summary["cancelled"] == 0
+    assert set(second_summary["succeeded_ids"] + second_summary["failed_ids"]) == second_ids
+    assert first_ids.isdisjoint(second_ids)
+    assert second_summary["failure_classes"] == {
+        "ingestion_error": {
+            "count": 1,
+            "ids": second_summary["failed_ids"],
+        }
+    }
+
+    with service.uow_factory() as uow:
+        canonical = uow.export_invocation(invocation_id)
+    assert canonical["outcome_summary"] == second_summary
+    assert {str(item["batch_asset_id"]) for item in canonical["assets"]} == second_ids
+
+
+@requires_db
 def test_concurrent_insert_and_seal_produce_exact_serializable_membership(
     tmp_path: Path,
 ):
@@ -371,6 +431,121 @@ def test_reused_snapshot_keeps_original_provenance_and_batch_uses_current_attemp
         )
         snapshot_attempt = cursor.fetchone()[0]
     assert UUID(str(snapshot_attempt)) == first_attempt
+
+
+@requires_db
+def test_bounded_wave_persists_success_failed_and_cancelled_preflight_members(
+    tmp_path: Path,
+):
+    migrate(TEST_DSN)
+    config = _config(tmp_path)
+    runs = build_run_service(config)
+    external_id = f"fr_issue217_wave_{uuid4().hex}"
+    runs.create(
+        "issue 217 mixed bounded extraction wave",
+        external_id,
+        execution_mode="autonomous_local",
+    )
+    build_workflow_operation_service(config).prepare_run(external_id)
+    status = runs.status(external_id=external_id)
+    runs.transition(
+        status.id,
+        "extracting",
+        expected_revision=status.lifecycle_revision,
+        idempotency_key=f"issue217:extracting:{status.id}",
+        actor_type="test",
+        actor_identifier="test_issue_217",
+        triggering_event="run.extracting",
+        reason="exercise mixed authoritative extraction batch membership",
+    )
+    status = runs.status(run_id=status.id)
+    candidates = [
+        _insert_candidate(status.id, label)
+        for label in ("wave-success", "wave-failed", "wave-cancelled")
+    ]
+
+    success_url = "https://example.test/wave/success"
+    failed_url = "https://example.test/wave/failed"
+    cancelled_url = "https://example.test/wave/cancelled"
+    raw_requests = [
+        {
+            "requested_url": success_url,
+            "request": IngestRequest(
+                success_url,
+                b"# authoritative bounded extraction evidence",
+            ),
+            "metadata": {
+                "candidate_id": str(candidates[0]),
+                "firecrawl": {"result_index": 0, "status_code": 200},
+            },
+        },
+        {
+            "requested_url": failed_url,
+            "metadata": {
+                "candidate_id": str(candidates[1]),
+                "firecrawl": {"result_index": 1, "status_code": 503},
+                "preflight_classification": "http_error",
+                "preflight_terminal": True,
+                "preflight_cancelled": False,
+                "preflight_retryable": False,
+                "preflight_reason_code": "http_503",
+                "preflight_reason": "authoritative test HTTP failure",
+                "preflight_failure_stage": "provider_operation",
+                "preflight_http_status": 503,
+            },
+        },
+        {
+            "requested_url": cancelled_url,
+            "metadata": {
+                "candidate_id": str(candidates[2]),
+                "firecrawl": {"result_index": 2},
+                "preflight_classification": "timeout",
+                "preflight_terminal": True,
+                "preflight_cancelled": True,
+                "preflight_retryable": False,
+                "preflight_reason_code": "provider_operation_timeout",
+                "preflight_reason": "authoritative test timeout",
+                "preflight_failure_stage": "provider_operation",
+                "preflight_elapsed_seconds": 1.25,
+            },
+        },
+    ]
+    stage = BoundedExtractionStage(
+        run_service=runs,
+        coverage_service=MagicMock(),
+        config=config,
+        corpus_service=build_service(config),
+        extraction_service=build_extraction_service(config),
+    )
+    context = {
+        "raw_ingest_requests": raw_requests,
+        "candidate_coverage_items": {},
+    }
+
+    result = stage.execute(
+        status.id,
+        status.lifecycle_revision,
+        None,
+        "extracting",
+        context,
+    )
+    assert result.error is None
+    summary = result.details["outcome_summary"]
+    assert summary["member_count"] == 3
+    assert summary["succeeded"] == 1
+    assert summary["failed"] == 1
+    assert summary["cancelled"] == 1
+    assert len(summary["succeeded_extraction_attempt_ids"]) == 1
+    assert len(summary["failed_extraction_attempt_ids"]) == 1
+    assert len(summary["cancelled_extraction_attempt_ids"]) == 1
+    assert summary["failure_classes"]["http_error"]["count"] == 1
+    assert summary["failure_classes"]["timeout"]["count"] == 1
+
+    with runs.uow_factory() as uow:
+        manifest = uow.export_invocation_by_batch(result.details["batch_id"])
+    assert len(manifest["assets"]) == 3
+    assert {item["ordinal"] for item in manifest["assets"]} == {0, 1, 2}
+    assert all(item["extraction_attempt_id"] is not None for item in manifest["assets"])
 
 
 @requires_db
@@ -500,3 +675,52 @@ def test_arc05_canonical_read_exposes_stage_specific_selection_semantics(
     assert final["retained"] is True
     assert final["evidence_eligible"] is True
     assert final["completion_critical"] is True
+
+
+@requires_db
+def test_arc05_failed_and_rejected_subjects_keep_stage_specific_truth(tmp_path: Path):
+    migrate(TEST_DSN)
+    config = _config(tmp_path)
+    runs = build_run_service(config)
+    extraction = build_extraction_service(config)
+    status = runs.create(
+        "issue 217 failed and rejected stage semantics",
+        f"fr_issue217_rejected_{uuid4().hex}",
+        execution_mode="autonomous_local",
+    )
+    candidate_id = _insert_candidate(status.id, "rejected-stage-flags")
+    attempt_id = extraction.create_attempt(candidate_id, status.id)
+    extraction.complete_attempt(
+        attempt_id,
+        "failed",
+        failure_class="http_error",
+        error_message="authoritative test failure",
+    )
+    promotions = AssetPromotionService(runs.uow_factory)
+
+    failed = promotions.list_assets(status.id)[0]
+    assert failed["current_stage"] == "selected_for_extraction"
+    assert failed["selected_for_extraction"] is True
+    assert failed["extraction_succeeded"] is False
+    assert failed["retained"] is False
+    assert failed["evidence_eligible"] is False
+    assert failed["completion_critical"] is False
+
+    current = runs.status(run_id=status.id)
+    promotions.reject(
+        UUID(str(failed["id"])),
+        expected_lifecycle_revision=current.lifecycle_revision,
+        expected_run_id=status.id,
+        actor_type="test",
+        actor_identifier="test_issue_217",
+        policy_version="issue217-test-v1",
+        reason_code="test_rejection",
+        reason="verify rejected stage-specific semantics",
+    )
+    rejected = promotions.list_assets(status.id)[0]
+    assert rejected["current_stage"] == "rejected"
+    assert rejected["selected_for_extraction"] is True
+    assert rejected["extraction_succeeded"] is False
+    assert rejected["retained"] is False
+    assert rejected["evidence_eligible"] is False
+    assert rejected["completion_critical"] is False
