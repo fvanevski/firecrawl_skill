@@ -56,7 +56,8 @@ jobs:
             -p no:cacheprovider \
             scripts/test_audit_regression_baseline.py \
             scripts/test_issue_213_search_empty_telemetry.py \
-            scripts/test_issue_219_verifier_inconclusive.py
+            scripts/test_issue_219_verifier_inconclusive.py \
+            scripts/test_issue_220_doctor_diagnostics.py
           python scripts/verify_pytest_skips.py \
             --junitxml "$PYTEST_JUNIT" \
             --allowlist references/audit-regression-skip-allowlist.json \
