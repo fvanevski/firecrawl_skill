@@ -212,8 +212,55 @@ def test_curated_four_asset_lifecycle_uses_real_direct_wrappers(
     assert curated.resume(external_id)["next_action"] == "resume index checkpoint"
 
     _mark_run_index_complete(started.run.id)
-    first_finish = curated.finish(external_id, outcome="satisfied")
-    second_finish = curated.finish(external_id, outcome="satisfied")
+
+    # Insert a validation synthesis stage so completion gates pass.
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    stage_id = uuid4()
+    with runs.uow_factory() as uow:
+        uow.insert_synthesis_stage(
+            {
+                "id": stage_id,
+                "run_id": started.run.id,
+                "stage_name": "validation",
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "local",
+                "prompt_version": "synthesis-v1",
+                "schema_version": 1,
+                "artifact": {
+                    "report_hash": "test-hash",
+                    "current_packet_revision": 1,
+                    "stale_packet": False,
+                    "validation_status": "valid",
+                    "is_complete": True,
+                    "claim_manifest": [],
+                    "validation_errors_count": 0,
+                    "validation_warnings_count": 0,
+                    "summary": "All claims supported.",
+                },
+                "error": None,
+                "attempts": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    first_finish = curated.finish(
+        external_id,
+        outcome="satisfied",
+        source_manifest_sha256="a" * 64,
+        answer_sha256="b" * 64,
+    )
+    second_finish = curated.finish(
+        external_id,
+        outcome="satisfied",
+        source_manifest_sha256="a" * 64,
+        answer_sha256="b" * 64,
+    )
     assert first_finish.run.state == second_finish.run.state == "completed"
     assert curated.resume(external_id)["next_action"] == "none"
 
