@@ -94,13 +94,37 @@ do not enter corpus ingestion.
 
 No Alembic migration is required. Issue #216 reuses existing
 `extraction_attempts` columns and the existing `extraction_failure_class` enum.
-The added policy metadata is in-memory/diagnostic data; persisted audit output
-uses existing PostgreSQL fields. Existing search-response and immutable content
-hashing contracts are unchanged.
+Timing and classification are carried in bounded transport/preflight metadata;
+the public `SearchAdapterResult` domain contract is not expanded for this issue.
+Persisted audit output uses existing PostgreSQL fields. Existing search-response
+and immutable content hashing contracts are unchanged.
 
 Rollback is therefore code-only: reverting the issue #216 provider/stage
 routing restores the previous behavior without a database downgrade. Historical
 rows are not backfilled or reclassified.
+
+## Review remediation matrix
+
+The final implementation supersedes the original inline/post-hoc preflight
+attempt. The review findings are resolved at the production seam as follows:
+
+| Finding | Final correction | Regression evidence |
+|---|---|---|
+| Suitable candidates were treated as rejected because `"suitable"` was truthy. | Admission is based on the typed outcome's `terminal` state; suitable outcomes remain non-terminal and continue to ingestion. | Mixed suitable/empty `BoundedExtractionStage` test asserts the suitable candidate succeeds while the empty candidate is cancelled. |
+| Preflight ran after `search --scrape`, so it could not bound provider extraction. | Search is discovery-only and candidate `scrape` is a separate bounded provider operation. | Discovery-only command assertions plus candidate-scrape deadline tests. |
+| Empty/whitespace markdown could bypass the checker. | Candidate scrape results always pass through `CandidatePreflightChecker` before blob/corpus admission; empty content is terminal by default. | Empty and whitespace suitability tests plus zero-empty-retry test. |
+| Content type was not actually validated and the provisional failure name was incompatible with PostgreSQL. | MIME/content type is normalized and checked; `unsupported_content_type` maps to durable `unsupported_format`. | Unsupported MIME policy test and extraction-stage durable-enum test. |
+| First-byte/provider/overall deadlines were post-hoc or absent and provider work could be orphaned. | `BoundedSubprocessRunner` enforces live deadlines, starts a separate process session, terminates the process group, escalates to `SIGKILL` when required, and waits for reaping. | Real child-process first-byte and provider-operation timeout tests. |
+| Timeout provenance was conflated with empty content and timing was lost. | Timeout has its own classification/reason code/failure stage and elapsed timing is propagated in preflight metadata to the extraction audit record. | Timeout-classification test and PostgreSQL audit readback. |
+| Provider diagnostics could persist credentials. | Provider errors, transport metadata, and audit messages pass through bearer/assignment redaction before persistence. | Transient-error redaction test and PostgreSQL audit readback containing `[REDACTED]`. |
+| Anti-bot matching rejected legitimate research prose. | Detection requires challenge-specific phrases or provider/challenge term combinations rather than generic topical words. | Legitimate “bot detection”/Cloudflare article regression plus challenge rejection test. |
+| Rejected candidates could contaminate corpus admission or ordinal handling. | Only non-terminal requests enter `active_requests`; existing `metadata.firecrawl.result_index` is preserved so `CorpusService.ingest_batch()` keeps original manifest ordinals after filtering. | Mixed-candidate stage test; existing `CorpusService` ordinal contract remains unchanged. |
+| New tests did not exercise the responsible production seam and were absent from CI. | The issue suite imports the canonical package routing, executes `BoundedExtractionStage`, uses real child processes for cancellation, and performs PostgreSQL readback. A dedicated Python 3.11/3.12 workflow runs it with acquisition/orchestrator regressions. | `.github/workflows/extraction-preflight.yml`. |
+| Superseded first-pass API and broad test-format churn remained in the diff. | `domain.py`, `acquisition_service.py`, and `orchestrator.py` are restored to the base implementation; the legacy acquisition test changes only the discovery-only command assertions. | Final PR diff inspection. |
+
+No finding is resolved by weakening PostgreSQL authority, treating Qdrant as an
+exact-membership source, inferring historical provenance, or allowing external
+or provisional synthesis to satisfy an authoritative completion gate.
 
 ## Regression and CI coverage
 
@@ -118,8 +142,18 @@ rows are not backfilled or reclassified.
 - production `ExtractionStage` admission of suitable content while excluding
   rejected content;
 - durable PostgreSQL audit readback, including enum compatibility, elapsed-stage
-  text, cancellation, and secret redaction.
+  text, cancellation, and secret redaction; and
+- documentation/CI synchronization for the issue-specific contract.
 
 The test file runs in a dedicated Python 3.11/3.12 issue #216 workflow with a
 disposable PostgreSQL instance. The repository broad suite continues to run in
 parallel, so issue-specific evidence cannot be hidden by unrelated green checks.
+
+## Approved repository-tooling provenance
+
+The maintainer expressly expanded PR #233's scope to include the Serena MCP
+project configuration. `.serena/project.yml` is the shared project definition;
+`.serena/.gitignore` and the root `.gitignore` exclude generated cache and local
+override files. These files are repository-development tooling only: they do not
+participate in research lifecycle authority, provider execution, PostgreSQL
+completion decisions, content hashing, or Qdrant projection behavior.
