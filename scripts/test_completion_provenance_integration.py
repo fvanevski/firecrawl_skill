@@ -117,7 +117,7 @@ def _ready(config: StoreConfig):
 def test_completed_run_derives_and_persists_exact_authoritative_provenance(
     completion_config: StoreConfig,
 ):
-    runs, status, provenance, workflow = _ready(completion_config)
+    _runs, status, provenance, workflow = _ready(completion_config)
 
     finished = workflow.finish_run(status.external_id, outcome="satisfied")
     assert finished.state == "completed"

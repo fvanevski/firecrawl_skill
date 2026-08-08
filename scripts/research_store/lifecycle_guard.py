@@ -123,31 +123,6 @@ class GuardedResearchRunService(ResearchRunService):
                         error=error,
                         completion=completion_payload,
                     )
-                # Lock and validate the lifecycle CAS before any completion-only
-                # provenance work.  This preserves the public state-machine error
-                # semantics while also holding the run row for the remainder of
-                # the terminal transaction.
-                with uow.connection.cursor() as cursor:
-                    cursor.execute(
-                        "SELECT state,lifecycle_revision FROM research_runs "
-                        "WHERE id=%s FOR UPDATE",
-                        (run_id,),
-                    )
-                    run_row = cursor.fetchone()
-                if run_row is None:
-                    raise KeyError(run_id)
-                prior_state, current_revision = run_row
-                if int(current_revision) != expected_revision:
-                    raise StaleRunRevisionError(
-                        "stale research run revision: "
-                        f"expected {expected_revision}, current {current_revision}"
-                    )
-                if prior_state not in permitted_prior_states:
-                    raise RunStateError(
-                        "research run transition rejected: "
-                        f"{prior_state} -> {next_state} is not permitted"
-                    )
-
                 if next_state == "completed":
                     try:
                         authoritative = load_authoritative_completion_provenance(

@@ -213,7 +213,7 @@ def seed_authoritative_completion_provenance(
             passage_rows = cursor.fetchall()
             assert len(passage_rows) == len(membership["chunk_ids"])
             passage_by_id = {UUID(str(row[0])): row for row in passage_rows}
-            _, snapshot_id_raw, passage_text, source_url = passage_by_id[chunk_id]
+            _, snapshot_id_raw, _passage_text, source_url = passage_by_id[chunk_id]
             snapshot_id = UUID(str(snapshot_id_raw))
             provider, authority, model = _authority_for_mode(str(execution_mode))
 

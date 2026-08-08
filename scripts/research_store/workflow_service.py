@@ -434,7 +434,6 @@ class WorkflowOperationService:
                 },
             )
 
-        # --- Completion gates for authoritative completed outcome ----------
         provenance = self._assert_completion_gates(
             run_id=current.id,
             source_manifest_sha256=source_manifest_sha256,
@@ -505,7 +504,7 @@ class WorkflowOperationService:
             raise WorkflowBoundaryError(
                 f"authoritative completion provenance rejected: {exc}"
             ) from exc
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise WorkflowBoundaryError(
                 "authoritative completion provenance is unavailable; "
                 f"completion fails closed ({type(exc).__name__})"
