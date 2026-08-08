@@ -381,10 +381,7 @@ def test_writer_that_commits_first_forces_terminal_revalidation_to_fail(
         assert not thread.is_alive()
         error = str(result.get("error", ""))
         assert "failed revalidation" in error
-        assert (
-            "current persisted claim provenance" in error
-            or "stale" in error.lower()
-        )
+        assert "current persisted claim provenance" in error or "stale" in error.lower()
         assert runs.status(run_id=status.id).state == "validating"
     finally:
         writer.rollback()
