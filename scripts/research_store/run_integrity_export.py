@@ -591,7 +591,12 @@ def _diagnostics(
     }
 
     if run.get("state") == "completed":
-        required = ("evidence_packets", "semantic_calls", "semantic_artifacts", "synthesis_stages")
+        required = (
+            "evidence_packets",
+            "semantic_calls",
+            "semantic_artifacts",
+            "synthesis_stages",
+        )
         missing = [name for name in required if completion_counts.get(name, 0) <= 0]
         domains["synthesis_completion"] = {
             "status": "failure" if missing else "pass",
@@ -610,8 +615,12 @@ def _diagnostics(
         }
 
     statuses = {domain["status"] for domain in domains.values()}
-    overall = "failure" if "failure" in statuses else (
-        "inconclusive" if "inconclusive" in statuses else "pass"
+    overall = (
+        "failure"
+        if "failure" in statuses
+        else "inconclusive"
+        if "inconclusive" in statuses
+        else "pass"
     )
     return {"overall_status": overall, "domains": domains}
 
@@ -619,13 +628,17 @@ def _diagnostics(
 def _core_sections(cursor: Any, run_id: UUID) -> dict[str, dict[str, Any]]:
     specs = {
         "lifecycle_ledger": (
-            "SELECT row_to_json(t) FROM research_run_transitions t WHERE t.run_id=%s "
-            "ORDER BY t.lifecycle_revision,t.id",
+            (
+                "SELECT row_to_json(t) FROM research_run_transitions t WHERE t.run_id=%s "
+                "ORDER BY t.lifecycle_revision,t.id"
+            ),
             (run_id,),
         ),
         "terminal_decisions": (
-            "SELECT row_to_json(d) FROM terminal_decisions d WHERE d.run_id=%s "
-            "ORDER BY d.created_at,d.id",
+            (
+                "SELECT row_to_json(d) FROM terminal_decisions d WHERE d.run_id=%s "
+                "ORDER BY d.created_at,d.id"
+            ),
             (run_id,),
         ),
         "run_mode_history": (
@@ -637,13 +650,17 @@ def _core_sections(cursor: Any, run_id: UUID) -> dict[str, dict[str, Any]]:
             (run_id,),
         ),
         "promotion_subjects": (
-            "SELECT row_to_json(s) FROM run_asset_promotion_subjects s WHERE s.run_id=%s "
-            "ORDER BY s.created_at,s.id",
+            (
+                "SELECT row_to_json(s) FROM run_asset_promotion_subjects s WHERE s.run_id=%s "
+                "ORDER BY s.created_at,s.id"
+            ),
             (run_id,),
         ),
         "promotion_events": (
-            "SELECT row_to_json(e) FROM run_asset_promotion_events e WHERE e.run_id=%s "
-            "ORDER BY e.occurred_at,e.id",
+            (
+                "SELECT row_to_json(e) FROM run_asset_promotion_events e WHERE e.run_id=%s "
+                "ORDER BY e.occurred_at,e.id"
+            ),
             (run_id,),
         ),
         "indexing_checkpoint_observations": (
@@ -653,8 +670,10 @@ def _core_sections(cursor: Any, run_id: UUID) -> dict[str, dict[str, Any]]:
             (run_id,),
         ),
         "invocations": (
-            "SELECT row_to_json(i) FROM research_invocations i WHERE i.run_id=%s "
-            "ORDER BY i.created_at,i.id",
+            (
+                "SELECT row_to_json(i) FROM research_invocations i WHERE i.run_id=%s "
+                "ORDER BY i.created_at,i.id"
+            ),
             (run_id,),
         ),
         "search_plans": (
@@ -662,33 +681,45 @@ def _core_sections(cursor: Any, run_id: UUID) -> dict[str, dict[str, Any]]:
             (run_id,),
         ),
         "search_plan_queries": (
-            "SELECT row_to_json(q) FROM search_plan_queries q WHERE q.run_id=%s "
-            "ORDER BY q.created_at,q.id",
+            (
+                "SELECT row_to_json(q) FROM search_plan_queries q WHERE q.run_id=%s "
+                "ORDER BY q.created_at,q.id"
+            ),
             (run_id,),
         ),
         "search_responses": (
-            "SELECT row_to_json(r) FROM search_responses r WHERE r.run_id=%s "
-            "ORDER BY r.created_at,r.id",
+            (
+                "SELECT row_to_json(r) FROM search_responses r WHERE r.run_id=%s "
+                "ORDER BY r.created_at,r.id"
+            ),
             (run_id,),
         ),
         "search_candidates": (
-            "SELECT row_to_json(c) FROM search_candidates c WHERE c.run_id=%s "
-            "ORDER BY c.created_at,c.id",
+            (
+                "SELECT row_to_json(c) FROM search_candidates c WHERE c.run_id=%s "
+                "ORDER BY c.created_at,c.id"
+            ),
             (run_id,),
         ),
         "candidate_occurrences": (
-            "SELECT row_to_json(o) FROM candidate_occurrences o WHERE o.run_id=%s "
-            "ORDER BY o.discovered_at,o.id",
+            (
+                "SELECT row_to_json(o) FROM candidate_occurrences o WHERE o.run_id=%s "
+                "ORDER BY o.discovered_at,o.id"
+            ),
             (run_id,),
         ),
         "retrieval_events": (
-            "SELECT row_to_json(e) FROM retrieval_events e WHERE e.run_id=%s "
-            "ORDER BY e.created_at,e.id",
+            (
+                "SELECT row_to_json(e) FROM retrieval_events e WHERE e.run_id=%s "
+                "ORDER BY e.created_at,e.id"
+            ),
             (run_id,),
         ),
         "run_assets": (
-            "SELECT row_to_json(a) FROM research_run_assets a WHERE a.run_id=%s "
-            "ORDER BY a.snapshot_id,a.role",
+            (
+                "SELECT row_to_json(a) FROM research_run_assets a WHERE a.run_id=%s "
+                "ORDER BY a.snapshot_id,a.role"
+            ),
             (run_id,),
         ),
         "sources": (
@@ -731,8 +762,10 @@ def _core_sections(cursor: Any, run_id: UUID) -> dict[str, dict[str, Any]]:
             (run_id,),
         ),
         "ingestion_batches": (
-            "SELECT row_to_json(b) FROM ingestion_batches b WHERE b.research_run_id=%s "
-            "ORDER BY b.started_at,b.id",
+            (
+                "SELECT row_to_json(b) FROM ingestion_batches b WHERE b.research_run_id=%s "
+                "ORDER BY b.started_at,b.id"
+            ),
             (run_id,),
         ),
         "ingestion_batch_assets": (
@@ -746,18 +779,24 @@ def _core_sections(cursor: Any, run_id: UUID) -> dict[str, dict[str, Any]]:
             (run_id,),
         ),
         "semantic_artifacts": (
-            "SELECT row_to_json(a) FROM semantic_artifacts a WHERE a.run_id=%s "
-            "ORDER BY a.created_at,a.id",
+            (
+                "SELECT row_to_json(a) FROM semantic_artifacts a WHERE a.run_id=%s "
+                "ORDER BY a.created_at,a.id"
+            ),
             (run_id,),
         ),
         "synthesis_stages": (
-            "SELECT row_to_json(s) FROM synthesis_stages s WHERE s.run_id=%s "
-            "ORDER BY s.created_at,s.id",
+            (
+                "SELECT row_to_json(s) FROM synthesis_stages s WHERE s.run_id=%s "
+                "ORDER BY s.created_at,s.id"
+            ),
             (run_id,),
         ),
         "evidence_packets": (
-            "SELECT row_to_json(p) FROM evidence_packets p WHERE p.run_id=%s "
-            "ORDER BY p.packet_revision,p.id",
+            (
+                "SELECT row_to_json(p) FROM evidence_packets p WHERE p.run_id=%s "
+                "ORDER BY p.packet_revision,p.id"
+            ),
             (run_id,),
         ),
         "research_claims": (
@@ -765,8 +804,10 @@ def _core_sections(cursor: Any, run_id: UUID) -> dict[str, dict[str, Any]]:
             (run_id,),
         ),
         "claim_evidence_links": (
-            "SELECT row_to_json(l) FROM claim_evidence_links l WHERE l.run_id=%s "
-            "ORDER BY l.created_at,l.id",
+            (
+                "SELECT row_to_json(l) FROM claim_evidence_links l WHERE l.run_id=%s "
+                "ORDER BY l.created_at,l.id"
+            ),
             (run_id,),
         ),
         "blob_references": (
@@ -779,7 +820,10 @@ def _core_sections(cursor: Any, run_id: UUID) -> dict[str, dict[str, Any]]:
             (run_id,),
         ),
     }
-    return {name: _section(cursor, sql, params) for name, (sql, params) in specs.items()}
+    return {
+        name: _section(cursor, sql, params)
+        for name, (sql, params) in specs.items()
+    }
 
 
 def _connect(config: Any):
