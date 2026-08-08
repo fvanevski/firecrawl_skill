@@ -180,9 +180,7 @@ def test_outcome_summary_uses_exact_attempt_outcomes_ids_and_failure_classes(
         extraction.create_attempt(candidate, status.id, start_time=start)
         for candidate, start in zip(candidates, start_times, strict=True)
     ]
-    extraction.complete_attempt(
-        attempt_ids[0], "succeeded", end_time=end_times[0]
-    )
+    extraction.complete_attempt(attempt_ids[0], "succeeded", end_time=end_times[0])
     extraction.complete_attempt(
         attempt_ids[1],
         "failed",
@@ -269,7 +267,7 @@ def test_concurrent_insert_and_seal_produce_exact_serializable_membership(
     batch_id = initial["batch_id"]
     barrier = threading.Barrier(2)
     outcomes: list[str] = []
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
 
     def record_late() -> None:
         try:
@@ -285,7 +283,7 @@ def test_concurrent_insert_and_seal_produce_exact_serializable_membership(
         except ValueError as exc:
             outcomes.append("rejected")
             assert "sealed" in str(exc)
-        except BaseException as exc:  # pragma: no cover - surfaced below
+        except Exception as exc:  # pragma: no cover - surfaced below
             errors.append(exc)
 
     def seal() -> None:
@@ -293,7 +291,7 @@ def test_concurrent_insert_and_seal_produce_exact_serializable_membership(
             barrier.wait(timeout=5)
             service.finalize_ingestion_batch(batch_id, "complete")
             outcomes.append("sealed")
-        except BaseException as exc:  # pragma: no cover - surfaced below
+        except Exception as exc:  # pragma: no cover - surfaced below
             errors.append(exc)
 
     writer = threading.Thread(target=record_late)
