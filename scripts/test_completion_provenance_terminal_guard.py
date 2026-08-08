@@ -149,6 +149,10 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
                 evidence_packet_revision=int(claim["evidence_packet_revision"]),
             )
 
+    def delete_claims():
+        with runs.uow_factory() as uow:
+            uow.delete_claims(status.id)
+
     def append_evidence_link():
         with runs.uow_factory() as uow:
             uow.insert_evidence_link(
@@ -160,6 +164,10 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
                 relationship=link["relationship"],
                 confidence=float(link["confidence"]),
             )
+
+    def delete_evidence_links():
+        with runs.uow_factory() as uow:
+            uow.delete_evidence_links(status.id)
 
     def mutate_synthesis_stage():
         with runs.uow_factory() as uow:
@@ -181,6 +189,14 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
                 status="pending",
             )
 
+    def mutate_semantic_call():
+        with runs.uow_factory() as uow:
+            uow.annotate_semantic_call(
+                status.id,
+                semantic["id"],
+                {"late_terminal_annotation": True},
+            )
+
     def append_semantic_artifact():
         with runs.uow_factory() as uow:
             uow.record_semantic_artifact(
@@ -198,9 +214,12 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
     for action in (
         persist_packet,
         mutate_claim,
+        delete_claims,
         append_evidence_link,
+        delete_evidence_links,
         mutate_synthesis_stage,
         append_semantic_call,
+        mutate_semantic_call,
         append_semantic_artifact,
     ):
         _assert_terminal_guard(action)
@@ -330,6 +349,89 @@ def test_writer_waits_for_terminal_commit_then_rejects(
             (status.id,),
         )
         assert int(cursor.fetchone()[0]) == int(packet[2])
+
+
+def test_update_writer_waits_for_fully_locked_terminal_snapshot_then_rejects(
+    terminal_guard_config: StoreConfig,
+    monkeypatch,
+):
+    runs, status, _provenance, workflow = _ready(terminal_guard_config)
+    with runs.uow_factory() as uow:
+        draft = uow.get_synthesis_stage(status.id, "draft")
+    original_attempts = int(draft["attempts"])
+
+    from research_store import lifecycle_guard
+
+    original_loader = lifecycle_guard.load_authoritative_completion_provenance
+    provenance_locked = threading.Event()
+    release_terminal = threading.Event()
+    writer_started = threading.Event()
+    writer_done = threading.Event()
+    result: dict[str, object] = {}
+
+    def paused_after_locking(uow, run_id, *, for_update=False):
+        authoritative = original_loader(uow, run_id, for_update=for_update)
+        if for_update and run_id == status.id:
+            provenance_locked.set()
+            if not release_terminal.wait(5):
+                raise RuntimeError("timed out waiting to release terminal transaction")
+        return authoritative
+
+    monkeypatch.setattr(
+        lifecycle_guard,
+        "load_authoritative_completion_provenance",
+        paused_after_locking,
+    )
+
+    def complete():
+        try:
+            result["completion"] = workflow.finish_run(
+                status.external_id,
+                outcome="satisfied",
+            )
+        except Exception as exc:  # noqa: BLE001 - asserted below
+            result["completion_error"] = exc
+
+    def writer():
+        writer_started.set()
+        try:
+            with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE synthesis_stages
+                          SET attempts=attempts+1
+                        WHERE run_id=%s AND stage_name='draft'""",
+                    (status.id,),
+                )
+        except Exception as exc:  # noqa: BLE001 - asserted below
+            result["writer_error"] = exc
+        finally:
+            writer_done.set()
+
+    completion_thread = threading.Thread(target=complete, daemon=True)
+    completion_thread.start()
+    assert provenance_locked.wait(5)
+
+    writer_thread = threading.Thread(target=writer, daemon=True)
+    writer_thread.start()
+    assert writer_started.wait(2)
+    assert not writer_done.wait(0.2)
+
+    release_terminal.set()
+    completion_thread.join(timeout=5)
+    writer_thread.join(timeout=5)
+    assert not completion_thread.is_alive()
+    assert not writer_thread.is_alive()
+    assert "completion_error" not in result
+    assert result["completion"].state == "completed"
+    assert _TERMINAL_GUARD in str(result.get("writer_error", ""))
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT attempts FROM synthesis_stages
+                WHERE run_id=%s AND stage_name='draft'""",
+            (status.id,),
+        )
+        assert int(cursor.fetchone()[0]) == original_attempts
 
 
 def test_writer_that_commits_first_forces_terminal_revalidation_to_fail(

@@ -44,12 +44,9 @@ Migration `0044_terminal_provenance_guard` installs one database-level writer gu
 - `run_asset_membership_seals`
 - `run_asset_membership_members`
 
-Every `INSERT`, `UPDATE`, or `DELETE` on those tables first locks the owning `research_runs` row with `FOR KEY SHARE` and checks the current run state. This establishes a single run-first lock order:
+Before a row mutation on any guarded table can be accepted, its trigger locks the owning `research_runs` row with `FOR KEY SHARE` and checks the current run state. Terminalization independently locks that same run row with `FOR UPDATE` before final provenance revalidation. Those lock modes conflict, so a provenance write and terminalization cannot both commit across the same run boundary unnoticed.
 
-1. provenance writer acquires `FOR KEY SHARE` on the run before changing provenance;
-2. terminalization acquires `FOR UPDATE` on the run before final provenance revalidation.
-
-`FOR UPDATE` conflicts with `FOR KEY SHARE`, so the two operations cannot cross one another unnoticed. If a writer commits first, terminalization waits and then revalidates the writer's committed state. If terminalization commits first, a waiting writer resumes, observes the terminal state, and is rejected. A writer started after terminalization is rejected immediately.
+If a writer establishes the run-side lock and commits first, terminalization waits and then revalidates the writer's committed provenance. If terminalization commits first, a waiting writer resumes, observes the terminal state, and is rejected. For `UPDATE` or `DELETE`, PostgreSQL may already hold a target-row lock before the row-level trigger requests the run lock; if opposite lock acquisition produces a deadlock, PostgreSQL aborts one transaction rather than allowing both mutations to commit. In every ordering, the invariant is fail-closed: terminal provenance cannot change successfully without an explicit reopen.
 
 This database guard is deliberate defense in depth. It protects service methods, raw SQL, future repository paths, and concurrent callers rather than relying on each Python writer to remember a state check.
 
@@ -105,9 +102,10 @@ The production-seam tests cover:
 
 - factory wiring to `GuardedResearchRunService`;
 - migration installation on every guarded provenance table;
-- post-terminal rejection of EvidencePacket, claim, evidence-link, synthesis-stage, semantic-call, semantic-artifact, and membership mutations;
+- post-terminal rejection of EvidencePacket, claim insert/update/delete, evidence-link insert/delete, synthesis-stage, semantic-call insert/update, semantic-artifact, and membership mutations;
 - explicit reopen restoring legal provenance writes;
-- a writer blocked behind terminalization that resumes and rejects after terminal commit;
+- a new EvidencePacket writer blocked behind terminalization that resumes and rejects after terminal commit;
+- an `UPDATE synthesis_stages` writer blocked behind the fully locked terminal provenance snapshot that resumes and rejects after terminal commit;
 - a writer that commits first and forces final terminal revalidation to fail;
 - authoritative hash derivation and binding;
 - malformed/mismatched hash rejection;

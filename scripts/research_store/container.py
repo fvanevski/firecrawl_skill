@@ -242,7 +242,7 @@ def build_resource_governor(
 
     Args:
         config: Store config. Uses ``StoreConfig.from_env()`` when
-        ``None``.
+            ``None``.
 
     Returns:
         A ``ResourceGovernor`` instance with PostgreSQL-backed health
