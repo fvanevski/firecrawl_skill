@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from research_store.completion_provenance import CompletionProvenanceError
 from research_store.run_service import PERMITTED_TRANSITIONS, RunStatus
 from research_store.workflow_service import (
     RunIndexProgress,
@@ -28,13 +29,47 @@ def _run_status(run_id, external_id, state="created", revision=0):
     )
 
 
+class FakeUow:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeCompletionProvenance:
+    source_manifest_sha256 = "a" * 64
+    answer_sha256 = "b" * 64
+
+    def completion_fields(self):
+        return {
+            "source_manifest_sha256": self.source_manifest_sha256,
+            "answer_sha256": self.answer_sha256,
+            "provenance_type": "authoritative",
+            "completion_provenance": {
+                "schema_version": "completion-provenance-v1",
+                "semantic_artifact_id": str(uuid4()),
+            },
+        }
+
+
+@pytest.fixture
+def authoritative_gate(monkeypatch):
+    provenance = FakeCompletionProvenance()
+    monkeypatch.setattr(
+        "research_store.workflow_service.load_authoritative_completion_provenance",
+        lambda _uow, _run_id, for_update=False: provenance,
+    )
+    return provenance
+
+
 class FakeRunService:
     def __init__(self, state="created"):
         self.run_id = uuid4()
         self.external_id = f"fr_{uuid4().hex}"
         self.current = _run_status(self.run_id, self.external_id, state)
         self.transitions = []
-        self.uow_factory = lambda: None
+        self.uow_factory = FakeUow
 
     def status(self, *, run_id=None, external_id=None):
         if run_id not in (None, self.run_id) or external_id not in (
@@ -281,19 +316,17 @@ def test_finish_rejects_missing_index_job():
         service.finish_run(service.fake_run_service.external_id, outcome="satisfied")
 
 
-def test_finish_advances_valid_terminal_path_and_retry_is_idempotent():
+def test_finish_advances_valid_terminal_path_and_retry_is_idempotent(
+    authoritative_gate,
+):
     service = WorkflowServiceHarness(state="indexing")
     first = service.finish_run(
         service.fake_run_service.external_id,
         outcome="satisfied",
-        source_manifest_sha256="a" * 64,
-        answer_sha256="b" * 64,
     )
     second = service.finish_run(
         service.fake_run_service.external_id,
         outcome="satisfied",
-        source_manifest_sha256="a" * 64,
-        answer_sha256="b" * 64,
     )
     assert first.state == second.state == "completed"
     assert [item[1] for item in service.fake_run_service.transitions] == [
@@ -302,6 +335,13 @@ def test_finish_advances_valid_terminal_path_and_retry_is_idempotent():
         "validating",
         "completed",
     ]
+    completion = service.fake_run_service.transitions[-1][3]["completion"]
+    assert completion["source_manifest_sha256"] == "a" * 64
+    assert completion["answer_sha256"] == "b" * 64
+    assert completion["provenance_type"] == "authoritative"
+    assert completion["completion_provenance"]["schema_version"] == (
+        "completion-provenance-v1"
+    )
 
 
 def test_partial_finish_stops_at_partial():
@@ -327,23 +367,75 @@ def test_failed_finish_uses_permitted_path_from_created():
     ]
 
 
-def test_finish_rejects_missing_source_manifest_hash():
+def test_finish_derives_hashes_when_callers_omit_them(authoritative_gate):
     service = WorkflowServiceHarness(state="indexing")
-    with pytest.raises(WorkflowBoundaryError, match="source_manifest_sha256"):
+    result = service.finish_run(
+        service.fake_run_service.external_id,
+        outcome="satisfied",
+    )
+    assert result.state == "completed"
+    completion = service.fake_run_service.transitions[-1][3]["completion"]
+    assert (
+        completion["source_manifest_sha256"]
+        == authoritative_gate.source_manifest_sha256
+    )
+    assert completion["answer_sha256"] == authoritative_gate.answer_sha256
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("source_manifest_sha256", "x", "64 hexadecimal"),
+        ("answer_sha256", "not-a-digest", "64 hexadecimal"),
+        ("source_manifest_sha256", "c" * 64, "active sealed membership"),
+        ("answer_sha256", "d" * 64, "immutable synthesis artifact"),
+    ],
+)
+def test_finish_rejects_malformed_or_mismatched_hash_assertions(
+    authoritative_gate, field, value, match
+):
+    service = WorkflowServiceHarness(state="indexing")
+    kwargs = {field: value}
+    with pytest.raises(WorkflowBoundaryError, match=match):
         service.finish_run(
             service.fake_run_service.external_id,
             outcome="satisfied",
-            answer_sha256="b" * 64,
+            **kwargs,
         )
 
 
-def test_finish_rejects_missing_answer_hash():
+def test_completion_gate_fails_closed_when_uow_is_unavailable():
     service = WorkflowServiceHarness(state="indexing")
-    with pytest.raises(WorkflowBoundaryError, match="answer_sha256"):
-        service.finish_run(
-            service.fake_run_service.external_id,
-            outcome="satisfied",
-            source_manifest_sha256="a" * 64,
+
+    def unavailable():
+        raise RuntimeError("database unavailable")
+
+    service.uow_factory = unavailable
+    with pytest.raises(WorkflowBoundaryError, match="fails closed"):
+        service._assert_completion_gates(
+            service.fake_run_service.run_id,
+            source_manifest_sha256=None,
+            answer_sha256=None,
+            provenance_type=None,
+        )
+
+
+def test_completion_gate_propagates_provenance_rejection(monkeypatch):
+    service = WorkflowServiceHarness(state="indexing")
+
+    def reject(_uow, _run_id, for_update=False):
+        raise CompletionProvenanceError("stale EvidencePacket")
+
+    monkeypatch.setattr(
+        "research_store.workflow_service.load_authoritative_completion_provenance",
+        reject,
+    )
+    with pytest.raises(WorkflowBoundaryError, match="stale EvidencePacket"):
+        service._assert_completion_gates(
+            service.fake_run_service.run_id,
+            source_manifest_sha256=None,
+            answer_sha256=None,
+            provenance_type=None,
         )
 
 
@@ -353,8 +445,6 @@ def test_finish_rejects_external_provenance_type():
         service.finish_run(
             service.fake_run_service.external_id,
             outcome="satisfied",
-            source_manifest_sha256="a" * 64,
-            answer_sha256="b" * 64,
             provenance_type="external",
         )
 
@@ -365,13 +455,13 @@ def test_finish_rejects_provisional_provenance_type():
         service.finish_run(
             service.fake_run_service.external_id,
             outcome="satisfied",
-            source_manifest_sha256="a" * 64,
-            answer_sha256="b" * 64,
             provenance_type="provisional",
         )
 
 
-def test_finish_accepts_authoritative_provenance_type():
+def test_finish_accepts_authoritative_assertion_when_persisted_authority_matches(
+    authoritative_gate,
+):
     service = WorkflowServiceHarness(state="indexing")
     result = service.finish_run(
         service.fake_run_service.external_id,
