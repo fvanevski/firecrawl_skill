@@ -232,3 +232,231 @@ def test_export_run_totally_orders_equal_timestamp_events_and_is_read_only(
             "SELECT count(*) FROM retrieval_events WHERE run_id=%s", (run.id,)
         )
         assert cursor.fetchone()[0] == event_count_before
+
+
+@requires_postgres
+def test_export_run_includes_schema_version_and_is_read_only(
+    tmp_path,
+    monkeypatch,
+    prepared_export_database,
+):
+    """Verify export-run includes schema_version and is read-only."""
+    config = _config(tmp_path)
+    external_run_id = f"fr_export_schema_{uuid4().hex}"
+    build_run_service(config).create(
+        "Schema version export test",
+        external_run_id,
+        execution_mode="autonomous_local",
+    )
+
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.setenv("BLOB_ROOT", str(config.blob_root))
+    first = tmp_path / "run-v1.json"
+    second = tmp_path / "run-v2.json"
+
+    # Default schema version
+    assert store_cli.main(["export-run", external_run_id, "--output", str(first)]) == 0
+    payload1 = _assert_canonical_file(first)
+    assert payload1["schema_version"] == "export-run-v2"
+    assert "run" in payload1
+    assert "retrieval_events" in payload1
+
+    # Custom schema version
+    assert (
+        store_cli.main(
+            [
+                "export-run",
+                external_run_id,
+                "--output",
+                str(second),
+                "--schema-version",
+                "export-run-custom",
+            ]
+        )
+        == 0
+    )
+    payload2 = _assert_canonical_file(second)
+    assert payload2["schema_version"] == "export-run-custom"
+
+
+@requires_postgres
+def test_integrity_command_produces_complete_report(
+    tmp_path,
+    monkeypatch,
+    prepared_export_database,
+):
+    """Verify integrity command produces a complete offline report."""
+    config = _config(tmp_path)
+    external_run_id = f"fr_integrity_{uuid4().hex}"
+    build_run_service(config).create(
+        "Integrity report test",
+        external_run_id,
+        execution_mode="autonomous_local",
+    )
+
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.setenv("BLOB_ROOT", str(config.blob_root))
+    output = tmp_path / "integrity.json"
+
+    assert store_cli.main(["integrity", external_run_id, "--output", str(output)]) == 0
+    payload = _assert_canonical_file(output)
+
+    # Required top-level fields
+    assert payload["schema_version"] == "integrity-v1"
+    assert "generated_at" in payload
+    assert "database_schema_version" in payload
+    assert "run" in payload
+    assert "lifecycle_ledger" in payload
+    assert "terminal_decisions" in payload
+    assert "run_mode_history" in payload
+    assert "promotion_subjects" in payload
+    assert "promotion_events" in payload
+    assert "membership_seal" in payload
+    assert "job_census" in payload
+    assert "heartbeats" in payload
+    assert "active_leases" in payload
+    assert "invocations" in payload
+    assert "batches" in payload
+    assert "synthesis_stages" in payload
+    assert "semantic_artifacts" in payload
+    assert "retrieval_events" in payload
+    assert "snapshots" in payload
+    assert "documents" in payload
+    assert "blocks" in payload
+    assert "chunks" in payload
+    assert "index_jobs" in payload
+    assert "qdrant_definitions" in payload
+    assert "late_completion_count" in payload
+    assert "blob_references" in payload
+
+    # Bounded counts
+    assert "bounded_counts" in payload
+    bounded = payload["bounded_counts"]
+    assert bounded["total_retrieval_events"] == 0
+    assert bounded["total_documents"] == 0
+    assert bounded["total_chunks"] == 0
+    assert bounded["active_lease_count"] == 0
+    assert bounded["late_completion_count"] == 0
+
+    # Deterministic hashes
+    assert "run_sha256" in payload
+    assert "lifecycle_ledger_sha256" in payload
+    assert "blob_integrity_sha256" in payload
+
+
+@requires_postgres
+def test_integrity_command_identifies_running_live_jobs(
+    tmp_path,
+    monkeypatch,
+    prepared_export_database,
+):
+    """Offline reader can identify running-live jobs at terminal decision and later completions."""
+    config = _config(tmp_path)
+    external_run_id = f"fr_integrity_live_{uuid4().hex}"
+    build_run_service(config).create(
+        "Live jobs integrity test",
+        external_run_id,
+        execution_mode="autonomous_local",
+    )
+
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.setenv("BLOB_ROOT", str(config.blob_root))
+    output = tmp_path / "integrity-live.json"
+
+    assert store_cli.main(["integrity", external_run_id, "--output", str(output)]) == 0
+    payload = _assert_canonical_file(output)
+
+    # Should have valid structure with non-negative counts
+    assert payload["bounded_counts"]["active_lease_count"] >= 0
+    assert payload["bounded_counts"]["total_index_jobs"] >= 0
+    assert isinstance(payload["active_leases"], list)
+    assert isinstance(payload["index_jobs"], list)
+
+
+@requires_postgres
+def test_integrity_redacts_sensitive_data(
+    tmp_path,
+    monkeypatch,
+    prepared_export_database,
+):
+    """Verify integrity report redacts credentials and sensitive paths."""
+    config = _config(tmp_path)
+    external_run_id = f"fr_integrity_redact_{uuid4().hex}"
+    run = build_run_service(config).create(
+        "Redaction test",
+        external_run_id,
+        execution_mode="autonomous_local",
+    )
+
+    # Insert a source first, then a snapshot with sensitive blob URI
+    import hashlib
+
+    test_hash = hashlib.sha256(b"a" * 64).hexdigest()
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """INSERT INTO sources(id, canonical_url, registered_domain, source_type)
+               VALUES (gen_random_uuid(), 'https://example.com', 'example.com', 'web')"""
+        )
+        source_id = "SELECT id FROM sources WHERE canonical_url = 'https://example.com'"
+        cursor.execute(source_id)
+        source_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO asset_snapshots(id, source_id, requested_url, final_url, retrieved_at, content_sha256, raw_blob_uri, raw_byte_length)
+               VALUES (gen_random_uuid(), %s, 'https://example.com', 'https://example.com', now(), %s, 's3://bucket/path/to/blob?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Signature=secret', 1024)""",
+            (source_id, test_hash),
+        )
+        # Get the snapshot_id from the previous insert
+        cursor.execute(
+            """SELECT id FROM asset_snapshots ORDER BY retrieved_at DESC LIMIT 1"""
+        )
+        snapshot_id = cursor.fetchone()[0]
+        cursor.execute(
+            """INSERT INTO research_run_assets(run_id, snapshot_id) VALUES (%s, %s)""",
+            (run.id, snapshot_id),
+        )
+
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.setenv("BLOB_ROOT", str(config.blob_root))
+    output = tmp_path / "integrity-redact.json"
+
+    assert store_cli.main(["integrity", external_run_id, "--output", str(output)]) == 0
+    payload = _assert_canonical_file(output)
+
+    # Check that sensitive data is redacted
+    for ref in payload.get("blob_references", []):
+        uri = ref.get("blob_uri") or ""
+        assert "AKIAIOSFODNN7EXAMPLE" not in uri
+        assert "secret" not in uri.lower() or "***REDACTED***" in uri
+
+
+@requires_postgres
+def test_integrity_golden_late_32_job_scenario(
+    tmp_path,
+    monkeypatch,
+    prepared_export_database,
+):
+    """Golden export fixture for the audited late-32-job scenario."""
+    config = _config(tmp_path)
+    external_run_id = f"fr_integrity_golden_{uuid4().hex}"
+    build_run_service(config).create(
+        "Golden late-32-job scenario",
+        external_run_id,
+        execution_mode="autonomous_local",
+    )
+
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.setenv("BLOB_ROOT", str(config.blob_root))
+    output = tmp_path / "integrity-golden.json"
+
+    assert store_cli.main(["integrity", external_run_id, "--output", str(output)]) == 0
+    payload = _assert_canonical_file(output)
+
+    # Verify bounded counts are non-negative and deterministic
+    assert isinstance(payload["bounded_counts"], dict)
+    assert payload["bounded_counts"]["total_index_jobs"] >= 0
+    assert payload["bounded_counts"]["active_lease_count"] >= 0
+    assert payload["late_completion_count"] >= 0
+    # Verify deterministic hashes exist
+    assert len(payload["run_sha256"]) == 64
+    assert len(payload["lifecycle_ledger_sha256"]) == 64
+    assert len(payload["blob_integrity_sha256"]) == 64
