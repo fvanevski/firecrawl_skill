@@ -287,7 +287,9 @@ def test_v43_retry_replaces_exact_member_summary_without_stale_accumulation(
     assert first_summary["member_count"] == 2
     assert first_summary["succeeded"] == 1
     assert first_summary["failed"] == 1
-    assert set(first_summary["succeeded_ids"] + first_summary["failed_ids"]) == first_ids
+    assert (
+        set(first_summary["succeeded_ids"] + first_summary["failed_ids"]) == first_ids
+    )
 
     second = service.ingest_batch(invocation_id, "issue217_retry", requests)
     second = service.finalize_ingestion_batch(second["batch_id"], "partial")
@@ -299,7 +301,10 @@ def test_v43_retry_replaces_exact_member_summary_without_stale_accumulation(
     assert second_summary["succeeded"] == 1
     assert second_summary["failed"] == 1
     assert second_summary["cancelled"] == 0
-    assert set(second_summary["succeeded_ids"] + second_summary["failed_ids"]) == second_ids
+    assert (
+        set(second_summary["succeeded_ids"] + second_summary["failed_ids"])
+        == second_ids
+    )
     assert first_ids.isdisjoint(second_ids)
     assert second_summary["failure_classes"] == {
         "ingestion_error": {
