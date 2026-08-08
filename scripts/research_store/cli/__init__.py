@@ -12,15 +12,20 @@ import argparse
 import sys
 from pathlib import Path
 
-# Execute the established implementation in this module's globals. Keeping
-# ``__package__`` at ``research_store`` preserves the relative imports used by
-# legacy function bodies at call time, while this package remains the import
-# target ``research_store.cli`` and continues to support ``python -m``.
-_LEGACY_PATH = Path(__file__).resolve().parents[1] / "cli.py"
+# Preserve the historical module path while executing its code in this package
+# namespace. Legacy helpers derive the repository root from ``__file__`` at call
+# time, so retaining cli.py here is part of the compatibility contract.
+_PACKAGE_INIT_PATH = Path(__file__).resolve()
+_LEGACY_PATH = _PACKAGE_INIT_PATH.parents[1] / "cli.py"
 __package__ = "research_store"
-exec(compile(_LEGACY_PATH.read_text(encoding="utf-8"), str(_LEGACY_PATH), "exec"), globals())
-_legacy_main = main
-_legacy_export_json = _export_json
+__file__ = str(_LEGACY_PATH)
+exec(  # noqa: S102 - compatibility loader for this repository-owned module
+    compile(_LEGACY_PATH.read_text(encoding="utf-8"), str(_LEGACY_PATH), "exec"),
+    globals(),
+)
+_legacy_main = globals()["main"]
+_legacy_export_json = globals()["_export_json"]
+_legacy_dumps = globals()["dumps"]
 
 from research_store.config import StoreConfig
 from research_store.run_integrity_export import (
@@ -61,7 +66,7 @@ def _artifact_main(command: str, argv: list[str]) -> int:
     _legacy_export_json(output, result)
     if command == "integrity":
         print(
-            dumps(
+            _legacy_dumps(
                 {
                     "status": "written",
                     "path": str(output),
