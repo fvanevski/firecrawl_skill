@@ -154,7 +154,9 @@ def _resolve_run(cursor: Any, identifier: str) -> dict[str, Any]:
             (identifier,),
         )
     else:
-        cursor.execute("SELECT row_to_json(r) FROM research_runs r WHERE id=%s", (run_id,))
+        cursor.execute(
+            "SELECT row_to_json(r) FROM research_runs r WHERE id=%s", (run_id,)
+        )
     row = cursor.fetchone()
     if row is None:
         raise SystemExit("research run not found")
@@ -545,7 +547,9 @@ def _diagnostics(
         domains["indexing"] = {
             "status": "failure" if noncomplete else "pass",
             "reason_code": (
-                "index_membership_incomplete" if noncomplete else "index_membership_complete"
+                "index_membership_incomplete"
+                if noncomplete
+                else "index_membership_complete"
             ),
             "noncomplete_classes": noncomplete,
             "decision_evidence": census.get("decision_evidence"),
@@ -574,7 +578,9 @@ def _diagnostics(
                     else "terminal_decision_census_complete"
                 ),
                 "noncomplete_classes": noncomplete,
-                "later_completion_count": timing["completed_after_decision"]["exact_count"],
+                "later_completion_count": timing["completed_after_decision"][
+                    "exact_count"
+                ],
                 "spanning_terminal_decision_exact_count": timing[
                     "spanning_terminal_decision_exact_count"
                 ],
@@ -821,8 +827,7 @@ def _core_sections(cursor: Any, run_id: UUID) -> dict[str, dict[str, Any]]:
         ),
     }
     return {
-        name: _section(cursor, sql, params)
-        for name, (sql, params) in specs.items()
+        name: _section(cursor, sql, params) for name, (sql, params) in specs.items()
     }
 
 
@@ -927,7 +932,9 @@ def _build_v2(
         }
 
 
-def build_run_export(config: Any, identifier: str, schema_version: str) -> dict[str, Any]:
+def build_run_export(
+    config: Any, identifier: str, schema_version: str
+) -> dict[str, Any]:
     if schema_version not in EXPORT_RUN_SCHEMA_VERSIONS:
         raise ValueError(f"unsupported export-run schema version: {schema_version}")
     if schema_version == "export-run-v1":
@@ -953,7 +960,9 @@ def build_run_export(config: Any, identifier: str, schema_version: str) -> dict[
     )
 
 
-def build_integrity_report(config: Any, identifier: str, schema_version: str) -> dict[str, Any]:
+def build_integrity_report(
+    config: Any, identifier: str, schema_version: str
+) -> dict[str, Any]:
     if schema_version not in INTEGRITY_SCHEMA_VERSIONS:
         raise ValueError(f"unsupported integrity schema version: {schema_version}")
     return _build_v2(

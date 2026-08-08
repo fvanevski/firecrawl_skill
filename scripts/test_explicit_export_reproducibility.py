@@ -75,7 +75,11 @@ def _create_run_with_asset(config: StoreConfig, label: str):
     build_service(config).ingest_batch(
         invocation_id,
         "scrape",
-        [IngestRequest(f"https://{label}.example/item", f"# {label}\n\nEvidence.".encode())],
+        [
+            IngestRequest(
+                f"https://{label}.example/item", f"# {label}\n\nEvidence.".encode()
+            )
+        ],
         research_run_external_id=external_id,
     )
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
@@ -137,7 +141,9 @@ def test_explicit_export_serializer_is_canonical_and_atomic(tmp_path):
     assert list(tmp_path.glob(".export.json.*.tmp")) == []
 
 
-def test_explicit_export_cleans_temporary_file_after_replace_failure(tmp_path, monkeypatch):
+def test_explicit_export_cleans_temporary_file_after_replace_failure(
+    tmp_path, monkeypatch
+):
     target = tmp_path / "export.json"
 
     def fail_replace(*_args):
@@ -183,9 +189,15 @@ def test_export_invocation_is_byte_reproducible_and_read_only(
             (invocation_id,),
         )
         before = cursor.fetchone()
-    assert store_cli.main(["export-invocation", invocation_id, "--output", str(first)]) == 0
+    assert (
+        store_cli.main(["export-invocation", invocation_id, "--output", str(first)])
+        == 0
+    )
     capsys.readouterr()
-    assert store_cli.main(["export-invocation", invocation_id, "--output", str(second)]) == 0
+    assert (
+        store_cli.main(["export-invocation", invocation_id, "--output", str(second)])
+        == 0
+    )
     capsys.readouterr()
     assert first.read_bytes() == second.read_bytes()
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
@@ -202,10 +214,14 @@ def test_export_invocation_is_byte_reproducible_and_read_only(
 
 
 @requires_postgres
-def test_export_run_v1_remains_byte_reproducible(tmp_path, monkeypatch, prepared_export_database):
+def test_export_run_v1_remains_byte_reproducible(
+    tmp_path, monkeypatch, prepared_export_database
+):
     config = _config(tmp_path)
     external_id = f"fr_export_v1_{uuid4().hex}"
-    run = build_run_service(config).create("v1 compatibility", external_id, execution_mode="autonomous_local")
+    run = build_run_service(config).create(
+        "v1 compatibility", external_id, execution_mode="autonomous_local"
+    )
     same_time = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -221,7 +237,10 @@ def test_export_run_v1_remains_byte_reproducible(tmp_path, monkeypatch, prepared
     assert first.read_bytes() == second.read_bytes()
     payload = _assert_canonical_file(first)
     assert payload["schema_version"] == "export-run-v1"
-    assert [event["id"] for event in payload["retrieval_events"]] == [str(UUID(int=1)), str(UUID(int=2))]
+    assert [event["id"] for event in payload["retrieval_events"]] == [
+        str(UUID(int=1)),
+        str(UUID(int=2)),
+    ]
 
 
 @requires_postgres
@@ -230,7 +249,9 @@ def test_export_run_v2_is_bounded_snapshot_read_only_and_rejects_fake_versions(
 ):
     config = _config(tmp_path)
     external_id = f"fr_export_v2_{uuid4().hex}"
-    run = build_run_service(config).create("v2 export", external_id, execution_mode="autonomous_local")
+    run = build_run_service(config).create(
+        "v2 export", external_id, execution_mode="autonomous_local"
+    )
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         for index in range(SECTION_ITEM_LIMIT + 5):
             cursor.execute(
@@ -243,7 +264,10 @@ def test_export_run_v2_is_bounded_snapshot_read_only_and_rejects_fake_versions(
     assert store_cli.main(["export-run", external_id, "--output", str(second)]) == 0
     payload = _assert_canonical_file(first)
     assert payload["schema_version"] == "export-run-v2"
-    assert payload["snapshot_transaction"] == {"isolation": "repeatable read", "read_only": True}
+    assert payload["snapshot_transaction"] == {
+        "isolation": "repeatable read",
+        "read_only": True,
+    }
     section = payload["sections"]["retrieval_events"]
     assert section["exact_count"] == SECTION_ITEM_LIMIT + 5
     assert len(section["items"]) == SECTION_ITEM_LIMIT
@@ -251,10 +275,16 @@ def test_export_run_v2_is_bounded_snapshot_read_only_and_rejects_fake_versions(
     assert len(section["sha256"]) == 64
     assert first.read_bytes() == second.read_bytes()
     with pytest.raises(SystemExit) as exc:
-        store_cli.main([
-            "export-run", external_id, "--output", str(tmp_path / "bad.json"),
-            "--schema-version", "export-run-custom",
-        ])
+        store_cli.main(
+            [
+                "export-run",
+                external_id,
+                "--output",
+                str(tmp_path / "bad.json"),
+                "--schema-version",
+                "export-run-custom",
+            ]
+        )
     assert exc.value.code == 2
 
 
@@ -275,7 +305,10 @@ def test_integrity_is_run_scoped_and_ignores_other_run_leases(
                       lease_expires_at=now()+interval '10 minutes' WHERE id=%s""",
             (other_job,),
         )
-        cursor.execute("UPDATE embedding_manifests SET index_status='pending' WHERE id=%s", (other_manifest,))
+        cursor.execute(
+            "UPDATE embedding_manifests SET index_status='pending' WHERE id=%s",
+            (other_manifest,),
+        )
         cursor.execute(
             "INSERT INTO index_worker_heartbeats(worker_id,heartbeat_at) VALUES('other-worker',now()) ON CONFLICT(worker_id) DO UPDATE SET heartbeat_at=excluded.heartbeat_at"
         )
@@ -286,13 +319,21 @@ def test_integrity_is_run_scoped_and_ignores_other_run_leases(
     assert payload["index_job_census"]["expected"] == len(target_ids)
     assert payload["sections"]["index_jobs"]["exact_count"] == len(target_ids)
     assert payload["sections"]["active_leases"]["exact_count"] == 0
-    assert all(item.get("worker_id") != "other-worker" for item in payload["sections"]["relevant_worker_heartbeats"]["items"])
-    assert payload["qdrant_projection_reconciliation"]["authoritative_for_completion"] is False
+    assert all(
+        item.get("worker_id") != "other-worker"
+        for item in payload["sections"]["relevant_worker_heartbeats"]["items"]
+    )
+    assert (
+        payload["qdrant_projection_reconciliation"]["authoritative_for_completion"]
+        is False
+    )
     assert other.id != target.id
 
 
 @requires_postgres
-def test_integrity_redacts_entire_artifact_and_stdout(tmp_path, monkeypatch, capsys, prepared_export_database):
+def test_integrity_redacts_entire_artifact_and_stdout(
+    tmp_path, monkeypatch, capsys, prepared_export_database
+):
     config = _config(tmp_path)
     run, external_id, rows = _create_run_with_asset(config, "redact")
     _install_checkpoint(run.id, rows)
@@ -302,7 +343,10 @@ def test_integrity_redacts_entire_artifact_and_stdout(tmp_path, monkeypatch, cap
         cursor.execute(
             """UPDATE asset_snapshots SET raw_blob_uri=%s
                  WHERE id IN (SELECT snapshot_id FROM research_run_assets WHERE run_id=%s)""",
-            (f"s3://bucket/blob?AWSAccessKeyId={access_key}&Signature={signature}", run.id),
+            (
+                f"s3://bucket/blob?AWSAccessKeyId={access_key}&Signature={signature}",
+                run.id,
+            ),
         )
         cursor.execute(
             "UPDATE research_runs SET metadata=metadata || %s::jsonb WHERE id=%s",
@@ -336,7 +380,10 @@ def test_integrity_reports_running_live_at_terminal_then_later_completion(
                       completed_at=NULL,error=NULL WHERE id=%s""",
             (job_id,),
         )
-        cursor.execute("UPDATE embedding_manifests SET index_status='pending',indexed_at=NULL,error=NULL WHERE id=%s", (manifest_id,))
+        cursor.execute(
+            "UPDATE embedding_manifests SET index_status='pending',indexed_at=NULL,error=NULL WHERE id=%s",
+            (manifest_id,),
+        )
         cursor.execute(
             "INSERT INTO index_worker_heartbeats(worker_id,heartbeat_at) VALUES('late-worker',now()) ON CONFLICT(worker_id) DO UPDATE SET heartbeat_at=excluded.heartbeat_at"
         )
@@ -344,8 +391,11 @@ def test_integrity_reports_running_live_at_terminal_then_later_completion(
     assert census["running_live"] == 1
     service = build_run_service(config)
     planning = service.transition(
-        run.id, "planning", expected_revision=run.lifecycle_revision,
-        idempotency_key=f"planning:{uuid4()}", actor_type="test",
+        run.id,
+        "planning",
+        expected_revision=run.lifecycle_revision,
+        idempotency_key=f"planning:{uuid4()}",
+        actor_type="test",
     )
     service.fail(
         run.id,
@@ -356,7 +406,10 @@ def test_integrity_reports_running_live_at_terminal_then_later_completion(
         completion={"state_census": census},
     )
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute("SELECT created_at FROM terminal_decisions WHERE run_id=%s ORDER BY created_at DESC LIMIT 1", (run.id,))
+        cursor.execute(
+            "SELECT created_at FROM terminal_decisions WHERE run_id=%s ORDER BY created_at DESC LIMIT 1",
+            (run.id,),
+        )
         decision_at = cursor.fetchone()[0]
         finished_at = decision_at + timedelta(seconds=5)
         cursor.execute(
@@ -386,7 +439,9 @@ def test_integrity_golden_preserves_audited_1344_complete_plus_32_live_census(
 ):
     config = _config(tmp_path)
     external_id = f"fr_golden_{uuid4().hex}"
-    run = build_run_service(config).create("audited 1344+32 state", external_id, execution_mode="autonomous_local")
+    run = build_run_service(config).create(
+        "audited 1344+32 state", external_id, execution_mode="autonomous_local"
+    )
     counts = {name: 0 for name in CENSUS_CLASSES}
     counts.update({"complete": 1344, "running_live": 32})
     terminal_census = {
@@ -398,13 +453,17 @@ def test_integrity_golden_preserves_audited_1344_complete_plus_32_live_census(
     }
     service = build_run_service(config)
     planning = service.transition(
-        run.id, "planning", expected_revision=run.lifecycle_revision,
-        idempotency_key=f"planning:{uuid4()}", actor_type="test",
+        run.id,
+        "planning",
+        expected_revision=run.lifecycle_revision,
+        idempotency_key=f"planning:{uuid4()}",
+        actor_type="test",
     )
     service.fail(
         run.id,
         expected_revision=planning.lifecycle_revision,
-        idempotency_key=f"failed:{uuid4()}", actor_type="test",
+        idempotency_key=f"failed:{uuid4()}",
+        actor_type="test",
         reason="audited late-32 fixture",
         completion={"state_census": terminal_census},
     )
@@ -417,15 +476,22 @@ def test_integrity_golden_preserves_audited_1344_complete_plus_32_live_census(
     assert persisted["counts"]["complete"] == 1344
     assert persisted["counts"]["running_live"] == 32
     assert persisted["counts"]["claimable"] == 0
-    assert payload["diagnostics"]["domains"]["terminal_decision"]["status"] == "failure"
+    assert (
+        payload["diagnostics"]["domains"]["terminal_decision"]["status"]
+        == "failure"
+    )
 
 
 @requires_postgres
-def test_integrity_exports_execution_mode_history(tmp_path, monkeypatch, prepared_export_database):
+def test_integrity_exports_execution_mode_history(
+    tmp_path, monkeypatch, prepared_export_database
+):
     config = _config(tmp_path)
     external_id = f"fr_mode_{uuid4().hex}"
     service = build_run_service(config)
-    run = service.create("mode history", external_id, execution_mode="autonomous_local")
+    run = service.create(
+        "mode history", external_id, execution_mode="autonomous_local"
+    )
     service.change_execution_mode(
         run.id,
         "agent_led",
