@@ -1,8 +1,11 @@
 """Persistent research asset store for the Firecrawl skill."""
 
 from . import acquisition_service as _acquisition_service
+from . import bounded_orchestrator as _bounded_orchestrator
 from . import orchestrator as _orchestrator
+from . import postgres as _postgres
 from . import run_service as _run_service
+from . import service as _service
 from . import workflow_service as _workflow_service
 from .acquisition_authority import (
     AcquisitionPreflightError,
@@ -38,6 +41,7 @@ from .domain import (
 from .execution_policy import ExecutionModePolicy
 from .extraction_repository import ExtractionAttemptRepository
 from .extraction_service import ExtractionError, ExtractionService
+from .ingestion_batch_semantics import install_issue_217_contract
 from .lifecycle_guard import GuardedResearchRunService
 from .orchestrator import OrchestratorConfig, OrchestratorResult
 from .provider_preflight import (
@@ -74,6 +78,12 @@ _acquisition_service.FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
 FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
 _orchestrator.AcquisitionStage = BoundedAcquisitionStage
 _orchestrator.ExtractionStage = BoundedExtractionStage
+
+# Issue #217 installs the authoritative batch timing/outcome/selection contract
+# on the same canonical production extension points.  The installer mutates the
+# already-imported classes in place so existing references held by builders,
+# tests, and checkpoint wrappers receive the exact same PostgreSQL behavior.
+install_issue_217_contract(_postgres, _service, _bounded_orchestrator)
 
 __all__ = [
     "VALID_NORMALIZATION_DISPOSITIONS",

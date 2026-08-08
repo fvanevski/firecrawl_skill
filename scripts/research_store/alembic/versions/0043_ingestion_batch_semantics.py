@@ -1,21 +1,27 @@
-"""Add truthful batch timestamps, outcome summaries, and seal gating.
+"""Add authoritative ingestion batch timing, outcomes, and seal gating.
 
 RC-11 / RC-12 / RC-13 tracked by #217.
 
-* ``sealed_at`` — when the batch's membership closure was recorded.
-* ``outcome_summary`` — JSONB blob capturing succeeded/failed/cancelled counts
-  and per-class failure breakdown so operators can read partial status without
-  joining every attempt manually.
+New rows use three distinct temporal concepts:
 
-``started_at`` is preserved as the wall-clock row creation time for historical
-records; callers derive constituent-driven timing at finish time instead of
-relying on statement wall clock. Batches created after this migration receive
-constituent-derived ``started_at`` when the earliest extraction attempt start
-is available.
+* ``started_at`` — earliest authoritative constituent start;
+* ``sealed_at`` — membership closure time; and
+* ``completed_at`` — latest authoritative constituent terminal outcome.
 
-No historical timestamps are invented. Existing rows keep their original
-``started_at`` and ``completed_at`` values; ``sealed_at`` defaults to NULL and
-``outcome_summary`` defaults to '{}'.
+``ingestion_batch_assets`` stores a direct ``extraction_attempt_id`` whenever a
+batch member belongs to an extraction attempt.  Direct-ingestion members instead
+persist ``constituent_started_at`` / ``constituent_completed_at``.  Batch
+finalization fails closed when any new member lacks its authoritative timing
+source; no statement-time completion fallback is used for v43 batches.
+
+``outcome_summary`` stores deterministic counts and stable batch-member IDs for
+succeeded, failed, and cancelled outcomes plus per-failure-class IDs/counts.
+Cancellation is derived from ``extraction_attempts.exit_status`` rather than
+being overloaded onto the ingestion asset status check constraint.
+
+No historical timestamps or promotion intent are invented. Existing rows retain
+their prior ``started_at`` / ``completed_at``; new columns default to NULL (or an
+empty summary) until authoritative new work populates them.
 """
 
 from alembic import op
@@ -39,9 +45,27 @@ def upgrade():
           ADD COLUMN extraction_attempt_id uuid;
 
         ALTER TABLE ingestion_batch_assets
+          ADD COLUMN constituent_started_at timestamptz;
+
+        ALTER TABLE ingestion_batch_assets
+          ADD COLUMN constituent_completed_at timestamptz;
+
+        ALTER TABLE ingestion_batch_assets
           ADD CONSTRAINT ingestion_batch_assets_extr_att_fk
             FOREIGN KEY (extraction_attempt_id)
             REFERENCES extraction_attempts(id) ON DELETE SET NULL;
+
+        ALTER TABLE ingestion_batch_assets
+          ADD CONSTRAINT ingestion_batch_assets_constituent_timing_ck
+            CHECK (
+              constituent_completed_at IS NULL
+              OR constituent_started_at IS NULL
+              OR constituent_completed_at >= constituent_started_at
+            );
+
+        CREATE INDEX ix_ingestion_batch_assets_extraction_attempt
+          ON ingestion_batch_assets(extraction_attempt_id)
+          WHERE extraction_attempt_id IS NOT NULL;
         """
     )
 
