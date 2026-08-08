@@ -122,11 +122,31 @@ def _ensure_membership(uow, run_id: UUID):
                    id,run_id,snapshot_id,role,current_stage,stage_revision,
                    provenance,actor_type,policy_version,lifecycle_revision,
                    reason_code,reason)
-                 VALUES(%s,%s,%s,%s,'completion_critical',0,'direct_retention',
+                 VALUES(%s,%s,%s,%s,'retained',0,'direct_retention',
                         'integration-test','completion-membership-v1',%s,
                         'issue_218_test_seed',
                         'authoritative completion test fixture')""",
             (subject_id, run_id, snapshot_id, role, lifecycle_revision),
+        )
+        cursor.execute(
+            """UPDATE run_asset_promotion_subjects
+                  SET current_stage='evidence_eligible',
+                      actor_type='integration-test',
+                      policy_version='completion-membership-v1',
+                      reason_code='issue_218_test_promote',
+                      reason='authoritative completion test fixture'
+                WHERE id=%s AND run_id=%s""",
+            (subject_id, run_id),
+        )
+        cursor.execute(
+            """UPDATE run_asset_promotion_subjects
+                  SET current_stage='completion_critical',
+                      actor_type='integration-test',
+                      policy_version='completion-membership-v1',
+                      reason_code='issue_218_test_promote',
+                      reason='authoritative completion test fixture'
+                WHERE id=%s AND run_id=%s""",
+            (subject_id, run_id),
         )
         member_payload = _member_payload(subject_id, snapshot_id, role, chunk_ids)
         member_hash = _canonical_sha256(member_payload)

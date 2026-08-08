@@ -359,9 +359,6 @@ def load_authoritative_completion_provenance(
                 "completion requires an active exact PostgreSQL membership seal"
             )
         seal_id = _require_uuid(seal[0], "membership seal id")
-        # Re-run the database-native deferred seal validator at the completion
-        # boundary.  This verifies canonical member hashes, contiguous ordering,
-        # exact asset/chunk census, and the persisted membership digest.
         cur.execute("SELECT validate_run_asset_membership_seal(%s)", (seal_id,))
         cur.fetchone()
         seal_revision = int(seal[1])
@@ -380,9 +377,7 @@ def load_authoritative_completion_provenance(
         membership_rows = cur.fetchall()
         sealed_snapshots = {str(row[1]) for row in membership_rows}
         sealed_chunks = {
-            str(chunk_id)
-            for row in membership_rows
-            for chunk_id in tuple(row[3] or ())
+            str(chunk_id) for row in membership_rows for chunk_id in tuple(row[3] or ())
         }
         member_payloads = []
         for subject_id, snapshot_id, role, chunk_ids, member_sha256 in membership_rows:
@@ -482,9 +477,7 @@ def load_authoritative_completion_provenance(
                 )
 
         claim_ids = {
-            str(claim.get("claim_id"))
-            for claim in claims
-            if claim.get("claim_id")
+            str(claim.get("claim_id")) for claim in claims if claim.get("claim_id")
         }
         if len(claim_ids) != len(claims):
             raise CompletionProvenanceError(
@@ -815,9 +808,7 @@ def resolve_completion_assertions(
     answer_sha256: str | None,
 ) -> CompletionProvenance:
     """Validate optional CLI assertions against authoritative persisted hashes."""
-    supplied_source = normalize_sha256(
-        "source_manifest_sha256", source_manifest_sha256
-    )
+    supplied_source = normalize_sha256("source_manifest_sha256", source_manifest_sha256)
     supplied_answer = normalize_sha256("answer_sha256", answer_sha256)
     if (
         supplied_source is not None
