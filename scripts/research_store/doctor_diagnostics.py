@@ -106,7 +106,9 @@ def classify_connectivity_failure(
         "must be owner of ",
         "not authorized for relation",
     )
-    if database_context and any(token in message for token in database_permission_tokens):
+    if database_context and any(
+        token in message for token in database_permission_tokens
+    ):
         return _failure("database_rejection", exc)
 
     if (
@@ -219,9 +221,7 @@ def _inconclusive(reason_code: str, remediation: str) -> dict[str, str]:
     }
 
 
-def _qdrant_failure(
-    record: dict[str, Any], reason_code: str, remediation: str
-) -> None:
+def _qdrant_failure(record: dict[str, Any], reason_code: str, remediation: str) -> None:
     record["status"] = "failure"
     record.setdefault("issues", []).append(
         {"reason_code": reason_code, "remediation": remediation}
@@ -229,7 +229,9 @@ def _qdrant_failure(
 
 
 def _aggregate_component_status(components: dict[str, dict[str, Any]]) -> str:
-    statuses = {component.get("status", "inconclusive") for component in components.values()}
+    statuses = {
+        component.get("status", "inconclusive") for component in components.values()
+    }
     if "failure" in statuses:
         return "failure"
     if "inconclusive" in statuses:
@@ -590,7 +592,9 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
 
 def format_human(checks: dict[str, Any]) -> str:
     """Render the same independent domains without changing status semantics."""
-    lines = [f"Research store doctor ({checks.get('schema_version', DOCTOR_SCHEMA_VERSION)})"]
+    lines = [
+        f"Research store doctor ({checks.get('schema_version', DOCTOR_SCHEMA_VERSION)})"
+    ]
     for domain in DOCTOR_DOMAINS:
         record = checks.get(domain) or {
             "status": "inconclusive",
