@@ -7,8 +7,10 @@ import selectors
 import signal
 import subprocess
 import time
+from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlsplit
 
 from .domain import SearchAdapterResult
@@ -112,7 +114,7 @@ class ExtractionDeadlinePolicy:
             raise ValueError("retry counts must be non-negative")
 
     @classmethod
-    def from_env(cls) -> "ExtractionDeadlinePolicy":
+    def from_env(cls) -> ExtractionDeadlinePolicy:
         return cls(
             first_byte_timeout_seconds=_env_float(
                 "FIRECRAWL_EXTRACTION_FIRST_BYTE_TIMEOUT_SECONDS", 10.0
@@ -164,7 +166,7 @@ class BoundedSubprocessRunner:
     ) -> ProviderCommandResult:
         started = time.monotonic()
         try:
-            process = subprocess.Popen(  # noqa: S603
+            process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -224,10 +226,8 @@ class BoundedSubprocessRunner:
                     except BlockingIOError:
                         continue
                     if not chunk:
-                        try:
+                        with suppress(Exception):
                             selector.unregister(key.fileobj)
-                        except Exception:  # noqa: BLE001
-                            pass
                         continue
                     if first_byte_seconds is None:
                         first_byte_seconds = time.monotonic() - started
@@ -247,10 +247,8 @@ class BoundedSubprocessRunner:
                             except BlockingIOError:
                                 break
                             if not chunk:
-                                try:
+                                with suppress(Exception):
                                     selector.unregister(stream)
-                                except Exception:  # noqa: BLE001
-                                    pass
                                 break
                             if first_byte_seconds is None:
                                 first_byte_seconds = time.monotonic() - started
@@ -329,7 +327,7 @@ class CandidatePreflightResult:
     def is_terminal(self) -> bool:
         return self.terminal
 
-    def with_retry_exhausted(self) -> "CandidatePreflightResult":
+    def with_retry_exhausted(self) -> CandidatePreflightResult:
         if not self.retryable:
             return self
         return CandidatePreflightResult(
@@ -367,7 +365,7 @@ class CandidatePreflightResult:
         }
 
     @classmethod
-    def from_metadata(cls, value: Mapping[str, Any]) -> "CandidatePreflightResult":
+    def from_metadata(cls, value: Mapping[str, Any]) -> CandidatePreflightResult:
         return cls(
             classification=str(value["classification"]),
             reason_code=str(value.get("reason_code") or "preflight_unknown"),
@@ -450,25 +448,28 @@ class CandidatePreflightChecker:
                 retryable=False,
                 terminal=True,
             )
-        if self.max_elapsed_seconds is not None and elapsed is not None:
-            if elapsed > self.max_elapsed_seconds:
-                return CandidatePreflightResult(
-                    classification="timeout",
-                    reason_code="overall_candidate_timeout",
-                    reason=(
-                        f"overall candidate deadline exceeded: {elapsed:.3f}s > "
-                        f"{self.max_elapsed_seconds:.3f}s"
-                    ),
-                    failure_stage="overall_candidate",
-                    http_status=result.http_status,
-                    content_type=content_type,
-                    elapsed_seconds=elapsed,
-                    first_byte_seconds=first_byte,
-                    provider_operation_seconds=operation,
-                    cancelled=True,
-                    retryable=False,
-                    terminal=True,
-                )
+        if (
+            self.max_elapsed_seconds is not None
+            and elapsed is not None
+            and elapsed > self.max_elapsed_seconds
+        ):
+            return CandidatePreflightResult(
+                classification="timeout",
+                reason_code="overall_candidate_timeout",
+                reason=(
+                    f"overall candidate deadline exceeded: {elapsed:.3f}s > "
+                    f"{self.max_elapsed_seconds:.3f}s"
+                ),
+                failure_stage="overall_candidate",
+                http_status=result.http_status,
+                content_type=content_type,
+                elapsed_seconds=elapsed,
+                first_byte_seconds=first_byte,
+                provider_operation_seconds=operation,
+                cancelled=True,
+                retryable=False,
+                terminal=True,
+            )
 
         if result.transport_error:
             safe_error = redact_error_text(result.transport_error, max_chars=300)
