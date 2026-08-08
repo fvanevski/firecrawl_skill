@@ -382,7 +382,15 @@ class _FakeCorpusService:
                     "chunk_ids": [str(uuid4())],
                 }
             )
-        return {"assets": assets, "failure_count": 0}
+        return {"batch_id": str(uuid4()), "assets": assets, "failure_count": 0}
+
+    def finalize_ingestion_batch(self, batch_id, status, error=None):
+        return {
+            "batch_id": batch_id,
+            "status": status,
+            "assets": [],
+            "failure_count": 0,
+        }
 
 
 class _FakeScrapeAdapter:
@@ -554,7 +562,13 @@ def test_postgres_audit_readback_preserves_class_stage_elapsed_and_redaction(tmp
         run_service=run_service,
         coverage_service=MagicMock(),
         config=config,
-        corpus_service=SimpleNamespace(),
+        corpus_service=SimpleNamespace(
+            ingest_batch=lambda *a, **k: {"batch_id": str(uuid4()), "assets": []},
+            finalize_ingestion_batch=lambda *a, **k: {
+                "batch_id": str(uuid4()),
+                "assets": [],
+            },
+        ),
         extraction_service=build_extraction_service(config),
     )
     context = {

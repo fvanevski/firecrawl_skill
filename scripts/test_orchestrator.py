@@ -1860,6 +1860,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         coverage_svc = MockCoverageService(item_count=3)
         corpus_svc = MagicMock()
         corpus_svc.ingest_batch.return_value = {
+            "batch_id": str(uuid4()),
             "assets": [
                 {
                     "ordinal": 0,
@@ -1875,7 +1876,14 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
                     "snapshot_id": uuid4(),
                     "chunk_ids": [uuid4()],
                 },
-            ]
+            ],
+        }
+        corpus_svc.finalize_ingestion_batch.return_value = {
+            "batch_id": str(uuid4()),
+            "assets": [
+                {"ordinal": 0, "status": "complete"},
+                {"ordinal": 1, "status": "complete"},
+            ],
         }
         extraction_svc = MagicMock()
         extraction_svc.create_attempt.side_effect = [uuid4(), uuid4()]

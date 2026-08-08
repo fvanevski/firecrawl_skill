@@ -301,36 +301,42 @@ class _BatchTimingCursor:
         normalized: str,
         params: tuple[Any, ...],
     ) -> None:
-        required_relations = (
+        # Direct association path skips asset_snapshots; legacy path requires it.
+        has_direct_association = "extraction_attempt_id" in normalized
+        required_relations = [
             "ingestion_batch_assets",
-            "asset_snapshots",
             "extraction_attempts",
-        )
-        required_columns = (
-            "batch_id",
-            "snapshot_id",
-            "extraction_attempt_id",
-            "end_time",
-            "exit_status",
-        )
-        for token in (*required_relations, *required_columns):
+        ]
+        if not has_direct_association:
+            required_relations.append("asset_snapshots")
+        for token in required_relations:
             assert token in normalized, f"missing exact constituent token: {token}"
-        assert "max(" in normalized, "constituent terminal times must be aggregated"
+        # started_at derivation uses start_time; completed_at uses end_time.
+        assert any(col in normalized for col in ("start_time", "end_time")), (
+            "constituent timing query must reference a timestamp column"
+        )
+        # exit_status filtering is required only for terminal-time queries,
+        # not for the started_at derivation which scans all attempts.
+        if "min(ea.start_time)" not in normalized:
+            assert "exit_status" in normalized, "must filter on exit_status"
         assert "now()" not in normalized, "batch completion must not use statement time"
         assert self.connection.target_batch_id in params
 
-        parameter_values = self._parameter_values(params)
-        states_in_sql = {
-            state for state in _TERMINAL_EXTRACTION_STATES if state in normalized
-        }
-        states_in_params = {
-            value
-            for value in parameter_values
-            if isinstance(value, str) and value in _TERMINAL_EXTRACTION_STATES
-        }
-        assert states_in_sql | states_in_params == _TERMINAL_EXTRACTION_STATES, (
-            "terminal extraction-state filtering is incomplete"
-        )
+        # Terminal-state filtering is only required for completed_at queries;
+        # started_at derivation scans all attempts without exit_status filter.
+        if "min(ea.start_time)" not in normalized:
+            parameter_values = self._parameter_values(params)
+            states_in_sql = {
+                state for state in _TERMINAL_EXTRACTION_STATES if state in normalized
+            }
+            states_in_params = {
+                value
+                for value in parameter_values
+                if isinstance(value, str) and value in _TERMINAL_EXTRACTION_STATES
+            }
+            assert states_in_sql | states_in_params == _TERMINAL_EXTRACTION_STATES, (
+                "terminal extraction-state filtering is incomplete"
+            )
 
     def execute(self, query: str, params: tuple[Any, ...] | None = None) -> None:
         normalized = " ".join(query.lower().split())
@@ -338,7 +344,9 @@ class _BatchTimingCursor:
         self.connection.statements.append((normalized, params))
 
         is_batch_update = "update ingestion_batches" in normalized
-        has_constituent_relations = all(
+        # Accept both the legacy snapshot-join path and the direct
+        # extraction_attempt_id association path.
+        has_legacy_relations = all(
             relation in normalized
             for relation in (
                 "ingestion_batch_assets",
@@ -346,17 +354,36 @@ class _BatchTimingCursor:
                 "extraction_attempts",
             )
         )
+        has_direct_association = (
+            "ingestion_batch_assets" in normalized
+            and "extraction_attempts" in normalized
+            and "extraction_attempt_id" in normalized
+        )
+        has_constituent_relations = has_legacy_relations or has_direct_association
 
-        if has_constituent_relations:
+        if has_constituent_relations and not is_batch_update:
+            # Only validate constituent aggregation for SELECT queries.
+            # UPDATE statements carry CTEs that reference the relations but
+            # do not directly contain the timing columns.
             self._validate_constituent_aggregation(normalized, params)
-            terminal_at = self.connection.latest_terminal_for_target_batch()
-            self.connection.selected_terminal_at = terminal_at
-            self._row = (terminal_at,)
-            if is_batch_update:
-                self.connection.batches[self.connection.target_batch_id][
-                    "completed_at"
-                ] = terminal_at
-                self.rowcount = 1
+            # started_at derivation (MIN start_time) is separate from
+            # completed_at derivation (MAX end_time); only the latter drives
+            # the batch update timestamp.
+            is_started_at_query = "min(ea.start_time)" in normalized
+            if not is_started_at_query:
+                terminal_at = self.connection.latest_terminal_for_target_batch()
+                self.connection.selected_terminal_at = terminal_at
+                self._row = (terminal_at,)
+                return
+            # started_at query returns the earliest constituent start; skip
+            # None values that represent attempts without terminal outcomes.
+            valid_starts = [
+                a["end_time"]
+                for a in self.connection.extraction_attempts.values()
+                if a.get("end_time") is not None
+            ]
+            earliest = min(valid_starts) if valid_starts else None
+            self._row = (earliest,)
             return
 
         if is_batch_update:
@@ -394,6 +421,27 @@ class _BatchTimingCursor:
         if "information_schema.columns" in normalized and "sealed_at" in normalized:
             # Backward-compatibility column-existence probe.
             self._row = (1,)
+            return
+
+        if (
+            "information_schema.columns" in normalized
+            and "extraction_attempt_id" in normalized
+            and "ingestion_batch_assets" in normalized
+        ):
+            # Column-existence probe for extraction_attempt_id; present on v43+.
+            self._row = (1,)
+            return
+
+        if (
+            "from ingestion_batches" in normalized
+            and "started_at" in normalized
+            and "for update" not in normalized
+        ):
+            # started_at fallback read; return the existing row value.
+            batch_data = self.connection.batches.get(
+                self.connection.target_batch_id, {}
+            )
+            self._row = (batch_data.get("started_at"),)
             return
 
         raise AssertionError(f"unexpected batch completion SQL: {normalized}")

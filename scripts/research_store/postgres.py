@@ -3367,6 +3367,18 @@ class PostgresUnitOfWork:
         row = cur.fetchone()
         return row[0] if row else None
 
+    @staticmethod
+    def _has_extraction_attempt_id_column(connection):
+        """Return True if ingestion_batch_assets has an extraction_attempt_id column."""
+        with connection.cursor() as cur:
+            cur.execute(
+                """SELECT 1 FROM information_schema.columns
+                WHERE table_name='ingestion_batch_assets'
+                  AND column_name='extraction_attempt_id'
+                LIMIT 1"""
+            )
+            return cur.fetchone() is not None
+
     def record_batch_asset(
         self,
         batch_id,
@@ -3376,66 +3388,190 @@ class PostgresUnitOfWork:
         result=None,
         error=None,
         metadata=None,
+        extraction_attempt_id=None,
     ):
-        # Check seal status only when the column exists; skip on pre-migration
-        # schemas to preserve backward compatibility.
+        # Check seal status atomically within the same transaction.  A
+        # SELECT ... FOR UPDATE serializes against concurrent seal/insert
+        # races across database connections while preserving the repository's
+        # deterministic lock ordering.
         if self._has_sealed_at_column(self.connection):
             with self.connection.cursor() as cur:
-                sealed_at = self._load_batch_seal(cur, batch_id)
+                cur.execute(
+                    "SELECT sealed_at FROM ingestion_batches WHERE id=%s FOR UPDATE",
+                    (batch_id,),
+                )
+                row = cur.fetchone()
+                sealed_at = row[0] if row else None
                 if sealed_at is not None:
                     raise ValueError(
                         f"batch {batch_id} is sealed; no new assets may be recorded"
                     )
         with self.connection.cursor() as cur:
-            cur.execute(
-                """INSERT INTO ingestion_batch_assets(
-                batch_id,ordinal,requested_url,status,source_id,snapshot_id,document_id,chunk_ids,error,metadata)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT(batch_id,ordinal) DO UPDATE SET
-                  requested_url=excluded.requested_url,status=excluded.status,
-                  source_id=excluded.source_id,snapshot_id=excluded.snapshot_id,
-                  document_id=excluded.document_id,chunk_ids=excluded.chunk_ids,
-                  error=excluded.error,metadata=excluded.metadata""",
-                (
-                    batch_id,
-                    ordinal,
-                    requested_url,
-                    status,
-                    result.source_id if result else None,
-                    result.snapshot_id if result else None,
-                    result.document_id if result else None,
-                    list(result.chunk_ids) if result else [],
-                    error,
-                    json.dumps(metadata or {}),
-                ),
+            has_extraction_attempt = self._has_extraction_attempt_id_column(
+                self.connection
             )
+            if has_extraction_attempt:
+                cur.execute(
+                    """INSERT INTO ingestion_batch_assets(
+                    batch_id,ordinal,requested_url,status,source_id,snapshot_id,document_id,chunk_ids,error,metadata,extraction_attempt_id)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT(batch_id,ordinal) DO UPDATE SET
+                      requested_url=excluded.requested_url,status=excluded.status,
+                      source_id=excluded.source_id,snapshot_id=excluded.snapshot_id,
+                      document_id=excluded.document_id,chunk_ids=excluded.chunk_ids,
+                      error=excluded.error,metadata=excluded.metadata,
+                      extraction_attempt_id=CASE
+                        WHEN ingestion_batch_assets.extraction_attempt_id IS NULL
+                        THEN excluded.extraction_attempt_id
+                        ELSE ingestion_batch_assets.extraction_attempt_id END""",
+                    (
+                        batch_id,
+                        ordinal,
+                        requested_url,
+                        status,
+                        result.source_id if result else None,
+                        result.snapshot_id if result else None,
+                        result.document_id if result else None,
+                        list(result.chunk_ids) if result else [],
+                        error,
+                        json.dumps(metadata or {}),
+                        str(extraction_attempt_id) if extraction_attempt_id else None,
+                    ),
+                )
+            else:
+                cur.execute(
+                    """INSERT INTO ingestion_batch_assets(
+                    batch_id,ordinal,requested_url,status,source_id,snapshot_id,document_id,chunk_ids,error,metadata)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT(batch_id,ordinal) DO UPDATE SET
+                      requested_url=excluded.requested_url,status=excluded.status,
+                      source_id=excluded.source_id,snapshot_id=excluded.snapshot_id,
+                      document_id=excluded.document_id,chunk_ids=excluded.chunk_ids,
+                      error=excluded.error,metadata=excluded.metadata""",
+                    (
+                        batch_id,
+                        ordinal,
+                        requested_url,
+                        status,
+                        result.source_id if result else None,
+                        result.snapshot_id if result else None,
+                        result.document_id if result else None,
+                        list(result.chunk_ids) if result else [],
+                        error,
+                        json.dumps(metadata or {}),
+                    ),
+                )
 
     def finish_ingestion_batch(self, batch_id, status, error=None):
+        """Finalize an ingestion batch after all constituent outcomes are known.
+
+        Derives ``started_at`` from the earliest constituent start and
+        ``completed_at`` from the latest constituent terminal outcome.  The
+        batch is sealed atomically with the finalization so that no asset can
+        be recorded after the batch is authoritatively complete.
+        """
         has_seal = self._has_sealed_at_column(self.connection)
+        has_extraction_attempt = self._has_extraction_attempt_id_column(self.connection)
         with self.connection.cursor() as cur:
+            # Lock the batch row to serialize against concurrent seal/insert
+            # races across database connections.
             cur.execute(
-                """SELECT MAX(ea.end_time) AS terminal_at
-                FROM ingestion_batch_assets iba
-                JOIN asset_snapshots ass ON ass.id = iba.snapshot_id
-                JOIN extraction_attempts ea
-                  ON ea.id = ass.extraction_attempt_id
-                WHERE iba.batch_id = %s
-                  AND ea.exit_status IN ('succeeded','partial','failed','cancelled')
-                  AND ea.end_time IS NOT NULL""",
+                "SELECT 1 FROM ingestion_batches WHERE id=%s FOR UPDATE",
                 (batch_id,),
             )
+            if cur.fetchone() is None:
+                raise KeyError(batch_id)
+
+            # Derive started_at from the earliest constituent start time.
+            # Use the authoritative per-batch extraction attempt association
+            # when available; fall back to snapshot-based join for legacy rows.
+            if has_extraction_attempt:
+                cur.execute(
+                    """SELECT MIN(ea.start_time) AS earliest_start
+                    FROM ingestion_batch_assets iba
+                    JOIN extraction_attempts ea ON ea.id = iba.extraction_attempt_id
+                    WHERE iba.batch_id = %s
+                      AND ea.start_time IS NOT NULL""",
+                    (batch_id,),
+                )
+            else:
+                cur.execute(
+                    """SELECT MIN(ea.start_time) AS earliest_start
+                    FROM ingestion_batch_assets iba
+                    JOIN asset_snapshots ass ON ass.id = iba.snapshot_id
+                    JOIN extraction_attempts ea
+                      ON ea.id = ass.extraction_attempt_id
+                    WHERE iba.batch_id = %s
+                      AND ea.start_time IS NOT NULL""",
+                    (batch_id,),
+                )
+            row = cur.fetchone()
+            constituent_started_at = row[0] if row else None
+
+            # Derive completed_at from the latest constituent terminal outcome.
+            if has_extraction_attempt:
+                cur.execute(
+                    """SELECT MAX(ea.end_time) AS terminal_at
+                    FROM ingestion_batch_assets iba
+                    JOIN extraction_attempts ea ON ea.id = iba.extraction_attempt_id
+                    WHERE iba.batch_id = %s
+                      AND ea.exit_status IN ('succeeded','partial','failed','cancelled')
+                      AND ea.end_time IS NOT NULL""",
+                    (batch_id,),
+                )
+            else:
+                cur.execute(
+                    """SELECT MAX(ea.end_time) AS terminal_at
+                    FROM ingestion_batch_assets iba
+                    JOIN asset_snapshots ass ON ass.id = iba.snapshot_id
+                    JOIN extraction_attempts ea
+                      ON ea.id = ass.extraction_attempt_id
+                    WHERE iba.batch_id = %s
+                      AND ea.exit_status IN ('succeeded','partial','failed','cancelled')
+                      AND ea.end_time IS NOT NULL""",
+                    (batch_id,),
+                )
             row = cur.fetchone()
             terminal_at = row[0] if row else None
             completed_at = terminal_at or utcnow()
+
+            # Derive started_at: prefer constituent evidence; fall back to
+            # row creation time when historical records predate constituent
+            # tracking.
+            cur.execute(
+                "SELECT started_at FROM ingestion_batches WHERE id=%s",
+                (batch_id,),
+            )
+            row = cur.fetchone()
+            existing_started_at = row[0] if row else None
+            started_at = constituent_started_at or existing_started_at
+
             if has_seal:
                 sealed_at = utcnow()
                 cur.execute(
                     """WITH asset_counts AS MATERIALIZED (
                         SELECT
                           count(*) FILTER(WHERE status='complete') AS succeeded,
-                          count(*) FILTER(WHERE status='failed')   AS failed
+                          count(*) FILTER(WHERE status='failed')   AS failed,
+                          count(*) FILTER(WHERE status='cancelled') AS cancelled
                         FROM ingestion_batch_assets
                         WHERE batch_id = %s
+                    ),
+                    failure_classes AS MATERIALIZED (
+                        SELECT jsonb_object_agg(fc.classification, fc.cnt)
+                          AS classes
+                        FROM (
+                            SELECT ea.failure_class AS classification,
+                                   count(*) AS cnt
+                            FROM ingestion_batch_assets iba
+                            JOIN extraction_attempts ea
+                              ON ea.id = iba.extraction_attempt_id
+                            WHERE iba.batch_id = %s
+                              AND ea.exit_status IN ('failed','cancelled')
+                              AND ea.failure_class IS NOT NULL
+                              AND ea.failure_class != 'none'
+                            GROUP BY ea.failure_class
+                        ) fc
                     )
                     UPDATE ingestion_batches
                     SET status=%s, error=%s,
@@ -3443,25 +3579,41 @@ class PostgresUnitOfWork:
                         sealed_at=%s,
                         outcome_summary=jsonb_build_object(
                             'succeeded', COALESCE(ac.succeeded, 0),
-                            'failed',   COALESCE(ac.failed, 0))
-                    FROM asset_counts ac
+                            'failed',   COALESCE(ac.failed, 0),
+                            'cancelled',COALESCE(ac.cancelled, 0),
+                            'failure_classes', COALESCE(fc.classes, '{}'::jsonb))
+                    FROM asset_counts ac LEFT JOIN failure_classes fc ON TRUE
                     WHERE id=%s""",
-                    (batch_id, status, error, completed_at, sealed_at, batch_id),
+                    (
+                        batch_id,
+                        batch_id,
+                        status,
+                        error,
+                        completed_at,
+                        sealed_at,
+                        batch_id,
+                    ),
                 )
             else:
                 # Pre-migration path: preserve original semantics.
                 cur.execute(
                     """UPDATE ingestion_batches
-                    SET status=%s, error=%s, completed_at=%s
+                    SET status=%s, error=%s, completed_at=%s,
+                        started_at=COALESCE(%s, started_at)
                     WHERE id=%s""",
-                    (status, error, completed_at, batch_id),
+                    (status, error, completed_at, started_at, batch_id),
                 )
 
     def export_invocation(self, invocation_id):
         with self.connection.cursor() as cur:
+            # Select sealed_at/outcome_summary only when the column exists;
+            # pre-migration schemas omit them gracefully.
+            extra_columns = ""
+            if self._has_sealed_at_column(self.connection):
+                extra_columns = ",b.sealed_at,b.outcome_summary"
             cur.execute(
-                """SELECT b.id,b.invocation_id,b.operation,b.status,b.started_at,b.completed_at,
-                b.error,b.metadata,r.external_run_id
+                f"""SELECT b.id,b.invocation_id,b.operation,b.status,b.started_at,b.completed_at,
+                b.error,b.metadata{extra_columns},r.external_run_id
                 FROM ingestion_batches b LEFT JOIN research_runs r ON r.id=b.research_run_id
                 WHERE b.invocation_id=%s""",
                 (invocation_id,),
@@ -3478,6 +3630,8 @@ class PostgresUnitOfWork:
                 "completed_at",
                 "error",
                 "metadata",
+                "sealed_at",
+                "outcome_summary",
                 "research_run_id",
             )
             result = dict(zip(keys, row))
@@ -3488,6 +3642,59 @@ class PostgresUnitOfWork:
                 LEFT JOIN documents d ON d.id=a.document_id
                 WHERE a.batch_id=%s ORDER BY a.ordinal,a.id""",
                 (row[0],),
+            )
+            asset_keys = (
+                "ordinal",
+                "requested_url",
+                "status",
+                "source_id",
+                "snapshot_id",
+                "document_id",
+                "chunk_ids",
+                "error",
+                "metadata",
+                "content_sha256",
+            )
+            result["assets"] = [
+                dict(zip(asset_keys, asset)) for asset in cur.fetchall()
+            ]
+            return result
+
+    def export_invocation_by_batch(self, batch_id):
+        """Return the canonical invocation record for a batch by batch ID."""
+        with self.connection.cursor() as cur:
+            extra_columns = ""
+            if self._has_sealed_at_column(self.connection):
+                extra_columns = ",b.sealed_at,b.outcome_summary"
+            cur.execute(
+                f"""SELECT b.invocation_id,b.operation,b.status,b.started_at,b.completed_at,
+                b.error,b.metadata{extra_columns}
+                FROM ingestion_batches b
+                WHERE b.id=%s""",
+                (batch_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise KeyError(batch_id)
+            keys = (
+                "invocation_id",
+                "operation",
+                "status",
+                "started_at",
+                "completed_at",
+                "error",
+                "metadata",
+                "sealed_at",
+                "outcome_summary",
+            )
+            result = dict(zip(keys, row))
+            cur.execute(
+                """SELECT ordinal,requested_url,status,source_id,
+                a.snapshot_id,document_id,chunk_ids,error,a.metadata,d.document_sha256
+                FROM ingestion_batch_assets a
+                LEFT JOIN documents d ON d.id=a.document_id
+                WHERE a.batch_id=%s ORDER BY a.ordinal,a.id""",
+                (batch_id,),
             )
             asset_keys = (
                 "ordinal",
