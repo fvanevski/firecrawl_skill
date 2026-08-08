@@ -793,6 +793,29 @@ class BoundedExtractionStage(ExtractionStage):
                     ),
                 )
 
+        # Finalize the ingestion batch only after every constituent has a
+        # persisted terminal outcome so batch timing and summaries are
+        # derived from authoritative evidence rather than wall-clock guesses.
+        # Skip when no active requests produced a batch (all preflighted away).
+        if "batch_id" in manifest:
+            success_count = sum(
+                1 for a in manifest.get("assets", []) if a.get("status") == "complete"
+            )
+            failure_count = len(manifest.get("assets", [])) - success_count
+            batch_status = (
+                "complete"
+                if failure_count == 0
+                else ("failed" if success_count == 0 else "partial")
+            )
+            try:
+                self.corpus_service.finalize_ingestion_batch(
+                    manifest["batch_id"], batch_status
+                )
+            except Exception as exc:  # noqa: BLE001
+                return StageResult.failed(
+                    "extraction", f"authoritative batch finalization failed: {exc}"
+                )
+
         extraction_success_count = len(completed_assets)
         context.setdefault("extracted_assets", []).extend(completed_assets)
         context[ContextKeys.EXTRACTION_SUCCESS_COUNT] = extraction_success_count

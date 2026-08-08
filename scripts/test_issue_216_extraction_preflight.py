@@ -363,6 +363,7 @@ class _FakeExtractionService:
 class _FakeCorpusService:
     def __init__(self):
         self.calls: list[dict] = []
+        self.last_assets: list[dict] = []
 
     def ingest_batch(self, **kwargs):
         self.calls.append(kwargs)
@@ -373,16 +374,42 @@ class _FakeCorpusService:
                 .get("firecrawl", {})
                 .get("result_index", fallback)
             )
-            assets.append(
-                {
-                    "ordinal": ordinal,
-                    "status": "complete",
-                    "requested_url": item["request"].requested_url,
-                    "snapshot_id": str(uuid4()),
-                    "chunk_ids": [str(uuid4())],
-                }
-            )
-        return {"assets": assets, "failure_count": 0}
+            request = item.get("request")
+            if request is not None:
+                assets.append(
+                    {
+                        "ordinal": ordinal,
+                        "status": "complete",
+                        "requested_url": request.requested_url,
+                        "snapshot_id": str(uuid4()),
+                        "chunk_ids": [str(uuid4())],
+                        "extraction_attempt_id": str(item["extraction_attempt_id"]),
+                    }
+                )
+            else:
+                assets.append(
+                    {
+                        "ordinal": ordinal,
+                        "status": "failed",
+                        "requested_url": item["requested_url"],
+                        "snapshot_id": None,
+                        "chunk_ids": [],
+                        "error": item.get("error"),
+                        "extraction_attempt_id": str(item["extraction_attempt_id"]),
+                    }
+                )
+        self.last_assets = assets
+        return {"batch_id": str(uuid4()), "assets": assets, "failure_count": 0}
+
+    def finalize_ingestion_batch(self, batch_id, status, error=None):
+        return {
+            "batch_id": batch_id,
+            "status": status,
+            "assets": list(self.last_assets),
+            "failure_count": sum(
+                1 for item in self.last_assets if item["status"] == "failed"
+            ),
+        }
 
 
 class _FakeScrapeAdapter:
@@ -446,8 +473,11 @@ class TestProductionExtractionSeam:
         result = stage.execute(uuid4(), 4, 1, "extracting", context)
         assert result.error is None
         assert len(corpus.calls) == 1
-        assert len(corpus.calls[0]["requests"]) == 1
+        assert len(corpus.calls[0]["requests"]) == 2
         assert corpus.calls[0]["requests"][0]["requested_url"] == good
+        assert corpus.calls[0]["requests"][1]["requested_url"] == empty
+        assert "request" not in corpus.calls[0]["requests"][1]
+        assert corpus.calls[0]["requests"][1].get("extraction_attempt_id") is not None
         assert any(item["exit_status"] == "succeeded" for item in extraction.completed)
         rejected = [
             item
@@ -487,7 +517,10 @@ class TestProductionExtractionSeam:
         }
         result = stage.execute(uuid4(), 7, 1, "extracting", context)
         assert result.error is None
-        assert corpus.calls == []
+        assert len(corpus.calls) == 1
+        assert len(corpus.calls[0]["requests"]) == 1
+        assert "request" not in corpus.calls[0]["requests"][0]
+        assert corpus.calls[0]["requests"][0].get("extraction_attempt_id") is not None
         assert extraction.completed[0]["failure_class"] == "unsupported_format"
         assert extraction.completed[0]["exit_status"] == "cancelled"
 
@@ -554,7 +587,7 @@ def test_postgres_audit_readback_preserves_class_stage_elapsed_and_redaction(tmp
         run_service=run_service,
         coverage_service=MagicMock(),
         config=config,
-        corpus_service=SimpleNamespace(),
+        corpus_service=_FakeCorpusService(),
         extraction_service=build_extraction_service(config),
     )
     context = {

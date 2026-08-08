@@ -62,6 +62,40 @@ Generic run-asset links that have no candidate/extraction lineage begin at
 `retained` with `direct_retention` provenance. This records the known retention
 fact while explicitly declining to invent discovery or extraction history.
 
+## Canonical stage-specific read semantics
+
+Issue #217 (RC-13) reuses this ledger rather than creating a second selection or
+promotion state machine. `AssetPromotionService.list_assets()` exposes the
+following stage-specific read fields for authoritative subjects:
+
+- `selected_for_extraction` — the subject has reached
+  `selected_for_extraction`;
+- `extraction_succeeded` — the subject has reached the persisted ARC-05
+  `extracted` stage;
+- `retained` — the subject has reached `retained`;
+- `evidence_eligible` — the subject has reached `evidence_eligible`; and
+- `completion_critical` — the subject has reached `completion_critical`.
+
+These fields are derived only from the subject's current PostgreSQL stage and
+its append-only promotion events. A later stage therefore preserves the fact
+that earlier stages were reached without inferring anything that is absent from
+the ledger. `extraction_succeeded` is the externally explicit read name for the
+persisted `extracted` stage; it does not reinterpret a provisional extraction
+attempt or a generic boolean selection field as success.
+
+Historical compatibility remains conservative. For a pre-0040 run asset with
+`current_stage = unknown` and `provenance = legacy_unstructured`, each of the
+five stage-specific fields is `None`, not `False`. `False` would assert that a
+stage was definitely never reached, which cannot be proven for history that was
+never recorded.
+
+Legacy storage/API fields named only `selected` remain compatibility fields and
+must not be treated as lifecycle authority. New reads use a stage-specific name:
+retrieval traces expose `selected_for_retrieval`, while extraction and asset
+lifecycle consumers use the five ARC-05 fields above. In particular, a bare
+`selected` value must not be used to infer extraction success, retention,
+evidence eligibility, or completion membership.
+
 ## Indexing admission policy
 
 Candidate-ranking policy is outside issue #211. At the indexing boundary, the
@@ -135,3 +169,7 @@ of one candidate into distinct subjects and snapshots; invalid stage skips;
 PostgreSQL rejection of false member/seal hashes and duplicate chunks;
 idempotent sealing; exact checkpoint binding; explicit reopen/reseal CAS;
 deterministic race orderings; interruption recovery; and pre-0040 compatibility.
+
+Issue #217 additionally verifies the canonical stage-specific read fields at
+successive promotion stages and verifies that pre-0040 unknown history keeps
+all five fields unknown rather than fabricating negative assertions.

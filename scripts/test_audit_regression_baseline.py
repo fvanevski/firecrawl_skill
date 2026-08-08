@@ -35,7 +35,6 @@ AUDITED_COMPLETE = 1_344
 AUDITED_RUNNING_LIVE = 32
 AUDITED_TOTAL = 1_376
 AUDITED_FINGERPRINT = "audit-index-fingerprint"
-_TERMINAL_EXTRACTION_STATES = frozenset({"succeeded", "partial", "failed", "cancelled"})
 
 
 def _worker_result(*, complete: int, running_live: int) -> dict[str, int]:
@@ -275,9 +274,12 @@ class _SuccessfulStage:
 
 
 class _BatchTimingCursor:
+    """Small exact-member fake for the RC-11 production repository method."""
+
     def __init__(self, connection: _BatchTimingConnection) -> None:
         self.connection = connection
-        self._row: tuple[datetime] | None = None
+        self._row: tuple[Any, ...] | None = None
+        self._rows: list[tuple[Any, ...]] = []
         self.rowcount = 0
 
     def __enter__(self) -> Self:
@@ -286,184 +288,125 @@ class _BatchTimingCursor:
     def __exit__(self, *_args: object) -> None:
         return None
 
-    @staticmethod
-    def _parameter_values(params: tuple[Any, ...]) -> list[Any]:
-        values: list[Any] = []
-        for value in params:
-            if isinstance(value, (list, tuple, set, frozenset)):
-                values.extend(value)
-            else:
-                values.append(value)
-        return values
-
-    def _validate_constituent_aggregation(
-        self,
-        normalized: str,
-        params: tuple[Any, ...],
-    ) -> None:
-        required_relations = (
-            "ingestion_batch_assets",
-            "asset_snapshots",
-            "extraction_attempts",
-        )
-        required_columns = (
-            "batch_id",
-            "snapshot_id",
-            "extraction_attempt_id",
-            "end_time",
-            "exit_status",
-        )
-        for token in (*required_relations, *required_columns):
-            assert token in normalized, f"missing exact constituent token: {token}"
-        assert "max(" in normalized, "constituent terminal times must be aggregated"
-        assert "now()" not in normalized, "batch completion must not use statement time"
-        assert self.connection.target_batch_id in params
-
-        parameter_values = self._parameter_values(params)
-        states_in_sql = {
-            state for state in _TERMINAL_EXTRACTION_STATES if state in normalized
-        }
-        states_in_params = {
-            value
-            for value in parameter_values
-            if isinstance(value, str) and value in _TERMINAL_EXTRACTION_STATES
-        }
-        assert states_in_sql | states_in_params == _TERMINAL_EXTRACTION_STATES, (
-            "terminal extraction-state filtering is incomplete"
-        )
-
     def execute(self, query: str, params: tuple[Any, ...] | None = None) -> None:
         normalized = " ".join(query.lower().split())
         params = params or ()
         self.connection.statements.append((normalized, params))
+        self._row = None
+        self._rows = []
+        self.rowcount = 0
 
-        is_batch_update = "update ingestion_batches" in normalized
-        has_constituent_relations = all(
-            relation in normalized
-            for relation in (
-                "ingestion_batch_assets",
-                "asset_snapshots",
-                "extraction_attempts",
-            )
-        )
-
-        if has_constituent_relations:
-            self._validate_constituent_aggregation(normalized, params)
-            terminal_at = self.connection.latest_terminal_for_target_batch()
-            self.connection.selected_terminal_at = terminal_at
-            self._row = (terminal_at,)
-            if is_batch_update:
-                self.connection.batches[self.connection.target_batch_id][
-                    "completed_at"
-                ] = terminal_at
-                self.rowcount = 1
+        if "information_schema.columns" in normalized and "sealed_at" in normalized:
+            self._row = (1,)
             return
-
-        if is_batch_update:
-            assert self.connection.target_batch_id in params
-            if "completed_at" not in normalized:
-                self.rowcount = 1
-                return
-            assert "now()" not in normalized, (
-                "ingestion_batches.completed_at still uses statement wall clock"
+        if (
+            "information_schema.columns" in normalized
+            and "constituent_started_at" in normalized
+            and "constituent_completed_at" in normalized
+        ):
+            self._row = (2,)
+            return
+        if (
+            normalized.startswith("select 1 from ingestion_batches")
+            and "for update" in normalized
+        ):
+            assert params == (self.connection.target_batch_id,)
+            self._row = (1,)
+            return
+        if (
+            "from ingestion_batch_assets iba" in normalized
+            and "left join extraction_attempts ea" in normalized
+        ):
+            assert params == (self.connection.target_batch_id,)
+            assert "ea.start_time" in normalized
+            assert "ea.end_time" in normalized
+            assert "iba.extraction_attempt_id" in normalized
+            assert "now()" not in normalized
+            self._rows = self.connection.member_rows()
+            return
+        if normalized.startswith("update ingestion_batches"):
+            assert params[-1] == self.connection.target_batch_id
+            assert "started_at=%s" in normalized
+            assert "completed_at=%s" in normalized
+            assert "sealed_at=%s" in normalized
+            assert "outcome_summary=%s::jsonb" in normalized
+            status, _error, started_at, completed_at, _sealed_at, summary, _batch = (
+                params
             )
-            assert self.connection.selected_terminal_at is not None, (
-                "batch update did not derive a timestamp from exact constituents"
-            )
-            timestamps = [value for value in params if isinstance(value, datetime)]
-            assert timestamps == [self.connection.selected_terminal_at]
-            self.connection.batches[self.connection.target_batch_id]["completed_at"] = (
-                timestamps[0]
+            self.connection.batches[self.connection.target_batch_id].update(
+                {
+                    "status": status,
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "outcome_summary": json.loads(summary),
+                }
             )
             self.rowcount = 1
             return
 
-        if (
-            "from ingestion_batches" in normalized
-            and "for update" in normalized
-            and self.connection.target_batch_id in params
-        ):
-            self._row = (self.connection.target_batch_id,)
-            return
-
         raise AssertionError(f"unexpected batch completion SQL: {normalized}")
 
-    def fetchone(self) -> tuple[datetime] | None:
+    def fetchone(self) -> tuple[Any, ...] | None:
         return self._row
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return list(self._rows)
 
 
 class _BatchTimingConnection:
     def __init__(self) -> None:
         self.target_batch_id = UUID(int=11)
         self.unrelated_batch_id = UUID(int=12)
+        self.expected_started_at = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
         self.expected_terminal_at = datetime(2026, 8, 4, 12, 10, tzinfo=timezone.utc)
         self.batches: dict[UUID, dict[str, Any]] = {
-            self.target_batch_id: {"status": "running", "completed_at": None},
-            self.unrelated_batch_id: {"status": "running", "completed_at": None},
+            self.target_batch_id: {
+                "status": "running",
+                "started_at": None,
+                "completed_at": None,
+            },
+            self.unrelated_batch_id: {
+                "status": "running",
+                "started_at": None,
+                "completed_at": None,
+            },
         }
-        self.batch_assets = [
-            {
-                "batch_id": self.target_batch_id,
-                "snapshot_id": UUID(int=101),
-                "status": "complete",
-            },
-            {
-                "batch_id": self.target_batch_id,
-                "snapshot_id": UUID(int=102),
-                "status": "failed",
-            },
-            {
-                "batch_id": self.target_batch_id,
-                "snapshot_id": UUID(int=103),
-                "status": "complete",
-            },
-            {
-                "batch_id": self.unrelated_batch_id,
-                "snapshot_id": UUID(int=201),
-                "status": "complete",
-            },
+        self.members = [
+            (
+                UUID(int=101),
+                0,
+                "complete",
+                UUID(int=1_001),
+                self.expected_started_at,
+                datetime(2026, 8, 4, 12, 5, tzinfo=timezone.utc),
+                "succeeded",
+                "none",
+            ),
+            (
+                UUID(int=102),
+                1,
+                "complete",
+                UUID(int=1_002),
+                datetime(2026, 8, 4, 12, 1, tzinfo=timezone.utc),
+                self.expected_terminal_at,
+                "succeeded",
+                "none",
+            ),
+            (
+                UUID(int=103),
+                2,
+                "complete",
+                UUID(int=1_003),
+                datetime(2026, 8, 4, 12, 2, tzinfo=timezone.utc),
+                datetime(2026, 8, 4, 12, 7, tzinfo=timezone.utc),
+                "succeeded",
+                "none",
+            ),
         ]
-        self.snapshots = {
-            UUID(int=101): {"extraction_attempt_id": UUID(int=1_001)},
-            UUID(int=102): {"extraction_attempt_id": UUID(int=1_002)},
-            UUID(int=103): {"extraction_attempt_id": UUID(int=1_003)},
-            UUID(int=201): {"extraction_attempt_id": UUID(int=2_001)},
-        }
-        self.extraction_attempts = {
-            UUID(int=1_001): {
-                "exit_status": "succeeded",
-                "end_time": datetime(2026, 8, 4, 12, 5, tzinfo=timezone.utc),
-            },
-            UUID(int=1_002): {
-                "exit_status": "failed",
-                "end_time": self.expected_terminal_at,
-            },
-            UUID(int=1_003): {
-                "exit_status": "succeeded",
-                "end_time": None,
-            },
-            UUID(int=2_001): {
-                "exit_status": "succeeded",
-                "end_time": datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-            },
-        }
-        self.selected_terminal_at: datetime | None = None
         self.statements: list[tuple[str, tuple[Any, ...]]] = []
 
-    def latest_terminal_for_target_batch(self) -> datetime:
-        terminal_times: list[datetime] = []
-        for asset in self.batch_assets:
-            if asset["batch_id"] != self.target_batch_id:
-                continue
-            snapshot = self.snapshots[asset["snapshot_id"]]
-            attempt = self.extraction_attempts[snapshot["extraction_attempt_id"]]
-            if (
-                attempt["exit_status"] in _TERMINAL_EXTRACTION_STATES
-                and attempt["end_time"] is not None
-            ):
-                terminal_times.append(attempt["end_time"])
-        assert terminal_times
-        return max(terminal_times)
+    def member_rows(self) -> list[tuple[Any, ...]]:
+        return list(self.members)
 
     def cursor(self) -> _BatchTimingCursor:
         return _BatchTimingCursor(self)
@@ -730,26 +673,22 @@ def test_rc_09_stage_execution_does_not_write_provider_response() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "RC-11 tracked by #217: batch completion follows exact constituent "
-        "terminal time"
-    ),
-)
-def test_rc_11_batch_completion_uses_latest_constituent_terminal_time() -> None:
+def test_rc_11_batch_completion_uses_exact_constituent_start_and_terminal_times() -> (
+    None
+):
     connection = _BatchTimingConnection()
     unit_of_work = object.__new__(PostgresUnitOfWork)
     unit_of_work.connection = connection
 
     unit_of_work.finish_ingestion_batch(connection.target_batch_id, "complete")
 
-    assert connection.batches[connection.target_batch_id]["completed_at"] == (
-        connection.expected_terminal_at
-    )
+    target = connection.batches[connection.target_batch_id]
+    assert target["started_at"] == connection.expected_started_at
+    assert target["completed_at"] == connection.expected_terminal_at
+    assert target["outcome_summary"]["succeeded"] == 3
+    assert target["outcome_summary"]["member_count"] == 3
+    assert connection.batches[connection.unrelated_batch_id]["started_at"] is None
     assert connection.batches[connection.unrelated_batch_id]["completed_at"] is None
-    assert connection.selected_terminal_at == connection.expected_terminal_at
 
 
 @pytest.mark.xfail(

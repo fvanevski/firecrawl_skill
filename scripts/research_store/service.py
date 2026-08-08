@@ -422,6 +422,9 @@ class CorpusService:
                             metadata=item.get("metadata")
                             if isinstance(item, dict)
                             else None,
+                            extraction_attempt_id=(
+                                request.extraction_attempt_id if request else None
+                            ),
                         )
                         if research_run_external_id:
                             try:
@@ -451,21 +454,42 @@ class CorpusService:
                         metadata=item.get("metadata")
                         if isinstance(item, dict)
                         else None,
+                        extraction_attempt_id=(
+                            request.extraction_attempt_id if request else None
+                        ),
                     )
-            status = (
-                "complete"
-                if not failures
-                else ("failed" if failures == len(requests) else "partial")
-            )
-            uow.finish_ingestion_batch(batch_id, status)
             manifest = uow.export_invocation(invocation_id)
+        # The caller is responsible for finalizing the batch after all
+        # constituent outcomes are persisted.  Direct callers that do not have
+        # separate constituent tracking finalize immediately; orchestrators
+        # complete their extraction attempts first and then call
+        # :meth:`finalize_ingestion_batch`.
+        manifest["failure_count"] = failures
+        return manifest
+
+    def finalize_ingestion_batch(
+        self, batch_id: str, status: str, error: str | None = None
+    ) -> dict:
+        """Finalize an ingestion batch after all constituent outcomes are known.
+
+        Must be called after every constituent has a persisted terminal
+        outcome so that batch timing and outcome summaries are derived from
+        authoritative evidence rather than wall-clock guesses.
+        """
+        with self.uow_factory() as uow:
+            uow.finish_ingestion_batch(batch_id, status, error=error)
+            manifest = uow.export_invocation_by_batch(batch_id)
         self._notify(
             chunk_id
-            for asset in manifest["assets"]
+            for asset in manifest.get("assets", [])
             if asset["status"] == "complete"
             for chunk_id in asset["chunk_ids"]
         )
-        manifest["failure_count"] = failures
+        manifest["batch_id"] = batch_id
+        manifest["status"] = status
+        manifest["failure_count"] = sum(
+            1 for a in manifest.get("assets", []) if a.get("status") == "failed"
+        )
         return manifest
 
     def persist_manifest_batch(

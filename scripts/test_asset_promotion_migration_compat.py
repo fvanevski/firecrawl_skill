@@ -65,12 +65,20 @@ def test_prior_head_rows_remain_unknown_without_fabricated_events(
         )
         assert manifest["failure_count"] == 0
 
-        assert migrate(isolated_dsn) == 42
+        assert migrate(isolated_dsn) == 43
         service = AssetPromotionService(runs.uow_factory)
         assets = service.list_assets(status.id)
         assert len(assets) == 1
         assert assets[0]["current_stage"] == "unknown"
         assert assets[0]["provenance"] == "legacy_unstructured"
+        for field in (
+            "selected_for_extraction",
+            "extraction_succeeded",
+            "retained",
+            "evidence_eligible",
+            "completion_critical",
+        ):
+            assert assets[0][field] is None
         assert service.list_events(status.id) == []
 
         alembic = Config(str(Path(__file__).parents[1] / "alembic.ini"))

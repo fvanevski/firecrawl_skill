@@ -63,7 +63,7 @@ def policy_store(tmp_path):
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN) == 42
+    assert migrate(TEST_DSN) == 43
     return replace(
         StoreConfig.from_env(),
         database_url=TEST_DSN,
