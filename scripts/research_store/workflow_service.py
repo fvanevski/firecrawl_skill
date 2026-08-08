@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 from uuid import UUID
 
+from .completion_provenance import (
+    CompletionProvenance,
+    CompletionProvenanceError,
+    load_authoritative_completion_provenance,
+    resolve_completion_assertions,
+)
 from .invocation_service import InvocationError, InvocationRecord, InvocationService
 from .run_service import TERMINAL_STATES, ResearchRunService, RunStatus
 
@@ -340,15 +346,16 @@ class WorkflowOperationService:
     ) -> RunStatus:
         """Finish a run with authoritative synthesis provenance gates.
 
-        Completion gates enforced for ``completed`` outcome:
-        * ``answer_sha256`` and ``source_manifest_sha256`` must be populated.
-        * A valid ``validation`` synthesis stage must exist.
-        * No synthesis stage may be in a failed state.
-        * ``provenance_type`` must be ``authoritative`` (or omitted) for
-          completed runs; external/provisional outputs cannot satisfy the gate.
+        ``completed`` derives its answer and source hashes from persisted
+        PostgreSQL authority: the immutable synthesis artifact and active exact
+        membership seal.  Caller-supplied hashes are optional assertions and
+        must match those records.  Current evidence, semantic-call authority,
+        claim/evidence links, citation validation, and complete deterministic
+        validation are all required.  The exact provenance bundle is repeated
+        inside the guarded terminal transaction before commit.
 
         Partial outcome is reserved for intentional policy-approved incomplete
-        research and does not require synthesis provenance.
+        research and does not require authoritative synthesis provenance.
         """
         current = self.run_service.status(external_id=external_run_id)
         if current.state in TERMINAL_STATES:
@@ -428,7 +435,7 @@ class WorkflowOperationService:
             )
 
         # --- Completion gates for authoritative completed outcome ----------
-        self._assert_completion_gates(
+        provenance = self._assert_completion_gates(
             run_id=current.id,
             source_manifest_sha256=source_manifest_sha256,
             answer_sha256=answer_sha256,
@@ -460,10 +467,8 @@ class WorkflowOperationService:
             reason="operator completed the PostgreSQL-authoritative run",
             outcome=outcome,
             completion={
-                "source_manifest_sha256": source_manifest_sha256,
-                "answer_sha256": answer_sha256,
+                **provenance.completion_fields(),
                 "index_progress": progress.to_dict(),
-                "provenance_type": provenance_type,
             },
         )
 
@@ -474,66 +479,34 @@ class WorkflowOperationService:
         source_manifest_sha256: str | None,
         answer_sha256: str | None,
         provenance_type: str | None,
-    ) -> None:
-        """Validate synthesis provenance gates before allowing completion.
+    ) -> CompletionProvenance:
+        """Load and verify the complete authoritative completion provenance.
 
-        Raises:
-            WorkflowBoundaryError: When any gate is violated.
+        Any lookup, schema, persistence, or validation failure rejects
+        completion.  No missing-UoW or compatibility path is allowed to
+        bypass an authoritative terminal gate.
         """
-        if not source_manifest_sha256:
-            raise WorkflowBoundaryError(
-                "completion requires source_manifest_sha256; "
-                "populate the source manifest hash before completing"
-            )
-        if not answer_sha256:
-            raise WorkflowBoundaryError(
-                "completion requires answer_sha256; "
-                "populate the answer hash before completing"
-            )
         if provenance_type not in (None, "authoritative"):
             raise WorkflowBoundaryError(
                 f"completion with provenance_type={provenance_type!r} is rejected; "
-                "only 'authoritative' (or omitted) provenance satisfies the gate"
+                "authority is derived from persisted semantic provenance"
             )
-
-        # Verify a valid validation synthesis stage exists and no stages failed.
         try:
-            from .domain import SynthesisStageStatus
-        except ImportError:  # pragma: no cover
-            return
-        uow_factory = self.run_service.uow_factory
-        if uow_factory is None:
-            return
-        try:
-            with uow_factory() as uow:
-                stages = uow.get_synthesis_stages(run_id)
-        except (RuntimeError, TypeError, AttributeError):  # pragma: no cover
-            return
-        if not stages:
-            raise WorkflowBoundaryError(
-                "completion requires a validation synthesis stage; "
-                "persist the synthesis artifact before completing"
+            with self.uow_factory() as uow:
+                provenance = load_authoritative_completion_provenance(
+                    uow, run_id, for_update=False
+                )
+            return resolve_completion_assertions(
+                provenance,
+                source_manifest_sha256=source_manifest_sha256,
+                answer_sha256=answer_sha256,
             )
-        validation_stage = next(
-            (s for s in stages if s.get("stage_name") == "validation"), None
-        )
-        if validation_stage is None:
+        except CompletionProvenanceError as exc:
             raise WorkflowBoundaryError(
-                "completion requires a validation synthesis stage; "
-                "persist the synthesis artifact before completing"
-            )
-        if validation_stage.get("stage_status") != "completed":
+                f"authoritative completion provenance rejected: {exc}"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
             raise WorkflowBoundaryError(
-                "completion requires a valid (completed) validation synthesis stage; "
-                f"got status={validation_stage.get('stage_status')!r}"
-            )
-        failed_stages = [
-            s.get("stage_name")
-            for s in stages
-            if s.get("stage_status") == SynthesisStageStatus.FAILED
-        ]
-        if failed_stages:
-            raise WorkflowBoundaryError(
-                f"completion rejected due to irrecoverable failed synthesis stage(s): "
-                f"{', '.join(failed_stages)}"
-            )
+                "authoritative completion provenance is unavailable; "
+                f"completion fails closed ({type(exc).__name__})"
+            ) from exc

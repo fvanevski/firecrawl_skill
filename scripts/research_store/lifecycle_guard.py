@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from .completion_provenance import (
+    CompletionProvenanceError,
+    load_authoritative_completion_provenance,
+)
 from .run_service import (
     RUN_STATES,
     TERMINAL_STATES,
@@ -119,6 +123,43 @@ class GuardedResearchRunService(ResearchRunService):
                         error=error,
                         completion=completion_payload,
                     )
+                # Lock and validate the lifecycle CAS before any completion-only
+                # provenance work.  This preserves the public state-machine error
+                # semantics while also holding the run row for the remainder of
+                # the terminal transaction.
+                with uow.connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT state,lifecycle_revision FROM research_runs "
+                        "WHERE id=%s FOR UPDATE",
+                        (run_id,),
+                    )
+                    run_row = cursor.fetchone()
+                if run_row is None:
+                    raise KeyError(run_id)
+                prior_state, current_revision = run_row
+                if int(current_revision) != expected_revision:
+                    raise StaleRunRevisionError(
+                        "stale research run revision: "
+                        f"expected {expected_revision}, current {current_revision}"
+                    )
+                if prior_state not in permitted_prior_states:
+                    raise RunStateError(
+                        "research run transition rejected: "
+                        f"{prior_state} -> {next_state} is not permitted"
+                    )
+
+                if next_state == "completed":
+                    try:
+                        authoritative = load_authoritative_completion_provenance(
+                            uow, run_id, for_update=True
+                        )
+                        authoritative.assert_matches_completion(completion_payload)
+                    except CompletionProvenanceError as exc:
+                        raise TerminalDecisionError(
+                            "authoritative completion provenance changed or "
+                            f"failed revalidation: {exc}"
+                        ) from exc
+
                 expected = (
                     decision_id,
                     run_revision,
@@ -211,6 +252,8 @@ class GuardedResearchRunService(ResearchRunService):
         except StaleRunRevisionError:
             raise
         except RunStateError:
+            raise
+        except TerminalDecisionError:
             raise
         except ValueError as exc:
             message = str(exc)
