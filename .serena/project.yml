@@ -172,9 +172,9 @@ initial_prompt: |
   insert_before_symbol, insert_after_symbol, and rename_symbol when the
   requested change aligns with a code symbol.
 
-  For precise textual edits that do not align with a whole symbol, use
-  replace_content. For controlled repeated changes across files, consider
-  replace_in_files and inspect its preview before applying replacements.
+  For precise textual edits that do not align with a whole symbol, use the
+  native Qwen edit tool. For controlled repeated changes across files,
+  consider replace_in_files and inspect its preview before applying replacements.
 
   Do not use Serena execute_shell_command. Use the host Qwen/RTK shell path
   for Git, GitHub, tests, linting, Docker, database commands, and project CLI
