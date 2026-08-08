@@ -2,12 +2,6 @@
   "schema_version": "pytest-skip-allowlist-v1",
   "entries": [
     {
-      "node_id": "scripts/test_audit_regression_baseline.py::test_rc_11_batch_completion_uses_latest_constituent_terminal_time",
-      "reason_contains": "RC-11 tracked by #217",
-      "classification": "audit-regression-expected-failure",
-      "replacement_gate": "Issue #217 remediation"
-    },
-    {
       "node_id": "scripts/test_audit_regression_baseline.py::test_rc_16_zero_blob_verification_is_inconclusive",
       "reason_contains": "RC-16 tracked by #219",
       "classification": "audit-regression-expected-failure",
