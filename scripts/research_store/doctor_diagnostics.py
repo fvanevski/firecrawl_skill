@@ -180,7 +180,7 @@ def classify_connectivity_failure(
 
 
 def blob_health(config: Any) -> dict[str, Any]:
-    """Inspect immutable referenced blobs and global disk inventory separately."""
+    """Inspect immutable references independently from global blob inventory."""
     from . import cli
 
     store = ContentAddressedBlobStore(config.blob_root)
@@ -203,8 +203,6 @@ def blob_health(config: Any) -> dict[str, Any]:
     status = "pass" if not missing else "failure"
     return {
         "status": status,
-        # Compatibility for the standalone verify-blobs result. Doctor itself
-        # exposes the canonical per-domain ``status`` field.
         "integrity": status,
         "referenced": len(references),
         "missing_or_corrupt": missing,
@@ -213,17 +211,19 @@ def blob_health(config: Any) -> dict[str, Any]:
     }
 
 
-def _dependency_inconclusive(reason: str, remediation: str) -> dict[str, str]:
+def _inconclusive(reason_code: str, remediation: str) -> dict[str, str]:
     return {
         "status": "inconclusive",
-        "reason_code": reason,
+        "reason_code": reason_code,
         "remediation": remediation,
     }
 
 
-def _qdrant_issue(qdrant: dict[str, Any], reason_code: str, remediation: str) -> None:
-    qdrant["status"] = "failure"
-    qdrant.setdefault("issues", []).append(
+def _qdrant_failure(
+    record: dict[str, Any], reason_code: str, remediation: str
+) -> None:
+    record["status"] = "failure"
+    record.setdefault("issues", []).append(
         {"reason_code": reason_code, "remediation": remediation}
     )
 
@@ -240,15 +240,13 @@ def _aggregate_component_status(components: dict[str, dict[str, Any]]) -> str:
 
 
 def doctor(config: Any) -> tuple[dict[str, Any], bool]:
-    """Return independent, machine-readable doctor domains for issue #220."""
+    """Return the seven independent diagnostic domains required by issue #220."""
     from . import cli
 
     checks: dict[str, Any] = {"schema_version": DOCTOR_SCHEMA_VERSION}
     failed = False
     schema: dict[str, Any] | None = None
 
-    # PostgreSQL authority is its own domain. Worker health is deliberately
-    # evaluated separately so a worker failure cannot erase authority status.
     try:
         schema = cli._schema_state(config)
         checks["schema"] = schema
@@ -268,11 +266,12 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
                     "oldest_running": oldest_running,
                 }
         if schema["at_head"]:
-            checks["postgres_authority"] = {"status": "pass"}
+            checks["postgres_authority"] = {"status": "pass", "schema": schema}
         else:
             checks["postgres_authority"] = {
                 "status": "failure",
                 "reason_code": "migration_required",
+                "schema": schema,
                 "remediation": (
                     "Run research-db migrate against the authoritative PostgreSQL "
                     "database and verify the schema reaches the expected head."
@@ -286,7 +285,7 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
         failed = True
 
     if checks["postgres_authority"]["status"] != "pass":
-        checks["worker_health"] = _dependency_inconclusive(
+        checks["worker_health"] = _inconclusive(
             "postgres_authority_unavailable",
             "Resolve postgres_authority before evaluating durable worker state.",
         )
@@ -342,14 +341,13 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
             )
             failed = True
 
-    # Referenced integrity and global orphan inventory are independent domains.
     try:
         if not config.blob_root.is_dir():
             raise RuntimeError(f"blob root is not a directory: {config.blob_root}")
         if not os.access(config.blob_root, os.R_OK | os.X_OK):
             raise RuntimeError("blob root is not readable")
-        health = cli._blob_health(config)
-        referenced = {
+        health = blob_health(config)
+        referenced: dict[str, Any] = {
             "status": health["status"],
             "referenced": health["referenced"],
             "missing_or_corrupt": health["missing_or_corrupt"],
@@ -366,8 +364,9 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
             )
             failed = True
         checks["referenced_blob_integrity"] = referenced
+
         orphan_count = health["orphan_count"]
-        inventory = {
+        inventory: dict[str, Any] = {
             "status": "warning" if orphan_count else "pass",
             "orphan_count": orphan_count,
             "unreferenced": health["unreferenced_inventory"],
@@ -392,13 +391,12 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
                 "Restore readable access to the configured BLOB_ROOT and rerun doctor."
             ),
         }
-        checks["unreferenced_blob_inventory"] = _dependency_inconclusive(
+        checks["unreferenced_blob_inventory"] = _inconclusive(
             "blob_inventory_unavailable",
             "Restore readable BLOB_ROOT access before interpreting orphan inventory.",
         )
         failed = True
 
-    # Qdrant is checked only as a rebuildable projection of PostgreSQL chunks.
     try:
         aliases = cli._qdrant(config).list_aliases()
         active = aliases.get(config.qdrant_alias)
@@ -443,7 +441,7 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
                 row["fingerprint"] == config.embedding_fingerprint
             )
             if not qdrant["query_embedding_compatible"]:
-                _qdrant_issue(
+                _qdrant_failure(
                     qdrant,
                     "embedding_fingerprint_mismatch",
                     "Rebuild the projection from PostgreSQL with the active embedding fingerprint.",
@@ -453,12 +451,13 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
                 config, active, row["dimension"], row["distance_metric"]
             ).inspect_schema()
             if not qdrant["schema"]["compatible"]:
-                _qdrant_issue(
+                _qdrant_failure(
                     qdrant,
                     "qdrant_schema_incompatible",
                     "Rebuild the projection with the configured dimension and distance metric.",
                 )
                 failed = True
+
             point_ids: set[str] = set()
             offset = None
             active_index = cli._qdrant(
@@ -478,14 +477,13 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
                 "orphaned": len(point_ids - chunk_ids),
             }
             if point_ids != chunk_ids:
-                _qdrant_issue(
+                _qdrant_failure(
                     qdrant,
                     "projection_membership_mismatch",
                     "Reconcile or rebuild Qdrant from authoritative PostgreSQL chunks.",
                 )
                 failed = True
             elif qdrant["status"] != "failure":
-                # Coverage success must never erase an earlier compatibility failure.
                 qdrant["status"] = "pass"
         checks["qdrant_projection"] = qdrant
     except Exception as exc:  # noqa: BLE001
@@ -497,7 +495,7 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
     try:
         if schema and schema.get("at_head"):
             reconcile = cli._index_reconcile(config, repair=False)
-            index_health = {
+            index_health: dict[str, Any] = {
                 "status": "pass" if reconcile["ok"] else "failure",
                 "total_active_chunks": reconcile["total_active_chunks"],
                 "definitions": len(reconcile["definitions"]),
@@ -516,7 +514,7 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
                 failed = True
             checks["index_job_health"] = index_health
         else:
-            checks["index_job_health"] = _dependency_inconclusive(
+            checks["index_job_health"] = _inconclusive(
                 "postgres_authority_unavailable",
                 "Resolve postgres_authority before evaluating durable index jobs.",
             )
@@ -591,7 +589,7 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
 
 
 def format_human(checks: dict[str, Any]) -> str:
-    """Render the same independent domains without changing their status meaning."""
+    """Render the same independent domains without changing status semantics."""
     lines = [f"Research store doctor ({checks.get('schema_version', DOCTOR_SCHEMA_VERSION)})"]
     for domain in DOCTOR_DOMAINS:
         record = checks.get(domain) or {
