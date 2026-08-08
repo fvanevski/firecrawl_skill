@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import sys
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,8 +11,8 @@ from uuid import UUID
 
 import pytest
 from research_store import cli
-from research_store.blob import ContentAddressedBlobStore
 from research_store import doctor_diagnostics as diagnostics
+from research_store.blob import ContentAddressedBlobStore
 from research_store.doctor_command import parser as doctor_parser
 
 
@@ -128,8 +129,8 @@ def _install_healthy_dependencies(
     index_fingerprint: str = "fingerprint-a",
 ) -> tuple[SimpleNamespace, UUID, str]:
     store = ContentAddressedBlobStore(blob_root)
-    referenced = store.put_bytes(b"referenced payload")
-    orphan = store.put_bytes(b"unrelated orphan payload")
+    referenced = store.put(BytesIO(b"referenced payload"))
+    orphan = store.put(BytesIO(b"unrelated orphan payload"))
     snapshot_id = UUID(int=220)
     point_id = UUID(int=221)
     config = _config(blob_root)
