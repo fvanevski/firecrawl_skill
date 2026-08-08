@@ -162,6 +162,7 @@ jobs:
             scripts/test_database_native_inspection.py \
             scripts/test_database_native_inspection_integration.py \
             scripts/test_issue_214_search_relational_provenance.py \
+            scripts/test_completion_provenance_integration.py \
             scripts/test_research_store_integration.py
           python scripts/verify_pytest_skips.py \
             --junitxml "$PYTEST_JUNIT" \
