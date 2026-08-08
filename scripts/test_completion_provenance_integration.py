@@ -248,7 +248,10 @@ def test_completion_rejects_stale_validation_after_new_evidence_packet(
                 json.dumps(payload),
             ),
         )
-    with pytest.raises(WorkflowBoundaryError, match="stale"):
+    with pytest.raises(
+        WorkflowBoundaryError,
+        match="EvidencePacket claim does not match current persisted claim provenance",
+    ):
         workflow.finish_run(status.external_id, outcome="satisfied")
 
 

@@ -43,7 +43,16 @@ def pytest_runtest_setup(item):
     from research_store.postgres import connect
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        # Truncate append-only ledgers before pytest invokes the class setup.
+        # These tables have row-level triggers that reject DELETE in production,
+        # but tests need a clean slate between TestIndexRebuildRecovery test
+        # methods. TRUNCATE bypasses row-level triggers while preserving the
+        # production append-only invariant. Use CASCADE to handle foreign keys
+        # (e.g., indexing_checkpoints references run_asset_membership_seals).
         cursor.execute("TRUNCATE TABLE run_asset_promotion_events")
+        cursor.execute("TRUNCATE TABLE run_asset_membership_members")
+        cursor.execute("TRUNCATE TABLE indexing_checkpoint_observations")
+        cursor.execute("TRUNCATE TABLE run_asset_membership_seals CASCADE")
 
 
 @pytest.fixture(scope="session", autouse=True)
