@@ -1026,8 +1026,8 @@ class ResearchRunService:
             run_id: Research run UUID.
 
         Returns:
-            Verification report with available, missing, hash_mismatch,
-            and file_based counts.
+            Verification report with status (passed/failed/inconclusive),
+            available, missing, hash_mismatch, and file_based counts.
         """
         with self.uow_factory() as uow:
             # Get all invocations for this run
@@ -1100,9 +1100,21 @@ class ResearchRunService:
                         if artifact is not None:
                             _check_artifact(inv["id"], artifact)
 
+            # Determine verification status:
+            # - inconclusive: no eligible path/hash pairs were examined
+            # - passed: all eligible pairs are available (no mismatches)
+            # - failed: at least one eligible pair has a hash mismatch
+            if total == 0:
+                status = "inconclusive"
+            elif hash_mismatch > 0:
+                status = "failed"
+            else:
+                status = "passed"
+
             return {
                 "target": str(run_id),
                 "verified_at": datetime.now(timezone.utc).isoformat(),
+                "status": status,
                 "total": total,
                 "available": available,
                 "missing": missing,
