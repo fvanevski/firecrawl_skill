@@ -205,21 +205,24 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
     ):
         _assert_terminal_guard(action)
 
-    with pytest.raises(Exception, match=_TERMINAL_GUARD):
-        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-            cursor.execute(
-                """INSERT INTO run_asset_membership_seals(
-                       run_id,seal_revision,lifecycle_revision,status,
-                       membership_sha256,expected_asset_count,expected_chunk_count,
-                       actor_type,actor_identifier,policy_version,reason_code,reason)
-                     SELECT run_id,seal_revision+1,lifecycle_revision,'sealed',
-                            membership_sha256,expected_asset_count,
-                            expected_chunk_count,actor_type,actor_identifier,
-                            policy_version,reason_code,reason
-                       FROM run_asset_membership_seals
-                      WHERE run_id=%s AND status='sealed'""",
-                (status.id,),
-            )
+    with (
+        pytest.raises(Exception, match=_TERMINAL_GUARD),
+        connect(TEST_DSN) as connection,
+        connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            """INSERT INTO run_asset_membership_seals(
+                   run_id,seal_revision,lifecycle_revision,status,
+                   membership_sha256,expected_asset_count,expected_chunk_count,
+                   actor_type,actor_identifier,policy_version,reason_code,reason)
+                 SELECT run_id,seal_revision+1,lifecycle_revision,'sealed',
+                        membership_sha256,expected_asset_count,
+                        expected_chunk_count,actor_type,actor_identifier,
+                        policy_version,reason_code,reason
+                   FROM run_asset_membership_seals
+                  WHERE run_id=%s AND status='sealed'""",
+            (status.id,),
+        )
 
 
 def test_reopen_is_the_only_path_that_reenables_provenance_writes(
@@ -230,9 +233,11 @@ def test_reopen_is_the_only_path_that_reenables_provenance_writes(
     assert finished.state == "completed"
     packet = _packet_record(status.id)
 
-    with pytest.raises(Exception, match=_TERMINAL_GUARD):
-        with runs.uow_factory() as uow:
-            _persist_next_packet(uow, status.id, packet)
+    with (
+        pytest.raises(Exception, match=_TERMINAL_GUARD),
+        runs.uow_factory() as uow,
+    ):
+        _persist_next_packet(uow, status.id, packet)
 
     current = runs.status(run_id=status.id)
     reopened = runs.reopen(
