@@ -1049,7 +1049,9 @@ class ResearchRunService:
                         total += 1
                         store = self.blob_store
                         exists = getattr(store, "exists", None) if store else None
-                        if store is None or (callable(exists) and not exists(expected_hash)):
+                        if store is None or (
+                            callable(exists) and not exists(expected_hash)
+                        ):
                             missing += 1
                             state = "missing"
                         elif store.verify(expected_hash):
