@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -266,44 +267,32 @@ def test_concurrent_insert_and_seal_produce_exact_serializable_membership(
     )
     batch_id = initial["batch_id"]
     barrier = threading.Barrier(2)
-    outcomes: list[str] = []
-    errors: list[Exception] = []
 
-    def record_late() -> None:
+    def record_late() -> str:
+        barrier.wait(timeout=5)
         try:
             with service.uow_factory() as uow:
-                barrier.wait(timeout=5)
                 uow.record_batch_asset(
                     batch_id,
                     99,
                     "https://example.test/race/late",
                     "complete",
                 )
-            outcomes.append("recorded")
         except ValueError as exc:
-            outcomes.append("rejected")
             assert "sealed" in str(exc)
-        except Exception as exc:  # pragma: no cover - surfaced below
-            errors.append(exc)
+            return "rejected"
+        return "recorded"
 
-    def seal() -> None:
-        try:
-            barrier.wait(timeout=5)
-            service.finalize_ingestion_batch(batch_id, "complete")
-            outcomes.append("sealed")
-        except Exception as exc:  # pragma: no cover - surfaced below
-            errors.append(exc)
+    def seal() -> str:
+        barrier.wait(timeout=5)
+        service.finalize_ingestion_batch(batch_id, "complete")
+        return "sealed"
 
-    writer = threading.Thread(target=record_late)
-    sealer = threading.Thread(target=seal)
-    writer.start()
-    sealer.start()
-    writer.join(timeout=10)
-    sealer.join(timeout=10)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        writer = executor.submit(record_late)
+        sealer = executor.submit(seal)
+        outcomes = [writer.result(timeout=10), sealer.result(timeout=10)]
 
-    assert not writer.is_alive()
-    assert not sealer.is_alive()
-    assert errors == []
     assert "sealed" in outcomes
     assert outcomes.count("recorded") + outcomes.count("rejected") == 1
 
