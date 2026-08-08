@@ -134,8 +134,9 @@ def test_v43_finalization_fails_closed_without_extraction_terminal_evidence(
             extraction_attempt_id=attempt_id,
         )
 
-    with runs.uow_factory() as uow, pytest.raises(
-        ValueError, match="lacks authoritative terminal time"
+    with (
+        runs.uow_factory() as uow,
+        pytest.raises(ValueError, match="lacks authoritative terminal time"),
     ):
         uow.finish_ingestion_batch(batch_id, "complete")
 
@@ -384,7 +385,9 @@ def test_v42_retry_and_export_are_schema_compatible_and_positionally_safe(
     with connect(admin_dsn) as admin:
         admin.autocommit = True
         with admin.cursor() as cursor:
-            cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
+            cursor.execute(
+                sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database))
+            )
 
     try:
         assert migrate(isolated_dsn, "0042_candidate_ranking_budgets") == 42

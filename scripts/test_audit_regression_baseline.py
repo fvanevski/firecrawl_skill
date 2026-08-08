@@ -673,7 +673,9 @@ def test_rc_09_stage_execution_does_not_write_provider_response() -> None:
     )
 
 
-def test_rc_11_batch_completion_uses_exact_constituent_start_and_terminal_times() -> None:
+def test_rc_11_batch_completion_uses_exact_constituent_start_and_terminal_times() -> (
+    None
+):
     connection = _BatchTimingConnection()
     unit_of_work = object.__new__(PostgresUnitOfWork)
     unit_of_work.connection = connection
