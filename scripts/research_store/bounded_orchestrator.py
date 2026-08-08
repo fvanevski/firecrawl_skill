@@ -9,6 +9,7 @@ blob/corpus ingestion occurs.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
@@ -35,6 +36,8 @@ from .provider_preflight import (
 )
 from .run_service import RunStateError, StaleRunRevisionError
 from .stages import ContextKeys, StageResult
+
+logger = logging.getLogger(__name__)
 
 _TERMINAL_PREFLIGHT_CLASSES = frozenset(
     {
@@ -399,11 +402,7 @@ class BoundedAcquisitionStage(AcquisitionStage):
                     raw_ingest_requests.append(item)
                     extraction_attempt_count += 1
             except Exception as exc:  # noqa: BLE001
-                import logging
-
-                logging.getLogger(__name__).warning(
-                    "acquisition query failed: %s — %s", query_text, exc
-                )
+                logger.warning("acquisition query failed: %s — %s", query_text, exc)
 
         if coverage_revision is not None:
             try:
@@ -418,8 +417,8 @@ class BoundedAcquisitionStage(AcquisitionStage):
                                 f"acquire:cand:{run_id}:w{wave_count}:{index}:{item_id}"
                             ),
                         )
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("coverage update after acquisition failed: %s", exc)
 
         context[ContextKeys.SEARCH_RESPONSE_IDS] = response_ids
         context[ContextKeys.CANDIDATE_COUNT] = candidate_count
