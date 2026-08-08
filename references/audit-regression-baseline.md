@@ -2,16 +2,18 @@
 
 ## Purpose
 
-This release-candidate baseline freezes two remaining defects observed during
-the audited run as deterministic strict expected failures. RC-01, RC-02, RC-04,
-RC-08, RC-09, and RC-16 are now ordinary passing regressions after issues #208,
-#209, #212, #213, and #219 added the exact PostgreSQL index-job census, the
+This release-candidate baseline preserves the audited failure sequence as a
+permanent regression set. RC-01, RC-02, RC-04, RC-08, RC-09, RC-11, RC-16,
+and RC-17 are now ordinary passing regressions after issues #208, #209, #212,
+#213, #217, #219, and #220 added the exact PostgreSQL index-job census, the
 lease-aware drain barrier, explicit direct-acquisition lifecycle boundaries,
 provider no-result normalization, separation of lifecycle-stage telemetry from
-provider search responses, and explicit run-level blob-verification outcomes.
-The remaining entries are intentionally test-only: they describe required
-corrected behavior while preserving their current defects until the dedicated
-remediation issues are implemented.
+provider search responses, exact constituent batch timing, explicit run-level
+blob-verification outcomes, and independent doctor diagnostic domains.
+
+There are currently no strict expected failures in the dedicated audit
+allowlist. The expected-failure policy below remains the contract for any future
+audited defect added before its remediation lands.
 
 The audited indexing fixture is exact:
 
@@ -28,10 +30,14 @@ acquisition preflight, direct wrapper boundary, and normal finish boundary
 remediated by issue #212. RC-08 exercises the provider-response parser against
 the exact audited plaintext payload and supported JSON empty-result envelopes.
 RC-09 exercises the public orchestrator stage-execution boundary and verifies
-that lifecycle execution does not write provider-response rows. RC-16 exercises
+that lifecycle execution does not write provider-response rows. RC-11 exercises
+the exact ingestion-batch timing repository seam. RC-16 exercises
 `ResearchRunService.verify()` directly and verifies that zero eligible
 path/hash pairs produce an explicit inconclusive result rather than a positive
-integrity assertion.
+integrity assertion. RC-17 exercises the canonical doctor diagnostic service
+and verifies that referenced integrity, global orphan inventory, projection,
+workers, PostgreSQL authority, durable index jobs, and environment connectivity
+remain independent domains.
 
 ## Finding map
 
@@ -42,22 +48,23 @@ integrity assertion.
 | RC-04 | `test_rc_04_direct_acquisition_obeys_lifecycle_boundaries` | A `created` run is rejected consistently by the authoritative acquisition preflight and direct wrapper operation, and the normal finish boundary cannot bypass preparation, start, persistence, or revision transitions. | #212 remediated; ordinary passing regression |
 | RC-08 | `test_rc_08_provider_declared_no_results_are_empty` | A valid provider-declared no-result payload is an empty successful search, not a provider failure. | #213 remediated; ordinary passing regression |
 | RC-09 | `test_rc_09_stage_execution_does_not_write_provider_response` | Executing a lifecycle stage does not call `record_search_response()` or create provider-response records; lifecycle telemetry must use a separate persistence channel. | #213 remediated; ordinary passing regression |
-| RC-11 | `test_rc_11_batch_completion_uses_latest_constituent_terminal_time` | Batch `completed_at` is the maximum terminal `extraction_attempts.end_time` linked through the exact batch's assets and snapshots, excluding nonterminal attempts and unrelated batches. | #217 |
+| RC-11 | `test_rc_11_batch_completion_uses_exact_constituent_start_and_terminal_times` | Batch timing is derived from exact constituent extraction attempts, excluding nonterminal attempts and unrelated batches. | #217 remediated; ordinary passing regression |
 | RC-16 | `test_rc_16_zero_blob_verification_is_inconclusive` | Zero eligible or referenced blobs produce an inconclusive result, never a positive integrity proof. | #219 remediated; ordinary passing regression |
-| RC-17 | `test_rc_17_orphans_do_not_fail_referenced_blob_integrity` | Unrelated orphan inventory is reported separately and does not fail healthy referenced-blob integrity. | #220 |
+| RC-17 | `test_rc_17_orphans_do_not_fail_referenced_blob_integrity`; `scripts/test_issue_220_doctor_diagnostics.py` | Unrelated orphan inventory is reported separately and does not fail healthy referenced-blob integrity; doctor exposes seven independent domains and distinct actionable connectivity reason codes. | #220 remediated; ordinary passing regression |
 
 Passing controls cover exact membership conservation, valid nonempty and empty
 provider responses, distinct malformed/contract-breaking/provider-error
-classification, the remediated RC-01 census boundary, the remediated RC-02 drain
-barrier, the remediated RC-04 lifecycle boundary, the remediated RC-09
-stage-execution boundary, and the remediated RC-16 run-verifier boundary.
+classification, the remediated census and drain barriers, direct-acquisition
+lifecycle boundaries, lifecycle-stage telemetry separation, exact batch timing,
+run-verifier zero-object behavior, and the RC-17 doctor domain/classification
+contract.
 
 ## Remediation-fidelity requirements
 
 Each regression test must invoke the production boundary responsible for the
 corresponding remediation issue. A parser, constant, broad SQL-shape check, or
 neighboring orchestration behavior is not a substitute for the responsible
-producer, repository, lifecycle, or persistence seam.
+producer, repository, lifecycle, persistence, or diagnostic seam.
 
 Mocks and fakes remain acceptable when they are deterministic and
 boundary-faithful:
@@ -82,6 +89,11 @@ boundary-faithful:
   invocation set and a real `ContentAddressedBlobStore`, proving the zero-object
   behavior at the production verifier boundary rather than at the neighboring
   doctor/blob-health boundary.
+- The RC-17 issue-specific suite executes the typed doctor diagnostic service
+  used by `scripts/research-db doctor`, with deterministic PostgreSQL, worker,
+  Qdrant, Valkey, embedding, reranker, and blob seams. It verifies the complete
+  seven-domain result rather than only the classifier or `_blob_health()` helper.
+  It also freezes the thin launcher and destructive-reset consumer contracts.
 
 A remediation is complete only when the corresponding assertion passes because
 the responsible production behavior changed. A neighboring fix must not make a
@@ -202,9 +214,34 @@ mixed classes, legacy file-only references, and the stable CLI exit-code
 mapping. The dedicated audit-regression workflow executes this suite on Python
 3.11 and 3.12.
 
+### RC-17 doctor diagnostic contract
+
+`doctor-diagnostics-v1` exposes `postgres_authority`,
+`referenced_blob_integrity`, `unreferenced_blob_inventory`,
+`index_job_health`, `qdrant_projection`, `worker_health`, and
+`environment_connectivity` as separate domains. Every domain uses
+`pass`, `warning`, `failure`, or `inconclusive`. A global orphan warning cannot
+invalidate healthy referenced-blob integrity, while a missing or corrupt
+referenced blob remains a failure.
+
+Connectivity classification combines exception type/errno with component
+context. Sandbox policy denial, namespace/routing failure, unavailable server,
+credential/configuration failure, PostgreSQL rejection, and query/runtime
+failure have distinct machine-readable reason codes and remediation text.
+Diagnostic detail is bounded and redacts common credential forms. Qdrant remains
+a rebuildable projection: exact point coverage never clears an embedding or
+schema compatibility failure and never becomes lifecycle or membership
+authority.
+
+`scripts/test_issue_220_doctor_diagnostics.py` exercises the typed production
+service and canonical shell route, including human/JSON category parity,
+adversarial `ECONNREFUSED`/`errno111` forms, PostgreSQL privilege rejection,
+secret redaction, Qdrant failure monotonicity, and the reset-script clean-state
+consumer. `references/doctor-diagnostics.md` is the normative operator contract.
+
 ## Strict expected-failure policy
 
-Each unresolved defect test uses
+An unresolved audited defect uses
 `pytest.mark.xfail(strict=True, raises=AssertionError, ...)`. The assertion must
 fail against the audited production behavior for the stated RC finding. An
 underlying production fix therefore creates an unexpected pass and fails this
@@ -215,10 +252,11 @@ dedicated workflow until the corresponding remediation PR deliberately:
 2. removes the matching entry from
    `references/audit-regression-skip-allowlist.json`.
 
-Issues #208, #209, #212, #213, and #219 performed both steps for RC-01, RC-02,
-RC-04, RC-08, RC-09, and RC-16. The allowlist remains isolated from the
-repository-wide skip allowlist so each later remediation can remove its
-classification independently without creating stale entries elsewhere.
+Issues #208, #209, #212, #213, #217, #219, and #220 have completed that process
+for the audited defects currently represented in this baseline. The dedicated
+allowlist is therefore empty. It remains isolated from the repository-wide skip
+allowlist so any future audited expected failure can be classified and removed
+independently without creating stale entries elsewhere.
 
 ## Change boundary
 
@@ -229,9 +267,12 @@ explicit run-mode metadata, direct-acquisition lifecycle commands, and exact
 invocation start provenance using existing PostgreSQL columns and JSONB
 metadata. The RC-08/RC-09 remediation adds provider no-result normalization and
 keeps lifecycle-stage observability on existing transition/event/logging
-surfaces. RC-16 adds a structured run-verifier outcome plus disjoint
+surfaces. RC-11 corrects constituent batch timing without inventing provenance.
+RC-16 adds a structured run-verifier outcome plus disjoint
 available/missing/hash-mismatch accounting over invocation-referenced immutable
-blobs; it does not change database schema, infer historical provenance, consult
-Qdrant for integrity, or implement the independent doctor-domain work reserved
-for RC-17/#220. PostgreSQL remains authoritative, immutable provider payloads
-remain in `BLOB_ROOT`, and Qdrant remains a rebuildable projection.
+blobs. RC-17/#220 adds observational doctor-domain separation, actionable
+failure classification, synchronized reset consumption, and diagnostic
+redaction without changing database schema, inferring historical provenance, or
+consulting Qdrant for authoritative integrity. PostgreSQL remains authoritative,
+immutable provider payloads remain in `BLOB_ROOT`, and Qdrant remains a
+rebuildable projection.
