@@ -64,7 +64,7 @@ _workflow_service.ResearchRunService = GuardedResearchRunService
 _orchestrator.ResearchOrchestrator = CheckpointResearchOrchestrator
 ResearchOrchestrator = CheckpointResearchOrchestrator
 
-# Issue #216 canonical provider/stage routing. ``AcquisitionService`` resolves
+# Issue #216 canonical provider/stage routing.  ``AcquisitionService`` resolves
 # its default adapter from the module global at construction time, and
 # ``ResearchOrchestrator.__init__`` resolves its stage classes the same way.
 # Rebinding those established extension points keeps every public builder,
@@ -85,6 +85,7 @@ __all__ = [
     "CandidatePreflightChecker",
     "CandidatePreflightResult",
     "ContextKeys",
+    "ContentAddressedBlobStore",
     "CorpusService",
     "DirectScrapeBatchResult",
     "DirectScrapeError",
