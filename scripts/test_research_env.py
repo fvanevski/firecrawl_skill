@@ -80,7 +80,7 @@ def test_loads_root_env_and_ignores_legacy_nested_path(
 
     assert values == [
         "root-model",
-        "qwen3-embedding-0.6b-q6_k@8c605f43dcb0",
+        "qwen3-embedding-0.6b-q4_k_m@8c605f43dcb0",
         "loaded from root",
     ]
 
@@ -105,7 +105,7 @@ def test_defaults_apply_when_root_env_is_absent(tmp_path: pathlib.Path) -> None:
 
     assert values == [
         "embed",
-        "qwen3-embedding-0.6b-q6_k@8c605f43dcb0",
+        "qwen3-embedding-0.6b-q4_k_m@8c605f43dcb0",
         "",
     ]
 
