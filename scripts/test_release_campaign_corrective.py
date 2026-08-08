@@ -346,14 +346,19 @@ def test_current_schema_completion_and_stage_timing_diagnostics(tmp_path: Path):
 
     try:
         with connect(database_url) as connection, connection.cursor() as cursor:
+            # Build synthetic semantic telemetry while the runs are nonterminal.
+            # The terminal-provenance guard intentionally forbids adding semantic
+            # calls after a run is completed. Keep the prior exact timestamps so
+            # timing diagnostics remain deterministic, then mark the runs completed
+            # only after all semantic provenance has been inserted.
             cursor.execute(
                 """INSERT INTO research_runs(
                        id, objective, state, execution_mode,
                        started_at, completed_at
                    ) VALUES
-                       (%s, 'timing A', 'completed', 'autonomous_local',
+                       (%s, 'timing A', 'validating', 'autonomous_local',
                         now() - interval '75 seconds', now()),
-                       (%s, 'timing B', 'completed', 'autonomous_local',
+                       (%s, 'timing B', 'validating', 'autonomous_local',
                         now() - interval '10 seconds', now())""",
                 (run_a, run_b),
             )
@@ -396,6 +401,10 @@ def test_current_schema_completion_and_stage_timing_diagnostics(tmp_path: Path):
                     json.dumps({"attempts": [{"attempt": 1, "latency_ms": 782}]}),
                     f"timing-b-complete-{run_b}",
                 ),
+            )
+            cursor.execute(
+                "UPDATE research_runs SET state='completed' WHERE id=ANY(%s::uuid[])",
+                ([run_a, run_b],),
             )
 
         result_paths: dict[str, Path] = {}
@@ -499,6 +508,10 @@ def test_current_schema_completion_and_stage_timing_diagnostics(tmp_path: Path):
         assert stage["campaign_a_status_counts"] == {"complete": 1, "failed": 1}
     finally:
         with connect(database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE research_runs SET state='validating' WHERE id=ANY(%s::uuid[])",
+                ([run_a, run_b],),
+            )
             cursor.execute(
                 "DELETE FROM semantic_calls WHERE run_id = ANY(%s::uuid[])",
                 ([run_a, run_b],),
