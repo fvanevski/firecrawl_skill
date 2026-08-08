@@ -242,3 +242,19 @@ def test_cli_exit_codes_are_stable_and_json_status_is_authoritative(
     return_code, payload = run("failed")
     assert return_code == 0
     assert payload["status"] == "failed"
+
+
+def test_skill_documents_verifier_status_and_exit_contract() -> None:
+    skill = (Path(__file__).parents[1] / "SKILL.md").read_text(encoding="utf-8")
+
+    for required in (
+        "`available` when the content-addressed blob exists and verifies",
+        "`missing` when the expected digest is absent from `BLOB_ROOT`",
+        "`hash_mismatch` when the digest path exists",
+        "`failed` when any eligible pair is missing or hash-mismatched",
+        "conclusive `passed` and `failed` reports exit `0`",
+        "`inconclusive` exits `1` by default",
+        "`--allow-empty` changes only an inconclusive result to exit `0`",
+        "must inspect the JSON `status` and counters",
+    ):
+        assert required in skill
