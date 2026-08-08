@@ -79,6 +79,7 @@ jobs:
             -p no:cacheprovider \
             scripts/test_workflow_service.py \
             scripts/test_completion_provenance_integration.py \
+            scripts/test_completion_provenance_terminal_guard.py \
             scripts/test_curated_run_lifecycle.py \
             scripts/test_curated_run_integration.py \
             scripts/test_curated_run_documentation.py \

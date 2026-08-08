@@ -1,56 +1,128 @@
 # Authoritative completion provenance
 
-Issue #218 makes `completed` an evidence-bearing state, not an operator assertion. A run may enter `completed` only when PostgreSQL can reproduce the exact source membership and immutable synthesis artifacts that were validated.
+Issue #218 makes `completed` an evidence-bearing state rather than an operator assertion. A run may enter `completed` only when PostgreSQL can reproduce the exact source membership and immutable synthesis artifacts that were validated, and that authority is frozen while the run remains terminal.
 
 ## Authority chain
 
 For a completed run, the completion gate derives authority from persisted PostgreSQL records in this order:
 
 1. the active `run_asset_membership_seals` row and its exact `run_asset_membership_members` snapshot/chunk membership;
-2. the latest `evidence_packets` revision, whose included and omitted passages/snapshots must all resolve within that sealed membership; the packet itself is hashed and recorded as the exact synthesis input, while the seal hash independently identifies the complete source membership;
-3. persisted `research_claims` and append-only `claim_evidence_links` for every claim in the packet;
-4. current, completed `outline`, `binding`, `draft`, `citation_pass`, and `validation` synthesis stages for that same packet revision;
-5. run-local immutable semantic calls and semantic artifacts for the final `draft` and `citation_pass`, including provider/model identity, model revision, prompt version, schema version, semantic-input SHA-256, artifact SHA-256, and the exact EvidencePacket input reference;
-6. deterministic validation of the exact immutable citation artifact, including a current packet revision, `validation_status=valid`, `stale_packet=false`, `is_complete=true`, zero validation errors, zero validation warnings, and an evidence-bound claim manifest.
+2. the latest `evidence_packets` revision, whose included and omitted passages and snapshots must all resolve within that sealed membership;
+3. persisted `research_claims` and `claim_evidence_links` for every claim required by the packet;
+4. current, completed `outline`, `binding`, `draft`, `citation_pass`, and `validation` synthesis stages for the same EvidencePacket revision;
+5. run-local immutable semantic calls and artifacts for the final `draft` and `citation_pass`, including provider/model identity, model revision, prompt version, schema version, semantic-input SHA-256, artifact SHA-256, and the exact EvidencePacket input reference;
+6. deterministic validation of the exact immutable citation artifact, including current packet revision, `validation_status=valid`, `stale_packet=false`, `is_complete=true`, zero validation errors, zero validation warnings, and an evidence-bound claim manifest.
 
-Qdrant is not consulted for lifecycle authority or exact completion membership. It remains a projection/index surface only.
+Qdrant is not lifecycle authority and is not consulted to establish exact completion membership. It remains a projection/index surface.
 
-The terminal transition ledger records a `completion_provenance` object containing the exact membership seal, EvidencePacket, synthesis/citation/validation stage IDs, semantic call/artifact IDs, and hashes. `research_runs.source_manifest_sha256` is derived from the active sealed membership. `research_runs.answer_sha256` is derived from the immutable final draft semantic artifact. Neither value is accepted from the caller as authority.
+The completed transition records a `completion_provenance` object containing the exact membership seal, EvidencePacket, draft/citation/validation stage IDs, semantic call/artifact IDs, provider/model/prompt/schema identities, and hashes. `research_runs.source_manifest_sha256` is derived from the sealed source membership. `research_runs.answer_sha256` is derived from the immutable final draft semantic artifact. Neither field is accepted from the caller as authority.
+
+## Terminal service wiring
+
+All repository factories created by `build_run_service()` use `GuardedResearchRunService`. Consequently wrapper completion, curated completion, and direct terminal lifecycle commands share the same terminal-decision transaction and the same authoritative completion revalidation.
+
+For a new `completed` command, the guarded service:
+
+1. locks the `research_runs` row with `FOR UPDATE`;
+2. confirms the expected lifecycle revision and permitted prior state;
+3. reloads all completion provenance with row locks in the same transaction;
+4. compares that authoritative reload byte-for-byte with the preflight completion bundle;
+5. records the terminal decision and lifecycle transition and applies the terminal state in that same transaction.
+
+An identical already-committed terminal command remains idempotently replayable. A changed revision, changed provenance bundle, or changed terminal decision is rejected.
+
+## Two-sided concurrency and terminal immutability
+
+Migration `0044_terminal_provenance_guard` installs one database-level writer guard on the completion-critical provenance tables:
+
+- `evidence_packets`
+- `research_claims`
+- `claim_evidence_links`
+- `synthesis_stages`
+- `semantic_calls`
+- `semantic_artifacts`
+- `run_asset_membership_seals`
+- `run_asset_membership_members`
+
+Every `INSERT`, `UPDATE`, or `DELETE` on those tables first locks the owning `research_runs` row with `FOR KEY SHARE` and checks the current run state. This establishes a single run-first lock order:
+
+1. provenance writer acquires `FOR KEY SHARE` on the run before changing provenance;
+2. terminalization acquires `FOR UPDATE` on the run before final provenance revalidation.
+
+`FOR UPDATE` conflicts with `FOR KEY SHARE`, so the two operations cannot cross one another unnoticed. If a writer commits first, terminalization waits and then revalidates the writer's committed state. If terminalization commits first, a waiting writer resumes, observes the terminal state, and is rejected. A writer started after terminalization is rejected immediately.
+
+This database guard is deliberate defense in depth. It protects service methods, raw SQL, future repository paths, and concurrent callers rather than relying on each Python writer to remember a state check.
+
+## Reopen semantics
+
+`completed`, `partial`, `failed`, and `cancelled` runs have immutable completion-critical provenance. The only supported way to revise that provenance is the explicit lifecycle reopen command.
+
+The reopen transaction moves `research_runs.state` back to `created` before invalidating prior semantic artifacts. Because the run is nonterminal at that point, the terminal-provenance trigger permits the invalidation and subsequent new evidence/synthesis writes. Reopen also clears the run's completion hashes under the existing lifecycle semantics. A new completion therefore requires a fresh authoritative provenance chain.
+
+Existing terminal rows are not rewritten or retroactively upgraded.
 
 ## `frun finish`
 
-Normal completion remains:
+Normal completion is:
 
 ```bash
 rtk proxy "<skill-root>/scripts/frun" finish "$RUN_ID" --outcome satisfied
 ```
 
-`frun finish` derives the authoritative source and answer hashes itself. The optional `--source-manifest-sha256` and `--answer-sha256` arguments are assertions only: when supplied they must be canonical 64-character hexadecimal SHA-256 digests and must exactly match the persisted authoritative records. A malformed or mismatched assertion rejects completion.
+`frun finish` derives the authoritative source and answer hashes itself. Optional `--source-manifest-sha256` and `--answer-sha256` values are assertions only. When supplied they must be canonical 64-character hexadecimal SHA-256 digests and must exactly match the persisted authoritative records.
 
-`--provenance-type authoritative` is likewise only an assertion. Omitting `--provenance-type` does not upgrade external or provisional content: authority is derived from the persisted semantic call/provider and execution-mode policy. Explicit `external`, `provisional`, or other non-authoritative values are rejected for `completed`.
+`--provenance-type authoritative` is also only an assertion. Omitting it does not upgrade external or provisional content. Explicit `external`, `provisional`, or other non-authoritative values are rejected for `completed`, and persisted semantic provider/authority must independently match the run's execution mode.
 
-## Fail-closed and concurrency behavior
+## External, provisional, cached, and historical output
 
-Any missing UoW, lookup failure, schema mismatch, stale packet, incomplete validation, missing immutable semantic artifact, missing evidence link, digest mismatch, or non-authoritative semantic provider rejects completion. The boundary error reports the failed invariant without exposing credentials or raw provider payloads.
+Imported, out-of-band, cached, or historical output cannot satisfy completion merely by supplying a hash or omitting a provenance label. It must already be represented by a provenance-preserving semantic operation that records the run-local semantic call, immutable artifact, exact input packet, authority, schema/prompt/model metadata, and validation result required above.
 
-The workflow performs an early read-only preflight for actionable errors. Immediately before terminal commit, `GuardedResearchRunService` locks the run and exact mutable provenance rows through the authoritative provenance reload, compares the reloaded identities and hashes byte-for-byte with the preflight metadata, and then applies the existing lifecycle/idempotency CAS in the same transaction. Consequently a concurrent provenance change is either included in the final revalidation or cannot cross the terminal commit unnoticed. Identical terminal retries retain the existing idempotent replay behavior.
+Cache hits that do not preserve the required run-local semantic call/artifact linkage cannot authorize completion. The completion gate never fabricates or retroactively infers missing historical provenance.
 
-The immutable semantic artifacts and terminal transition ledger remain the historical authority; mutable synthesis-stage rows are revalidated and locked at terminal commit and are not themselves a substitute for the immutable artifacts recorded there. An explicit reopen clears the run's completion hashes and invalidates prior semantic artifacts before a new lifecycle can produce a new completion record.
+## Fail-closed behavior
 
-## External, provisional, and historical output
+Completion rejects any missing transactional UoW, lookup failure, malformed SHA-256, hash mismatch, missing or cross-run semantic linkage, non-authoritative provider, invalid semantic artifact, stale EvidencePacket, missing claim/evidence link, stale synthesis stage, failed citation pass, incomplete validation, validation error, validation warning, or validation hash mismatch.
 
-Imported, out-of-band, cached, or historical output cannot satisfy completion merely by supplying a hash or omitting a provenance label. It must already be represented through a provenance-preserving semantic operation that records the run-local semantic call, immutable artifact, exact input packet, authority, schema/prompt/model metadata, and validation result required above. The completion gate never fabricates or retroactively infers missing historical provenance.
-
-Existing terminal rows are not rewritten or upgraded by this change. A nonterminal historical run that lacks the required persisted provenance remains resumable, partial, or fail-able, but cannot be promoted to `completed` until it produces new authoritative synthesis provenance.
+Provenance-loader and database failures are completion failures. There is no compatibility path that silently bypasses the gate.
 
 ## Partial and failed semantics
 
 `partial` is reserved for an intentional policy-approved incomplete research result from the permitted lifecycle state. It does not claim authoritative completed synthesis and therefore does not require the completed-run provenance chain.
 
-`failed` represents a terminal failure and likewise does not require synthesis provenance. Infrastructure lag or a recoverable checkpoint is not converted into `partial`; those conditions remain nonterminal/recoverable until policy explicitly determines a terminal outcome.
+`failed` represents a terminal failure and likewise does not require authoritative synthesis. Infrastructure lag or a recoverable indexing/checkpoint condition is not converted into `partial`; those conditions remain recoverable until policy explicitly determines a terminal outcome.
+
+The audited failed run therefore remains accurately represented as having no authoritative synthesis.
+
+## Migration and compatibility
+
+`0044_terminal_provenance_guard` is a forward-only workflow migration, consistent with the existing research-store migration policy. It adds no columns and rewrites no historical provenance. Existing nonterminal runs continue normally; existing terminal runs become protected against new completion-critical provenance mutation.
+
+Rollback is by forward repair or PostgreSQL restore rather than destructive Alembic downgrade. The migration's `downgrade()` intentionally raises, matching the repository's forward-only migration contract.
+
+## Verification
+
+The production-seam tests cover:
+
+- factory wiring to `GuardedResearchRunService`;
+- migration installation on every guarded provenance table;
+- post-terminal rejection of EvidencePacket, claim, evidence-link, synthesis-stage, semantic-call, semantic-artifact, and membership mutations;
+- explicit reopen restoring legal provenance writes;
+- a writer blocked behind terminalization that resumes and rejects after terminal commit;
+- a writer that commits first and forces final terminal revalidation to fail;
+- authoritative hash derivation and binding;
+- malformed/mismatched hash rejection;
+- missing semantic provenance;
+- external/provisional authority rejection;
+- stale EvidencePacket rejection;
+- incomplete validation rejection;
+- missing evidence-link rejection;
+- fail-closed provenance-store errors;
+- partial/failed semantics and terminal retry behavior.
+
+Both the broad CI matrix and the index-checkpoint matrix run the completion provenance integration suite on Python 3.11 and 3.12.
 
 ## Audit and recovery
 
-For a completed run, inspect the `completed` `research_run_transitions.validation_result->'completion'->'completion_provenance'` object together with `research_runs.source_manifest_sha256` and `answer_sha256`. The recorded IDs and hashes are sufficient to locate the exact PostgreSQL membership, EvidencePacket, semantic calls, immutable artifacts, and validation record used for completion.
+For a completed run, inspect the `completed` `research_run_transitions.validation_result->'completion'->'completion_provenance'` object together with `research_runs.source_manifest_sha256` and `answer_sha256`. The recorded IDs and hashes locate the exact PostgreSQL membership, EvidencePacket, semantic calls, immutable artifacts, and validation record used for completion.
 
-If completion fails because provenance is stale or incomplete, do not edit terminal metadata or manufacture replacement hashes. Re-run the appropriate evidence/synthesis/validation stage against the current sealed membership and EvidencePacket, then retry `frun finish` with the same stable idempotency key when appropriate.
+If completion fails because provenance is stale or incomplete, do not edit terminal metadata or manufacture replacement hashes. Re-run the appropriate evidence/synthesis/validation stage on a nonterminal run, or explicitly reopen a terminal run before producing new authoritative provenance, then retry completion.
