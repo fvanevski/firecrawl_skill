@@ -24,14 +24,16 @@ TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item):
-    """Clear the append-only promotion ledger before legacy rebuild cleanup.
+    """Clear guarded ledgers before legacy index-rebuild cleanup.
 
     ``TestIndexRebuildRecovery.setup_method`` resets shared corpus/index rows
-    with dependency-ordered ``DELETE`` statements. Migration 0040 adds the
-    append-only ``run_asset_promotion_events`` ledger, whose row trigger
-    intentionally rejects ``DELETE`` even in tests. Truncating that test-only
-    ledger before pytest invokes the class setup preserves the production
-    append-only invariant while allowing the existing cleanup to proceed.
+    with dependency-ordered ``DELETE`` statements. Production append-only and
+    terminal-provenance triggers intentionally reject row deletes that would
+    otherwise cascade through historical authority. For this one recovery-test
+    class on the explicitly disposable integration database, truncate those
+    ledgers before pytest invokes the class setup. This keeps production
+    invariants intact while giving each rebuild case the clean database state
+    that its legacy cleanup contract requires.
     """
     if (
         not TEST_DSN
@@ -43,16 +45,26 @@ def pytest_runtest_setup(item):
     from research_store.postgres import connect
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        # Truncate append-only ledgers before pytest invokes the class setup.
-        # These tables have row-level triggers that reject DELETE in production,
-        # but tests need a clean slate between TestIndexRebuildRecovery test
-        # methods. TRUNCATE bypasses row-level triggers while preserving the
-        # production append-only invariant. Use CASCADE to handle foreign keys
-        # (e.g., indexing_checkpoints references run_asset_membership_seals).
-        cursor.execute("TRUNCATE TABLE run_asset_promotion_events")
-        cursor.execute("TRUNCATE TABLE run_asset_membership_members")
-        cursor.execute("TRUNCATE TABLE indexing_checkpoint_observations")
-        cursor.execute("TRUNCATE TABLE run_asset_membership_seals CASCADE")
+        # TRUNCATE does not fire the row-level append-only/terminal guards.
+        # This hook is deliberately scoped to TestIndexRebuildRecovery and an
+        # explicit disposable test DSN; it is not a production cleanup path.
+        # Clear completion-critical provenance first so the class's later
+        # DELETE FROM chunks/documents/assets cannot cascade into terminal
+        # claim/evidence rows. CASCADE handles the checkpoint membership FKs.
+        cursor.execute(
+            """TRUNCATE TABLE
+                   claim_evidence_links,
+                   research_claims,
+                   evidence_packets,
+                   synthesis_stages,
+                   semantic_artifacts,
+                   semantic_calls,
+                   run_asset_promotion_events,
+                   run_asset_membership_members,
+                   indexing_checkpoint_observations,
+                   run_asset_membership_seals
+               CASCADE"""
+        )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -211,7 +223,7 @@ def prepared_database_for_claims():
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("DROP SCHEMA public CASCADE")
         cur.execute("CREATE SCHEMA public")
-    # Migrates to the current Alembic head (0036_run_performance_telemetry).
+    # Migrates to the current Alembic head.
     # The assertion confirms the migration returned a non-zero revision count.
     assert migrate(TEST_DSN) >= 1
 
