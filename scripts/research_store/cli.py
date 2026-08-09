@@ -308,6 +308,20 @@ def parser():
     export_run = sub.add_parser("export-run")
     export_run.add_argument("id")
     export_run.add_argument("--output", required=True)
+    export_run.add_argument(
+        "--schema-version",
+        default="export-run-v2",
+        help="Export schema version",
+    )
+
+    integrity = sub.add_parser("integrity")
+    integrity.add_argument("id")
+    integrity.add_argument("--output", required=True)
+    integrity.add_argument(
+        "--schema-version",
+        default="integrity-v1",
+        help="Integrity report schema version",
+    )
 
     run_start = sub.add_parser("run-start")
     run_start.add_argument("external_id")
@@ -1181,6 +1195,348 @@ def _resolve_any_run_id(config, external_id):
     if not row:
         raise SystemExit(f"research run not found: {external_id}")
     return row[0]
+
+
+def _redact_sensitive(value):
+    """Redact credentials, tokens, and unsafe filesystem details."""
+    if not isinstance(value, str):
+        return value
+    # Redact common secret patterns
+    redacted = value
+    import re
+
+    # API keys and tokens - match common secret patterns
+    redacted = re.sub(
+        r"((?:api[_-]?key|token|secret|password|credential|accesskeyid|signature)[\s]*[=:][\s]*\S+)",
+        r"***REDACTED***",
+        redacted,
+        flags=re.IGNORECASE,
+    )
+    # Also redact any base64-like strings that look like keys (20+ chars)
+    redacted = re.sub(
+        r"(?:^|[\?&])([A-Z0-9]{20,})=",
+        r"\g<1>=***REDACTED***",
+        redacted,
+        flags=re.IGNORECASE,
+    )
+    # Filesystem paths that might leak sensitive info
+    redacted = re.sub(
+        r"/(home|Users)/\w+",
+        lambda m: m.group(0).rsplit("/", 1)[0] + "/***REDACTED_HOME***",
+        redacted,
+    )
+    return redacted
+
+
+def _fetch_run_with_context(conn, cur, run_id):
+    """Fetch run and all related context for integrity reporting."""
+    cur.execute("SELECT row_to_json(r) FROM research_runs r WHERE id=%s", (run_id,))
+    run_row = cur.fetchone()
+    if not run_row:
+        return None
+    run = run_row[0]
+
+    # Lifecycle ledger (transitions)
+    cur.execute(
+        """SELECT row_to_json(t) FROM research_run_transitions t
+           WHERE t.run_id=%s ORDER BY t.lifecycle_revision""",
+        (run_id,),
+    )
+    lifecycle_ledger = [row[0] for row in cur.fetchall()]
+
+    # Terminal decisions
+    cur.execute(
+        """SELECT row_to_json(d) FROM terminal_decisions d
+           WHERE d.run_id=%s ORDER BY d.created_at""",
+        (run_id,),
+    )
+    terminal_decisions = [row[0] for row in cur.fetchall()]
+
+    # Run mode is part of the run record itself
+    run_mode_history = []
+
+    # Promotion history
+    cur.execute(
+        """SELECT row_to_json(s) FROM run_asset_promotion_subjects s
+           WHERE s.run_id=%s ORDER BY s.created_at""",
+        (run_id,),
+    )
+    promotion_subjects = [row[0] for row in cur.fetchall()]
+
+    cur.execute(
+        """SELECT row_to_json(e) FROM run_asset_promotion_events e
+           WHERE e.run_id=%s ORDER BY e.occurred_at""",
+        (run_id,),
+    )
+    promotion_events = [row[0] for row in cur.fetchall()]
+
+    # Sealed membership hash
+    cur.execute(
+        """SELECT row_to_json(s) FROM run_asset_membership_seals s
+           WHERE s.run_id=%s ORDER BY s.seal_revision DESC LIMIT 1""",
+        (run_id,),
+    )
+    membership_seal_row = cur.fetchone()
+    membership_seal = membership_seal_row[0] if membership_seal_row else None
+
+    # Job census
+    cur.execute(
+        """SELECT status, count(*) FROM index_jobs
+           WHERE entity_type IN ('document', 'chunk') AND entity_id IN (
+             SELECT id FROM documents WHERE snapshot_id IN (
+               SELECT id FROM asset_snapshots WHERE source_id IN (
+                 SELECT id FROM sources WHERE registered_domain IS NOT NULL
+               )
+             )
+           ) GROUP BY status""",
+    )
+    job_census = dict(cur.fetchall()) if cur.rowcount else {}
+
+    # Leases and heartbeats
+    cur.execute(
+        """SELECT worker_id, heartbeat_at, metadata FROM index_worker_heartbeats""",
+    )
+    heartbeats = {
+        row[0]: {"heartbeat_at": row[1], "metadata": row[2]} for row in cur.fetchall()
+    }
+
+    cur.execute(
+        """SELECT id, entity_type, entity_id, lease_token, lease_owner, lease_expires_at
+           FROM index_jobs WHERE lease_token IS NOT NULL""",
+    )
+    active_leases = [
+        {
+            "job_id": row[0],
+            "entity_type": row[1],
+            "entity_id": row[2],
+            "lease_token": _redact_sensitive(str(row[3])),
+            "lease_owner": row[4],
+            "lease_expires_at": row[5],
+        }
+        for row in cur.fetchall()
+    ]
+
+    # Search linkage (invocations)
+    cur.execute(
+        """SELECT row_to_json(i) FROM research_invocations i
+           WHERE i.run_id=%s ORDER BY i.created_at""",
+        (run_id,),
+    )
+    invocations = [row[0] for row in cur.fetchall()]
+
+    # Batch outcomes
+    cur.execute(
+        """SELECT row_to_json(b) FROM ingestion_batches b
+           WHERE b.research_run_id=%s ORDER BY b.started_at""",
+        (run_id,),
+    )
+    batches = [row[0] for row in cur.fetchall()]
+
+    # Synthesis provenance
+    cur.execute(
+        """SELECT row_to_json(s) FROM synthesis_stages s
+           WHERE s.run_id=%s ORDER BY s.created_at""",
+        (run_id,),
+    )
+    synthesis_stages = [row[0] for row in cur.fetchall()]
+
+    # Semantic artifacts
+    cur.execute(
+        """SELECT row_to_json(a) FROM semantic_artifacts a
+           WHERE a.run_id=%s ORDER BY a.created_at""",
+        (run_id,),
+    )
+    semantic_artifacts = [row[0] for row in cur.fetchall()]
+
+    # Retrieval events
+    cur.execute(
+        """SELECT row_to_json(e) FROM retrieval_events e
+           WHERE e.run_id=%s ORDER BY e.created_at, e.id""",
+        (run_id,),
+    )
+    retrieval_events = [row[0] for row in cur.fetchall()]
+
+    # Asset snapshots and documents
+    cur.execute(
+        """SELECT DISTINCT ON (a.id) row_to_json(a) FROM asset_snapshots a
+           JOIN research_run_assets ra ON ra.snapshot_id = a.id
+           WHERE ra.run_id=%s ORDER BY a.id, a.retrieved_at DESC""",
+        (run_id,),
+    )
+    snapshots = [row[0] for row in cur.fetchall()]
+
+    cur.execute(
+        """SELECT row_to_json(d) FROM documents d
+           JOIN asset_snapshots a ON a.id = d.snapshot_id
+           JOIN research_run_assets ra ON ra.snapshot_id = a.id
+           WHERE ra.run_id=%s ORDER BY d.id""",
+        (run_id,),
+    )
+    documents = [row[0] for row in cur.fetchall()]
+
+    # Document blocks
+    cur.execute(
+        """SELECT row_to_json(b) FROM document_blocks b
+           JOIN documents d ON d.id = b.document_id
+           JOIN asset_snapshots a ON a.id = d.snapshot_id
+           JOIN research_run_assets ra ON ra.snapshot_id = a.id
+           WHERE ra.run_id=%s ORDER BY b.document_id, b.ordinal""",
+        (run_id,),
+    )
+    blocks = [row[0] for row in cur.fetchall()]
+
+    # Chunks
+    cur.execute(
+        """SELECT row_to_json(c) FROM chunks c
+           JOIN documents d ON d.id = c.document_id
+           JOIN asset_snapshots a ON a.id = d.snapshot_id
+           JOIN research_run_assets ra ON ra.snapshot_id = a.id
+           WHERE ra.run_id=%s ORDER BY c.document_id, c.ordinal, c.id""",
+        (run_id,),
+    )
+    chunks = [row[0] for row in cur.fetchall()]
+
+    # Index jobs
+    cur.execute(
+        """SELECT row_to_json(j) FROM index_jobs j
+           WHERE j.entity_type IN ('document', 'chunk')
+           AND j.entity_id IN (
+             SELECT id FROM documents WHERE snapshot_id IN (
+               SELECT id FROM asset_snapshots WHERE source_id IN (
+                 SELECT id FROM sources WHERE registered_domain IS NOT NULL
+               )
+             )
+             UNION
+             SELECT id FROM chunks WHERE document_id IN (
+               SELECT id FROM documents WHERE snapshot_id IN (
+                 SELECT id FROM asset_snapshots WHERE source_id IN (
+                   SELECT id FROM sources WHERE registered_domain IS NOT NULL
+                 )
+               )
+             )
+           )""",
+    )
+    index_jobs = [row[0] for row in cur.fetchall()]
+
+    # Qdrant reconciliation (index definitions)
+    cur.execute(
+        """SELECT row_to_json(d) FROM index_definitions d
+           LEFT JOIN embedding_manifests m ON m.index_definition_id = d.id
+           GROUP BY d.id ORDER BY d.created_at DESC""",
+    )
+    qdrant_definitions = [row[0] for row in cur.fetchall()]
+
+    # Late completions (jobs completed after run finished)
+    cur.execute(
+        """SELECT count(*) FROM index_jobs j
+           JOIN research_runs r ON r.id = %s
+           WHERE j.completed_at > COALESCE(r.completed_at, r.started_at)
+           AND j.status IN ('complete', 'failed')""",
+        (run_id,),
+    )
+    late_completion_count = cur.fetchone()[0]
+
+    # Blob references
+    cur.execute(
+        """SELECT a.id, a.raw_blob_uri, a.content_sha256, a.raw_byte_length
+           FROM asset_snapshots a
+           JOIN research_run_assets ra ON ra.snapshot_id = a.id
+           WHERE ra.run_id=%s""",
+        (run_id,),
+    )
+    blob_references = [
+        {
+            "snapshot_id": str(row[0]),
+            "blob_uri": _redact_sensitive(row[1]) if row[1] else None,
+            "content_sha256": row[2],
+            "byte_length": row[3],
+        }
+        for row in cur.fetchall()
+    ]
+
+    return {
+        "run": run,
+        "lifecycle_ledger": lifecycle_ledger,
+        "terminal_decisions": terminal_decisions,
+        "run_mode_history": run_mode_history,
+        "promotion_subjects": promotion_subjects,
+        "promotion_events": promotion_events,
+        "membership_seal": membership_seal,
+        "job_census": job_census,
+        "heartbeats": heartbeats,
+        "active_leases": active_leases,
+        "invocations": invocations,
+        "batches": batches,
+        "synthesis_stages": synthesis_stages,
+        "semantic_artifacts": semantic_artifacts,
+        "retrieval_events": retrieval_events,
+        "snapshots": snapshots,
+        "documents": documents,
+        "blocks": blocks,
+        "chunks": chunks,
+        "index_jobs": index_jobs,
+        "qdrant_definitions": qdrant_definitions,
+        "late_completion_count": late_completion_count,
+        "blob_references": blob_references,
+    }
+
+
+def _cmd_integrity(config, args):
+    """Generate an offline integrity report for a research run."""
+    with _db(config) as conn, conn.cursor() as cur:
+        try:
+            internal_id = UUID(args.id)
+            cur.execute(
+                "SELECT row_to_json(r) FROM research_runs r WHERE id=%s",
+                (internal_id,),
+            )
+        except ValueError:
+            cur.execute(
+                "SELECT row_to_json(r) FROM research_runs r WHERE external_run_id=%s",
+                (args.id,),
+            )
+        run = cur.fetchone()
+        if not run:
+            raise SystemExit("research run not found")
+        internal_id = run[0]["id"]
+        context = _fetch_run_with_context(conn, cur, internal_id)
+
+    # Compute deterministic summary hashes
+    import hashlib
+
+    def _stable_hash(obj):
+        canonical = json.dumps(
+            obj, sort_keys=True, default=json_default, ensure_ascii=False
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    context["run_sha256"] = _stable_hash(context["run"])
+    context["lifecycle_ledger_sha256"] = _stable_hash(context["lifecycle_ledger"])
+    context["blob_integrity_sha256"] = _stable_hash(context["blob_references"])
+
+    # Bounded counts
+    context["bounded_counts"] = {
+        "total_retrieval_events": len(context["retrieval_events"]),
+        "total_documents": len(context["documents"]),
+        "total_chunks": len(context["chunks"]),
+        "total_blocks": len(context["blocks"]),
+        "total_snapshots": len(context["snapshots"]),
+        "total_index_jobs": len(context["index_jobs"]),
+        "total_semantic_artifacts": len(context["semantic_artifacts"]),
+        "total_invocations": len(context["invocations"]),
+        "total_batches": len(context["batches"]),
+        "total_synthesis_stages": len(context["synthesis_stages"]),
+        "total_promotion_subjects": len(context["promotion_subjects"]),
+        "total_promotion_events": len(context["promotion_events"]),
+        "active_lease_count": len(context["active_leases"]),
+        "late_completion_count": context["late_completion_count"],
+    }
+
+    context["schema_version"] = args.schema_version
+    context["generated_at"] = datetime.now(timezone.utc).isoformat()
+    context["database_schema_version"] = _schema_state(config)["current"]
+
+    return context
 
 
 def _index_rows(config):
@@ -2653,7 +3009,19 @@ def main(argv=None):
                 (internal_id,),
             )
             events = [row[0] for row in cur.fetchall()]
-        _export_json(Path(args.output), {"run": run[0], "retrieval_events": events})
+        _export_json(
+            Path(args.output),
+            {
+                "schema_version": args.schema_version,
+                "run": run[0],
+                "retrieval_events": events,
+            },
+        )
+        return 0
+    if args.command == "integrity":
+        result = _cmd_integrity(config, args)
+        _export_json(Path(args.output), result)
+        print(dumps(result))
         return 0
 
     if args.command == "run-start":
