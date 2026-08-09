@@ -22,6 +22,35 @@ health report. That mode is deliberately labeled `scope=projection` and must
 not be interpreted as historical run provenance. `reconcile-qdrant` is retained
 as a command alias with the same semantics.
 
+### Projection compatibility mode
+
+The no-run form exists for established `doctor`/index-rebuild operations that
+need current projection health rather than historical provenance. It uses the
+current parser, normalization, and chunker configuration to scope PostgreSQL and
+Qdrant observations and preserves the existing aggregate manifest/job and
+cached-point-count report shape.
+
+This compatibility mode has deliberately narrower claims than run-scoped
+reconciliation:
+
+- a completely empty collection is treated as a not-yet-populated projection
+  while durable PostgreSQL manifests/jobs are still incomplete;
+- once PostgreSQL marks the current corpus manifests/jobs complete, an empty or
+  partially populated collection is reported as exact missing coverage;
+- payload identity fields that are present on current projection points are
+  checked exhaustively, but absent identity fields on legacy/manual projection
+  fixtures are reported as unavailable rather than being presented as inferred
+  historical corruption; and
+- a projection repair promotes a fresh post-repair observation to the top-level
+  result while retaining the explicit repair actions/errors for auditability.
+
+These compatibility rules never apply to `index-reconcile <run>`. Run-scoped
+reconciliation always uses the immutable checkpoint/seal set, requires the
+complete identity payload contract, and reports every absent sealed point.
+Disposable integration tests that reset PostgreSQL per method also reset their
+Qdrant collections at the same boundary so stale points from an earlier method
+cannot be mistaken for production orphans.
+
 ## Authoritative run membership
 
 A run-scoped reconciliation is anchored to the latest **completed**
