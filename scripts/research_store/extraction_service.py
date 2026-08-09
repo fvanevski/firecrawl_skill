@@ -195,6 +195,13 @@ class ExtractionService:
         It updates the attempt row with timing, blobs, quality metrics,
         and failure classification.
 
+        **Idempotent success replay:**  When called with ``exit_status ==
+        "succeeded"`` and the attempt already has a terminal ``end_time``,
+        the call is treated as a replay.  If every supplied field matches the
+        persisted evidence exactly, the existing record is returned without
+        writing.  A mismatch raises ``RuntimeError`` so that divergent
+        evidence surfaces immediately rather than silently overwriting.
+
         **Partial-update semantics (COALESCE):**  When a blob argument
         (``raw_blob``, ``normalized_blob``) or ``parser_used`` is ``None``,
         the corresponding database column is *not* changed — the existing
@@ -227,6 +234,8 @@ class ExtractionService:
 
         Raises:
             ExtractionAttemptError: If the attempt cannot be found.
+            RuntimeError: If a succeeded replay conflicts with existing
+                          authoritative evidence.
         """
         now = end_time or utcnow()
         with self.uow_factory() as uow:
@@ -236,6 +245,75 @@ class ExtractionService:
                     f"attempt {attempt_id} not found",
                     failure_class="internal",
                 )
+
+            # Idempotent success replay guard.  When the caller reissues a
+            # succeeded completion (for example after a bounded atomic ingest
+            # already committed the same outcome), return the existing record
+            # when all evidence matches.  Divergent evidence is a defect and
+            # must fail closed.
+            if exit_status == "succeeded" and existing.get("end_time") is not None:
+
+                def _blobs_match(
+                    existing_ref: BlobReference | dict | None,
+                    supplied_ref: BlobReference | None,
+                ) -> bool:
+                    if supplied_ref is None:
+                        return True
+                    if existing_ref is None:
+                        return False
+                    # Handle both BlobReference objects and raw dict rows.
+                    if isinstance(existing_ref, dict):
+                        ex_sha256 = existing_ref.get("sha256")
+                        ex_uri = existing_ref.get("uri")
+                        ex_length = existing_ref.get("byte_length")
+                    else:
+                        ex_sha256 = existing_ref.sha256
+                        ex_uri = existing_ref.uri
+                        ex_length = existing_ref.byte_length
+                    return (
+                        ex_sha256 == supplied_ref.sha256
+                        and ex_length == supplied_ref.byte_length
+                        and ex_uri == supplied_ref.uri
+                    )
+
+                same = (
+                    existing.get("exit_status") == "succeeded"
+                    and _blobs_match(existing.get("raw_blob"), raw_blob)
+                    and _blobs_match(existing.get("normalized_blob"), normalized_blob)
+                    and (
+                        parser_used is None
+                        or existing.get("parser_used") == parser_used
+                    )
+                    and (
+                        quality_metrics is None
+                        or existing.get("quality_metrics") == quality_metrics
+                    )
+                    and existing.get("failure_class") == failure_class
+                    and (
+                        http_status is None
+                        or existing.get("http_status") == http_status
+                    )
+                    and (
+                        backend_status is None
+                        or existing.get("backend_status") == backend_status
+                    )
+                    and (end_time is None or existing.get("end_time") == end_time)
+                    and (
+                        error_message is None
+                        or existing.get("error_message") == error_message
+                    )
+                )
+                if same:
+                    return ExtractionAttempt.from_mapping(existing)
+
+                # Divergent evidence on an already-terminal succeeded attempt
+                # is a production defect — reject it before any repository
+                # write so the terminal row stays immutable.
+                raise RuntimeError(
+                    f"extraction attempt {attempt_id} is already finalized "
+                    "with different authoritative evidence"
+                )
+
             uow.extraction_attempts.complete_attempt(
                 attempt_id=attempt_id,
                 exit_status=exit_status,

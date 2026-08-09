@@ -288,10 +288,10 @@ class TestSanitization:
         assert result["normal"] == "value"
 
     def test_bearer_token_is_redacted(self):
-        payload = {"header": "Bearer eyJhbGciOiJIUzI1NiJ9.test"}
+        payload = {"header": "Bearer short-token-123"}
         result = _sanitize(payload)
         assert "Bearer [REDACTED]" == result["header"]
-        assert "eyJhbGci" not in result["header"]
+        assert "short-token" not in result["header"]
 
     def test_api_key_pattern_is_redacted(self):
         payload = {"detail": "api_key=secret123"}

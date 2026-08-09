@@ -411,6 +411,10 @@ class _FakeCorpusService:
             ),
         }
 
+    def bounded_ingest_batch(self, **kwargs):
+        # Mirror ingest_batch semantics for the bounded path.
+        return self.ingest_batch(**kwargs)
+
 
 class _FakeScrapeAdapter:
     def __init__(self, by_url):

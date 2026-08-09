@@ -1859,7 +1859,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         run_svc = MockRunService(initial_state="extracting", revision=1)
         coverage_svc = MockCoverageService(item_count=3)
         corpus_svc = MagicMock()
-        corpus_svc.ingest_batch.return_value = {
+        corpus_svc.bounded_ingest_batch.return_value = {
             "batch_id": str(uuid4()),
             "assets": [
                 {
@@ -1929,7 +1929,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
 
         self.assertEqual(result.outcome, StageOutcome.CONTINUE)
         self.assertEqual(ctx[ContextKeys.EXTRACTION_SUCCESS_COUNT], 2)
-        corpus_svc.ingest_batch.assert_called_once()
+        corpus_svc.bounded_ingest_batch.assert_called_once()
         self.assertTrue(len(coverage_svc.events_applied) > 0)
 
     def test_indexing_stage_vector_worker(self):

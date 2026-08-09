@@ -68,7 +68,7 @@ _workflow_service.ResearchRunService = GuardedResearchRunService
 _orchestrator.ResearchOrchestrator = CheckpointResearchOrchestrator
 ResearchOrchestrator = CheckpointResearchOrchestrator
 
-# Issue #216 canonical provider/stage routing.  ``AcquisitionService`` resolves
+# Issue #216 canonical provider/stage routing. ``AcquisitionService`` resolves
 # its default adapter from the module global at construction time, and
 # ``ResearchOrchestrator.__init__`` resolves its stage classes the same way.
 # Rebinding those established extension points keeps every public builder,
@@ -80,10 +80,14 @@ _orchestrator.AcquisitionStage = BoundedAcquisitionStage
 _orchestrator.ExtractionStage = BoundedExtractionStage
 
 # Issue #217 installs the authoritative batch timing/outcome/selection contract
-# on the same canonical production extension points.  The installer mutates the
+# on the same canonical production extension points. The installer mutates the
 # already-imported classes in place so existing references held by builders,
 # tests, and checkpoint wrappers receive the exact same PostgreSQL behavior.
 install_issue_217_contract(_postgres, _service, _bounded_orchestrator)
+
+# ARC-17 correction is now baked into CorpusService.bounded_ingest_batch and
+# ExtractionService.complete_attempt idempotency guard. No monkeypatching is
+# required; the bounded stage calls the explicit production path directly.
 
 __all__ = [
     "VALID_NORMALIZATION_DISPOSITIONS",

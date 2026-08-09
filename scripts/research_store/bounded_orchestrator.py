@@ -696,7 +696,7 @@ class BoundedExtractionStage(ExtractionStage):
 
         if active_requests:
             try:
-                manifest = self.corpus_service.ingest_batch(
+                manifest = self.corpus_service.bounded_ingest_batch(
                     invocation_id=invocation_id,
                     operation="orchestration_extract",
                     requests=active_requests,

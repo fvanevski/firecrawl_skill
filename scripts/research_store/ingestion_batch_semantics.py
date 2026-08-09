@@ -812,7 +812,10 @@ def _corpus_finalize_ingestion_batch(
         for chunk_id in asset["chunk_ids"]
     )
     summary = manifest.get("outcome_summary") or {}
-    manifest["batch_id"] = batch_id
+    # Normalize batch identity to the canonical UUID representation so that
+    # downstream consumers (export, assertions, callers) always see the same
+    # type PostgreSQL returns from export_invocation / export_invocation_by_batch.
+    manifest["batch_id"] = UUID(str(batch_id))
     manifest["status"] = manifest.get("status", status)
     if summary:
         manifest["failure_count"] = int(summary.get("failed", 0)) + int(
@@ -1057,7 +1060,7 @@ def _bounded_extraction_execute(
         )
 
     try:
-        manifest = self.corpus_service.ingest_batch(
+        manifest = self.corpus_service.bounded_ingest_batch(
             invocation_id=invocation_id,
             operation="orchestration_extract",
             requests=batch_requests,
