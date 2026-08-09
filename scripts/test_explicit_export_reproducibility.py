@@ -476,10 +476,7 @@ def test_integrity_golden_preserves_audited_1344_complete_plus_32_live_census(
     assert persisted["counts"]["complete"] == 1344
     assert persisted["counts"]["running_live"] == 32
     assert persisted["counts"]["claimable"] == 0
-    assert (
-        payload["diagnostics"]["domains"]["terminal_decision"]["status"]
-        == "failure"
-    )
+    assert payload["diagnostics"]["domains"]["terminal_decision"]["status"] == "failure"
 
 
 @requires_postgres
@@ -489,9 +486,7 @@ def test_integrity_exports_execution_mode_history(
     config = _config(tmp_path)
     external_id = f"fr_mode_{uuid4().hex}"
     service = build_run_service(config)
-    run = service.create(
-        "mode history", external_id, execution_mode="autonomous_local"
-    )
+    run = service.create("mode history", external_id, execution_mode="autonomous_local")
     service.change_execution_mode(
         run.id,
         "agent_led",
