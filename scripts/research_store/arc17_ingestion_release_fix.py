@@ -207,7 +207,9 @@ def _bounded_execute_with_scoped_success_replay(self, *args, **kwargs):
                         backend_status is None
                         or existing.backend_status == backend_status
                     )
-                    and (error_message is None or existing.error_message == error_message)
+                    and (
+                        error_message is None or existing.error_message == error_message
+                    )
                 )
                 if same:
                     return existing
