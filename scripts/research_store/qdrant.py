@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import time
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote
-from urllib.request import Request, urlopen
+import urllib.error
+import urllib.parse
+import urllib.request
 
 
 PAYLOAD_INDEX_SCHEMAS: dict[str, str] = {
@@ -58,8 +58,13 @@ class QdrantIndex:
         if self.api_key:
             headers["api-key"] = self.api_key
         data = json.dumps(payload).encode() if payload is not None else None
-        with urlopen(
-            Request(self.url + path, data=data, headers=headers, method=method),
+        with urllib.request.urlopen(
+            urllib.request.Request(
+                self.url + path,
+                data=data,
+                headers=headers,
+                method=method,
+            ),
             timeout=15,
         ) as response:
             return json.load(response)
@@ -68,9 +73,9 @@ class QdrantIndex:
         """Inspect collection compatibility without creating or updating it."""
         try:
             response = self._request(
-                "GET", f"/collections/{quote(self.collection, safe='')}"
+                "GET", f"/collections/{urllib.parse.quote(self.collection, safe='')}"
             )
-        except HTTPError as exc:
+        except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return {
                     "collection": self.collection,
@@ -117,7 +122,7 @@ class QdrantIndex:
         if not status["exists"]:
             self._request(
                 "PUT",
-                f"/collections/{quote(self.collection, safe='')}",
+                f"/collections/{urllib.parse.quote(self.collection, safe='')}",
                 {
                     "vectors": {
                         "dense": {"size": self.dimension, "distance": self.distance}
@@ -126,10 +131,13 @@ class QdrantIndex:
             )
             return {**status, "created": True, "compatible": True}
         if not status["compatible"]:
-            self._request("DELETE", f"/collections/{quote(self.collection, safe='')}")
+            self._request(
+                "DELETE",
+                f"/collections/{urllib.parse.quote(self.collection, safe='')}",
+            )
             self._request(
                 "PUT",
-                f"/collections/{quote(self.collection, safe='')}",
+                f"/collections/{urllib.parse.quote(self.collection, safe='')}",
                 {
                     "vectors": {
                         "dense": {"size": self.dimension, "distance": self.distance}
@@ -155,11 +163,11 @@ class QdrantIndex:
             try:
                 self._request(
                     "PUT",
-                    f"/collections/{quote(self.collection, safe='')}/points?wait=true",
+                    f"/collections/{urllib.parse.quote(self.collection, safe='')}/points?wait=true",
                     {"points": points},
                 )
                 return
-            except (HTTPError, URLError, TimeoutError):
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
                 if attempt + 1 == attempts:
                     raise
                 time.sleep(min(2**attempt, 10))
@@ -168,7 +176,7 @@ class QdrantIndex:
         """Retrieve exact point IDs from the selected physical collection."""
         response = self._request(
             "POST",
-            f"/collections/{quote(self.collection, safe='')}/points",
+            f"/collections/{urllib.parse.quote(self.collection, safe='')}/points",
             {
                 "ids": [str(identifier) for identifier in ids],
                 "with_payload": with_payload,
@@ -180,12 +188,14 @@ class QdrantIndex:
     def delete(self, ids):
         self._request(
             "POST",
-            f"/collections/{quote(self.collection, safe='')}/points/delete?wait=true",
+            f"/collections/{urllib.parse.quote(self.collection, safe='')}/points/delete?wait=true",
             {"points": [str(i) for i in ids]},
         )
 
     def delete_collection(self) -> None:
-        self._request("DELETE", f"/collections/{quote(self.collection, safe='')}")
+        self._request(
+            "DELETE", f"/collections/{urllib.parse.quote(self.collection, safe='')}"
+        )
 
     def search(self, vector, filters, limit):
         payload = {
@@ -198,7 +208,7 @@ class QdrantIndex:
             payload["filter"] = filters
         return self._request(
             "POST",
-            f"/collections/{quote(self.collection, safe='')}/points/query",
+            f"/collections/{urllib.parse.quote(self.collection, safe='')}/points/query",
             payload,
         )["result"]["points"]
 
@@ -214,7 +224,7 @@ class QdrantIndex:
             payload["offset"] = offset
         return self._request(
             "POST",
-            f"/collections/{quote(self.collection, safe='')}/points/scroll",
+            f"/collections/{urllib.parse.quote(self.collection, safe='')}/points/scroll",
             payload,
         )["result"]
 
@@ -287,9 +297,9 @@ class QdrantIndex:
         expected = self._expected_payload_schemas(fields)
         try:
             response = self._request(
-                "GET", f"/collections/{quote(self.collection, safe='')}"
+                "GET", f"/collections/{urllib.parse.quote(self.collection, safe='')}"
             )
-        except HTTPError as exc:
+        except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return {
                     field: {
@@ -339,7 +349,7 @@ class QdrantIndex:
                     continue
                 self._request(
                     "PUT",
-                    f"/collections/{quote(self.collection, safe='')}/index?wait=true",
+                    f"/collections/{urllib.parse.quote(self.collection, safe='')}/index?wait=true",
                     {
                         "field_name": field,
                         "field_schema": expected[field],
@@ -358,9 +368,10 @@ class QdrantIndex:
         """
         try:
             response = self._request(
-                "GET", f"/collections/{quote(self.collection, safe='')}/cluster"
+                "GET",
+                f"/collections/{urllib.parse.quote(self.collection, safe='')}/cluster",
             )
-        except HTTPError as exc:
+        except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return [
                     {
@@ -392,9 +403,10 @@ class QdrantIndex:
         """Return fail-closed shard/replica health from the cluster endpoint."""
         try:
             response = self._request(
-                "GET", f"/collections/{quote(self.collection, safe='')}/cluster"
+                "GET",
+                f"/collections/{urllib.parse.quote(self.collection, safe='')}/cluster",
             )
-        except HTTPError as exc:
+        except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return {
                     "healthy": False,
