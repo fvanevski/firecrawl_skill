@@ -43,6 +43,12 @@ REQUIRED_GATE_IDS = (
     "credentialed_release_campaign",
 )
 ALLOWED_PHASES = {"ci", "disposable", "credentialed"}
+_DIAGNOSTIC_SECRET_NAMES = {
+    "DATABASE_URL",
+    "RESEARCH_STORE_TEST_DATABASE_URL",
+    "VALKEY_URL",
+}
+_DIAGNOSTIC_EXCERPT_BYTES = 8192
 
 
 def _sha256(data: bytes) -> str:
@@ -125,6 +131,25 @@ def _service_versions() -> dict[str, Any]:
     return result
 
 
+def _redacted_excerpt(data: bytes, environment: dict[str, str]) -> str:
+    clipped = data[:_DIAGNOSTIC_EXCERPT_BYTES]
+    text = clipped.decode("utf-8", errors="replace")
+    for name, value in environment.items():
+        upper_name = name.upper()
+        is_secret = (
+            name in _DIAGNOSTIC_SECRET_NAMES
+            or "SECRET" in upper_name
+            or "TOKEN" in upper_name
+            or "PASSWORD" in upper_name
+            or "API_KEY" in upper_name
+        )
+        if is_secret and value and len(value) >= 8:
+            text = text.replace(value, "[REDACTED]")
+    if len(data) > len(clipped):
+        text += f"\n[diagnostic excerpt truncated: {len(data)} bytes total]"
+    return text
+
+
 def execute_phase(
     matrix: dict[str, Any],
     *,
@@ -205,6 +230,17 @@ def execute_phase(
                 },
             }
         )
+        if exit_code != 0:
+            print(
+                f"FAILED ARC-17 GATE {gate_id}: exit={exit_code} timed_out={timed_out}",
+                file=sys.stderr,
+            )
+            if stdout:
+                print("--- redacted stdout excerpt ---", file=sys.stderr)
+                print(_redacted_excerpt(stdout, environment), file=sys.stderr)
+            if stderr:
+                print("--- redacted stderr excerpt ---", file=sys.stderr)
+                print(_redacted_excerpt(stderr, environment), file=sys.stderr)
 
     evidence = {
         "schema_version": EVIDENCE_SCHEMA,

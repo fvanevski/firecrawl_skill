@@ -7,7 +7,6 @@ on:
   push:
     branches:
       - main
-      - rc/audit-17-release-gates
   workflow_dispatch:
     inputs:
       candidate-sha:
