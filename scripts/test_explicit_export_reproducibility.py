@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -311,7 +310,7 @@ def test_integrity_is_run_scoped_and_ignores_other_run_leases(
     tmp_path, monkeypatch, prepared_export_database
 ):
     config = _config(tmp_path)
-    target, target_external, target_rows = _create_run_with_asset(config, "target")
+    target, target_external, _target_rows = _create_run_with_asset(config, "target")
     other, _other_external, other_rows = _create_run_with_asset(config, "other")
     target_ids, _fingerprint = _install_checkpoint(config, target)
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
