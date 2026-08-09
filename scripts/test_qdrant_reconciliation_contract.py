@@ -25,9 +25,7 @@ def _collection(payload_schema):
         "result": {
             "payload_schema": payload_schema,
             "config": {
-                "params": {
-                    "vectors": {"dense": {"size": 4, "distance": "Cosine"}}
-                }
+                "params": {"vectors": {"dense": {"size": 4, "distance": "Cosine"}}}
             },
         }
     }

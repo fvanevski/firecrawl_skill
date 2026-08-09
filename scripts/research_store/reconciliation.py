@@ -199,9 +199,7 @@ def _reconcile_scope(
         if manifest["status"] == "complete"
     }
     complete_jobs = {
-        chunk_id
-        for chunk_id, statuses in pg["jobs"].items()
-        if "complete" in statuses
+        chunk_id for chunk_id, statuses in pg["jobs"].items() if "complete" in statuses
     }
     index = _qdrant(config, scope.definition)
     aliases = QdrantIndex(

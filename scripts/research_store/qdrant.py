@@ -288,9 +288,7 @@ class QdrantIndex:
 
     def inspect_payload_indexes(
         self,
-        fields: dict[str, str]
-        | list[str]
-        | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
+        fields: dict[str, str] | list[str] | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
     ) -> dict[str, dict]:
         """Read payload-index state from ``result.payload_schema`` without writes."""
         expected = self._expected_payload_schemas(fields)
@@ -326,9 +324,7 @@ class QdrantIndex:
 
     def ensure_payload_indexes(
         self,
-        fields: dict[str, str]
-        | list[str]
-        | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
+        fields: dict[str, str] | list[str] | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
         *,
         create_missing: bool = True,
     ) -> dict[str, bool]:
