@@ -218,12 +218,16 @@ def _finalize_batch_with_canonical_identity(
     return manifest
 
 
-def install_arc17_ingestion_release_fix(service_module, extraction_service_module) -> None:
+def install_arc17_ingestion_release_fix(
+    service_module, extraction_service_module
+) -> None:
     """Install the ARC-17 ordering/idempotency correction on canonical classes."""
     global _ORIGINAL_COMPLETE_ATTEMPT, _ORIGINAL_FINALIZE_BATCH
 
     if _ORIGINAL_COMPLETE_ATTEMPT is None:
-        _ORIGINAL_COMPLETE_ATTEMPT = extraction_service_module.ExtractionService.complete_attempt
+        _ORIGINAL_COMPLETE_ATTEMPT = (
+            extraction_service_module.ExtractionService.complete_attempt
+        )
     if _ORIGINAL_FINALIZE_BATCH is None:
         _ORIGINAL_FINALIZE_BATCH = service_module.CorpusService.finalize_ingestion_batch
 
