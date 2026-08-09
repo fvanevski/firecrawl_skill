@@ -30,12 +30,9 @@ _legacy_dumps = globals()["dumps"]
 _legacy_index_build = globals()["_index_build"]
 
 from research_store.config import StoreConfig
+from research_store.projection_reconciliation import reconcile_projection_compat
 from research_store.qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
-from research_store.reconciliation import (
-    ReconciliationError,
-    reconcile_projection,
-    reconcile_run,
-)
+from research_store.reconciliation import ReconciliationError, reconcile_run
 from research_store.run_integrity_export import (
     EXPORT_RUN_SCHEMA_VERSIONS,
     INTEGRITY_SCHEMA_VERSIONS,
@@ -78,7 +75,11 @@ def _index_reconcile(config, repair=False):
     first-class CLI command accepts a run identifier and uses the immutable
     checkpoint/seal authority in :mod:`research_store.reconciliation`.
     """
-    return reconcile_projection(config, repair=repair)
+    return reconcile_projection_compat(
+        config,
+        repair=repair,
+        index_build=_index_build,
+    )
 
 
 def _artifact_parser(command: str) -> argparse.ArgumentParser:
@@ -152,7 +153,11 @@ def _reconcile_main(command: str, argv: list[str]) -> int:
         if args.run:
             result = reconcile_run(config, args.run, repair=args.repair)
         else:
-            result = reconcile_projection(config, repair=args.repair)
+            result = reconcile_projection_compat(
+                config,
+                repair=args.repair,
+                index_build=_index_build,
+            )
     except ReconciliationError as exc:
         print(
             _legacy_dumps(
@@ -167,7 +172,7 @@ def _reconcile_main(command: str, argv: list[str]) -> int:
         )
         return 2
     print(_legacy_dumps(result))
-    final = result.get("post_repair", result) if args.repair else result
+    final = result.get("post_repair") or result
     return 0 if final.get("ok", False) else 1
 
 
