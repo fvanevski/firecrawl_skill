@@ -59,10 +59,8 @@ def _load_definition(cursor, fingerprint: str) -> dict[str, Any]:
     rows = cursor.fetchall()
     if len(rows) != 1:
         raise ReconciliationError(
-            (
-                f"checkpoint fingerprint {fingerprint} resolves to "
-                f"{len(rows)} index definitions"
-            )
+            f"checkpoint fingerprint {fingerprint} resolves to "
+            f"{len(rows)} index definitions"
         )
     return _definition_from_row(rows[0])
 

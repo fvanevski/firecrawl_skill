@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import collections.abc
 import json
 import time
-from collections.abc import Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -245,9 +245,9 @@ class QdrantIndex:
 
     @staticmethod
     def _expected_payload_schemas(
-        fields: Mapping[str, str] | list[str] | tuple[str, ...],
+        fields: collections.abc.Mapping[str, str] | list[str] | tuple[str, ...],
     ) -> dict[str, str]:
-        if isinstance(fields, Mapping):
+        if isinstance(fields, collections.abc.Mapping):
             return {str(field): str(schema) for field, schema in fields.items()}
         return {
             str(field): PAYLOAD_INDEX_SCHEMAS.get(str(field), "keyword")
@@ -280,7 +280,9 @@ class QdrantIndex:
 
     def inspect_payload_indexes(
         self,
-        fields: Mapping[str, str] | list[str] | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
+        fields: collections.abc.Mapping[str, str]
+        | list[str]
+        | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
     ) -> dict[str, dict]:
         """Read payload-index state from ``result.payload_schema`` without writes."""
         expected = self._expected_payload_schemas(fields)
@@ -316,7 +318,9 @@ class QdrantIndex:
 
     def ensure_payload_indexes(
         self,
-        fields: Mapping[str, str] | list[str] | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
+        fields: collections.abc.Mapping[str, str]
+        | list[str]
+        | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
         *,
         create_missing: bool = True,
     ) -> dict[str, bool]:

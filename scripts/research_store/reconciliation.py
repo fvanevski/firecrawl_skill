@@ -6,7 +6,8 @@ completed indexing checkpoint plus its asset-membership seal.
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 from uuid import UUID
 
 from .config import StoreConfig
@@ -237,12 +238,13 @@ def _reconcile_scope(
         )
     if not schema.get("exists") or not schema.get("compatible"):
         discrepancies.append("Qdrant vector schema is missing or incompatible")
-    if scope.scope == "run" or scope.definition.get("lifecycle_status") == "active":
-        if alias_target != expected_collection:
-            discrepancies.append(
-                f"alias {config.qdrant_alias} targets {alias_target!r}, "
-                f"expected {expected_collection!r}"
-            )
+    if (
+        scope.scope == "run" or scope.definition.get("lifecycle_status") == "active"
+    ) and alias_target != expected_collection:
+        discrepancies.append(
+            f"alias {config.qdrant_alias} targets {alias_target!r}, "
+            f"expected {expected_collection!r}"
+        )
     if missing_points:
         discrepancies.append(f"{len(missing_points)} sealed Qdrant points are missing")
     if orphaned_definition_points:
