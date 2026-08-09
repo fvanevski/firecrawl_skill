@@ -13,7 +13,6 @@ from .acquisition_authority import (
     require_authoritative_acquisition,
 )
 from .acquisition_service import AcquisitionService
-from .arc17_ingestion_release_fix import install_arc17_ingestion_release_fix
 from .blob import ContentAddressedBlobStore
 from .bounded_acquisition import BoundedFirecrawlSearchAdapter
 from .bounded_orchestrator import BoundedAcquisitionStage, BoundedExtractionStage
@@ -86,13 +85,9 @@ _orchestrator.ExtractionStage = BoundedExtractionStage
 # tests, and checkpoint wrappers receive the exact same PostgreSQL behavior.
 install_issue_217_contract(_postgres, _service, _bounded_orchestrator)
 
-# ARC-17 independently executes the issue #217 production seam and exposed an
-# ordering defect between successful attempt finalization and run-asset linkage.
-# Install the narrow correction after issue #217 so the exact canonical classes
-# keep run/batch/attempt provenance atomic. The idempotent replay shim is scoped
-# only to BoundedExtractionStage.execute; ordinary ExtractionService completion
-# remains unchanged.
-install_arc17_ingestion_release_fix(_service, _bounded_orchestrator)
+# ARC-17 correction is now baked into CorpusService.bounded_ingest_batch and
+# ExtractionService.complete_attempt idempotency guard. No monkeypatching is
+# required; the bounded stage calls the explicit production path directly.
 
 __all__ = [
     "VALID_NORMALIZATION_DISPOSITIONS",

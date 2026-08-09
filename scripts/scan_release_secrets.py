@@ -27,11 +27,10 @@ EXCLUDED_PARTS = {
     ".mypy_cache",
     ".pytest_cache",
     ".serena",
-    # Test files that intentionally embed bearer/token patterns for regression
-    # testing must be excluded; scanning them would produce false-positive
-    # findings that block release evidence rather than testing the scanner.
-    "test_release_secret_scan.py",
 }
+# Contract: no test file may be added to EXCLUDED_PARTS merely to suppress
+# scanner findings. The only permitted non-test exclusions are directories and
+# generated artifact paths. See test_contract_no_test_file_in_exclusions.
 PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     (
         "private_key",

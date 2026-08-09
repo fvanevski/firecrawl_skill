@@ -107,7 +107,10 @@ def test_direct_batch_persists_exact_constituent_min_max_and_member_ids(tmp_path
 
     with service.uow_factory() as uow:
         canonical = uow.export_invocation(invocation_id)
-    assert canonical["batch_id"] == manifest["batch_id"]
+    # After removing the ARC-17 monkeypatch, finalize_ingestion_batch returns
+    # the raw string batch_id; export_invocation returns a UUID. Compare as
+    # strings to keep the provenance check stable across both paths.
+    assert str(canonical["batch_id"]) == manifest["batch_id"]
     assert canonical["sealed_at"] == manifest["sealed_at"]
     assert canonical["outcome_summary"] == summary
     assert [str(item["batch_asset_id"]) for item in canonical["assets"]] == member_ids

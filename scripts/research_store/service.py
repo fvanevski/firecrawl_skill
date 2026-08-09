@@ -485,11 +485,154 @@ class CorpusService:
             if asset["status"] == "complete"
             for chunk_id in asset["chunk_ids"]
         )
-        manifest["batch_id"] = batch_id
+        # Normalize the internal batch identity representation while preserving
+        # the manifest shape; all ingestion ordering changes remain bounded-stage
+        # scoped.
+        if manifest.get("batch_id") is not None:
+            manifest["batch_id"] = UUID(str(manifest["batch_id"]))
         manifest["status"] = status
         manifest["failure_count"] = sum(
             1 for a in manifest.get("assets", []) if a.get("status") == "failed"
         )
+        return manifest
+
+    def bounded_ingest_batch(
+        self,
+        invocation_id: str,
+        operation: str,
+        requests: list,
+        *,
+        research_run_external_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        """Persist bounded extraction success and run linkage atomically.
+
+        Unlike :meth:`ingest_batch`, this method completes each extraction
+        attempt within the same UoW as the batch asset recording and run-asset
+        linkage, ensuring atomicity of success terminalization, batch membership,
+        and run-asset retention. Callers that subsequently invoke
+        :meth:`~ExtractionService.complete_attempt` for the same attempts will
+        hit the idempotency guard and return the existing record when the
+        evidence matches.
+        """
+        from .domain import utcnow
+
+        failures = 0
+        with self.uow_factory() as uow:
+            batch_id = uow.start_ingestion_batch(
+                invocation_id, operation, research_run_external_id, metadata
+            )
+            seen_ordinals: set[int] = set()
+            for fallback_ordinal, item in enumerate(requests):
+                ordinal = fallback_ordinal
+                item_mapping = item if isinstance(item, dict) else None
+                if item_mapping is not None:
+                    result_index = (
+                        item_mapping.get("metadata", {})
+                        .get("firecrawl", {})
+                        .get("result_index")
+                    )
+                    if isinstance(result_index, int) and result_index >= 0:
+                        ordinal = result_index
+                if ordinal in seen_ordinals:
+                    raise ValueError(f"duplicate ingestion result ordinal: {ordinal}")
+                seen_ordinals.add(ordinal)
+
+                request = (
+                    item if isinstance(item, IngestRequest) else item.get("request")
+                )
+                requested_url = (
+                    request.requested_url
+                    if request is not None
+                    else item.get("requested_url") or item.get("url") or "unknown:"
+                )
+                item_metadata = item.get("metadata") if isinstance(item, dict) else None
+                explicit_attempt_id = (
+                    item.get("extraction_attempt_id")
+                    if isinstance(item, dict)
+                    else None
+                )
+                attempt_id = (
+                    request.extraction_attempt_id
+                    if request is not None and request.extraction_attempt_id is not None
+                    else explicit_attempt_id
+                )
+                constituent_started_at = utcnow()
+                try:
+                    if request is None:
+                        raise RuntimeError(item.get("error") or "acquisition failed")
+                    prepared = self._prepare_ingest(request)
+                    with uow.savepoint():
+                        result = uow.persist_ingest(*prepared.persist_args())
+                        constituent_completed_at = utcnow()
+
+                        # For the bounded path, extraction success, exact batch
+                        # membership, and run-asset retention become authoritative
+                        # in one PostgreSQL transaction. If any later write in
+                        # this savepoint fails, the success completion rolls back
+                        # too.
+                        if attempt_id is not None:
+                            raw_blob = self.blob_store.put(
+                                BytesIO(request.content), None
+                            )
+                            normalized_blob = self.blob_store.put(
+                                BytesIO(request.normalized_content or request.content),
+                                None,
+                            )
+                            status_code = None
+                            if isinstance(item_metadata, dict):
+                                firecrawl = item_metadata.get("firecrawl")
+                                if isinstance(firecrawl, dict):
+                                    status_code = firecrawl.get("status_code")
+                            if status_code is None:
+                                status_code = request.http_status
+                            uow.extraction_attempts.complete_attempt(
+                                attempt_id=attempt_id,
+                                exit_status="succeeded",
+                                raw_blob=raw_blob,
+                                normalized_blob=normalized_blob,
+                                parser_used=self.config.parser_version,
+                                quality_metrics=None,
+                                failure_class="none",
+                                http_status=status_code,
+                                backend_status="complete",
+                                end_time=constituent_completed_at,
+                                error_message=None,
+                            )
+
+                        uow.record_batch_asset(
+                            batch_id,
+                            ordinal,
+                            requested_url,
+                            "complete",
+                            result,
+                            metadata=item_metadata,
+                            extraction_attempt_id=attempt_id,
+                            constituent_started_at=constituent_started_at,
+                            constituent_completed_at=constituent_completed_at,
+                        )
+                        if research_run_external_id:
+                            uow.link_run_asset(
+                                research_run_external_id,
+                                result.snapshot_id,
+                                "acquired",
+                            )
+                except Exception as exc:  # noqa: BLE001
+                    failures += 1
+                    constituent_completed_at = utcnow()
+                    uow.record_batch_asset(
+                        batch_id,
+                        ordinal,
+                        requested_url,
+                        "failed",
+                        error=f"{type(exc).__name__}: {exc}",
+                        metadata=item_metadata,
+                        extraction_attempt_id=attempt_id,
+                        constituent_started_at=constituent_started_at,
+                        constituent_completed_at=constituent_completed_at,
+                    )
+            manifest = uow.export_invocation(invocation_id)
+        manifest["failure_count"] = failures
         return manifest
 
     def persist_manifest_batch(

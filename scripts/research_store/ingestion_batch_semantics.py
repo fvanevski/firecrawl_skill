@@ -1057,7 +1057,7 @@ def _bounded_extraction_execute(
         )
 
     try:
-        manifest = self.corpus_service.ingest_batch(
+        manifest = self.corpus_service.bounded_ingest_batch(
             invocation_id=invocation_id,
             operation="orchestration_extract",
             requests=batch_requests,

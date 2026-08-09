@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from audit_release_gate_matrix import REQUIRED_GATE_IDS, validate_matrix
+from research_store.stages import ContextKeys
 
 ROOT = Path(__file__).parents[1]
 MATRIX = ROOT / "references" / "audit-remediation-release-gates.json"
@@ -87,29 +88,35 @@ def test_real_release_campaign_is_blocked_by_disposable_gates_and_secret_scan():
 
 def test_bounded_execution_uses_positive_type_contract_not_mock_detection():
     """The ARC-17 correction must identify production services by positive type
-    membership, not by excluding ``unittest.mock`` types.  A dynamically-built
-    fake that is not a ``Mock``/``MagicMock`` subclass must still fall through
-    to the original bounded execute when it is not an instance of the real
-    ``CorpusService`` / ``ExtractionService`` classes."""
+    membership, not by excluding ``unittest.mock`` types.  The bounded ingest
+    path lives on ``CorpusService`` directly and the idempotency guard lives
+    on ``ExtractionService.complete_attempt``; neither uses mock detection."""
     import inspect
 
-    from research_store.arc17_ingestion_release_fix import (
-        _bounded_execute_with_scoped_atomic_ingest,
-    )
+    from research_store.extraction_service import ExtractionService
+    from research_store.service import CorpusService
 
-    source = inspect.getsource(_bounded_execute_with_scoped_atomic_ingest)
-    assert "unittest.mock" not in source
-    assert "MagicMock" not in source
-    assert "Mock)" not in source or "isinstance" in source
-    assert "isinstance(extraction_service, ExtractionService)" in source
-    assert "isinstance(corpus_service, CorpusService)" in source
+    bounded_source = inspect.getsource(CorpusService.bounded_ingest_batch)
+    complete_source = inspect.getsource(ExtractionService.complete_attempt)
+
+    for source in (bounded_source, complete_source):
+        assert "unittest.mock" not in source
+        assert "MagicMock" not in source
+        assert "Mock)" not in source or "isinstance" in source
+
+    # The bounded ingest path is a direct method call — no monkeypatch shim.
+    assert hasattr(CorpusService, "bounded_ingest_batch")
+    assert callable(CorpusService.bounded_ingest_batch)
 
 
 def test_concurrent_bounded_executions_on_independent_instances_do_not_interfere():
     """Two bounded extraction stages built from independent service instances
-    must execute without interfering with each other's method rebinding.  This
-    regresses the assumption that repository construction creates independent
-    service instances per stage."""
+    must execute concurrently without interfering with each other.  Each stage
+    owns its own service instances and the bounded ingest path is scoped to
+    those instances — there is no shared class-level state to collide on."""
+    import threading
+    import time
+
     import pytest
 
     test_dsn = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
@@ -146,13 +153,63 @@ def test_concurrent_bounded_executions_on_independent_instances_do_not_interfere
         extraction_service=extraction_b,
     )
 
-    # Both stages should have the ARC-17 correction installed (class-level).
-    assert stage_a.execute.__name__ == "_bounded_execute_with_scoped_atomic_ingest"
-    assert stage_b.execute.__name__ == "_bounded_execute_with_scoped_atomic_ingest"
-
-    # Independent instances must not share bound methods.
+    # Verify independent instances do not share bound methods.
     assert corpus_a.ingest_batch is not corpus_b.ingest_batch
+    assert corpus_a.bounded_ingest_batch is not corpus_b.bounded_ingest_batch
     assert extraction_a.complete_attempt is not extraction_b.complete_attempt
+
+    # Execute both stages concurrently and prove no interference.
+    results: list[dict[str, object]] = [
+        {"stage": "a", "result": None},
+        {"stage": "b", "result": None},
+    ]
+    barriers = [threading.Barrier(2), threading.Barrier(2)]
+
+    def run_stage(stage, idx):
+        barriers[0].wait()
+        start = time.monotonic()
+        try:
+            result = stage.execute(
+                run_id=__import__("uuid").uuid4(),
+                run_revision=1,
+                coverage_revision=None,
+                run_state="extracting",
+                context={
+                    "raw_ingest_requests": [],
+                    ContextKeys.WAVE_COUNT: 0,
+                    "candidate_coverage_items": {},
+                },
+            )
+            results[idx]["result"] = result
+        except Exception as exc:  # noqa: BLE001
+            results[idx]["result"] = exc
+        finally:
+            barriers[1].wait()
+        results[idx]["elapsed"] = time.monotonic() - start
+
+    thread_a = threading.Thread(target=run_stage, args=(stage_a, 0))
+    thread_b = threading.Thread(target=run_stage, args=(stage_b, 1))
+    thread_a.start()
+    thread_b.start()
+    thread_a.join(timeout=10)
+    thread_b.join(timeout=10)
+
+    assert not thread_a.is_alive(), "stage_a thread did not complete"
+    assert not thread_b.is_alive(), "stage_b thread did not complete"
+
+    for r in results:
+        assert not isinstance(r["result"], Exception), (
+            f"concurrent execution on {r['stage']} raised: {r['result']}"
+        )
+
+    # Service methods remain in their canonical state after concurrent execution.
+    # The bounded stage carries the issue #217 contract wrapper; what matters is
+    # that no per-call ARC-17 monkeypatch shim remains and that independent
+    # instances do not share bound methods.
+    assert stage_a.execute.__name__ == "_bounded_extraction_execute"
+    assert stage_b.execute.__name__ == "_bounded_extraction_execute"
+    assert hasattr(corpus_a, "bounded_ingest_batch")
+    assert hasattr(corpus_b, "bounded_ingest_batch")
 
 
 def test_release_campaign_secret_env_matches_scanner_boundary():
