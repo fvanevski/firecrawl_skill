@@ -401,7 +401,7 @@ def reconcile_projection_compat(
             index_build=index_build,
         )
 
-    return {
+    result = {
         "schema_version": "qdrant-projection-reconciliation-v2",
         "scope": "projection",
         "authoritative_membership": False,
@@ -422,3 +422,20 @@ def reconcile_projection_compat(
         "repair_errors": repair_errors,
         "post_repair": post_repair,
     }
+    if repair and post_repair is not None:
+        # Legacy callers expect the top-level observation to represent the
+        # state *after* explicit repair. Preserve repair evidence while
+        # promoting the fresh read-only observation to the public result.
+        result.update(post_repair)
+        result["read_only"] = False
+        result["repaired"] = repaired
+        result["repair_actions"] = repair_actions
+        result["repair_errors"] = repair_errors
+        result["post_repair"] = post_repair
+        if repair_errors:
+            result["ok"] = False
+            result["discrepancies"] = [
+                *result.get("discrepancies", []),
+                *repair_errors,
+            ]
+    return result
