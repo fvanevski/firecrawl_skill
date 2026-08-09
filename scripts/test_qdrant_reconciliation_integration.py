@@ -119,13 +119,12 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
                  VALUES(%s,%s,'acquired','{}'::jsonb)""",
             (run_id, snapshot_id),
         )
+        # The research_run_assets trigger establishes the authoritative
+        # direct-retention subject. Reuse it rather than bypassing the promotion
+        # contract with a second subject row.
         cur.execute(
-            """INSERT INTO run_asset_promotion_subjects(
-                   run_id,snapshot_id,role,current_stage,stage_revision,provenance,
-                   actor_type,policy_version,lifecycle_revision,reason_code)
-                 VALUES(%s,%s,'acquired','retained',0,'direct_retention',
-                        'integration-test','asset-promotion-v1',0,'test_seed')
-                 RETURNING id""",
+            """SELECT id FROM run_asset_promotion_subjects
+                 WHERE run_id=%s AND snapshot_id=%s AND role='acquired'""",
             (run_id, snapshot_id),
         )
         subject_id = UUID(str(cur.fetchone()[0]))
