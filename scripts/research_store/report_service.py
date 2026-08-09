@@ -359,6 +359,33 @@ class LocalSynthesisService:
         updated["updated_at"] = _utcnow()
         uow.synthesis_stages.update_synthesis_stage(updated)
 
+    def _commit_stage_failure(
+        self,
+        uow_factory: Any,
+        run_id: UUID,
+        stage_name: str,
+        error: str,
+        *,
+        increment_attempts: bool = True,
+    ) -> None:
+        """Commit a failed-stage update through its own UOW boundary.
+
+        The real PostgreSQL UOW rolls back on any exception during ``__exit__``.
+        Callers must never raise from inside the same UOW context that writes
+        the failure — otherwise the just-committed ``failed`` status is lost.
+        This helper opens and closes its own UOW so the write is durable
+        before the caller raises.
+        """
+        with uow_factory() as uow:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
+            self._update_stage(
+                uow,
+                record,
+                status=SynthesisStageStatus.FAILED.value,
+                error=error,
+                increment_attempts=increment_attempts,
+            )
+
     def _is_stage_completed(self, record: dict[str, Any]) -> bool:
         """Check if a stage has already completed successfully."""
         return record.get("stage_status") == SynthesisStageStatus.COMPLETED.value
@@ -982,19 +1009,12 @@ class LocalSynthesisService:
             batch_size=1,
         )
 
+        if result.error:
+            self._commit_stage_failure(uow_factory, run_id, "outline", result.error)
+            raise ReportServiceError(f"outline stage failed: {result.error}")
+
         with uow_factory() as uow:
             record = uow.synthesis_stages.get_synthesis_stage(run_id, "outline")
-
-            if result.error:
-                self._update_stage(
-                    uow,
-                    record,
-                    status=SynthesisStageStatus.FAILED.value,
-                    error=result.error,
-                    increment_attempts=True,
-                )
-                raise ReportServiceError(f"outline stage failed: {result.error}")
-
             self._update_stage(
                 uow,
                 record,
@@ -1378,19 +1398,12 @@ class LocalSynthesisService:
             batch_size=1,
         )
 
+        if result.error:
+            self._commit_stage_failure(uow_factory, run_id, "draft", result.error)
+            raise ReportServiceError(f"draft stage failed: {result.error}")
+
         with uow_factory() as uow:
             record = uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
-
-            if result.error:
-                self._update_stage(
-                    uow,
-                    record,
-                    status=SynthesisStageStatus.FAILED.value,
-                    error=result.error,
-                    increment_attempts=True,
-                )
-                raise ReportServiceError(f"draft stage failed: {result.error}")
-
             self._update_stage(
                 uow,
                 record,
@@ -1686,46 +1699,40 @@ class LocalSynthesisService:
             batch_size=1,
         )
 
+        citation_error: CompletionProvenanceError | None = None
+
+        if result.error:
+            self._commit_stage_failure(
+                uow_factory, run_id, "citation_pass", result.error
+            )
+            raise ReportServiceError(f"citation pass stage failed: {result.error}")
+
+        # ------------------------------------------------------------------
+        # Stage-time acceptance: enforce terminal-grade citation validation
+        # before persisting.  An invalid model response must never become a
+        # completed authoritative stage.
+        # ------------------------------------------------------------------
+        draft_citations: set[tuple[str, str, tuple[str, ...]]] = set()
+        for section in draft_sections:
+            for reference in section.get("claim_references", []):
+                claim_id = str(reference.get("claim_id") or "")
+                cited = tuple(
+                    sorted(str(item) for item in reference.get("passage_ids") or ())
+                )
+                draft_citations.add((section["section_id"], claim_id, cited))
+        try:
+            validate_citation_artifact(result.value, draft_citations)
+        except CompletionProvenanceError as exc:
+            self._commit_stage_failure(uow_factory, run_id, "citation_pass", str(exc))
+            citation_error = exc
+
+        if citation_error is not None:
+            raise ReportServiceError(
+                f"citation-pass semantic validation failed: {citation_error}"
+            )
+
         with uow_factory() as uow:
             record = uow.synthesis_stages.get_synthesis_stage(run_id, "citation_pass")
-
-            if result.error:
-                self._update_stage(
-                    uow,
-                    record,
-                    status=SynthesisStageStatus.FAILED.value,
-                    error=result.error,
-                    increment_attempts=True,
-                )
-                raise ReportServiceError(f"citation pass stage failed: {result.error}")
-
-            # ------------------------------------------------------------------
-            # Stage-time acceptance: enforce terminal-grade citation validation
-            # before persisting.  An invalid model response must never become a
-            # completed authoritative stage.
-            # ------------------------------------------------------------------
-            draft_citations: set[tuple[str, str, tuple[str, ...]]] = set()
-            for section in draft_sections:
-                for reference in section.get("claim_references", []):
-                    claim_id = str(reference.get("claim_id") or "")
-                    cited = tuple(
-                        sorted(str(item) for item in reference.get("passage_ids") or ())
-                    )
-                    draft_citations.add((section["section_id"], claim_id, cited))
-            try:
-                validate_citation_artifact(result.value, draft_citations)
-            except CompletionProvenanceError as exc:
-                self._update_stage(
-                    uow,
-                    record,
-                    status=SynthesisStageStatus.FAILED.value,
-                    error=str(exc),
-                    increment_attempts=True,
-                )
-                raise ReportServiceError(
-                    f"citation-pass semantic validation failed: {exc}"
-                )
-
             self._update_stage(
                 uow,
                 record,
