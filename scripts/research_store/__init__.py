@@ -2,7 +2,6 @@
 
 from . import acquisition_service as _acquisition_service
 from . import bounded_orchestrator as _bounded_orchestrator
-from . import extraction_service as _extraction_service
 from . import orchestrator as _orchestrator
 from . import postgres as _postgres
 from . import run_service as _run_service
@@ -70,7 +69,7 @@ _workflow_service.ResearchRunService = GuardedResearchRunService
 _orchestrator.ResearchOrchestrator = CheckpointResearchOrchestrator
 ResearchOrchestrator = CheckpointResearchOrchestrator
 
-# Issue #216 canonical provider/stage routing.  ``AcquisitionService`` resolves
+# Issue #216 canonical provider/stage routing. ``AcquisitionService`` resolves
 # its default adapter from the module global at construction time, and
 # ``ResearchOrchestrator.__init__`` resolves its stage classes the same way.
 # Rebinding those established extension points keeps every public builder,
@@ -82,7 +81,7 @@ _orchestrator.AcquisitionStage = BoundedAcquisitionStage
 _orchestrator.ExtractionStage = BoundedExtractionStage
 
 # Issue #217 installs the authoritative batch timing/outcome/selection contract
-# on the same canonical production extension points.  The installer mutates the
+# on the same canonical production extension points. The installer mutates the
 # already-imported classes in place so existing references held by builders,
 # tests, and checkpoint wrappers receive the exact same PostgreSQL behavior.
 install_issue_217_contract(_postgres, _service, _bounded_orchestrator)
@@ -90,9 +89,10 @@ install_issue_217_contract(_postgres, _service, _bounded_orchestrator)
 # ARC-17 independently executes the issue #217 production seam and exposed an
 # ordering defect between successful attempt finalization and run-asset linkage.
 # Install the narrow correction after issue #217 so the exact canonical classes
-# keep run/batch/attempt provenance atomic and identical completion retries
-# idempotent.
-install_arc17_ingestion_release_fix(_service, _extraction_service)
+# keep run/batch/attempt provenance atomic. The idempotent replay shim is scoped
+# only to BoundedExtractionStage.execute; ordinary ExtractionService completion
+# remains unchanged.
+install_arc17_ingestion_release_fix(_service, _bounded_orchestrator)
 
 __all__ = [
     "VALID_NORMALIZATION_DISPOSITIONS",
