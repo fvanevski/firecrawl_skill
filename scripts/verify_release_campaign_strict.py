@@ -16,6 +16,7 @@ import verify_release_campaign as _base
 from release_campaign_timing_contract import (
     validate_timing_diagnostics as _validate_timing,
 )
+from verify_release_campaign import WorkflowIdentity as WorkflowIdentityType
 
 _BASE_VERIFY = _base.verify
 _ACTIVE_COMPARISON: ContextVar[Mapping[str, Any] | None] = ContextVar(
@@ -69,7 +70,7 @@ def verify(
     root: Path,
     dataset_path: Path,
     database_url: str,
-    identity: WorkflowIdentity,
+    identity: WorkflowIdentityType,
     execution_conclusion: str,
 ) -> tuple[dict[str, Any], list[str]]:
     """Run the established verifier with strict timing cross-validation active."""
