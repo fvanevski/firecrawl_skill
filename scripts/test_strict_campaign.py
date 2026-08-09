@@ -2555,8 +2555,12 @@ class TestPreflightCheck:
 class TestNewPreflightChecks:
     """Unit tests for the new functional preflight checks."""
 
-    def test_preflight_valkey_missing_url(self, tmp_path: Path):
+    def test_preflight_valkey_missing_url(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         """Preflight fails when VALKEY_URL is not set."""
+        monkeypatch.delenv("VALKEY_URL", raising=False)
+
         from research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
