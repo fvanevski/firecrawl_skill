@@ -13,8 +13,9 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 MAX_FILE_BYTES = 32 * 1024 * 1024
 MAX_FINDINGS = 200
