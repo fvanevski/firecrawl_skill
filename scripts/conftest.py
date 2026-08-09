@@ -24,16 +24,20 @@ TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item):
-    """Clear guarded ledgers before legacy index-rebuild cleanup.
+    """Clear guarded ledgers and Qdrant before legacy rebuild-test cleanup.
 
     ``TestIndexRebuildRecovery.setup_method`` resets shared corpus/index rows
     with dependency-ordered ``DELETE`` statements. Production append-only and
     terminal-provenance triggers intentionally reject row deletes that would
     otherwise cascade through historical authority. For this one recovery-test
     class on the explicitly disposable integration database, truncate those
-    ledgers before pytest invokes the class setup. This keeps production
-    invariants intact while giving each rebuild case the clean database state
-    that its legacy cleanup contract requires.
+    ledgers before pytest invokes the class setup.
+
+    The class also assumes an empty projection for each method. PostgreSQL is
+    reset per method while the disposable Qdrant service is process-scoped, so
+    leaving prior collections behind makes a one-page test cleanup order
+    dependent. Clear all disposable Qdrant collections here to keep the two
+    authorities at the same test boundary rather than weakening orphan checks.
     """
     if (
         not TEST_DSN
@@ -65,6 +69,26 @@ def pytest_runtest_setup(item):
                    run_asset_membership_seals
                CASCADE"""
         )
+
+    qdrant_url = os.environ.get("QDRANT_URL")
+    if qdrant_url:
+        from research_store.qdrant import QdrantIndex
+
+        cleanup = QdrantIndex(
+            qdrant_url,
+            os.environ.get("QDRANT_API_KEY", ""),
+            "__test_cleanup__",
+            1,
+        )
+        try:
+            response = cleanup._request("GET", "/collections")
+            collections = response.get("result", {}).get("collections", [])
+            for collection in collections:
+                name = collection.get("name")
+                if name:
+                    cleanup.for_collection(name, 1).delete_collection()
+        except Exception as exc:  # noqa: BLE001
+            pytest.fail(f"Failed to reset disposable Qdrant test state: {exc}")
 
 
 @pytest.fixture(scope="session", autouse=True)

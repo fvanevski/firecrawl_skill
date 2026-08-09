@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import json
 import time
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote
-from urllib.request import Request, urlopen
+import urllib.error
+import urllib.parse
+import urllib.request
+
+PAYLOAD_INDEX_SCHEMAS: dict[str, str] = {
+    "snapshot_id": "uuid",
+    "document_id": "uuid",
+    "source_id": "uuid",
+    "domain": "keyword",
+    "published_at": "datetime",
+}
 
 
 class QdrantIndex:
@@ -49,8 +57,13 @@ class QdrantIndex:
         if self.api_key:
             headers["api-key"] = self.api_key
         data = json.dumps(payload).encode() if payload is not None else None
-        with urlopen(
-            Request(self.url + path, data=data, headers=headers, method=method),
+        with urllib.request.urlopen(
+            urllib.request.Request(
+                self.url + path,
+                data=data,
+                headers=headers,
+                method=method,
+            ),
             timeout=15,
         ) as response:
             return json.load(response)
@@ -59,9 +72,9 @@ class QdrantIndex:
         """Inspect collection compatibility without creating or updating it."""
         try:
             response = self._request(
-                "GET", f"/collections/{quote(self.collection, safe='')}"
+                "GET", f"/collections/{urllib.parse.quote(self.collection, safe='')}"
             )
-        except HTTPError as exc:
+        except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return {
                     "collection": self.collection,
@@ -74,7 +87,8 @@ class QdrantIndex:
                     },
                 }
             raise
-        params = response["result"]["config"]["params"]
+        result = response["result"]
+        params = result["config"]["params"]
         vectors = params.get("vectors", {})
         vector = vectors.get("dense", vectors)
         actual = {
@@ -89,6 +103,10 @@ class QdrantIndex:
             "compatible": actual == expected,
             "actual": actual,
             "expected": expected,
+            "status": result.get("status"),
+            "optimizer_status": result.get("optimizer_status"),
+            "points_count": result.get("points_count"),
+            "indexed_vectors_count": result.get("indexed_vectors_count"),
         }
 
     def ensure_schema(self):
@@ -103,7 +121,7 @@ class QdrantIndex:
         if not status["exists"]:
             self._request(
                 "PUT",
-                f"/collections/{quote(self.collection, safe='')}",
+                f"/collections/{urllib.parse.quote(self.collection, safe='')}",
                 {
                     "vectors": {
                         "dense": {"size": self.dimension, "distance": self.distance}
@@ -112,13 +130,13 @@ class QdrantIndex:
             )
             return {**status, "created": True, "compatible": True}
         if not status["compatible"]:
-            # Sparse-vector or otherwise incompatible collection — drop and
-            # recreate.  Qdrant is a rebuildable projection; PostgreSQL owns
-            # the authoritative chunk state.
-            self._request("DELETE", f"/collections/{quote(self.collection, safe='')}")
+            self._request(
+                "DELETE",
+                f"/collections/{urllib.parse.quote(self.collection, safe='')}",
+            )
             self._request(
                 "PUT",
-                f"/collections/{quote(self.collection, safe='')}",
+                f"/collections/{urllib.parse.quote(self.collection, safe='')}",
                 {
                     "vectors": {
                         "dense": {"size": self.dimension, "distance": self.distance}
@@ -130,7 +148,10 @@ class QdrantIndex:
                 "created": True,
                 "compatible": True,
                 "recreated": True,
-                "reason": "dropped incompatible collection and recreated with dense-only schema",
+                "reason": (
+                    "dropped incompatible collection and recreated with "
+                    "dense-only schema"
+                ),
             }
         return {**status, "created": False}
 
@@ -141,11 +162,11 @@ class QdrantIndex:
             try:
                 self._request(
                     "PUT",
-                    f"/collections/{quote(self.collection, safe='')}/points?wait=true",
+                    f"/collections/{urllib.parse.quote(self.collection, safe='')}/points?wait=true",
                     {"points": points},
                 )
                 return
-            except (HTTPError, URLError, TimeoutError):
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
                 if attempt + 1 == attempts:
                     raise
                 time.sleep(min(2**attempt, 10))
@@ -154,7 +175,7 @@ class QdrantIndex:
         """Retrieve exact point IDs from the selected physical collection."""
         response = self._request(
             "POST",
-            f"/collections/{quote(self.collection, safe='')}/points",
+            f"/collections/{urllib.parse.quote(self.collection, safe='')}/points",
             {
                 "ids": [str(identifier) for identifier in ids],
                 "with_payload": with_payload,
@@ -166,12 +187,14 @@ class QdrantIndex:
     def delete(self, ids):
         self._request(
             "POST",
-            f"/collections/{quote(self.collection, safe='')}/points/delete?wait=true",
+            f"/collections/{urllib.parse.quote(self.collection, safe='')}/points/delete?wait=true",
             {"points": [str(i) for i in ids]},
         )
 
     def delete_collection(self) -> None:
-        self._request("DELETE", f"/collections/{quote(self.collection, safe='')}")
+        self._request(
+            "DELETE", f"/collections/{urllib.parse.quote(self.collection, safe='')}"
+        )
 
     def search(self, vector, filters, limit):
         payload = {
@@ -184,7 +207,7 @@ class QdrantIndex:
             payload["filter"] = filters
         return self._request(
             "POST",
-            f"/collections/{quote(self.collection, safe='')}/points/query",
+            f"/collections/{urllib.parse.quote(self.collection, safe='')}/points/query",
             payload,
         )["result"]["points"]
 
@@ -200,7 +223,7 @@ class QdrantIndex:
             payload["offset"] = offset
         return self._request(
             "POST",
-            f"/collections/{quote(self.collection, safe='')}/points/scroll",
+            f"/collections/{urllib.parse.quote(self.collection, safe='')}/points/scroll",
             payload,
         )["result"]
 
@@ -228,83 +251,198 @@ class QdrantIndex:
         self._request("POST", "/collections/aliases", {"actions": actions})
         return True
 
-    def ensure_payload_indexes(self, fields: list[str]) -> dict[str, bool]:
-        """Ensure payload indexes exist for the given fields.
+    @staticmethod
+    def _expected_payload_schemas(
+        fields: dict[str, str] | list[str] | tuple[str, ...],
+    ) -> dict[str, str]:
+        if isinstance(fields, dict):
+            return {str(field): str(schema) for field, schema in fields.items()}
+        return {
+            str(field): PAYLOAD_INDEX_SCHEMAS.get(str(field), "keyword")
+            for field in fields
+        }
 
-        Creates indexes idempotently — returns the current state for each
-        field rather than raising on pre-existing indexes.
+    @staticmethod
+    def _payload_schema_type(schema) -> str | None:
+        if isinstance(schema, str):
+            return schema.lower()
+        if not isinstance(schema, dict):
+            return None
+        value = schema.get("data_type") or schema.get("type")
+        if isinstance(value, str):
+            return value.lower()
+        known = {
+            "keyword",
+            "integer",
+            "float",
+            "bool",
+            "geo",
+            "datetime",
+            "text",
+            "uuid",
+        }
+        for key in schema:
+            if str(key).lower() in known:
+                return str(key).lower()
+        return None
 
-        Payload indexes accelerate filter-based lookups on Qdrant point
-        payloads.  The set of indexed fields is drawn from the reconciliation
-        surface required by issue #222: snapshot_id, document_id, source_id,
-        domain, and published_at.
-
-        Returns:
-            A mapping from field name to ``True`` when the index is present
-            (either newly created or already existing).
-        """
-        result: dict[str, bool] = {}
+    def inspect_payload_indexes(
+        self,
+        fields: dict[str, str] | list[str] | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
+    ) -> dict[str, dict]:
+        """Read payload-index state from ``result.payload_schema`` without writes."""
+        expected = self._expected_payload_schemas(fields)
         try:
             response = self._request(
-                "GET", f"/collections/{quote(self.collection, safe='')}"
+                "GET", f"/collections/{urllib.parse.quote(self.collection, safe='')}"
             )
-        except HTTPError as exc:
+        except urllib.error.HTTPError as exc:
             if exc.code == 404:
-                return {field: False for field in fields}
+                return {
+                    field: {
+                        "present": False,
+                        "compatible": False,
+                        "expected_type": schema,
+                        "actual_type": None,
+                    }
+                    for field, schema in expected.items()
+                }
             raise
-        params = response["result"]["config"]["params"]
-        existing = {
-            idx["field_name"]
-            for idx in params.get("params", {}).get("indexed_fields", [])
-        }
-        for field in fields:
-            if field in existing:
-                result[field] = True
-                continue
-            self._request(
-                "PUT",
-                f"/collections/{quote(self.collection, safe='')}/index",
-                {
-                    "field_name": field,
-                    "field_schema": "text",
-                },
-            )
-            result[field] = True
-        return result
+        payload_schema = response.get("result", {}).get("payload_schema", {}) or {}
+        status: dict[str, dict] = {}
+        for field, expected_type in expected.items():
+            raw_schema = payload_schema.get(field)
+            actual_type = self._payload_schema_type(raw_schema)
+            present = raw_schema is not None
+            status[field] = {
+                "present": present,
+                "compatible": present and actual_type == expected_type.lower(),
+                "expected_type": expected_type.lower(),
+                "actual_type": actual_type,
+            }
+        return status
+
+    def ensure_payload_indexes(
+        self,
+        fields: dict[str, str] | list[str] | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
+        *,
+        create_missing: bool = True,
+    ) -> dict[str, bool]:
+        """Idempotently create *missing* payload indexes with typed schemas.
+
+        Incompatible existing schemas are never overwritten or deleted.  Set
+        ``create_missing=False`` for a read-only compatibility check.  The
+        return shape is retained as ``field -> bool`` for callers that used the
+        original issue-#222 helper; ``True`` means a compatible index exists.
+        """
+        expected = self._expected_payload_schemas(fields)
+        status = self.inspect_payload_indexes(expected)
+        created = False
+        if create_missing:
+            for field, detail in status.items():
+                if detail["present"]:
+                    continue
+                self._request(
+                    "PUT",
+                    f"/collections/{urllib.parse.quote(self.collection, safe='')}/index?wait=true",
+                    {
+                        "field_name": field,
+                        "field_schema": expected[field],
+                    },
+                )
+                created = True
+            if created:
+                status = self.inspect_payload_indexes(expected)
+        return {field: detail["compatible"] for field, detail in status.items()}
 
     def inspect_shard_state(self) -> list[dict]:
-        """Return per-shard state for the collection.
+        """Return actual local/remote shard replicas from Qdrant cluster info.
 
-        Qdrant shards carry their own point counts and health.  This method
-        surfaces that information so reconciliation can detect inactive or
-        degraded shards without assuming a single-shard topology.
+        This method never fabricates a healthy single-shard fallback.  An empty
+        list therefore means the cluster endpoint returned no shard replicas.
         """
         try:
             response = self._request(
-                "GET", f"/collections/{quote(self.collection, safe='')}"
+                "GET",
+                f"/collections/{urllib.parse.quote(self.collection, safe='')}/cluster",
             )
-        except HTTPError as exc:
+        except urllib.error.HTTPError as exc:
             if exc.code == 404:
-                return [{"state": "missing", "collection": self.collection}]
+                return [
+                    {
+                        "state": "missing",
+                        "collection": self.collection,
+                        "location": "collection",
+                    }
+                ]
             raise
-        shards = response["result"].get("shards", [])
-        if not shards:
-            return [
-                {
-                    "state": "active",
-                    "shard_id": 0,
-                    "point_count": None,
-                    "is_writer": True,
-                }
-            ]
-        out: list[dict] = []
-        for shard in shards:
-            out.append(
-                {
+        result = response.get("result", {}) or {}
+        shards: list[dict] = []
+        for location, key in (("local", "local_shards"), ("remote", "remote_shards")):
+            for shard in result.get(key, []) or []:
+                item = {
                     "shard_id": shard.get("shard_id"),
-                    "point_count": shard.get("points_count", {}).get("total", None),
-                    "is_writer": shard.get("is_writer", False),
-                    "state": shard.get("state", "unknown"),
+                    "state": str(shard.get("state", "unknown")).lower(),
+                    "location": location,
                 }
+                if location == "local":
+                    item["point_count"] = shard.get("points_count")
+                else:
+                    item["peer_id"] = shard.get("peer_id")
+                if shard.get("shard_key") is not None:
+                    item["shard_key"] = shard.get("shard_key")
+                shards.append(item)
+        return shards
+
+    def inspect_shard_health(self) -> dict:
+        """Return fail-closed shard/replica health from the cluster endpoint."""
+        try:
+            response = self._request(
+                "GET",
+                f"/collections/{urllib.parse.quote(self.collection, safe='')}/cluster",
             )
-        return out
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return {
+                    "healthy": False,
+                    "shards": [
+                        {
+                            "state": "missing",
+                            "collection": self.collection,
+                            "location": "collection",
+                        }
+                    ],
+                    "shard_count": 0,
+                    "transfers": [],
+                    "resharding_operations": [],
+                }
+            raise
+        result = response.get("result", {}) or {}
+        shards: list[dict] = []
+        for location, key in (("local", "local_shards"), ("remote", "remote_shards")):
+            for shard in result.get(key, []) or []:
+                item = {
+                    "shard_id": shard.get("shard_id"),
+                    "state": str(shard.get("state", "unknown")).lower(),
+                    "location": location,
+                }
+                if location == "local":
+                    item["point_count"] = shard.get("points_count")
+                else:
+                    item["peer_id"] = shard.get("peer_id")
+                if shard.get("shard_key") is not None:
+                    item["shard_key"] = shard.get("shard_key")
+                shards.append(item)
+        transfers = result.get("shard_transfers", []) or []
+        resharding = result.get("resharding_operations", []) or []
+        states_healthy = bool(shards) and all(
+            shard.get("state") == "active" for shard in shards
+        )
+        return {
+            "healthy": states_healthy and not transfers and not resharding,
+            "shards": shards,
+            "shard_count": result.get("shard_count"),
+            "peer_id": result.get("peer_id"),
+            "transfers": transfers,
+            "resharding_operations": resharding,
+        }
