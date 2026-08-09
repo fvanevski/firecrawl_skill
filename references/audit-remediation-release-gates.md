@@ -1,7 +1,7 @@
 # Audit Remediation RC — ARC-17 release-gate contract
 
-Issue: #223  
-Epic: #206  
+Issue: #223
+Epic: #206
 Branch: `rc/audit-17-release-gates`
 
 This document is the human-readable companion to

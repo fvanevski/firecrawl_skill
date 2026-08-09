@@ -1,6 +1,6 @@
 # Audit Remediation RC — pre-release notes
 
-Issue: #223  
+Issue: #223
 Epic: #206
 
 These notes are deliberately **pre-release**. **No RC tag exists yet**, no release
