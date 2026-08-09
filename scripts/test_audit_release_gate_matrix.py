@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from dataclasses import replace
 from pathlib import Path
 
 from audit_release_gate_matrix import REQUIRED_GATE_IDS, validate_matrix
@@ -108,6 +110,14 @@ def test_concurrent_bounded_executions_on_independent_instances_do_not_interfere
     must execute without interfering with each other's method rebinding.  This
     regresses the assumption that repository construction creates independent
     service instances per stage."""
+    import pytest
+
+    test_dsn = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+    if not test_dsn:
+        pytest.skip(
+            "requires RESEARCH_STORE_TEST_DATABASE_URL for service construction"
+        )
+
     from unittest.mock import MagicMock
 
     from research_store.bounded_orchestrator import BoundedExtractionStage
@@ -115,6 +125,7 @@ def test_concurrent_bounded_executions_on_independent_instances_do_not_interfere
     from research_store.container import build_extraction_service, build_service
 
     config = StoreConfig.from_env()
+    config = replace(config, database_url=test_dsn)
     corpus_a = build_service(config)
     corpus_b = build_service(config)
     extraction_a = build_extraction_service(config)
