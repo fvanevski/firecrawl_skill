@@ -123,12 +123,24 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
             """INSERT INTO run_asset_promotion_subjects(
                    run_id,snapshot_id,role,current_stage,stage_revision,provenance,
                    actor_type,policy_version,lifecycle_revision,reason_code)
-                 VALUES(%s,%s,'acquired','completion_critical',0,'authoritative',
+                 VALUES(%s,%s,'acquired','retained',0,'direct_retention',
                         'integration-test','asset-promotion-v1',0,'test_seed')
                  RETURNING id""",
             (run_id, snapshot_id),
         )
         subject_id = UUID(str(cur.fetchone()[0]))
+        cur.execute(
+            """UPDATE run_asset_promotion_subjects
+                   SET current_stage='evidence_eligible',reason_code='test_evidence'
+                 WHERE id=%s""",
+            (subject_id,),
+        )
+        cur.execute(
+            """UPDATE run_asset_promotion_subjects
+                   SET current_stage='completion_critical',reason_code='test_completion'
+                 WHERE id=%s""",
+            (subject_id,),
+        )
         member_payload = _member_payload(
             subject_id,
             snapshot_id,
