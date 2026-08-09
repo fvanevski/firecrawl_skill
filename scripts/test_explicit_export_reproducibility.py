@@ -15,10 +15,12 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store import cli as store_cli
+from research_store.asset_promotion_service import AssetPromotionService
 from research_store.config import StoreConfig
 from research_store.container import build_run_service, build_service
 from research_store.domain import IngestRequest
 from research_store.index_census import CENSUS_CLASSES, census_index_jobs
+from research_store.index_checkpoint_service import IndexCheckpointService
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 from research_store.run_integrity_export import SECTION_ITEM_LIMIT
 
@@ -64,9 +66,29 @@ def _configure_env(monkeypatch, config: StoreConfig) -> None:
     monkeypatch.setenv("BLOB_ROOT", str(config.blob_root))
 
 
+def _advance_to_indexing(runs, status):
+    current = status
+    for next_state in (
+        "planning",
+        "corpus_review",
+        "acquiring",
+        "extracting",
+        "indexing",
+    ):
+        current = runs.transition(
+            status.id,
+            next_state,
+            expected_revision=current.lifecycle_revision,
+            idempotency_key=f"integrity-seed:{status.external_id}:{next_state}",
+            actor_type="integration-test",
+        )
+    return current
+
+
 def _create_run_with_asset(config: StoreConfig, label: str):
     external_id = f"fr_{label}_{uuid4().hex}"
-    run = build_run_service(config).create(
+    runs = build_run_service(config)
+    run = runs.create(
         f"{label} run",
         external_id,
         execution_mode="autonomous_local",
@@ -82,6 +104,15 @@ def _create_run_with_asset(config: StoreConfig, label: str):
         ],
         research_run_external_id=external_id,
     )
+    current = _advance_to_indexing(runs, run)
+    seal = AssetPromotionService(runs.uow_factory).prepare_for_indexing(
+        current.id,
+        lifecycle_revision=current.lifecycle_revision,
+        actor_type="integration-test",
+        actor_identifier="test_explicit_export_reproducibility",
+    )
+    assert seal.expected_asset_count == 1
+    assert seal.expected_chunk_count > 0
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT c.id,d.fingerprint,j.id,m.id
@@ -92,40 +123,27 @@ def _create_run_with_asset(config: StoreConfig, label: str):
                  JOIN index_definitions d ON d.id=m.index_definition_id
                  JOIN index_jobs j ON j.manifest_id=m.id
                 WHERE a.run_id=%s ORDER BY c.id""",
-            (run.id,),
+            (current.id,),
         )
         rows = cursor.fetchall()
     assert rows
-    return run, external_id, rows
+    return current, external_id, rows
 
 
-def _install_checkpoint(run_id: UUID, rows) -> tuple[list[UUID], str]:
-    entity_ids = [UUID(str(row[0])) for row in rows]
-    fingerprint = str(rows[0][1])
-    digest = hashlib.sha256(
-        "\n".join(sorted(str(item) for item in entity_ids)).encode("utf-8")
-    ).hexdigest()
-    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT lifecycle_revision FROM research_runs WHERE id=%s", (run_id,)
-        )
-        revision = int(cursor.fetchone()[0])
-        cursor.execute(
-            """INSERT INTO indexing_checkpoints(
-                   run_id,lifecycle_revision,fingerprint,entity_ids,
-                   expected_membership_sha256,expected_count,idempotency_key)
-                 VALUES(%s,%s,%s,%s,%s,%s,%s)""",
-            (
-                run_id,
-                revision,
-                fingerprint,
-                entity_ids,
-                digest,
-                len(entity_ids),
-                f"integrity-test:{uuid4()}",
-            ),
-        )
-    return entity_ids, fingerprint
+def _install_checkpoint(config: StoreConfig, run) -> tuple[list[UUID], str]:
+    runs = build_run_service(config)
+    checkpoints = IndexCheckpointService(
+        runs.uow_factory,
+        max_attempts=config.max_index_attempts,
+    )
+    fingerprint = checkpoints.active_fingerprint(run.id)
+    checkpoint = checkpoints.ensure(
+        run.id,
+        lifecycle_revision=run.lifecycle_revision,
+        fingerprint=fingerprint,
+        idempotency_key=f"integrity-test:{uuid4()}",
+    )
+    return list(checkpoint.entity_ids), fingerprint
 
 
 def test_explicit_export_serializer_is_canonical_and_atomic(tmp_path):
@@ -295,7 +313,7 @@ def test_integrity_is_run_scoped_and_ignores_other_run_leases(
     config = _config(tmp_path)
     target, target_external, target_rows = _create_run_with_asset(config, "target")
     other, _other_external, other_rows = _create_run_with_asset(config, "other")
-    target_ids, _fingerprint = _install_checkpoint(target.id, target_rows)
+    target_ids, _fingerprint = _install_checkpoint(config, target)
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         other_job = other_rows[0][2]
         other_manifest = other_rows[0][3]
@@ -335,8 +353,8 @@ def test_integrity_redacts_entire_artifact_and_stdout(
     tmp_path, monkeypatch, capsys, prepared_export_database
 ):
     config = _config(tmp_path)
-    run, external_id, rows = _create_run_with_asset(config, "redact")
-    _install_checkpoint(run.id, rows)
+    run, external_id, _rows = _create_run_with_asset(config, "redact")
+    _install_checkpoint(config, run)
     access_key = "AKIAIOSFODNN7EXAMPLE"
     signature = "super-secret-signature"
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
@@ -370,7 +388,7 @@ def test_integrity_reports_running_live_at_terminal_then_later_completion(
 ):
     config = _config(tmp_path)
     run, external_id, rows = _create_run_with_asset(config, "late")
-    entity_ids, fingerprint = _install_checkpoint(run.id, rows)
+    entity_ids, fingerprint = _install_checkpoint(config, run)
     job_id, manifest_id = rows[0][2], rows[0][3]
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -390,16 +408,9 @@ def test_integrity_reports_running_live_at_terminal_then_later_completion(
         census = census_index_jobs(connection, entity_ids, fingerprint)
     assert census["running_live"] == 1
     service = build_run_service(config)
-    planning = service.transition(
-        run.id,
-        "planning",
-        expected_revision=run.lifecycle_revision,
-        idempotency_key=f"planning:{uuid4()}",
-        actor_type="test",
-    )
     service.fail(
         run.id,
-        expected_revision=planning.lifecycle_revision,
+        expected_revision=run.lifecycle_revision,
         idempotency_key=f"failed:{uuid4()}",
         actor_type="test",
         reason="audited live job terminalization",
