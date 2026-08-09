@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import collections.abc
 import json
 import time
 from urllib.error import HTTPError, URLError
@@ -245,9 +244,9 @@ class QdrantIndex:
 
     @staticmethod
     def _expected_payload_schemas(
-        fields: collections.abc.Mapping[str, str] | list[str] | tuple[str, ...],
+        fields: dict[str, str] | list[str] | tuple[str, ...],
     ) -> dict[str, str]:
-        if isinstance(fields, collections.abc.Mapping):
+        if isinstance(fields, dict):
             return {str(field): str(schema) for field, schema in fields.items()}
         return {
             str(field): PAYLOAD_INDEX_SCHEMAS.get(str(field), "keyword")
@@ -280,7 +279,7 @@ class QdrantIndex:
 
     def inspect_payload_indexes(
         self,
-        fields: collections.abc.Mapping[str, str]
+        fields: dict[str, str]
         | list[str]
         | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
     ) -> dict[str, dict]:
@@ -318,7 +317,7 @@ class QdrantIndex:
 
     def ensure_payload_indexes(
         self,
-        fields: collections.abc.Mapping[str, str]
+        fields: dict[str, str]
         | list[str]
         | tuple[str, ...] = PAYLOAD_INDEX_SCHEMAS,
         *,
