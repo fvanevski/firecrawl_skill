@@ -12,8 +12,137 @@ permissions:
   contents: read
 
 jobs:
+  audit-gates:
+    name: ARC-17 exact-main disposable release gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate-sha }}
+      DISPATCH_SHA: ${{ github.sha }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      DISPATCH_REF: ${{ github.ref }}
+
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate-sha }}
+          fetch-depth: 0
+
+      - name: Verify exact-head workflow identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$DISPATCH_REF" = "refs/heads/main"
+          test "$DISPATCH_SHA" = "$CANDIDATE_SHA"
+          test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-research-store.txt pytest ruff mypy
+
+      - name: Start disposable PostgreSQL and Qdrant
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --name arc17-pg -d \
+            -e POSTGRES_PASSWORD=postgres \
+            -p 5432:5432 postgres:16-alpine
+          docker run --name arc17-qdrant -d \
+            -p 6333:6333 \
+            -e QDRANT__SERVICE__READ_ONLY_ACCESS=false \
+            qdrant/qdrant:v1.18.3-unprivileged
+
+          for attempt in $(seq 1 30); do
+            if PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres \
+              -c 'SELECT 1' >/dev/null 2>&1; then
+              break
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres \
+            -c 'CREATE DATABASE firecrawl_arc17_gate;'
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:6333/readyz >/dev/null; then
+              break
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+
+      - name: Initialize gate evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'AUDIT_GATE_DIR=%s\n' \
+            "$RUNNER_TEMP/audit-release-gates-$CANDIDATE_SHA" \
+            >> "$GITHUB_ENV"
+
+      - name: Validate machine-readable gate contract
+        env:
+          PYTHONPATH: scripts
+        run: python scripts/audit_release_gate_matrix.py validate
+
+      - name: Execute CI-phase release gates
+        env:
+          PYTHONPATH: scripts
+          RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_arc17_gate
+          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_arc17_gate
+          QDRANT_URL: http://127.0.0.1:6333
+        run: |
+          python scripts/audit_release_gate_matrix.py run \
+            --phase ci \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --output-dir "$AUDIT_GATE_DIR/ci"
+
+      - name: Execute disposable service release gates
+        env:
+          PYTHONPATH: scripts
+          RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_arc17_gate
+          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_arc17_gate
+          QDRANT_URL: http://127.0.0.1:6333
+        run: |
+          python scripts/audit_release_gate_matrix.py run \
+            --phase disposable \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --output-dir "$AUDIT_GATE_DIR/disposable"
+
+      - name: Upload exact-main ARC-17 gate evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-release-gates-${{ inputs.candidate-sha }}
+          path: ${{ runner.temp }}/audit-release-gates-${{ inputs.candidate-sha }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record gate artifact identity
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "artifact_id=${{ steps.upload.outputs.artifact-id }}"
+            echo "artifact_url=${{ steps.upload.outputs.artifact-url }}"
+            echo "artifact_digest=${{ steps.upload.outputs.artifact-digest }}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
   campaign:
-    name: "Real release campaigns (issues #146/#153/#170/#183/#193)"
+    name: "Real release campaigns (issues #146/#153/#170/#183/#193/#223)"
+    needs: audit-gates
     runs-on: [self-hosted, firecrawl-release]
     timeout-minutes: 180
     environment: release-campaign
@@ -122,6 +251,36 @@ jobs:
           python scripts/release_campaign_contract.py verify \
             --campaign-dir "$CAMPAIGN_DIR"
 
+      - name: Scan complete release campaign for secret leakage
+        id: secret_scan
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BLOB_ROOT: ${{ secrets.BLOB_ROOT }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          VALKEY_URL: ${{ secrets.VALKEY_URL }}
+          FIRECRAWL_API_URL: ${{ secrets.FIRECRAWL_API_URL }}
+          EMBEDDING_URL: ${{ secrets.EMBEDDING_URL }}
+          EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+          GENERATIVE_URL: ${{ secrets.GENERATIVE_URL }}
+          GENERATIVE_API_KEY: ${{ secrets.GENERATIVE_API_KEY }}
+          RERANKER_URL: ${{ secrets.RERANKER_URL }}
+          RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
+          PYTHONPATH: scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/scan_release_secrets.py \
+            --root "$CAMPAIGN_DIR" \
+            --output "$CAMPAIGN_DIR/secret-scan.json" \
+            --secret-env DATABASE_URL \
+            --secret-env QDRANT_API_KEY \
+            --secret-env VALKEY_URL \
+            --secret-env EMBEDDING_API_KEY \
+            --secret-env GENERATIVE_API_KEY \
+            --secret-env RERANKER_API_KEY
+
       - name: Upload complete campaign directory
         id: upload
         if: always()
@@ -142,6 +301,7 @@ jobs:
             echo "artifact_digest=${{ steps.upload.outputs.artifact-digest }}"
             echo "candidate_sha=$CANDIDATE_SHA"
             echo "workflow_sha=$WORKFLOW_SHA"
+            echo "secret_scan=${{ steps.secret_scan.outcome }}"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce authoritative gate
@@ -151,6 +311,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "${{ steps.secret_scan.outcome }}" = "success"
           python scripts/enforce_release_campaign_outcomes.py \
             --execute "${{ steps.execute.outcome }}" \
             --verify "${{ steps.verify.outcome }}" \
