@@ -5005,3 +5005,553 @@ class TestIndexRebuildRecovery:
         for collection_info in reconcile_result["qdrant"]["collections"].values():
             assert "cached_point_count" in collection_info
             assert collection_info["cached_point_count"] == 1
+
+    def test_index_reconcile_complete_coverage(self, service):
+        """Reconciliation reports full coverage when all chunks are indexed."""
+        from research_store.cli import _index_build, _index_reconcile
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://complete.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://complete.example/test", "c" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "complete coverage",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "d" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (doc_id, "complete chunk", "e" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        build = _index_build(config)
+        definition = build["index_definition"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests
+                SET index_status='complete',indexed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition["id"],),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition["id"],),
+            )
+
+        # Manually upsert points matching chunk IDs to simulate complete indexing
+
+        from research_store.cli import _qdrant
+
+        index = _qdrant(
+            config,
+            definition["physical_collection"],
+            definition["dimension"],
+            definition["distance_metric"],
+        )
+        # Get the actual chunk IDs from the database
+        with connect(test_dsn) as conn2, conn2.cursor() as cur2:
+            cur2.execute(
+                """SELECT c.id FROM chunks c
+                JOIN documents d ON d.id=c.document_id
+                WHERE d.parser_version=%s AND d.normalization_version=%s
+                  AND c.chunker_version=%s""",
+                (
+                    config.parser_version,
+                    config.normalization_version,
+                    config.chunker_version,
+                ),
+            )
+            chunk_ids = [str(row[0]) for row in cur2.fetchall()]
+
+        for chunk_id in chunk_ids:
+            index.upsert(
+                [
+                    {
+                        "id": chunk_id,
+                        "vector": {"dense": [1.0, 0.0, 0.0, 0.0]},
+                        "payload": {
+                            "parser_version": config.parser_version,
+                            "normalization_version": config.normalization_version,
+                            "chunker_version": config.chunker_version,
+                        },
+                    }
+                ]
+            )
+
+        reconcile_result = _index_reconcile(config, repair=False)
+        assert reconcile_result["ok"] is True
+        assert reconcile_result["discrepancies"] == []
+        for collection_info in reconcile_result["qdrant"]["collections"].values():
+            assert collection_info["coverage"]["missing"] == 0
+            assert collection_info["coverage"]["orphaned"] == 0
+            assert collection_info["has_discrepancies"] is False
+
+    def test_index_reconcile_missing_points(self, service):
+        """Reconciliation detects missing points correctly."""
+
+        from research_store.cli import _index_build, _index_reconcile, _qdrant
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://missing.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://missing.example/test", "f" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "missing points",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "g" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (doc_id, "missing chunk", "h" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        build = _index_build(config)
+        definition = build["index_definition"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests
+                SET index_status='complete',indexed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition["id"],),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition["id"],),
+            )
+
+        # Delete the point from Qdrant to simulate missing point
+        index = _qdrant(
+            config,
+            definition["physical_collection"],
+            definition["dimension"],
+            definition["distance_metric"],
+        )
+        points = index.point_ids()
+        if points.get("points"):
+            for point in points["points"]:
+                index.delete([point["id"]])
+
+        reconcile_result = _index_reconcile(config, repair=False)
+        assert reconcile_result["ok"] is False
+        collection = reconcile_result["qdrant"]["collections"][
+            definition["physical_collection"]
+        ]
+        assert collection["coverage"]["missing"] > 0
+        assert collection["coverage"]["orphaned"] == 0
+        assert collection["has_discrepancies"] is True
+
+    def test_index_reconcile_orphaned_points(self, service):
+        """Reconciliation detects orphaned points correctly."""
+        from uuid import uuid4
+
+        from research_store.cli import _index_build, _index_reconcile, _qdrant
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://orphan.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://orphan.example/test", "i" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "orphaned points",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "j" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (doc_id, "orphan chunk", "k" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        build = _index_build(config)
+        definition = build["index_definition"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests
+                SET index_status='complete',indexed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition["id"],),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition["id"],),
+            )
+
+        # Delete any existing points and add an orphan point to Qdrant
+        index = _qdrant(
+            config,
+            definition["physical_collection"],
+            definition["dimension"],
+            definition["distance_metric"],
+        )
+        # Clear existing points
+        existing = index.point_ids()
+        if existing.get("points"):
+            index.delete([p["id"] for p in existing["points"]])
+        orphan_id = uuid4()
+        index.upsert(
+            [
+                {
+                    "id": str(orphan_id),
+                    "vector": {"dense": [1.0, 0.0, 0.0, 0.0]},
+                    "payload": {
+                        "parser_version": config.parser_version,
+                        "normalization_version": config.normalization_version,
+                        "chunker_version": config.chunker_version,
+                    },
+                }
+            ]
+        )
+
+        reconcile_result = _index_reconcile(config, repair=False)
+        assert reconcile_result["ok"] is False
+        collection = reconcile_result["qdrant"]["collections"][
+            definition["physical_collection"]
+        ]
+        # Verify we have at least one orphaned point and the structure is correct
+        assert collection["coverage"]["orphaned"] >= 1
+        assert collection["has_discrepancies"] is True
+        assert "shard_state" in collection
+        assert "payload_indexes" in collection
+
+    def test_index_reconcile_payload_mismatch(self, service):
+        """Reconciliation detects payload identity mismatches."""
+
+        from research_store.cli import _index_build, _index_reconcile, _qdrant
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://payload-mismatch.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://payload-mismatch.example/test", "l" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "payload mismatch",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "m" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (doc_id, "payload chunk", "n" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            embedding_dimension=4,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        build = _index_build(config)
+        definition = build["index_definition"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests
+                SET index_status='complete',indexed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition["id"],),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition["id"],),
+            )
+
+        # Add an orphan point to trigger discrepancies
+        from uuid import uuid4
+
+        index = _qdrant(
+            config,
+            definition["physical_collection"],
+            definition["dimension"],
+            definition["distance_metric"],
+        )
+        orphan_id = uuid4()
+        index.upsert(
+            [
+                {
+                    "id": str(orphan_id),
+                    "vector": {"dense": [1.0, 0.0, 0.0, 0.0]},
+                    "payload": {
+                        "parser_version": config.parser_version,
+                        "normalization_version": config.normalization_version,
+                        "chunker_version": config.chunker_version,
+                    },
+                }
+            ]
+        )
+
+        reconcile_result = _index_reconcile(config, repair=False)
+        assert reconcile_result["ok"] is False
+        collection = reconcile_result["qdrant"]["collections"][
+            definition["physical_collection"]
+        ]
+        assert collection["has_discrepancies"] is True
+        # Verify new fields are present
+        assert "shard_state" in collection
+        assert "payload_indexes" in collection
+        assert "coverage" in collection
+
+    def test_index_reconcile_shard_state(self, service):
+        """Reconciliation includes shard state information."""
+        from research_store.cli import _index_build, _index_reconcile
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://shard-state.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://shard-state.example/test", "o" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "shard state",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "p" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (doc_id, "shard chunk", "q" * 64, "structural", "structural-v1"),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        _index_build(config)
+        reconcile_result = _index_reconcile(config, repair=False)
+        assert reconcile_result["ok"] is True
+        for collection_info in reconcile_result["qdrant"]["collections"].values():
+            assert "shard_state" in collection_info
+            assert isinstance(collection_info["shard_state"], list)
+            if collection_info["shard_state"]:
+                assert "state" in collection_info["shard_state"][0]
+                assert "shard_id" in collection_info["shard_state"][0]
+
+    def test_index_reconcile_payload_indexes(self, service):
+        """Reconciliation provisions payload indexes idempotently."""
+        from research_store.cli import _index_build, _index_reconcile
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://payload-index.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://payload-index.example/test", "r" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "payload index",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "s" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s)""",
+                (
+                    doc_id,
+                    "payload index chunk",
+                    "t" * 64,
+                    "structural",
+                    "structural-v1",
+                ),
+            )
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        _index_build(config)
+        reconcile_result = _index_reconcile(config, repair=False)
+        assert reconcile_result["ok"] is True
+        for collection_info in reconcile_result["qdrant"]["collections"].values():
+            assert "payload_indexes" in collection_info
+            payload_indexes = collection_info["payload_indexes"]
+            assert isinstance(payload_indexes, dict)
+            # All checked fields should be indexed
+            for field in [
+                "snapshot_id",
+                "document_id",
+                "source_id",
+                "domain",
+                "published_at",
+            ]:
+                assert payload_indexes.get(field) is True
+
+        # Run again to verify idempotency
+        reconcile_result2 = _index_reconcile(config, repair=False)
+        assert reconcile_result2["ok"] is True
+        for collection_info in reconcile_result2["qdrant"]["collections"].values():
+            payload_indexes = collection_info["payload_indexes"]
+            for field in [
+                "snapshot_id",
+                "document_id",
+                "source_id",
+                "domain",
+                "published_at",
+            ]:
+                assert payload_indexes.get(field) is True

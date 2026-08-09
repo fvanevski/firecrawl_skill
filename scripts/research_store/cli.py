@@ -1832,6 +1832,15 @@ def _index_reconcile(config, repair=False):
             for row in cur.fetchall()
         }
 
+    # Payload fields that reconciliation checks for identity mismatches.
+    payload_check_fields = [
+        "snapshot_id",
+        "document_id",
+        "source_id",
+        "domain",
+        "published_at",
+    ]
+
     # Qdrant reconciliation
     aliases = _qdrant(config).list_aliases()
     qdrant = {"ok": True, "aliases": aliases, "collections": {}}
@@ -1892,6 +1901,10 @@ def _index_reconcile(config, repair=False):
                 chunk_ids = {str(value) for value in _active_chunk_ids(config)}
                 missing = chunk_ids - point_ids
                 orphaned = point_ids - chunk_ids
+                collection_info["coverage"] = {
+                    "missing": len(missing),
+                    "orphaned": len(orphaned),
+                }
                 if missing:
                     discrepancies.append(
                         f"collection {collection_name}: {len(missing)} missing points"
@@ -1902,6 +1915,64 @@ def _index_reconcile(config, repair=False):
                         f"collection {collection_name}: {len(orphaned)} orphaned points"
                     )
                     definitions_with_discrepancies.add(row["id"])
+
+                # Payload identity mismatch detection.
+                sample_size = min(len(point_ids), 256)
+                sample_ids = list(point_ids)[:sample_size]
+                retrieved = index.retrieve(sample_ids, with_payload=True)
+                expected_records = {}
+                with _db(config) as conn2, conn2.cursor() as cur2:
+                    cur2.execute(
+                        """SELECT c.id, d.snapshot_id, d.document_id, s.id AS source_id,
+                               s.registered_domain, d.published_at
+                        FROM chunks c
+                        JOIN documents d ON d.id = c.document_id
+                        JOIN asset_snapshots a ON a.id = d.snapshot_id
+                        JOIN sources s ON s.id = a.source_id
+                        WHERE c.id = ANY(%s)""",
+                        (sample_ids,),
+                    )
+                    for rec_row in cur2.fetchall():
+                        expected_records[str(rec_row[0])] = {
+                            "snapshot_id": str(rec_row[1]) if rec_row[1] else None,
+                            "document_id": str(rec_row[2]) if rec_row[2] else None,
+                            "source_id": str(rec_row[3]) if rec_row[3] else None,
+                            "domain": rec_row[4],
+                            "published_at": (
+                                rec_row[5].isoformat() if rec_row[5] else None
+                            ),
+                        }
+                payload_mismatches = []
+                for point in retrieved:
+                    pid = str(point.get("id"))
+                    payload = point.get("payload", {})
+                    expected = expected_records.get(pid)
+                    if expected is None:
+                        continue
+                    for field in payload_check_fields:
+                        expected_val = expected.get(field)
+                        actual_val = payload.get(field)
+                        if expected_val is not None and str(actual_val) != str(
+                            expected_val
+                        ):
+                            payload_mismatches.append(
+                                f"point {pid} field {field}: expected={expected_val!r}, actual={actual_val!r}"
+                            )
+                if payload_mismatches:
+                    discrepancies.append(
+                        f"collection {collection_name}: {len(payload_mismatches)} payload mismatches"
+                    )
+                    definitions_with_discrepancies.add(row["id"])
+                    collection_info["payload_mismatches"] = payload_mismatches[:10]
+
+            # Shard state reporting.
+            shard_state = index.inspect_shard_state()
+            collection_info["shard_state"] = shard_state
+
+            # Payload index provisioning — idempotent.
+            payload_indexes = index.ensure_payload_indexes(payload_check_fields)
+            collection_info["payload_indexes"] = payload_indexes
+
             collection_info["has_discrepancies"] = (
                 row["id"] in definitions_with_discrepancies
             )
@@ -1950,7 +2021,7 @@ def _index_reconcile(config, repair=False):
                 missing = chunk_ids - point_ids
                 orphaned = point_ids - chunk_ids
                 cached = point_counts.get(def_id)
-                qdrant["collections"][collection_name] = {
+                collection_info = {
                     "aliases": [],
                     "schema": schema,
                     "point_count": len(point_ids),
@@ -1971,6 +2042,12 @@ def _index_reconcile(config, repair=False):
                         f"collection {collection_name}: {len(orphaned)} orphaned points"
                     )
                     definitions_with_discrepancies.add(def_id)
+                # Shard state and payload indexes for unaliased collections too.
+                collection_info["shard_state"] = index.inspect_shard_state()
+                collection_info["payload_indexes"] = index.ensure_payload_indexes(
+                    payload_check_fields
+                )
+                qdrant["collections"][collection_name] = collection_info
             except Exception as exc:  # noqa: BLE001
                 qdrant["collections"][collection_name] = {
                     "aliases": [],

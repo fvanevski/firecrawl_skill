@@ -227,3 +227,84 @@ class QdrantIndex:
         )
         self._request("POST", "/collections/aliases", {"actions": actions})
         return True
+
+    def ensure_payload_indexes(self, fields: list[str]) -> dict[str, bool]:
+        """Ensure payload indexes exist for the given fields.
+
+        Creates indexes idempotently — returns the current state for each
+        field rather than raising on pre-existing indexes.
+
+        Payload indexes accelerate filter-based lookups on Qdrant point
+        payloads.  The set of indexed fields is drawn from the reconciliation
+        surface required by issue #222: snapshot_id, document_id, source_id,
+        domain, and published_at.
+
+        Returns:
+            A mapping from field name to ``True`` when the index is present
+            (either newly created or already existing).
+        """
+        result: dict[str, bool] = {}
+        try:
+            response = self._request(
+                "GET", f"/collections/{quote(self.collection, safe='')}"
+            )
+        except HTTPError as exc:
+            if exc.code == 404:
+                return {field: False for field in fields}
+            raise
+        params = response["result"]["config"]["params"]
+        existing = {
+            idx["field_name"]
+            for idx in params.get("params", {}).get("indexed_fields", [])
+        }
+        for field in fields:
+            if field in existing:
+                result[field] = True
+                continue
+            self._request(
+                "PUT",
+                f"/collections/{quote(self.collection, safe='')}/index",
+                {
+                    "field_name": field,
+                    "field_schema": "text",
+                },
+            )
+            result[field] = True
+        return result
+
+    def inspect_shard_state(self) -> list[dict]:
+        """Return per-shard state for the collection.
+
+        Qdrant shards carry their own point counts and health.  This method
+        surfaces that information so reconciliation can detect inactive or
+        degraded shards without assuming a single-shard topology.
+        """
+        try:
+            response = self._request(
+                "GET", f"/collections/{quote(self.collection, safe='')}"
+            )
+        except HTTPError as exc:
+            if exc.code == 404:
+                return [{"state": "missing", "collection": self.collection}]
+            raise
+        shards = response["result"].get("shards", [])
+        if not shards:
+            return [
+                {
+                    "state": "active",
+                    "shard_id": 0,
+                    "point_count": None,
+                    "is_writer": True,
+                }
+            ]
+        out: list[dict] = []
+        for shard in shards:
+            out.append(
+                {
+                    "shard_id": shard.get("shard_id"),
+                    "point_count": shard.get("points_count", {}).get("total", None),
+                    "is_writer": shard.get("is_writer", False),
+                    "state": shard.get("state", "unknown"),
+                }
+            )
+        return out
