@@ -207,10 +207,7 @@ def _bounded_execute_with_scoped_success_replay(self, *args, **kwargs):
                         backend_status is None
                         or existing.backend_status == backend_status
                     )
-                    and (
-                        error_message is None
-                        or existing.error_message == error_message
-                    )
+                    and (error_message is None or existing.error_message == error_message)
                 )
                 if same:
                     return existing
@@ -232,7 +229,9 @@ def _bounded_execute_with_scoped_success_replay(self, *args, **kwargs):
             error_message=error_message,
         )
 
-    extraction_service.complete_attempt = MethodType(scoped_complete, extraction_service)
+    extraction_service.complete_attempt = MethodType(
+        scoped_complete, extraction_service
+    )
     try:
         return _ORIGINAL_BOUNDED_EXECUTE(self, *args, **kwargs)
     finally:
