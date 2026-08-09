@@ -6,12 +6,10 @@ snapshot before the corresponding extraction attempt had a terminal end time.
 The asset-promotion guard can therefore reject a valid run-asset link and make a
 successful corpus member appear failed.
 
-This module is installed after the issue #217 compatibility extension. It keeps
-successful extraction completion, batch-member persistence, and run-asset
-linkage in one PostgreSQL transaction. The only idempotent completion shim is
-scoped to the bounded-wave execution that deliberately replays the successful
-completion after corpus ingestion; ordinary ExtractionService completion remains
-unchanged.
+This module is installed after the issue #217 compatibility extension. It scopes
+its atomic ingest ordering and idempotent success replay only to the real bounded
+extraction execution. Ordinary CorpusService and ExtractionService callers keep
+their established contracts.
 """
 
 from __future__ import annotations
@@ -21,8 +19,8 @@ from types import MethodType
 from typing import Any
 from uuid import UUID
 
-_ORIGINAL_FINALIZE_BATCH = None
-_ORIGINAL_BOUNDED_EXECUTE = None
+_ORIGINAL_FINALIZE_BATCH: Any = None
+_ORIGINAL_BOUNDED_EXECUTE: Any = None
 
 
 def _same_blob(existing: Any, supplied: Any) -> bool:
@@ -37,7 +35,7 @@ def _same_blob(existing: Any, supplied: Any) -> bool:
     )
 
 
-def _corpus_ingest_batch(
+def _bounded_corpus_ingest_batch(
     self,
     invocation_id: str,
     operation: str,
@@ -46,7 +44,7 @@ def _corpus_ingest_batch(
     research_run_external_id: str | None = None,
     metadata: dict | None = None,
 ) -> dict:
-    """Persist extraction-backed success and run linkage atomically."""
+    """Persist bounded extraction success and run linkage atomically."""
     from .domain import IngestRequest, utcnow
 
     failures = 0
@@ -94,11 +92,10 @@ def _corpus_ingest_batch(
                     result = uow.persist_ingest(*prepared.persist_args())
                     constituent_completed_at = utcnow()
 
-                    # Extraction-backed success is terminalized in the same
-                    # transaction as the authoritative snapshot/member/link.
-                    # This satisfies the promotion guard without creating a
-                    # window in which a retained run asset cites a nonterminal
-                    # attempt. Content-addressed duplicate blob writes are safe.
+                    # For the bounded path, extraction success, exact batch
+                    # membership, and run-asset retention become authoritative
+                    # in one PostgreSQL transaction. If any later write in this
+                    # savepoint fails, the success completion rolls back too.
                     if attempt_id is not None:
                         raw_blob = self.blob_store.put(BytesIO(request.content), None)
                         normalized_blob = self.blob_store.put(
@@ -171,13 +168,22 @@ def _finalize_batch_with_canonical_identity(
     return manifest
 
 
-def _bounded_execute_with_scoped_success_replay(self, *args, **kwargs):
-    """Allow only the bounded wave's deliberate second success completion."""
+def _bounded_execute_with_scoped_atomic_ingest(self, *args, **kwargs):
+    """Apply the ordering correction only to the real bounded production seam."""
     extraction_service = self.extraction_service
-    if extraction_service is None:
+    corpus_service = self.corpus_service
+    has_real_boundary = (
+        extraction_service is not None
+        and corpus_service is not None
+        and hasattr(extraction_service, "get_attempt")
+        and hasattr(corpus_service, "uow_factory")
+        and hasattr(corpus_service, "blob_store")
+    )
+    if not has_real_boundary:
         return _ORIGINAL_BOUNDED_EXECUTE(self, *args, **kwargs)
 
     original_complete = extraction_service.complete_attempt
+    original_ingest_batch = corpus_service.ingest_batch
 
     def scoped_complete(
         service,
@@ -201,12 +207,17 @@ def _bounded_execute_with_scoped_success_replay(self, *args, **kwargs):
                     and _same_blob(existing.raw_blob, raw_blob)
                     and _same_blob(existing.normalized_blob, normalized_blob)
                     and (parser_used is None or existing.parser_used == parser_used)
+                    and (
+                        quality_metrics is None
+                        or existing.quality_metrics == quality_metrics
+                    )
                     and existing.failure_class == failure_class
                     and (http_status is None or existing.http_status == http_status)
                     and (
                         backend_status is None
                         or existing.backend_status == backend_status
                     )
+                    and (end_time is None or existing.end_time == end_time)
                     and (
                         error_message is None or existing.error_message == error_message
                     )
@@ -231,17 +242,19 @@ def _bounded_execute_with_scoped_success_replay(self, *args, **kwargs):
             error_message=error_message,
         )
 
+    corpus_service.ingest_batch = MethodType(_bounded_corpus_ingest_batch, corpus_service)
     extraction_service.complete_attempt = MethodType(
         scoped_complete, extraction_service
     )
     try:
         return _ORIGINAL_BOUNDED_EXECUTE(self, *args, **kwargs)
     finally:
+        corpus_service.ingest_batch = original_ingest_batch
         extraction_service.complete_attempt = original_complete
 
 
 def install_arc17_ingestion_release_fix(service_module, bounded_module) -> None:
-    """Install the ARC-17 ordering correction on the canonical bounded path."""
+    """Install the ARC-17 correction without replacing ordinary service calls."""
     global _ORIGINAL_FINALIZE_BATCH, _ORIGINAL_BOUNDED_EXECUTE
 
     if _ORIGINAL_FINALIZE_BATCH is None:
@@ -249,10 +262,11 @@ def install_arc17_ingestion_release_fix(service_module, bounded_module) -> None:
     if _ORIGINAL_BOUNDED_EXECUTE is None:
         _ORIGINAL_BOUNDED_EXECUTE = bounded_module.BoundedExtractionStage.execute
 
-    service_module.CorpusService.ingest_batch = _corpus_ingest_batch
+    # Normalize the internal batch identity representation while preserving the
+    # manifest shape; all ingestion ordering changes remain bounded-stage scoped.
     service_module.CorpusService.finalize_ingestion_batch = (
         _finalize_batch_with_canonical_identity
     )
     bounded_module.BoundedExtractionStage.execute = (
-        _bounded_execute_with_scoped_success_replay
+        _bounded_execute_with_scoped_atomic_ingest
     )

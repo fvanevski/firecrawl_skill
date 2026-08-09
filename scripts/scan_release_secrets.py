@@ -154,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
                 "files_scanned": report["files_scanned"],
                 "bytes_scanned": report["bytes_scanned"],
                 "findings": len(report["findings"]),
+                "finding_metadata": report["findings"][:10],
                 "skipped_large_files": len(report["skipped_large_files"]),
                 "output": str(args.output),
                 "report_sha256": report["report_sha256"],
