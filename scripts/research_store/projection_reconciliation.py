@@ -284,10 +284,15 @@ def reconcile_projection_compat(
 
             missing: set[str] = set()
             orphaned: set[str] = set()
-            # Preserve the long-standing projection-build contract: an empty
-            # not-yet-populated collection is schedulable and does not claim a
-            # failed historical run. Partial population is reconciled exactly.
-            if point_ids:
+            indexing_complete = (
+                bool(active_ids)
+                and complete_manifests >= len(active_ids)
+                and complete_jobs >= len(active_ids)
+            )
+            # An empty collection is schedulable while durable indexing is
+            # incomplete. Once PostgreSQL marks the current corpus complete,
+            # zero Qdrant points is an exact missing-coverage discrepancy.
+            if point_ids or indexing_complete:
                 missing = active_ids - point_ids
                 orphaned = point_ids - active_ids
                 if missing:
@@ -356,8 +361,7 @@ def reconcile_projection_compat(
                 "payload_index_details": payload_index_details,
                 "shard_state": shard_health["shards"],
                 "shard_health": shard_health,
-                "has_discrepancies": definition_id
-                in definitions_with_discrepancies,
+                "has_discrepancies": definition_id in definitions_with_discrepancies,
             }
         except Exception as exc:  # noqa: BLE001
             discrepancies.append(f"collection {collection_name}: {exc}")
