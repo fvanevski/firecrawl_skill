@@ -72,7 +72,7 @@ jobs:
             sleep 1
           done
           PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres \
-            -c 'CREATE DATABASE firecrawl_arc17_gate;'
+            -c 'CREATE DATABASE firecrawl_arc17_test_gate;'
 
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:6333/readyz >/dev/null; then
@@ -98,8 +98,8 @@ jobs:
       - name: Execute CI-phase release gates
         env:
           PYTHONPATH: scripts
-          RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_arc17_gate
-          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_arc17_gate
+          RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_arc17_test_gate
+          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_arc17_test_gate
           QDRANT_URL: http://127.0.0.1:6333
         run: |
           python scripts/audit_release_gate_matrix.py run \
@@ -110,8 +110,8 @@ jobs:
       - name: Execute disposable service release gates
         env:
           PYTHONPATH: scripts
-          RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_arc17_gate
-          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_arc17_gate
+          RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_arc17_test_gate
+          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_arc17_test_gate
           QDRANT_URL: http://127.0.0.1:6333
         run: |
           python scripts/audit_release_gate_matrix.py run \
