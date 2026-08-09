@@ -6,7 +6,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-
 PAYLOAD_INDEX_SCHEMAS: dict[str, str] = {
     "snapshot_id": "uuid",
     "document_id": "uuid",

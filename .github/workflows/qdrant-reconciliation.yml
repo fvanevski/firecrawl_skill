@@ -37,12 +37,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-research-store.txt pytest ruff
-
-      - name: Capture Ruff canonical import diff
-        run: |
-          ruff check --fix --diff scripts/research_store/qdrant.py || true
-          exit 1
+          python -m pip install -r requirements-research-store.txt pytest
 
       - name: Start disposable PostgreSQL
         run: |
