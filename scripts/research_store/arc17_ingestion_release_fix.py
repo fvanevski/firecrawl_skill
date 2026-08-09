@@ -14,8 +14,6 @@ an idempotent read rather than a mutation of finalized provenance.
 
 from __future__ import annotations
 
-import json
-import logging
 from io import BytesIO
 from typing import Any
 from uuid import UUID
@@ -58,10 +56,7 @@ def _complete_attempt_idempotent(
             and _same_blob(existing.raw_blob, raw_blob)
             and _same_blob(existing.normalized_blob, normalized_blob)
             and (parser_used is None or existing.parser_used == parser_used)
-            and (
-                quality_metrics is None
-                or existing.quality_metrics == quality_metrics
-            )
+            and (quality_metrics is None or existing.quality_metrics == quality_metrics)
             and existing.failure_class == failure_class
             and (http_status is None or existing.http_status == http_status)
             and (backend_status is None or existing.backend_status == backend_status)
