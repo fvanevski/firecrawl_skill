@@ -306,6 +306,14 @@ class ExtractionService:
                 if same:
                     return ExtractionAttempt.from_mapping(existing)
 
+                # Divergent evidence on an already-terminal succeeded attempt
+                # is a production defect — reject it before any repository
+                # write so the terminal row stays immutable.
+                raise RuntimeError(
+                    f"extraction attempt {attempt_id} is already finalized "
+                    "with different authoritative evidence"
+                )
+
             uow.extraction_attempts.complete_attempt(
                 attempt_id=attempt_id,
                 exit_status=exit_status,

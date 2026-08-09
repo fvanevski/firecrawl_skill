@@ -85,9 +85,6 @@ def test_contract_no_test_file_in_exclusions():
         for p in root.rglob("test_*.py")
         if p.is_file() and ".venv" not in str(p) and "__pycache__" not in str(p)
     }
-    # Exclude the scanner's own test file — it is the regression harness, not
-    # a victim of suppression.
-    test_files.discard("test_release_secret_scan.py")
     overlap = test_files & scan_release_secrets.EXCLUDED_PARTS
     assert not overlap, (
         f"The following test files are incorrectly listed in EXCLUDED_PARTS: "

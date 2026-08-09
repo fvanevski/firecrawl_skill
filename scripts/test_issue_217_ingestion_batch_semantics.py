@@ -107,10 +107,9 @@ def test_direct_batch_persists_exact_constituent_min_max_and_member_ids(tmp_path
 
     with service.uow_factory() as uow:
         canonical = uow.export_invocation(invocation_id)
-    # After removing the ARC-17 monkeypatch, finalize_ingestion_batch returns
-    # the raw string batch_id; export_invocation returns a UUID. Compare as
-    # strings to keep the provenance check stable across both paths.
-    assert str(canonical["batch_id"]) == manifest["batch_id"]
+    # Both paths must now return the same canonical UUID representation.
+    assert isinstance(manifest["batch_id"], UUID)
+    assert canonical["batch_id"] == manifest["batch_id"]
     assert canonical["sealed_at"] == manifest["sealed_at"]
     assert canonical["outcome_summary"] == summary
     assert [str(item["batch_asset_id"]) for item in canonical["assets"]] == member_ids
@@ -323,56 +322,99 @@ def test_v43_retry_replaces_exact_member_summary_without_stale_accumulation(
 
 
 @requires_db
-def test_concurrent_insert_and_seal_produce_exact_serializable_membership(
+def test_concurrent_bounded_ingest_batches_isolate_provenance_and_state(
     tmp_path: Path,
 ):
+    """Two concurrent bounded_ingest_batch calls on independent services must
+    complete with fully isolated provenance and no shared mutable state."""
     migrate(TEST_DSN)
-    service = build_service(_config(tmp_path))
-    invocation_id = f"fc_issue217_race_{uuid4().hex}"
-    initial = service.ingest_batch(
-        invocation_id,
-        "issue217_race",
-        [_request("race-initial")],
+
+    config_a = _config(tmp_path)
+    config_b = _config(tmp_path)
+    corpus_a = build_service(config_a)
+    corpus_b = build_service(config_b)
+    extraction_a = build_extraction_service(config_a)
+    extraction_b = build_extraction_service(config_b)
+
+    run_a = build_run_service(config_a)
+    run_b = build_run_service(config_b)
+    status_a = run_a.create(
+        "concurrent-bounded-a",
+        f"fc_concurrent_a_{uuid4().hex}",
+        execution_mode="autonomous_local",
     )
-    batch_id = initial["batch_id"]
+    status_b = run_b.create(
+        "concurrent-bounded-b",
+        f"fc_concurrent_b_{uuid4().hex}",
+        execution_mode="autonomous_local",
+    )
+    candidate_a = _insert_candidate(status_a.id, "concurrent-a")
+    candidate_b = _insert_candidate(status_b.id, "concurrent-b")
+
+    attempt_a = extraction_a.create_attempt(candidate_a, status_a.id)
+    attempt_b = extraction_b.create_attempt(candidate_b, status_b.id)
+
+    req_a = replace(_request("concurrent-a"), extraction_attempt_id=attempt_a)
+    req_b = replace(_request("concurrent-b"), extraction_attempt_id=attempt_b)
+
+    invocation_a = f"fc_concurrent_inv_a_{uuid4().hex}"
+    invocation_b = f"fc_concurrent_inv_b_{uuid4().hex}"
+
     barrier = threading.Barrier(2)
 
-    def record_late() -> str:
+    def ingest_a() -> dict:
         barrier.wait(timeout=5)
-        try:
-            with service.uow_factory() as uow:
-                uow.record_batch_asset(
-                    batch_id,
-                    99,
-                    "https://example.test/race/late",
-                    "complete",
-                )
-        except ValueError as exc:
-            assert "sealed" in str(exc)
-            return "rejected"
-        return "recorded"
+        return corpus_a.bounded_ingest_batch(
+            invocation_a,
+            "concurrent-test-a",
+            [req_a],
+        )
 
-    def seal() -> str:
+    def ingest_b() -> dict:
         barrier.wait(timeout=5)
-        service.finalize_ingestion_batch(batch_id, "complete")
-        return "sealed"
+        return corpus_b.bounded_ingest_batch(
+            invocation_b,
+            "concurrent-test-b",
+            [req_b],
+        )
+
+    complete_before_a = corpus_a.bounded_ingest_batch
+    complete_before_b = corpus_b.bounded_ingest_batch
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        writer = executor.submit(record_late)
-        sealer = executor.submit(seal)
-        outcomes = [writer.result(timeout=10), sealer.result(timeout=10)]
+        future_a = executor.submit(ingest_a)
+        future_b = executor.submit(ingest_b)
+        manifest_a = future_a.result(timeout=10)
+        manifest_b = future_b.result(timeout=10)
 
-    assert "sealed" in outcomes
-    assert outcomes.count("recorded") + outcomes.count("rejected") == 1
+    # Bound-method objects are recreated on each access; compare the underlying
+    # function to verify no monkeypatching changed the production contract.
+    assert corpus_a.bounded_ingest_batch.__func__ is complete_before_a.__func__
+    assert corpus_b.bounded_ingest_batch.__func__ is complete_before_b.__func__
 
-    with service.uow_factory() as uow:
-        manifest = uow.export_invocation_by_batch(batch_id)
-    summary = manifest["outcome_summary"]
-    expected_members = 2 if "recorded" in outcomes else 1
-    assert summary["member_count"] == expected_members
-    assert summary["succeeded"] == expected_members
-    assert len(summary["succeeded_ids"]) == expected_members
-    assert len(manifest["assets"]) == expected_members
+    assert manifest_a["failure_count"] == 0
+    assert manifest_b["failure_count"] == 0
+
+    assets_a = manifest_a.get("assets", [])
+    assets_b = manifest_b.get("assets", [])
+    assert len(assets_a) == 1
+    assert len(assets_b) == 1
+    assert assets_a[0]["extraction_attempt_id"] == attempt_a
+    assert assets_b[0]["extraction_attempt_id"] == attempt_b
+
+    assert manifest_a["batch_id"] != manifest_b["batch_id"]
+    assert isinstance(manifest_a["batch_id"], UUID)
+    assert isinstance(manifest_b["batch_id"], UUID)
+
+    with corpus_a.uow_factory() as uow_a:
+        canonical_a = uow_a.export_invocation(invocation_a)
+    with corpus_b.uow_factory() as uow_b:
+        canonical_b = uow_b.export_invocation(invocation_b)
+
+    assert canonical_a["batch_id"] == manifest_a["batch_id"]
+    assert canonical_b["batch_id"] == manifest_b["batch_id"]
+    assert canonical_a["assets"][0]["extraction_attempt_id"] == attempt_a
+    assert canonical_b["assets"][0]["extraction_attempt_id"] == attempt_b
 
 
 @requires_db
@@ -732,3 +774,90 @@ def test_arc05_failed_and_rejected_subjects_keep_stage_specific_truth(tmp_path: 
     assert rejected["retained"] is False
     assert rejected["evidence_eligible"] is False
     assert rejected["completion_critical"] is False
+
+
+@requires_db
+def test_complete_attempt_rejects_divergent_succeeded_replay(tmp_path: Path):
+    """Reissuing a succeeded completion with matching evidence returns the
+    existing record without writing.  Divergent evidence must raise RuntimeError
+    and leave the terminal row unchanged."""
+    migrate(TEST_DSN)
+    config = _config(tmp_path)
+    runs = build_run_service(config)
+    extraction = build_extraction_service(config)
+
+    status = runs.create(
+        "divergent-replay-immutable",
+        f"fc_divergent_{uuid4().hex}",
+        execution_mode="autonomous_local",
+    )
+    candidate_id = _insert_candidate(status.id, "divergent-replay")
+    attempt_id = extraction.create_attempt(candidate_id, status.id)
+
+    raw_blob = extraction.store_raw_blob(b"original-content")
+    normalized_blob = extraction.store_normalized_blob(b"original-content")
+
+    # Terminalize the attempt.
+    first_end = datetime(2026, 8, 9, 10, 0, tzinfo=UTC)
+    extraction.complete_attempt(
+        attempt_id,
+        "succeeded",
+        raw_blob=raw_blob,
+        normalized_blob=normalized_blob,
+        parser_used=config.parser_version,
+        http_status=200,
+        backend_status="complete",
+        end_time=first_end,
+    )
+
+    # Read back the canonical record.
+    with extraction.uow_factory() as uow:
+        original = uow.extraction_attempts.get_attempt(attempt_id)
+    original_end = original["end_time"]
+    original_status = original["exit_status"]
+
+    # Reissue identical evidence — must return the existing record unchanged.
+    returned = extraction.complete_attempt(
+        attempt_id,
+        "succeeded",
+        raw_blob=raw_blob,
+        normalized_blob=normalized_blob,
+        parser_used=config.parser_version,
+        http_status=200,
+        backend_status="complete",
+        end_time=first_end,
+    )
+    assert returned.id == attempt_id
+    assert returned.exit_status == "succeeded"
+
+    with extraction.uow_factory() as uow:
+        after_same = uow.extraction_attempts.get_attempt(attempt_id)
+    assert after_same["end_time"] == original_end
+    assert after_same["exit_status"] == original_status
+    assert after_same["http_status"] == 200
+    assert after_same["backend_status"] == "complete"
+
+    # --- Divergent replays must all raise RuntimeError ---
+    divergences = [
+        ("different raw blob", {"raw_blob": extraction.store_raw_blob(b"different")}),
+        (
+            "different normalized blob",
+            {"normalized_blob": extraction.store_normalized_blob(b"different")},
+        ),
+        ("different http_status", {"http_status": 500}),
+        ("different backend_status", {"backend_status": "error"}),
+        ("different parser", {"parser_used": "v99"}),
+        ("different end_time", {"end_time": datetime(2027, 1, 1, tzinfo=UTC)}),
+    ]
+
+    for label, kwargs in divergences:
+        with pytest.raises(RuntimeError, match="already finalized"):
+            extraction.complete_attempt(attempt_id, "succeeded", **kwargs)
+
+    # The original terminal row must remain untouched after every divergence.
+    with extraction.uow_factory() as uow:
+        final = uow.extraction_attempts.get_attempt(attempt_id)
+    assert final["end_time"] == original_end
+    assert final["exit_status"] == original_status
+    assert final["http_status"] == 200
+    assert final["backend_status"] == "complete"
