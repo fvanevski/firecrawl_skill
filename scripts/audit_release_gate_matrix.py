@@ -247,7 +247,11 @@ def execute_phase(
 
 
 def _default_matrix() -> Path:
-    return Path(__file__).parents[1] / "references" / "audit-remediation-release-gates.json"
+    return (
+        Path(__file__).parents[1]
+        / "references"
+        / "audit-remediation-release-gates.json"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -97,9 +97,13 @@ def rehearse(base_dsn: str) -> dict[str, object]:
         _create_database(admin_dsn, upgrade_name)
         previous_number = migrate(upgrade_dsn, PREVIOUS_REVISION)
         if previous_number != 43:
-            raise RuntimeError(f"previous migration reached {previous_number}, expected 43")
+            raise RuntimeError(
+                f"previous migration reached {previous_number}, expected 43"
+            )
         with connect(upgrade_dsn) as connection, connection.cursor() as cursor:
-            cursor.execute("CREATE TABLE arc17_restore_sentinel(value text PRIMARY KEY)")
+            cursor.execute(
+                "CREATE TABLE arc17_restore_sentinel(value text PRIMARY KEY)"
+            )
             cursor.execute(
                 "INSERT INTO arc17_restore_sentinel(value) "
                 "VALUES('pre-upgrade-authority')"
@@ -155,7 +159,9 @@ def rehearse(base_dsn: str) -> dict[str, object]:
                 cursor.execute("SELECT value FROM arc17_restore_sentinel")
                 sentinel = cursor.fetchone()
             if sentinel != ("pre-upgrade-authority",):
-                raise RuntimeError("restored sentinel does not match pre-upgrade authority")
+                raise RuntimeError(
+                    "restored sentinel does not match pre-upgrade authority"
+                )
             remigrated = migrate(upgrade_dsn)
             if remigrated != HEAD_REVISION_NUMBER:
                 raise RuntimeError("restored database did not migrate forward to head")
