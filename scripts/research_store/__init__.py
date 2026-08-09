@@ -2,6 +2,7 @@
 
 from . import acquisition_service as _acquisition_service
 from . import bounded_orchestrator as _bounded_orchestrator
+from . import extraction_service as _extraction_service
 from . import orchestrator as _orchestrator
 from . import postgres as _postgres
 from . import run_service as _run_service
@@ -13,6 +14,7 @@ from .acquisition_authority import (
     require_authoritative_acquisition,
 )
 from .acquisition_service import AcquisitionService
+from .arc17_ingestion_release_fix import install_arc17_ingestion_release_fix
 from .blob import ContentAddressedBlobStore
 from .bounded_acquisition import BoundedFirecrawlSearchAdapter
 from .bounded_orchestrator import BoundedAcquisitionStage, BoundedExtractionStage
@@ -84,6 +86,13 @@ _orchestrator.ExtractionStage = BoundedExtractionStage
 # already-imported classes in place so existing references held by builders,
 # tests, and checkpoint wrappers receive the exact same PostgreSQL behavior.
 install_issue_217_contract(_postgres, _service, _bounded_orchestrator)
+
+# ARC-17 independently executes the issue #217 production seam and exposed an
+# ordering defect between successful attempt finalization and run-asset linkage.
+# Install the narrow correction after issue #217 so the exact canonical classes
+# keep run/batch/attempt provenance atomic and identical completion retries
+# idempotent.
+install_arc17_ingestion_release_fix(_service, _extraction_service)
 
 __all__ = [
     "VALID_NORMALIZATION_DISPOSITIONS",
