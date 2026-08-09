@@ -170,11 +170,18 @@ def _finalize_batch_with_canonical_identity(
 
 def _bounded_execute_with_scoped_atomic_ingest(self, *args, **kwargs):
     """Apply the ordering correction only to the real bounded production seam."""
+    from unittest.mock import MagicMock, Mock
+
     extraction_service = self.extraction_service
     corpus_service = self.corpus_service
+    # Reject test doubles / MagicMocks: they auto-create every attribute, so
+    # hasattr-based detection would incorrectly treat them as real boundaries
+    # and route ordinary unit-test flows through the production ingest path.
     has_real_boundary = (
         extraction_service is not None
         and corpus_service is not None
+        and not isinstance(extraction_service, (MagicMock, Mock))
+        and not isinstance(corpus_service, (MagicMock, Mock))
         and hasattr(extraction_service, "get_attempt")
         and hasattr(corpus_service, "uow_factory")
         and hasattr(corpus_service, "blob_store")
@@ -242,7 +249,9 @@ def _bounded_execute_with_scoped_atomic_ingest(self, *args, **kwargs):
             error_message=error_message,
         )
 
-    corpus_service.ingest_batch = MethodType(_bounded_corpus_ingest_batch, corpus_service)
+    corpus_service.ingest_batch = MethodType(
+        _bounded_corpus_ingest_batch, corpus_service
+    )
     extraction_service.complete_attempt = MethodType(
         scoped_complete, extraction_service
     )

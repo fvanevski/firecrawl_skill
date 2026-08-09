@@ -26,6 +26,7 @@ EXCLUDED_PARTS = {
     "__pycache__",
     ".mypy_cache",
     ".pytest_cache",
+    ".serena",
 }
 PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     (
