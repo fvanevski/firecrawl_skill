@@ -169,6 +169,9 @@ def _build_env_manifest(
         lock_hash = "unresolvable"
 
     # Collect model/tokenizer fingerprints from environment.
+    # URL-typed secrets must never be persisted in release evidence; only
+    # model identifiers and non-secret metadata survive.
+    _SECRET_URL_KEYS = frozenset(("GENERATIVE_URL", "EMBEDDING_URL", "RERANKER_URL"))
     fingerprints: dict[str, str] = {}
     for key in (
         "GENERATIVE_MODEL",
@@ -179,7 +182,7 @@ def _build_env_manifest(
         "RERANKER_URL",
     ):
         val = os.environ.get(key, "")
-        if val:
+        if val and key not in _SECRET_URL_KEYS:
             fingerprints[key] = val
 
     firecrawl_version = _get_firecrawl_version()

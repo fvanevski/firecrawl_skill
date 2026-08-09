@@ -53,6 +53,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from .authorized_semantic import call_authorized_structured
+from .completion_provenance import validate_citation_artifact
 from .config import StoreConfig
 from .domain import SynthesisStageName, SynthesisStageStatus
 from .evidence import EvidenceService
@@ -607,13 +608,27 @@ class LocalSynthesisService:
         if not allow_commercial_fallback:
             self._enforce_local_only("local")
 
-        model_name = model_name or self.config.embedding_model
-        if not model_name:
-            raise ReportServiceError("no model configured for synthesis")
-
         # Fetch and validate the EvidencePacket.
         packet = self._get_packet(run_id, packet_revision)
         self._validate_packet(packet)
+
+        # ------------------------------------------------------------------
+        # Execution-mode-aware model identity
+        #
+        # Deterministic-fixture runs must not falsely claim production LLM
+        # authority.  Their semantic calls record ``model=""``; stage records
+        # must match so terminal provenance validation succeeds.
+        # ------------------------------------------------------------------
+        with self.semantic.uow_factory() as uow:
+            status = uow.runs.get_run_status(run_id=run_id)
+        execution_mode = status.get("execution_mode", "agent_led")
+
+        if execution_mode == "deterministic_debug":
+            # Truthful identity: no generative LLM produced these fixtures.
+            model_name = ""
+        else:
+            if not model_name:
+                raise ReportServiceError("no model configured for synthesis")
 
         # ------------------------------------------------------------------
         # UOW scope design
@@ -1580,7 +1595,16 @@ class LocalSynthesisService:
         )
 
         if cached is not None:
-            # Cache hit — use the cached artifact directly.
+            # Cache hit — validate before using the cached artifact directly.
+            draft_citations: set[tuple[str, str, tuple[str, ...]]] = set()
+            for section in draft_sections:
+                for reference in section.get("claim_references", []):
+                    claim_id = str(reference.get("claim_id") or "")
+                    cited = tuple(
+                        sorted(str(item) for item in reference.get("passage_ids") or ())
+                    )
+                    draft_citations.add((section["section_id"], claim_id, cited))
+            validate_citation_artifact(cached, draft_citations)
             with uow_factory() as uow:
                 record = uow.synthesis_stages.get_synthesis_stage(
                     run_id, "citation_pass"
@@ -1658,6 +1682,21 @@ class LocalSynthesisService:
                     increment_attempts=True,
                 )
                 raise ReportServiceError(f"citation pass stage failed: {result.error}")
+
+            # ------------------------------------------------------------------
+            # Stage-time acceptance: enforce terminal-grade citation validation
+            # before persisting.  An invalid model response must never become a
+            # completed authoritative stage.
+            # ------------------------------------------------------------------
+            draft_citations: set[tuple[str, str, tuple[str, ...]]] = set()
+            for section in draft_sections:
+                for reference in section.get("claim_references", []):
+                    claim_id = str(reference.get("claim_id") or "")
+                    cited = tuple(
+                        sorted(str(item) for item in reference.get("passage_ids") or ())
+                    )
+                    draft_citations.add((section["section_id"], claim_id, cited))
+            validate_citation_artifact(result.value, draft_citations)
 
             self._update_stage(
                 uow,

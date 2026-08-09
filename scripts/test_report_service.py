@@ -375,14 +375,63 @@ def test_synthesis_stage_record_invalid_revision():
 
 
 def test_run_synthesis_no_model_raises():
-    """If no model is configured, run_synthesis should raise."""
-    service, _, _, _ = _make_service()
-    service.config.embedding_model = ""
+    """If no model is provided and execution mode is not deterministic_debug,
+    run_synthesis should raise."""
+    service, _mock_evidence, _mock_semantic, _mock_uow = _make_service()
+    # Default mock_uow returns autonomous_local execution_mode.
     with pytest.raises(ReportServiceError, match="no model configured"):
         service.run_synthesis(
             run_id=UUID(_VALID_PACKET["run_id"]),
             packet_revision=1,
         )
+
+
+def test_run_synthesis_deterministic_debug_ignores_model_name():
+    """Deterministic-debug runs must truthfully record empty model identity
+    regardless of any model_name argument — no production LLM produced the
+    fixture."""
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+
+    # Override the mock UOW to report deterministic_debug mode.
+    mock_uow.runs.get_run_status.return_value = {
+        "lifecycle_revision": 1,
+        "execution_mode": "deterministic_debug",
+        "state": "synthesizing",
+    }
+
+    # Pre-populate all stages as completed so the pipeline short-circuits.
+    for stage_name in SynthesisStageName:
+        mock_uow.synthesis_stages.update_synthesis_stage(
+            {
+                "id": str(uuid4()),
+                "run_id": str(run_id),
+                "stage_name": stage_name.value,
+                "stage_status": "completed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 1,
+                "model_name": "",
+                "prompt_version": "v1",
+                "schema_version": 1,
+                "artifact": {},
+                "error": None,
+                "attempts": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        )
+
+    # Even passing a non-empty model_name must be ignored.
+    summary = service.run_synthesis(
+        run_id=run_id,
+        packet_revision=1,
+        model_name="should-be-ignored",
+    )
+
+    assert summary["overall_status"] == "completed"
+    for stage_key in SynthesisStageName:
+        assert summary["stages"][stage_key]["status"] == "skipped"
 
 
 def test_run_synthesis_skips_completed_stages():
@@ -507,20 +556,69 @@ def test_run_synthesis_resume_retries_failed():
     }
     mock_uow.synthesis_stages.update_synthesis_stage(binding_record)
 
-    # Now make the LLM succeed on retry.
-    mock_result = MagicMock()
-    mock_result.error = None
-    mock_result.value = {
-        "schema_version": "synthesis-outline-v1",
-        "run_id": str(run_id),
-        "evidence_packet_revision": 2,
-        "outline_sections": [],
-        "unsupported_claims": [],
-    }
-    mock_result.semantic_call_id = str(uuid4())
-    mock_result.artifact_ids = [str(uuid4())]
+    # Build per-stage mock results so each stage gets a valid artifact.
+    def _make_stage_result(stage_value):
+        r = MagicMock()
+        r.error = None
+        r.value = stage_value
+        r.semantic_call_id = str(uuid4())
+        r.artifact_ids = [str(uuid4())]
+        return r
 
-    with patch("model_gateway.call_structured", return_value=mock_result):
+    outline_result = _make_stage_result(
+        {
+            "schema_version": "synthesis-outline-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 2,
+            "outline_sections": [],
+            "unsupported_claims": [],
+        }
+    )
+    draft_result = _make_stage_result(
+        {
+            "schema_version": "synthesis-draft-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 2,
+            "report_sections": [],
+            "unsupported_claims": [],
+            "limitations": [],
+        }
+    )
+    citation_result = _make_stage_result(
+        {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 2,
+            "draft_revision": 1,
+            "pass_status": "passed",
+            "validation_results": [],
+            "invented_citations": [],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        }
+    )
+    validation_result = _make_stage_result(
+        {
+            "validation_status": "valid",
+            "is_complete": True,
+            "stale_packet": False,
+            "current_packet_revision": 2,
+            "validation_errors_count": 0,
+            "validation_warnings_count": 0,
+            "claim_manifest": [],
+            "report_hash": "d41d8cd98f00b204e9800998ecf8427e",
+        }
+    )
+
+    with patch(
+        "model_gateway.call_structured",
+        side_effect=[
+            outline_result,
+            draft_result,
+            citation_result,
+            validation_result,
+        ],
+    ):
         summary = service.resume_failed_synthesis(
             run_id=run_id,
             packet_revision=2,
@@ -1421,19 +1519,68 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
     assert summary["overall_status"] == "failed"
 
     # Second call: simulate successful retry after endpoint recovers.
-    mock_result = MagicMock()
-    mock_result.error = None
-    mock_result.value = {
-        "schema_version": "synthesis-outline-v1",
-        "run_id": str(run_id),
-        "evidence_packet_revision": 2,
-        "outline_sections": [],
-        "unsupported_claims": [],
-    }
-    mock_result.semantic_call_id = str(uuid4())
-    mock_result.artifact_ids = [str(uuid4())]
+    def _make_stage_result(stage_value):
+        r = MagicMock()
+        r.error = None
+        r.value = stage_value
+        r.semantic_call_id = str(uuid4())
+        r.artifact_ids = [str(uuid4())]
+        return r
 
-    with patch("model_gateway.call_structured", return_value=mock_result):
+    outline_result = _make_stage_result(
+        {
+            "schema_version": "synthesis-outline-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 2,
+            "outline_sections": [],
+            "unsupported_claims": [],
+        }
+    )
+    draft_result = _make_stage_result(
+        {
+            "schema_version": "synthesis-draft-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 2,
+            "report_sections": [],
+            "unsupported_claims": [],
+            "limitations": [],
+        }
+    )
+    citation_result = _make_stage_result(
+        {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 2,
+            "draft_revision": 1,
+            "pass_status": "passed",
+            "validation_results": [],
+            "invented_citations": [],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        }
+    )
+    validation_result = _make_stage_result(
+        {
+            "validation_status": "valid",
+            "is_complete": True,
+            "stale_packet": False,
+            "current_packet_revision": 2,
+            "validation_errors_count": 0,
+            "validation_warnings_count": 0,
+            "claim_manifest": [],
+            "report_hash": "d41d8cd98f00b204e9800998ecf8427e",
+        }
+    )
+
+    with patch(
+        "model_gateway.call_structured",
+        side_effect=[
+            outline_result,
+            draft_result,
+            citation_result,
+            validation_result,
+        ],
+    ):
         summary = service.resume_failed_synthesis(
             run_id=run_id,
             packet_revision=2,
@@ -1488,24 +1635,82 @@ def test_run_synthesis_picks_up_new_packet_revision():
     assert summary["overall_status"] == "failed"
 
     # Second call with revision 3 — should succeed and use the new packet.
-    mock_result = MagicMock()
-    mock_result.error = None
-    mock_result.value = {
-        "schema_version": "synthesis-outline-v1",
-        "run_id": str(run_id),
-        "evidence_packet_revision": 3,
-        "outline_sections": [],
-        "unsupported_claims": [],
-    }
-    mock_result.semantic_call_id = str(uuid4())
-    mock_result.artifact_ids = [str(uuid4())]
+    def _make_stage_result(stage_value):
+        r = MagicMock()
+        r.error = None
+        r.value = stage_value
+        r.semantic_call_id = str(uuid4())
+        r.artifact_ids = [str(uuid4())]
+        return r
+
+    outline_result = _make_stage_result(
+        {
+            "schema_version": "synthesis-outline-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 3,
+            "outline_sections": [],
+            "unsupported_claims": [],
+        }
+    )
+    binding_result = _make_stage_result({"new_packet_revision": 3})
+    draft_result = _make_stage_result(
+        {
+            "schema_version": "synthesis-draft-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 3,
+            "report_sections": [],
+            "unsupported_claims": [],
+            "limitations": [],
+        }
+    )
+    citation_result = _make_stage_result(
+        {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 3,
+            "draft_revision": 1,
+            "pass_status": "passed",
+            "validation_results": [],
+            "invented_citations": [],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        }
+    )
+    validation_result = _make_stage_result(
+        {
+            "validation_status": "valid",
+            "is_complete": True,
+            "stale_packet": False,
+            "current_packet_revision": 3,
+            "validation_errors_count": 0,
+            "validation_warnings_count": 0,
+            "claim_manifest": [],
+            "report_hash": "d41d8cd98f00b204e9800998ecf8427e",
+        }
+    )
 
     captured_prompts = []
 
     def capture_call(*args, **kwargs):
         nonlocal captured_prompts
         captured_prompts.append(kwargs.get("user_prompt", ""))
-        return mock_result
+        return (
+            outline_result
+            if len(captured_prompts) == 0
+            else (
+                binding_result
+                if len(captured_prompts) == 1
+                else (
+                    draft_result
+                    if len(captured_prompts) == 2
+                    else (
+                        citation_result
+                        if len(captured_prompts) == 3
+                        else validation_result
+                    )
+                )
+            )
+        )
 
     with patch("model_gateway.call_structured", side_effect=capture_call):
         summary = service.run_synthesis(

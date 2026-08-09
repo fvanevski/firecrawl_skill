@@ -671,39 +671,7 @@ def load_authoritative_completion_provenance(
             )
 
         citation_payload = citation.payload
-        citation_results: set[tuple[str, str, tuple[str, ...]]] = set()
-        for result in citation_payload.get("validation_results") or ():
-            if result.get("status") != "valid" or result.get("issue"):
-                raise CompletionProvenanceError(
-                    "citation-pass semantic artifact contains unresolved "
-                    "validation results"
-                )
-            citation_results.add(
-                (
-                    str(result.get("section_id") or ""),
-                    str(result.get("claim_id") or ""),
-                    tuple(
-                        sorted(str(item) for item in result.get("passage_ids") or ())
-                    ),
-                )
-            )
-        if citation_results != draft_citations:
-            raise CompletionProvenanceError(
-                "citation-pass artifact does not exactly validate the immutable "
-                "draft citations"
-            )
-        if citation_payload.get("pass_status") != "passed":
-            raise CompletionProvenanceError(
-                "citation-pass semantic artifact did not pass"
-            )
-        if (
-            citation_payload.get("invented_citations")
-            or citation_payload.get("unsupported_claims")
-            or citation_payload.get("entailment_mismatches")
-        ):
-            raise CompletionProvenanceError(
-                "citation-pass semantic artifact contains unresolved failures"
-            )
+        validate_citation_artifact(citation_payload, draft_citations)
 
         validation = stages["validation"]
         validation_artifact = validation.get("artifact")
@@ -824,10 +792,61 @@ def resolve_completion_assertions(
     return provenance
 
 
+def validate_citation_artifact(
+    citation_payload: dict[str, Any],
+    draft_citations: set[tuple[str, str, tuple[str, ...]]],
+) -> None:
+    """Validate a citation-pass artifact against terminal provenance rules.
+
+    Raises ``CompletionProvenanceError`` on any violation so that callers can
+    enforce stage-time acceptance at least as strictly as the terminal gate.
+    """
+    if not isinstance(citation_payload, dict):
+        raise CompletionProvenanceError("citation-pass artifact is not a mapping")
+
+    if citation_payload.get("pass_status") != "passed":
+        raise CompletionProvenanceError("citation-pass semantic artifact did not pass")
+
+    if (
+        citation_payload.get("invented_citations")
+        or citation_payload.get("unsupported_claims")
+        or citation_payload.get("entailment_mismatches")
+    ):
+        raise CompletionProvenanceError(
+            "citation-pass semantic artifact contains unresolved failures"
+        )
+
+    validation_results = citation_payload.get("validation_results") or ()
+    citation_results: set[tuple[str, str, tuple[str, ...]]] = set()
+    for result in validation_results:
+        if not isinstance(result, dict):
+            raise CompletionProvenanceError(
+                "citation validation result is not a mapping"
+            )
+        if result.get("status") != "valid" or result.get("issue"):
+            raise CompletionProvenanceError(
+                "citation-pass semantic artifact contains unresolved validation results"
+            )
+        citation_results.add(
+            (
+                str(result.get("section_id") or ""),
+                str(result.get("claim_id") or ""),
+                tuple(sorted(str(item) for item in result.get("passage_ids") or ())),
+            )
+        )
+
+    if citation_results != draft_citations:
+        raise CompletionProvenanceError(
+            "citation-pass artifact does not exactly validate the immutable "
+            "draft citations"
+        )
+
+
 __all__ = [
     "CompletionProvenance",
     "CompletionProvenanceError",
     "load_authoritative_completion_provenance",
     "normalize_sha256",
     "resolve_completion_assertions",
+    "validate_citation_artifact",
 ]
