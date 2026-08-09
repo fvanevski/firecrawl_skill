@@ -81,7 +81,7 @@ def _advance_to_indexing(runs, status):
             idempotency_key=f"integrity-seed:{status.external_id}:{next_state}",
             actor_type="integration-test",
         )
-    return current
+    return runs.status(run_id=status.id)
 
 
 def _create_run_with_asset(config: StoreConfig, label: str):
