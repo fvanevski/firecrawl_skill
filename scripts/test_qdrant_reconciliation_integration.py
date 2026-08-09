@@ -1,7 +1,7 @@
 """Opt-in PostgreSQL + Qdrant integration coverage for issue #222.
 
 The authoritative integration suite already supplies the disposable database
-fixture.  These tests import only that fixture so they share the same guarded
+fixture. These tests import only that fixture so they share the same guarded
 schema reset without re-running destructive setup.
 """
 
@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import sys
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -20,7 +21,6 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-from test_research_store_integration import prepared_database  # noqa: F401
 from research_store.asset_promotion_models import _canonical_sha256, _member_payload
 from research_store.cli import _index_build
 from research_store.config import StoreConfig
@@ -28,11 +28,15 @@ from research_store.index_checkpoint_models import _membership_digest
 from research_store.postgres import connect
 from research_store.qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
 from research_store.reconciliation import reconcile_run
+from test_research_store_integration import prepared_database  # noqa: F401
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(
-    not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
+    ),
+    pytest.mark.usefixtures("prepared_database"),
+]
 
 
 def _sha(text: str) -> str:
@@ -169,7 +173,7 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
                 run_id,
                 subject_id,
                 snapshot_id,
-                list(sorted(chunk_ids, key=str)),
+                sorted(chunk_ids, key=str),
                 count,
                 member_sha,
             ),
@@ -206,7 +210,7 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
             (
                 run_id,
                 definition["fingerprint"],
-                list(sorted(chunk_ids, key=str)),
+                sorted(chunk_ids, key=str),
                 checkpoint_digest,
                 count,
                 count,
@@ -267,13 +271,11 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
 
 
 def _cleanup(seed):
-    try:
+    with suppress(Exception):
         seed["index"].delete_collection()
-    except Exception:  # noqa: BLE001 - best-effort test cleanup
-        pass
 
 
-def test_reconcile_audited_1376_exact_membership(tmp_path, prepared_database):
+def test_reconcile_audited_1376_exact_membership(tmp_path):
     seed = _seed_reconciliation_run(tmp_path, count=1376)
     try:
         result = reconcile_run(seed["config"], seed["external_run_id"])
@@ -294,7 +296,7 @@ def test_reconcile_audited_1376_exact_membership(tmp_path, prepared_database):
         _cleanup(seed)
 
 
-def test_reconcile_missing_and_orphaned_points(tmp_path, prepared_database):
+def test_reconcile_missing_and_orphaned_points(tmp_path):
     seed = _seed_reconciliation_run(tmp_path, count=3)
     try:
         missing_id = str(seed["chunk_ids"][0])
@@ -317,9 +319,7 @@ def test_reconcile_missing_and_orphaned_points(tmp_path, prepared_database):
         _cleanup(seed)
 
 
-def test_reconcile_detects_real_payload_drift_without_membership_gap(
-    tmp_path, prepared_database
-):
+def test_reconcile_detects_real_payload_drift_without_membership_gap(tmp_path):
     seed = _seed_reconciliation_run(tmp_path, count=2)
     try:
         point = dict(seed["points"][0])
@@ -336,9 +336,7 @@ def test_reconcile_detects_real_payload_drift_without_membership_gap(
         _cleanup(seed)
 
 
-def test_reconcile_reports_alias_and_vector_schema_mismatch(
-    tmp_path, prepared_database
-):
+def test_reconcile_reports_alias_and_vector_schema_mismatch(tmp_path):
     seed = _seed_reconciliation_run(tmp_path, count=1)
     other = QdrantIndex(
         seed["config"].qdrant_url,
@@ -370,16 +368,12 @@ def test_reconcile_reports_alias_and_vector_schema_mismatch(
         assert vector_result["ok"] is False
         assert vector_result["qdrant"]["schema"]["compatible"] is False
     finally:
-        try:
+        with suppress(Exception):
             other.delete_collection()
-        except Exception:  # noqa: BLE001
-            pass
         _cleanup(seed)
 
 
-def test_payload_indexes_are_typed_and_idempotent_on_real_qdrant(
-    tmp_path, prepared_database
-):
+def test_payload_indexes_are_typed_and_idempotent_on_real_qdrant(tmp_path):
     seed = _seed_reconciliation_run(tmp_path, count=1)
     try:
         first = seed["index"].ensure_payload_indexes(PAYLOAD_INDEX_SCHEMAS)
@@ -393,9 +387,7 @@ def test_payload_indexes_are_typed_and_idempotent_on_real_qdrant(
         _cleanup(seed)
 
 
-def test_read_only_reconciliation_does_not_create_missing_payload_index(
-    tmp_path, prepared_database
-):
+def test_read_only_reconciliation_does_not_create_missing_payload_index(tmp_path):
     seed = _seed_reconciliation_run(tmp_path, count=1)
     field = "domain"
     path = (
@@ -421,9 +413,7 @@ def test_read_only_reconciliation_does_not_create_missing_payload_index(
         _cleanup(seed)
 
 
-def test_repair_refuses_to_repoint_alias_outside_activation_lifecycle(
-    tmp_path, prepared_database
-):
+def test_repair_refuses_to_repoint_alias_outside_activation_lifecycle(tmp_path):
     seed = _seed_reconciliation_run(tmp_path, count=1)
     other = QdrantIndex(
         seed["config"].qdrant_url,
@@ -439,8 +429,6 @@ def test_repair_refuses_to_repoint_alias_outside_activation_lifecycle(
         assert result["post_repair"]["qdrant"]["alias_target"] == other.collection
         assert any("index-activate" in blocker for blocker in result["repair_blockers"])
     finally:
-        try:
+        with suppress(Exception):
             other.delete_collection()
-        except Exception:  # noqa: BLE001
-            pass
         _cleanup(seed)

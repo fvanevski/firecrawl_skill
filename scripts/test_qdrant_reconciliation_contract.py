@@ -137,7 +137,7 @@ def test_empty_cluster_topology_fails_closed_instead_of_fabricating_active_shard
 
 
 def test_reconcile_cli_returns_nonzero_for_observed_discrepancies(monkeypatch, capsys):
-    import research_store.cli as cli
+    from research_store import cli
 
     fake_config = object()
     monkeypatch.setattr(
@@ -160,7 +160,7 @@ def test_reconcile_cli_returns_nonzero_for_observed_discrepancies(monkeypatch, c
 def test_reconcile_cli_returns_two_when_authoritative_scope_is_unavailable(
     monkeypatch, capsys
 ):
-    import research_store.cli as cli
+    from research_store import cli
 
     fake_config = object()
     monkeypatch.setattr(
