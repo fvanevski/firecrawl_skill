@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -134,6 +134,8 @@ def _make_mock_uow():
 def _make_service(
     mock_packet=None,
     execution_mode="autonomous_local",
+    generative_model="test-generative-model",
+    embedding_model="test-embedding-model",
 ):
     """Build a LocalSynthesisService with mocked dependencies."""
     packet = mock_packet or deepcopy(_VALID_PACKET)
@@ -155,8 +157,8 @@ def _make_service(
     mock_semantic.uow_factory = mock_uow_factory
 
     mock_config = MagicMock()
-    mock_config.embedding_model = "test-model"
-    mock_config.generative_model = "test-model"
+    mock_config.embedding_model = embedding_model
+    mock_config.generative_model = generative_model
 
     service = LocalSynthesisService(
         semantic_service=mock_semantic,
@@ -257,39 +259,167 @@ class TestDeterministicModelIdentity:
                 packet_revision=1,
             )
 
-    def test_divergent_stage_model_fails_closed(self):
-        """In deterministic_debug mode, model_name is forced to empty string."""
-        service, mock_uow = _make_service(execution_mode="deterministic_debug")
-        run_id = UUID("00000000-0000-0000-0000-000000000401")
-        from research_store.domain import SynthesisStageName
+    def test_divergent_stage_model_fails_closed(self, tmp_path):
+        """A synthesis stage whose model_name diverges from the authoritative
+        semantic-call model must be rejected at terminal completion time.
 
-        for stage_name in SynthesisStageName:
-            mock_uow.synthesis_stages.update_synthesis_stage(
-                {
-                    "id": str(uuid4()),
-                    "run_id": str(run_id),
-                    "stage_name": stage_name.value,
-                    "stage_status": "completed",
-                    "semantic_call_id": None,
-                    "semantic_artifact_id": None,
-                    "evidence_packet_revision": 1,
-                    "model_name": "",
-                    "prompt_version": "v1",
-                    "schema_version": 1,
-                    "artifact": {},
-                    "error": None,
-                    "attempts": 1,
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-01T00:00:00Z",
-                }
+        This test creates two independent runs in deterministic_debug mode:
+        one with matching stage/call identities (control) and one where the
+        draft stage was persisted with a different model_name.  It then invokes
+        the real terminal-completion path and asserts the divergent run is
+        rejected while the control succeeds.
+        """
+        import os
+
+        dsn = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        if not dsn:
+            pytest.skip("requires RESEARCH_STORE_TEST_DATABASE_URL")
+
+        from dataclasses import replace
+
+        from completion_provenance_test_support import (
+            seed_authoritative_completion_provenance,
+        )
+        from research_store.config import StoreConfig
+        from research_store.container import (
+            build_run_service,
+            build_service,
+            build_workflow_operation_service,
+        )
+        from research_store.domain import IngestRequest
+        from research_store.postgres import connect, migrate
+        from research_store.workflow_service import WorkflowBoundaryError
+
+        migrate(dsn)
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=dsn,
+            blob_root=tmp_path / "blobs",
+            qdrant_collection=f"arc17_{uuid4().hex}",
+            embedding_dimension=4,
+        )
+
+        def _seed_and_finalize(corpus, runs, external_id, execution_mode):
+            """Seed a run through indexing and finalize it."""
+            status = runs.create(
+                "arc17 test run",
+                external_id,
+                execution_mode=execution_mode,
+            )
+            manifest = corpus.ingest_batch(
+                f"fc-{uuid4().hex}",
+                "scrape",
+                [
+                    IngestRequest(
+                        f"https://example/{uuid4().hex}",
+                        b"# Test evidence\n\nPostgreSQL owns authoritative provenance.",
+                    )
+                ],
+                research_run_external_id=external_id,
+            )
+            assert manifest["failure_count"] == 0
+            revision = status.lifecycle_revision
+            for next_state in (
+                "planning",
+                "corpus_review",
+                "acquiring",
+                "extracting",
+                "indexing",
+            ):
+                runs.transition(
+                    status.id,
+                    next_state,
+                    expected_revision=revision,
+                    idempotency_key=f"test:{external_id}:{next_state}",
+                    actor_type="integration-test",
+                )
+                revision += 1
+            # Mark index jobs complete.
+            with connect(dsn) as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE index_jobs job
+                          SET status='complete', completed_at=now(), error=NULL,
+                              lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL
+                         FROM embedding_manifests manifest
+                         JOIN chunks chunk ON chunk.id=manifest.chunk_id
+                         JOIN documents document ON document.id=chunk.document_id
+                         JOIN research_run_assets asset
+                           ON asset.snapshot_id=document.snapshot_id
+                        WHERE job.manifest_id=manifest.id AND asset.run_id=%s""",
+                    (status.id,),
+                )
+                assert cursor.rowcount > 0
+                cursor.execute(
+                    """UPDATE embedding_manifests manifest
+                          SET index_status='complete', indexed_at=now(), error=NULL
+                         FROM chunks chunk
+                         JOIN documents document ON document.id=chunk.document_id
+                         JOIN research_run_assets asset
+                           ON asset.snapshot_id=document.snapshot_id
+                        WHERE manifest.chunk_id=chunk.id AND asset.run_id=%s""",
+                    (status.id,),
+                )
+            workflow = build_workflow_operation_service(config)
+            workflow._finalize_indexing(
+                external_id,
+                f"test:{external_id}:finalize-indexing",
+            )
+            status = runs.status(run_id=status.id)
+            assert status.state == "coverage_review"
+            return runs, status, workflow
+
+        # --- Control run: all stage/model identities match ---
+        runs_control = build_run_service(config)
+        corpus_control = build_service(config)
+        external_id_control = f"arc17-control-{uuid4().hex}"
+        runs_control, status_control, _workflow_control = _seed_and_finalize(
+            corpus_control, runs_control, external_id_control, "deterministic_debug"
+        )
+        seed_authoritative_completion_provenance(
+            runs_control.uow_factory, status_control.id
+        )
+        # In deterministic_debug, model_name must be "" on every stage.
+        with connect(dsn) as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE synthesis_stages SET model_name='' WHERE run_id=%s",
+                (status_control.id,),
+            )
+        with connect(dsn) as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE semantic_calls SET model='' WHERE run_id=%s",
+                (status_control.id,),
             )
 
-        summary = service.run_synthesis(
-            run_id=run_id,
-            packet_revision=1,
-            model_name="divergent-model",
+        # --- Divergent run: draft stage has wrong model_name ---
+        runs_diverge = build_run_service(config)
+        corpus_diverge = build_service(config)
+        external_id_diverge = f"arc17-diverge-{uuid4().hex}"
+        runs_diverge, status_diverge, workflow_diverge = _seed_and_finalize(
+            corpus_diverge, runs_diverge, external_id_diverge, "deterministic_debug"
         )
-        assert summary["overall_status"] == "completed"
+        seed_authoritative_completion_provenance(
+            runs_diverge.uow_factory, status_diverge.id
+        )
+        # Introduce divergence: persist draft stage with non-empty model.
+        with connect(dsn) as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE synthesis_stages SET model_name='divergent-model' "
+                "WHERE run_id=%s AND stage_name='draft'",
+                (status_diverge.id,),
+            )
+            assert cursor.rowcount == 1
+
+        # The control run should complete successfully.
+        finished_control = workflow_diverge.finish_run(
+            status_control.external_id, outcome="satisfied"
+        )
+        assert finished_control.state == "completed"
+
+        # The divergent run must be rejected at terminal completion.
+        with pytest.raises(
+            WorkflowBoundaryError, match="model identity does not match"
+        ):
+            workflow_diverge.finish_run(status_diverge.external_id, outcome="satisfied")
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +531,208 @@ class TestCitationStageAcceptance:
             set(),
         )
 
+    def test_citation_failure_marks_stage_failed_and_enables_resume(self):
+        """An invalid citation artifact must leave the stage as failed and be
+        resumable with a corrected artifact through the normal machinery."""
+        service, mock_uow = _make_service(execution_mode="autonomous_local")
+        run_id = UUID("00000000-0000-0000-0000-000000000401")
+
+        from research_store.domain import SynthesisStageName
+
+        # Pre-populate outline, binding, draft as completed.
+        # The draft artifact must contain report_sections with claim_references
+        # so the citation stage can compute draft_citations correctly.
+        draft_artifact = {
+            "schema_version": "synthesis-draft-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 1,
+            "report_sections": [
+                {
+                    "section_id": "s1",
+                    "title": "Findings",
+                    "body": "Test findings",
+                    "claim_references": [
+                        {
+                            "claim_id": "00000000-0000-0000-0000-000000000102",
+                            "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                            "relationship": "qualifies",
+                        }
+                    ],
+                }
+            ],
+            "unsupported_claims": [],
+            "limitations": [],
+        }
+        for stage_name in SynthesisStageName:
+            if stage_name.value in ("outline", "binding", "draft"):
+                mock_uow.synthesis_stages.update_synthesis_stage(
+                    {
+                        "id": str(uuid4()),
+                        "run_id": str(run_id),
+                        "stage_name": stage_name.value,
+                        "stage_status": "completed",
+                        "semantic_call_id": None,
+                        "semantic_artifact_id": None,
+                        "evidence_packet_revision": 1,
+                        "model_name": "test-model",
+                        "prompt_version": "v1",
+                        "schema_version": 1,
+                        "artifact": draft_artifact
+                        if stage_name.value == "draft"
+                        else {},
+                        "error": None,
+                        "attempts": 1,
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    }
+                )
+
+        # First call: citation_pass fails due to invalid artifact.
+        bad_citation = {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 1,
+            "draft_revision": 1,
+            "pass_status": "passed",
+            "validation_results": [
+                {
+                    "section_id": "s1",
+                    "claim_id": "00000000-0000-0000-0000-000000000102",
+                    "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                    "status": "invalid",
+                    "issue": "entailment mismatch",
+                }
+            ],
+            "invented_citations": [],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        }
+
+        with patch("model_gateway.call_structured") as mock_call:
+            mock_result = MagicMock()
+            mock_result.error = None
+            mock_result.value = bad_citation
+            mock_result.semantic_call_id = str(uuid4())
+            mock_result.artifact_ids = [str(uuid4())]
+            mock_call.return_value = mock_result
+
+            summary = service.run_synthesis(
+                run_id=run_id,
+                packet_revision=1,
+                model_name="test-model",
+            )
+
+        # run_synthesis catches ReportServiceError and returns a failed summary.
+        assert summary["overall_status"] == "failed"
+        assert summary["stages"]["citation_pass"]["status"] == "failed"
+        assert (
+            "citation-pass semantic validation failed"
+            in summary["stages"]["citation_pass"]["error"]
+        )
+        assert "error" in summary
+        assert "citation-pass semantic validation failed" in summary["error"]
+
+        # Verify the citation_pass stage is marked failed.
+        record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "citation_pass")
+        assert record["stage_status"] == "failed"
+        assert "unresolved validation results" in record.get("error", "")
+
+        # Now resume with a corrected artifact.
+        good_citation = {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 1,
+            "draft_revision": 1,
+            "pass_status": "passed",
+            "validation_results": [
+                {
+                    "section_id": "s1",
+                    "claim_id": "00000000-0000-0000-0000-000000000102",
+                    "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                    "status": "valid",
+                    "issue": "",
+                }
+            ],
+            "invented_citations": [],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        }
+
+        with patch("model_gateway.call_structured") as mock_call:
+            mock_result = MagicMock()
+            mock_result.error = None
+            mock_result.value = good_citation
+            mock_result.semantic_call_id = str(uuid4())
+            mock_result.artifact_ids = [str(uuid4())]
+            mock_call.return_value = mock_result
+
+            summary = service.resume_failed_synthesis(
+                run_id=run_id,
+                packet_revision=1,
+                model_name="test-model",
+            )
+
+        assert summary["stages"]["citation_pass"]["status"] == "completed"
+        record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "citation_pass")
+        assert record["stage_status"] == "completed"
+
+    def test_cache_hit_invalid_citation_marks_failed(self):
+        """A cache-hit with an invalid citation artifact must also mark the
+        stage as failed through the same ReportServiceError boundary."""
+        service, mock_uow = _make_service(execution_mode="autonomous_local")
+        run_id = UUID("00000000-0000-0000-0000-000000000401")
+
+        from research_store.domain import SynthesisStageName
+
+        for stage_name in SynthesisStageName:
+            if stage_name.value in ("outline", "binding", "draft"):
+                mock_uow.synthesis_stages.update_synthesis_stage(
+                    {
+                        "id": str(uuid4()),
+                        "run_id": str(run_id),
+                        "stage_name": stage_name.value,
+                        "stage_status": "completed",
+                        "semantic_call_id": None,
+                        "semantic_artifact_id": None,
+                        "evidence_packet_revision": 1,
+                        "model_name": "test-model",
+                        "prompt_version": "v1",
+                        "schema_version": 1,
+                        "artifact": {},
+                        "error": None,
+                        "attempts": 1,
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    }
+                )
+
+        bad_citation = {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 1,
+            "draft_revision": 1,
+            "pass_status": "passed",
+            "validation_results": [],
+            "invented_citations": [{"section_id": "s1"}],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        }
+
+        with patch.object(service, "_check_cache", return_value=bad_citation):
+            summary = service.run_synthesis(
+                run_id=run_id,
+                packet_revision=1,
+                model_name="test-model",
+            )
+
+        # run_synthesis catches ReportServiceError and returns a failed summary.
+        assert summary["overall_status"] == "failed"
+        assert summary["stages"]["citation_pass"]["status"] == "failed"
+        assert (
+            "citation-pass semantic validation failed"
+            in summary["stages"]["citation_pass"]["error"]
+        )
+
 
 # ---------------------------------------------------------------------------
 # Defect 3 — release environment artifacts must not serialize secrets
@@ -418,6 +750,8 @@ class TestEnvironmentManifestSecretStripping:
         monkeypatch.setenv("EMBEDDING_URL", "https://secret-embed.example.com/v1")
         monkeypatch.setenv("RERANKER_MODEL", "rerank-lite")
         monkeypatch.setenv("RERANKER_URL", "https://secret-rerank.example.com/v1")
+        monkeypatch.setenv("EMBEDDING_REVISION", "v2")
+        monkeypatch.setenv("EMBEDDING_DIMENSION", "1536")
 
         manifest = _build_env_manifest(
             candidate_sha="a" * 40,
@@ -431,6 +765,8 @@ class TestEnvironmentManifestSecretStripping:
         assert manifest.get("GENERATIVE_MODEL") == "gpt-4"
         assert manifest.get("EMBEDDING_MODEL") == "text-embedding-3-small"
         assert manifest.get("RERANKER_MODEL") == "rerank-lite"
+        assert manifest.get("EMBEDDING_REVISION") == "v2"
+        assert manifest.get("EMBEDDING_DIMENSION") == "1536"
 
     def test_non_secret_metadata_survives(self, monkeypatch):
         """Non-secret environment variables should still be captured."""
@@ -440,6 +776,8 @@ class TestEnvironmentManifestSecretStripping:
         monkeypatch.setenv("GENERATIVE_URL", "https://secret.example.com")
         monkeypatch.setenv("EMBEDDING_URL", "https://secret.example.com")
         monkeypatch.setenv("RERANKER_URL", "https://secret.example.com")
+        monkeypatch.setenv("EMBEDDING_REVISION", "main")
+        monkeypatch.setenv("EMBEDDING_DIMENSION", "768")
 
         manifest = _build_env_manifest(
             candidate_sha="b" * 40,
@@ -450,6 +788,8 @@ class TestEnvironmentManifestSecretStripping:
         assert manifest["GENERATIVE_MODEL"] == "claude-sonnet-4"
         assert manifest["EMBEDDING_MODEL"] == "nomic-embed"
         assert manifest["RERANKER_MODEL"] == "rerank-v2"
+        assert manifest["EMBEDDING_REVISION"] == "main"
+        assert manifest["EMBEDDING_DIMENSION"] == "768"
         assert "GENERATIVE_URL" not in manifest
         assert "EMBEDDING_URL" not in manifest
         assert "RERANKER_URL" not in manifest
@@ -470,3 +810,56 @@ class TestEnvironmentManifestSecretStripping:
         assert "EMBEDDING_URL" not in manifest
         assert "RERANKER_URL" not in manifest
         assert manifest["GENERATIVE_MODEL"] == "gpt-4"
+
+    def test_api_keys_absent_from_manifest(self, monkeypatch):
+        """API-key values must not appear in release evidence."""
+        monkeypatch.setenv("GENERATIVE_MODEL", "gpt-4")
+        monkeypatch.setenv("GENERATIVE_API_KEY", "sk-live-key-12345")
+        monkeypatch.setenv("EMBEDDING_MODEL", "nomic-embed")
+        monkeypatch.setenv("EMBEDDING_API_KEY", "ek-live-key-67890")
+        monkeypatch.setenv("GENERATIVE_URL", "https://secret.example.com")
+        monkeypatch.setenv("EMBEDDING_URL", "https://secret.example.com")
+
+        manifest = _build_env_manifest(
+            candidate_sha="d" * 40,
+            dataset_path=Path("/dev/null"),
+            dataset_hash="g" * 64,
+        )
+
+        assert "GENERATIVE_API_KEY" not in manifest
+        assert "EMBEDDING_API_KEY" not in manifest
+        assert "RERANKER_API_KEY" not in manifest
+
+    def test_intentional_secret_leak_triggers_scanner_failure(
+        self, tmp_path, monkeypatch
+    ):
+        """Deliberately injecting a runtime secret into generated evidence must
+        cause the release secret scanner to fail, proving the scanner is active."""
+        monkeypatch.setenv("GENERATIVE_MODEL", "gpt-4")
+        monkeypatch.setenv("GENERATIVE_URL", "https://secret.example.com")
+
+        manifest = _build_env_manifest(
+            candidate_sha="e" * 40,
+            dataset_path=Path("/dev/null"),
+            dataset_hash="h" * 64,
+        )
+
+        # Normal manifest passes scanner.
+        import scan_release_secrets
+
+        output = tmp_path / "scan_normal.json"
+        report = scan_release_secrets.scan_paths([tmp_path], output=output)
+        # Write manifest to tmp_path so scanner sees it.
+        (tmp_path / "manifest.json").write_text(
+            __import__("json").dumps(manifest, sort_keys=True), encoding="utf-8"
+        )
+        report = scan_release_secrets.scan_paths([tmp_path], output=output)
+        assert report["status"] == "pass"
+
+        # Inject a genuine secret value into the manifest.
+        manifest["GENERATIVE_URL"] = "sk-live-leaked-secret-value"
+        (tmp_path / "manifest.json").write_text(
+            __import__("json").dumps(manifest, sort_keys=True), encoding="utf-8"
+        )
+        report = scan_release_secrets.scan_paths([tmp_path], output=output)
+        assert report["status"] == "fail"

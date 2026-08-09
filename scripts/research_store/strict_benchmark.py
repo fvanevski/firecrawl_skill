@@ -178,6 +178,8 @@ def _build_env_manifest(
         "GENERATIVE_URL",
         "EMBEDDING_MODEL",
         "EMBEDDING_URL",
+        "EMBEDDING_REVISION",
+        "EMBEDDING_DIMENSION",
         "RERANKER_MODEL",
         "RERANKER_URL",
     ):

@@ -53,7 +53,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from .authorized_semantic import call_authorized_structured
-from .completion_provenance import validate_citation_artifact
+from .completion_provenance import CompletionProvenanceError, validate_citation_artifact
 from .config import StoreConfig
 from .domain import SynthesisStageName, SynthesisStageStatus
 from .evidence import EvidenceService
@@ -1604,7 +1604,23 @@ class LocalSynthesisService:
                         sorted(str(item) for item in reference.get("passage_ids") or ())
                     )
                     draft_citations.add((section["section_id"], claim_id, cited))
-            validate_citation_artifact(cached, draft_citations)
+            try:
+                validate_citation_artifact(cached, draft_citations)
+            except CompletionProvenanceError as exc:
+                with uow_factory() as uow:
+                    record = uow.synthesis_stages.get_synthesis_stage(
+                        run_id, "citation_pass"
+                    )
+                    self._update_stage(
+                        uow,
+                        record,
+                        status=SynthesisStageStatus.FAILED.value,
+                        error=str(exc),
+                        increment_attempts=True,
+                    )
+                raise ReportServiceError(
+                    f"citation-pass semantic validation failed: {exc}"
+                )
             with uow_factory() as uow:
                 record = uow.synthesis_stages.get_synthesis_stage(
                     run_id, "citation_pass"
@@ -1696,7 +1712,19 @@ class LocalSynthesisService:
                         sorted(str(item) for item in reference.get("passage_ids") or ())
                     )
                     draft_citations.add((section["section_id"], claim_id, cited))
-            validate_citation_artifact(result.value, draft_citations)
+            try:
+                validate_citation_artifact(result.value, draft_citations)
+            except CompletionProvenanceError as exc:
+                self._update_stage(
+                    uow,
+                    record,
+                    status=SynthesisStageStatus.FAILED.value,
+                    error=str(exc),
+                    increment_attempts=True,
+                )
+                raise ReportServiceError(
+                    f"citation-pass semantic validation failed: {exc}"
+                )
 
             self._update_stage(
                 uow,
