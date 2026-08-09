@@ -169,22 +169,30 @@ def _finalize_batch_with_canonical_identity(
 
 
 def _bounded_execute_with_scoped_atomic_ingest(self, *args, **kwargs):
-    """Apply the ordering correction only to the real bounded production seam."""
-    from unittest.mock import MagicMock, Mock
+    """Apply the ordering correction only to the real bounded production seam.
+
+    The bounded atomic-ingest path is scoped to the canonical production seam
+    identified by positive type membership on ``CorpusService`` and
+    ``ExtractionService``.  Test doubles that do not inherit from those classes
+    (for example ``_FakeCorpusService`` / ``_FakeExtractionService`` used in
+    issue-216 / issue-217 unit tests) fall through to the original bounded
+    execute without touching the production ingestion contract.
+
+    Per-call method rebinding is safe because repository construction creates
+    independent service instances per stage and the orchestrator executes runs
+    sequentially; overlapping bounded executions on the same instance are not
+    supported and would require an explicit shared-service lifecycle change.
+    """
+    from .extraction_service import ExtractionService
+    from .service import CorpusService
 
     extraction_service = self.extraction_service
     corpus_service = self.corpus_service
-    # Reject test doubles / MagicMocks: they auto-create every attribute, so
-    # hasattr-based detection would incorrectly treat them as real boundaries
-    # and route ordinary unit-test flows through the production ingest path.
     has_real_boundary = (
         extraction_service is not None
         and corpus_service is not None
-        and not isinstance(extraction_service, (MagicMock, Mock))
-        and not isinstance(corpus_service, (MagicMock, Mock))
-        and hasattr(extraction_service, "get_attempt")
-        and hasattr(corpus_service, "uow_factory")
-        and hasattr(corpus_service, "blob_store")
+        and isinstance(extraction_service, ExtractionService)
+        and isinstance(corpus_service, CorpusService)
     )
     if not has_real_boundary:
         return _ORIGINAL_BOUNDED_EXECUTE(self, *args, **kwargs)

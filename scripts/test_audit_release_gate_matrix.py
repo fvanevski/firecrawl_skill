@@ -81,3 +81,99 @@ def test_real_release_campaign_is_blocked_by_disposable_gates_and_secret_scan():
     assert "steps.secret_scan.outcome" in workflow
     assert "real-release-campaign-${{ inputs.candidate-sha }}" in workflow
     assert "retention-days: 90" in workflow
+
+
+def test_bounded_execution_uses_positive_type_contract_not_mock_detection():
+    """The ARC-17 correction must identify production services by positive type
+    membership, not by excluding ``unittest.mock`` types.  A dynamically-built
+    fake that is not a ``Mock``/``MagicMock`` subclass must still fall through
+    to the original bounded execute when it is not an instance of the real
+    ``CorpusService`` / ``ExtractionService`` classes."""
+    import inspect
+
+    from research_store.arc17_ingestion_release_fix import (
+        _bounded_execute_with_scoped_atomic_ingest,
+    )
+
+    source = inspect.getsource(_bounded_execute_with_scoped_atomic_ingest)
+    assert "unittest.mock" not in source
+    assert "MagicMock" not in source
+    assert "Mock)" not in source or "isinstance" in source
+    assert "isinstance(extraction_service, ExtractionService)" in source
+    assert "isinstance(corpus_service, CorpusService)" in source
+
+
+def test_concurrent_bounded_executions_on_independent_instances_do_not_interfere():
+    """Two bounded extraction stages built from independent service instances
+    must execute without interfering with each other's method rebinding.  This
+    regresses the assumption that repository construction creates independent
+    service instances per stage."""
+    from unittest.mock import MagicMock
+
+    from research_store.bounded_orchestrator import BoundedExtractionStage
+    from research_store.config import StoreConfig
+    from research_store.container import build_extraction_service, build_service
+
+    config = StoreConfig.from_env()
+    corpus_a = build_service(config)
+    corpus_b = build_service(config)
+    extraction_a = build_extraction_service(config)
+    extraction_b = build_extraction_service(config)
+
+    stage_a = BoundedExtractionStage(
+        run_service=MagicMock(),
+        coverage_service=MagicMock(),
+        config=config,
+        corpus_service=corpus_a,
+        extraction_service=extraction_a,
+    )
+    stage_b = BoundedExtractionStage(
+        run_service=MagicMock(),
+        coverage_service=MagicMock(),
+        config=config,
+        corpus_service=corpus_b,
+        extraction_service=extraction_b,
+    )
+
+    # Both stages should have the ARC-17 correction installed (class-level).
+    assert stage_a.execute.__name__ == "_bounded_execute_with_scoped_atomic_ingest"
+    assert stage_b.execute.__name__ == "_bounded_execute_with_scoped_atomic_ingest"
+
+    # Independent instances must not share bound methods.
+    assert corpus_a.ingest_batch is not corpus_b.ingest_batch
+    assert extraction_a.complete_attempt is not extraction_b.complete_attempt
+
+
+def test_release_campaign_secret_env_matches_scanner_boundary():
+    """Every injected release secret must appear as an exact-value scanner arg."""
+    import re
+
+    workflow = (ROOT / ".github" / "workflows" / "release-campaign.yml").read_text(
+        encoding="utf-8"
+    )
+
+    # Collect every ${{ secrets.* }} reference in the campaign workflow.
+    secret_refs = sorted(
+        {
+            m.group(1)
+            for m in re.finditer(
+                r"\$\{\{\s*secrets\.([A-Z_][A-Z0-9_]*)\s*\}\}", workflow
+            )
+        }
+    )
+
+    # Collect every --secret-env value passed to scan_release_secrets.py.
+    scan_section = workflow.split("Scan complete release campaign")[1]
+    scan_section = scan_section.split("- name: Upload")[0]
+    secret_env_values = sorted(
+        {
+            m.group(1)
+            for m in re.finditer(r"--secret-env\s+([A-Z_][A-Z0-9_]*)", scan_section)
+        }
+    )
+
+    missing = set(secret_refs) - set(secret_env_values)
+    assert not missing, (
+        f"Release campaign injects secrets that the scanner does not check: "
+        f"{sorted(missing)}"
+    )

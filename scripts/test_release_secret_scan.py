@@ -50,3 +50,18 @@ def test_placeholders_and_loopback_test_credentials_do_not_false_positive(tmp_pa
     report = scan_paths([tmp_path], output=output)
     assert report["status"] == "pass"
     assert json.loads(output.read_text(encoding="utf-8"))["findings"] == []
+
+
+def test_genuine_bearer_token_pattern_fails_with_bearer_kind(tmp_path):
+    """A real bearer-pattern value at or above the scanner threshold must fail
+    with ``kind == 'bearer_token'`` so that release evidence cannot carry live
+    token credentials without detection."""
+    (tmp_path / "leaked.txt").write_text(
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "scan.json"
+    report = scan_paths([tmp_path], output=output)
+    assert report["status"] == "fail"
+    kinds = {f["kind"] for f in report["findings"]}
+    assert "bearer_token" in kinds

@@ -275,10 +275,16 @@ jobs:
             --root "$CAMPAIGN_DIR" \
             --output "$CAMPAIGN_DIR/secret-scan.json" \
             --secret-env DATABASE_URL \
+            --secret-env BLOB_ROOT \
+            --secret-env QDRANT_URL \
             --secret-env QDRANT_API_KEY \
             --secret-env VALKEY_URL \
+            --secret-env FIRECRAWL_API_URL \
+            --secret-env EMBEDDING_URL \
             --secret-env EMBEDDING_API_KEY \
+            --secret-env GENERATIVE_URL \
             --secret-env GENERATIVE_API_KEY \
+            --secret-env RERANKER_URL \
             --secret-env RERANKER_API_KEY
 
       - name: Upload complete campaign directory
