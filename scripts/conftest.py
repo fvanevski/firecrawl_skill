@@ -60,6 +60,24 @@ def pytest_runtest_setup(item):
     from research_store.postgres import connect
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        # Guard: skip truncation if schema hasn't been applied yet.
+        # The pytest_runtest_setup hook can fire before session fixtures run,
+        # so verify the target tables exist before attempting TRUNCATE.
+        cursor.execute(
+            """SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_schema = 'public'
+                AND table_name IN (
+                    'claim_evidence_links','research_claims','evidence_packets',
+                    'synthesis_stages','semantic_artifacts','semantic_calls',
+                    'run_asset_promotion_events','run_asset_membership_members',
+                    'indexing_checkpoint_observations','run_asset_membership_seals'
+                )
+            )"""
+        )
+        if not cursor.fetchone()[0]:
+            return
+
         # TRUNCATE does not fire the row-level append-only/terminal guards.
         # This hook is deliberately scoped to TestIndexRebuildRecovery and an
         # explicit disposable test DSN; it is not a production cleanup path.

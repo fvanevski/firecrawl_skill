@@ -2522,74 +2522,79 @@ def _doctor(config):
             qdrant["status"] = "failure"
             failed = True
             checks["qdrant_projection"] = qdrant
-            return checks, failed
-        active = alias_state["actual_required_alias_target"]
-        if active and not checks.get("schema", {}).get("at_head"):
-            qdrant["schema"] = _qdrant(config, active).inspect_schema()
-            checks["qdrant_projection"] = qdrant
-            active = None
-        if active:
-            rows = [
-                row
-                for row in _index_rows(config)
-                if row["physical_collection"] == active
-            ]
-            if not rows:
-                raise RuntimeError("active alias is not backed by an index definition")
-            row = rows[0]
-            qdrant["query_embedding_compatible"] = (
-                row["fingerprint"] == config.embedding_fingerprint
-            )
-            if not qdrant["query_embedding_compatible"]:
-                qdrant["status"] = "failure"
-                failed = True
-            qdrant["schema"] = _qdrant(
-                config, active, row["dimension"], row["distance_metric"]
-            ).inspect_schema()
-            if not qdrant["schema"]["compatible"]:
-                qdrant["status"] = "failure"
-                failed = True
-            if checks.get("schema", {}).get("at_head"):
-                point_ids, offset = set(), None
-                active_index = _qdrant(
-                    config, active, row["dimension"], row["distance_metric"]
-                )
-                while True:
-                    page = active_index.point_ids(
-                        offset, filters=_derivation_filter(config)
+            # Continue to add index_job_health even when alias is unhealthy
+        else:
+            active = alias_state["actual_required_alias_target"]
+            if active and not checks.get("schema", {}).get("at_head"):
+                qdrant["schema"] = _qdrant(config, active).inspect_schema()
+                checks["qdrant_projection"] = qdrant
+                active = None
+            if active:
+                rows = [
+                    row
+                    for row in _index_rows(config)
+                    if row["physical_collection"] == active
+                ]
+                if not rows:
+                    raise RuntimeError(
+                        "active alias is not backed by an index definition"
                     )
-                    point_ids.update(str(item["id"]) for item in page.get("points", []))
-                    offset = page.get("next_page_offset")
-                    if not offset:
-                        break
-                chunk_ids = {str(value) for value in _active_chunk_ids(config)}
-                qdrant["coverage"] = {
-                    "missing": len(chunk_ids - point_ids),
-                    "orphaned": len(point_ids - chunk_ids),
-                }
-                # Detect destructive drift: PostgreSQL declares the projection
-                # active with complete jobs/manifests while Qdrant's physical
-                # collection holds zero vectors (alias destroyed).
-                if row["lifecycle_status"] == "active" and len(point_ids) == 0:
+                row = rows[0]
+                qdrant["query_embedding_compatible"] = (
+                    row["fingerprint"] == config.embedding_fingerprint
+                )
+                if not qdrant["query_embedding_compatible"]:
                     qdrant["status"] = "failure"
-                    qdrant["drift"] = {
-                        "type": "empty_active_projection",
-                        "message": (
-                            f"PostgreSQL reports index definition {row['id']} as active "
-                            f"with complete jobs/manifests but Qdrant collection "
-                            f"{active} has zero points. This indicates cross-store "
-                            f"activation drift between PostgreSQL and Qdrant."
-                        ),
+                    failed = True
+                qdrant["schema"] = _qdrant(
+                    config, active, row["dimension"], row["distance_metric"]
+                ).inspect_schema()
+                if not qdrant["schema"]["compatible"]:
+                    qdrant["status"] = "failure"
+                    failed = True
+                if checks.get("schema", {}).get("at_head"):
+                    point_ids, offset = set(), None
+                    active_index = _qdrant(
+                        config, active, row["dimension"], row["distance_metric"]
+                    )
+                    while True:
+                        page = active_index.point_ids(
+                            offset, filters=_derivation_filter(config)
+                        )
+                        point_ids.update(
+                            str(item["id"]) for item in page.get("points", [])
+                        )
+                        offset = page.get("next_page_offset")
+                        if not offset:
+                            break
+                    chunk_ids = {str(value) for value in _active_chunk_ids(config)}
+                    qdrant["coverage"] = {
+                        "missing": len(chunk_ids - point_ids),
+                        "orphaned": len(point_ids - chunk_ids),
                     }
-                    failed = True
-                elif point_ids != chunk_ids:
-                    qdrant["status"] = "failure"
-                    failed = True
+                    # Detect destructive drift: PostgreSQL declares the projection
+                    # active with complete jobs/manifests while Qdrant's physical
+                    # collection holds zero vectors (alias destroyed).
+                    if row["lifecycle_status"] == "active" and len(point_ids) == 0:
+                        qdrant["status"] = "failure"
+                        qdrant["drift"] = {
+                            "type": "empty_active_projection",
+                            "message": (
+                                f"PostgreSQL reports index definition {row['id']} as active "
+                                f"with complete jobs/manifests but Qdrant collection "
+                                f"{active} has zero points. This indicates cross-store "
+                                f"activation drift between PostgreSQL and Qdrant."
+                            ),
+                        }
+                        failed = True
+                    elif point_ids != chunk_ids:
+                        qdrant["status"] = "failure"
+                        failed = True
+                    else:
+                        qdrant["status"] = "pass"
                 else:
-                    qdrant["status"] = "pass"
-            else:
-                qdrant["status"] = "inconclusive"
-        checks["qdrant_projection"] = qdrant
+                    qdrant["status"] = "inconclusive"
+            checks["qdrant_projection"] = qdrant
     except Exception as exc:  # noqa: BLE001
         checks["qdrant_projection"] = _classify_connectivity_failure(exc)
         failed = True

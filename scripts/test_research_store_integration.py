@@ -4207,9 +4207,10 @@ class TestIndexRebuildRecovery:
 
         import contextlib
 
-        # Delete only Qdrant collections owned by this test class.
-        # Tests sharing a host Qdrant service must clean up resources they own,
-        # not perform global sweeps. Production collections are never deleted.
+        # Delete all disposable Qdrant collections before each test.
+        # This preserves the original behavior where tests share a host Qdrant
+        # service and must clean up all disposable collections to avoid drift.
+        # Production collections are never deleted.
         from research_store.config import StoreConfig
         from research_store.qdrant import QdrantIndex
 
@@ -4232,15 +4233,14 @@ class TestIndexRebuildRecovery:
                     name = collection.get("name")
                     if not name or name == production_collection:
                         continue
-                    if name in self._owned_collections:
-                        try:
-                            cleanup.for_collection(name, 1).delete_collection()
-                        except Exception as exc:  # noqa: BLE001
-                            import logging
+                    try:
+                        cleanup.for_collection(name, 1).delete_collection()
+                    except Exception as exc:  # noqa: BLE001
+                        import logging
 
-                            logging.getLogger(__name__).warning(
-                                "Failed to delete test collection %s: %s", name, exc
-                            )
+                        logging.getLogger(__name__).warning(
+                            "Failed to delete test collection %s: %s", name, exc
+                        )
 
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
         """Every eligible chunk gets a manifest AND a pending job."""
