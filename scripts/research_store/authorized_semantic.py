@@ -35,10 +35,23 @@ def _citation_verdict_schema(
     Citation identity is immutable draft state, not a semantic decision. The
     local model therefore supplies only one ordered status/issue verdict per
     draft reference. Exact section/claim/passage identity is rebound
-    deterministically after the model call.
+    deterministically after the model call. Extra fields are tolerated at the
+    transport boundary for model/backward compatibility but are ignored by the
+    deterministic binder and never acquire authority.
     """
     item_schema = full_schema["properties"]["validation_results"]["items"]
     properties = item_schema["properties"]
+    verdict_item = {
+        "type": "object",
+        "required": ["status", "issue"],
+        "properties": {
+            "status": deepcopy(properties["status"]),
+            "issue": deepcopy(properties["issue"]),
+        },
+        "additionalProperties": True,
+    }
+    if "oneOf" in item_schema:
+        verdict_item["oneOf"] = deepcopy(item_schema["oneOf"])
     return {
         "type": "object",
         "required": ["validation_results"],
@@ -47,18 +60,10 @@ def _citation_verdict_schema(
                 "type": "array",
                 "minItems": expected_count,
                 "maxItems": expected_count,
-                "items": {
-                    "type": "object",
-                    "required": ["status", "issue"],
-                    "properties": {
-                        "status": deepcopy(properties["status"]),
-                        "issue": deepcopy(properties["issue"]),
-                    },
-                    "additionalProperties": False,
-                },
+                "items": verdict_item,
             }
         },
-        "additionalProperties": False,
+        "additionalProperties": True,
     }
 
 
@@ -183,6 +188,15 @@ def _call_autonomous_citation(
     verdict_schema = _citation_verdict_schema(full_schema, expected_count)
     original_post_validate = call_kwargs.get("post_validate")
 
+    def _validate_canonical(payload: Mapping[str, Any]) -> dict[str, Any]:
+        canonical = _bind_citation_verdicts(deterministic_fixture, payload)
+        validation_errors = validate_structured_payload(canonical, full_schema)
+        if validation_errors:
+            raise ValueError("; ".join(validation_errors[:10]))
+        if original_post_validate is not None:
+            original_post_validate(canonical)
+        return canonical
+
     def _validate_verdicts(payload: dict[str, Any]) -> None:
         verdicts = payload.get("validation_results")
         if not isinstance(verdicts, list) or len(verdicts) != expected_count:
@@ -191,8 +205,7 @@ def _call_autonomous_citation(
                 f"expected {expected_count}, got "
                 f"{len(verdicts) if isinstance(verdicts, list) else 'non-array'}"
             )
-        if original_post_validate is not None:
-            original_post_validate(payload)
+        _validate_canonical(payload)
 
     kwargs = dict(call_kwargs)
     kwargs["schema"] = verdict_schema
@@ -204,10 +217,10 @@ def _call_autonomous_citation(
         + " for each draft claim reference in traversal order. Do not reproduce"
         + " section_id, claim_id, or passage_ids."
     )
-    kwargs["user_prompt"] = (
-        str(call_kwargs["user_prompt"])
-        + f"\n\nReturn exactly {expected_count} ordered citation verdict(s)."
-    )
+    # Preserve the caller's JSON-only user prompt. Some deterministic consumers
+    # parse it directly, and the exact verdict count is already constrained by
+    # the response schema's minItems/maxItems.
+    kwargs["user_prompt"] = str(call_kwargs["user_prompt"])
 
     persistence = _CitationPersistence(
         semantic_service,
@@ -223,14 +236,11 @@ def _call_autonomous_citation(
         return result
 
     try:
-        canonical = _bind_citation_verdicts(
-            deterministic_fixture,
-            result.value or {},
-        )
-        validation_errors = validate_structured_payload(canonical, full_schema)
-        if validation_errors:
-            raise ValueError("; ".join(validation_errors[:10]))
+        canonical = _validate_canonical(result.value or {})
     except (KeyError, TypeError, ValueError) as exc:
+        message = str(exc)
+        if "citation-pass semantic validation failed" not in message:
+            message = f"citation-pass semantic validation failed: {message}"
         return StructuredResult(
             None,
             {
@@ -238,7 +248,7 @@ def _call_autonomous_citation(
                 "citation_identity_binding": "deterministic",
             },
             result.attempts,
-            f"canonical citation artifact validation failed: {exc}",
+            message,
             semantic_call_id=result.semantic_call_id,
             artifact_ids=result.artifact_ids,
         )
