@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -116,6 +117,14 @@ class QdrantIndex:
         carries obsolete vector configuration (e.g. ``sparse_vectors``), drop
         and recreate it so the authoritative PostgreSQL state can drive a
         clean rebuild.
+
+        Safety invariant: this method NEVER deletes a collection that is
+        currently targeted by an active alias.  An active alias means some
+        PostgreSQL index definition has declared this physical collection as
+        its authoritative projection; destroying it would orphan that
+        definition without tracking the transition.  Incompatible-schema
+        situations involving an aliased collection must be resolved through
+        the explicit rebuild / activation lifecycle instead.
         """
         status = self.inspect_schema()
         if not status["exists"]:
@@ -130,6 +139,16 @@ class QdrantIndex:
             )
             return {**status, "created": True, "compatible": True}
         if not status["compatible"]:
+            aliases = self.list_aliases()
+            for target in aliases.values():
+                if target == self.collection:
+                    raise RuntimeError(
+                        f"collection {self.collection} is targeted by an active "
+                        f"alias ({', '.join(k for k, v in aliases.items() if v == self.collection)}) "
+                        f"and has incompatible schema ({status['actual']} vs "
+                        f"{status['expected']}); cannot auto-recreate — use the "
+                        f"explicit rebuild/activation lifecycle instead"
+                    )
             self._request(
                 "DELETE",
                 f"/collections/{urllib.parse.quote(self.collection, safe='')}",
@@ -231,8 +250,20 @@ class QdrantIndex:
         aliases = self._request("GET", "/aliases").get("result", {}).get("aliases", [])
         return {item["alias_name"]: item["collection_name"] for item in aliases}
 
+    def has_active_alias(self, collection: str) -> bool:
+        """Return True when *collection* is currently targeted by any alias."""
+        return collection in set(self.list_aliases().values())
+
     def switch_alias(self, alias: str, target_collection: str) -> bool:
         """Atomically repoint an alias, returning False when already active."""
+        # Guard against repointing the production alias.  Production aliases are
+        # authoritative state; test suites must never move them.
+        production_alias = os.environ.get("QDRANT_ALIAS", "research_chunks_active")
+        if alias == production_alias:
+            raise RuntimeError(
+                f"refusing to repoint production alias {alias!r}; "
+                "use index-activate to change the active projection"
+            )
         aliases = self.list_aliases()
         current = aliases.get(alias)
         if current == target_collection:

@@ -2478,7 +2478,22 @@ def _doctor(config):
                     "missing": len(chunk_ids - point_ids),
                     "orphaned": len(point_ids - chunk_ids),
                 }
-                if point_ids != chunk_ids:
+                # Detect destructive drift: PostgreSQL declares the projection
+                # active with complete jobs/manifests while Qdrant's physical
+                # collection holds zero vectors (alias destroyed).
+                if row["lifecycle_status"] == "active" and len(point_ids) == 0:
+                    qdrant["status"] = "failure"
+                    qdrant["drift"] = {
+                        "type": "empty_active_projection",
+                        "message": (
+                            f"PostgreSQL reports index definition {row['id']} as active "
+                            f"with complete jobs/manifests but Qdrant collection "
+                            f"{active} has zero points. The alias was likely destroyed "
+                            f"by an unsafe schema operation."
+                        ),
+                    }
+                    failed = True
+                elif point_ids != chunk_ids:
                     qdrant["status"] = "failure"
                     failed = True
                 else:

@@ -74,6 +74,13 @@ def pytest_runtest_setup(item):
     if qdrant_url:
         from research_store.qdrant import QdrantIndex
 
+        # Guard against deleting production collections.  The test suite runs
+        # against a disposable PostgreSQL instance but shares the host Qdrant
+        # service; wiping every Qdrant collection would destroy active
+        # projections whose PostgreSQL authority remains intact.  Only remove
+        # collections whose names do not match any known active alias target.
+        protection_prefixes = ("research_chunks_",)
+
         cleanup = QdrantIndex(
             qdrant_url,
             os.environ.get("QDRANT_API_KEY", ""),
@@ -83,10 +90,51 @@ def pytest_runtest_setup(item):
         try:
             response = cleanup._request("GET", "/collections")
             collections = response.get("result", {}).get("collections", [])
+            import logging
+
+            _logger = logging.getLogger(__name__)
+            _logger.info(
+                "conftest cleanup RUNNING: found %d collections, protection_prefixes=%s, item=%s",
+                len(collections),
+                protection_prefixes,
+                item.name,
+            )
+            # Protect production aliases — never delete or repoint them.
+            production_aliases = set()
+            try:
+                from research_store.config import StoreConfig
+
+                prod_config = StoreConfig.from_env()
+                production_aliases.add(prod_config.qdrant_alias)
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("Failed to load production alias config: %s", exc)
+            aliases_resp = cleanup._request("GET", "/aliases")
+            protected_alias_targets = set()
+            for alias_entry in aliases_resp.get("result", {}).get("aliases", []):
+                alias_name = alias_entry.get("alias_name")
+                collection_name = alias_entry.get("collection_name")
+                if alias_name in production_aliases:
+                    _logger.info(
+                        "  protecting alias %s -> %s (production alias)",
+                        alias_name,
+                        collection_name,
+                    )
+                    if collection_name:
+                        protected_alias_targets.add(collection_name)
             for collection in collections:
                 name = collection.get("name")
-                if name:
-                    cleanup.for_collection(name, 1).delete_collection()
+                if not name:
+                    continue
+                # Skip collections that belong to an active projection.
+                # Check both direct name match and alias targeting.
+                if any(name.startswith(p) for p in protection_prefixes):
+                    _logger.info("  protecting %s (prefix match)", name)
+                    continue
+                if name in protected_alias_targets:
+                    _logger.info("  protecting %s (protected alias target)", name)
+                    continue
+                _logger.info("  deleting %s", name)
+                cleanup.for_collection(name, 1).delete_collection()
         except Exception as exc:  # noqa: BLE001
             pytest.fail(f"Failed to reset disposable Qdrant test state: {exc}")
 
