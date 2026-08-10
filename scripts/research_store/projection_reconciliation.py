@@ -1,6 +1,6 @@
 """Operational projection reconciliation for legacy doctor/index tooling.
 
-This module intentionally does *not* establish historical run provenance.  It
+This module intentionally does *not* establish historical run provenance. It
 preserves the pre-existing current-projection contract while using the corrected
 Qdrant APIs and keeping observation read-only unless ``repair=True``.
 """
@@ -14,6 +14,7 @@ from uuid import UUID
 from .config import StoreConfig
 from .postgres import connect
 from .qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
+from .qdrant_authority import evaluate_required_alias_state
 
 _RETRIEVE_BATCH = 256
 
@@ -167,10 +168,10 @@ def _projection_payload_scan(
 ) -> dict[str, Any]:
     """Exhaustively compare identity fields that exist on projection points.
 
-    Historical/manual projection fixtures predate identity payload fields.  In
+    Historical/manual projection fixtures predate identity payload fields. In
     projection-only mode an absent field is therefore reported as unavailable,
-    not fabricated as a historical mismatch.  If a field is present, drift is
-    checked exhaustively.  Run-scoped reconciliation remains strict about both
+    not fabricated as a historical mismatch. If a field is present, drift is
+    checked exhaustively. Run-scoped reconciliation remains strict about both
     missing and mismatched identity fields.
     """
     expected = _expected_payloads(config, point_ids)
@@ -242,11 +243,34 @@ def reconcile_projection_compat(
         "Cosine",
     )
     aliases = base_index.list_aliases()
-    alias_by_collection = {collection: alias for alias, collection in aliases.items()}
+    aliases_by_collection: dict[str, list[str]] = {}
+    for alias, collection in aliases.items():
+        aliases_by_collection.setdefault(collection, []).append(alias)
+    for names in aliases_by_collection.values():
+        names.sort()
 
     discrepancies: list[str] = []
     definitions_with_discrepancies: set[str] = set()
     collections: dict[str, dict[str, Any]] = {}
+
+    active_definitions = [
+        definition
+        for definition in definitions
+        if definition.get("lifecycle_status") == "active"
+    ]
+    alias_state = evaluate_required_alias_state(
+        aliases=aliases,
+        required_alias_name=config.qdrant_alias,
+        active_definitions=active_definitions,
+    )
+    if alias_state["status"] != "healthy":
+        discrepancies.append(
+            "activation drift: "
+            f"{alias_state['actual']} (expected {alias_state['expected']})"
+        )
+        definitions_with_discrepancies.update(
+            alias_state.get("postgres_active_definitions", [])
+        )
 
     for definition in definitions:
         definition_id = definition["id"]
@@ -271,9 +295,15 @@ def reconcile_projection_compat(
 
         collection_name = definition["physical_collection"]
         index = _qdrant_for_definition(config, definition)
+        alias_names = aliases_by_collection.get(collection_name, [])
+        required_alias = (
+            config.qdrant_alias
+            if aliases.get(config.qdrant_alias) == collection_name
+            else None
+        )
         try:
             # Coverage checks against the active chunk set only apply to
-            # definitions that are currently driving the projection.  Inactive
+            # definitions that are currently driving the projection. Inactive
             # definitions may have complete manifests/jobs from a prior run but
             # their Qdrant state is irrelevant to current projection health.
             is_inactive = definition.get("lifecycle_status") == "inactive"
@@ -344,17 +374,10 @@ def reconcile_projection_compat(
                 )
                 definitions_with_discrepancies.add(definition_id)
 
-            alias_name = alias_by_collection.get(collection_name)
-            if definition.get("lifecycle_status") == "active" and alias_name is None:
-                discrepancies.append(
-                    f"collection {collection_name}: active definition is not alias-targeted"
-                )
-                definitions_with_discrepancies.add(definition_id)
-
             cached = point_counts.get(definition_id)
             collections[collection_name] = {
-                "alias": alias_name,
-                "aliases": [alias_name] if alias_name else [],
+                "alias": required_alias,
+                "aliases": alias_names,
                 "schema": schema,
                 "point_count": len(point_ids),
                 "cached_point_count": cached["count"] if cached else None,
@@ -371,14 +394,14 @@ def reconcile_projection_compat(
                 "has_discrepancies": definition_id in definitions_with_discrepancies,
             }
         except Exception as exc:  # noqa: BLE001
-            discrepancies.append(f"collection {collection_name}: {exc}")
-            definitions_with_discrepancies.add(definition_id)
             collections[collection_name] = {
-                "alias": alias_by_collection.get(collection_name),
-                "aliases": [],
+                "alias": required_alias,
+                "aliases": alias_names,
                 "error": str(exc),
                 "has_discrepancies": True,
             }
+            discrepancies.append(f"collection {collection_name}: {exc}")
+            definitions_with_discrepancies.add(definition_id)
 
     repair_actions: list[dict[str, Any]] = []
     repaired: list[str] = []
@@ -424,6 +447,7 @@ def reconcile_projection_compat(
         "qdrant": {
             "ok": not discrepancies,
             "aliases": aliases,
+            "required_alias_state": alias_state,
             "collections": collections,
         },
         "discrepancies": discrepancies,
