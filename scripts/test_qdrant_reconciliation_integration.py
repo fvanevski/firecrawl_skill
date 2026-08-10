@@ -647,16 +647,27 @@ def test_reconcile_fails_closed_when_required_alias_targets_wrong_collection(
             "activation drift" in d and "expected" in d for d in result["discrepancies"]
         )
     finally:
+        # Thorough cleanup: delete wrong collection, reset seed, reset all definitions
         with suppress(Exception):
+            # Delete the alias first, then the collection
+            delete_alias(wrong_idx, seed["config"].qdrant_alias)
             wrong_idx.delete_collection()
         _cleanup(seed)
+        # Also reset any other active definitions that might have been created
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute("UPDATE index_definitions SET lifecycle_status='building'")
         _reset_active_definitions()
+        # Debug: check state after cleanup
 
 
 def test_reconcile_passes_when_all_invariants_hold(tmp_path):
     """Exactly one active PG definition + exact required alias target +
     healthy coverage/schema => reconciliation passes."""
+    from research_store.postgres import connect
+
     seed = _seed_reconciliation_run(tmp_path, count=1)
+
+    # Debug: check state after seeding
     try:
         # Mark the definition active directly; the alias was set during seed.
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
