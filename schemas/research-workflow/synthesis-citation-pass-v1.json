@@ -59,11 +59,38 @@
           },
           "issue": {
             "type": "string",
-            "description": "Description of any issue found."
+            "description": "Description of any issue found. Empty string is the only canonical representation for a valid result; non-empty substantive text is required for error states."
           }
         },
-        "required": ["section_id", "claim_id", "passage_ids", "status"],
-        "additionalProperties": false
+        "required": ["section_id", "claim_id", "passage_ids", "status", "issue"],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "description": "Canonical valid result: status must be 'valid' and issue must be exactly empty string.",
+            "properties": {
+              "status": {
+                "const": "valid"
+              },
+              "issue": {
+                "const": ""
+              }
+            },
+            "required": ["status", "issue"]
+          },
+          {
+            "description": "Error state: status must be one of the failure types and issue must be a substantive non-empty description.",
+            "properties": {
+              "status": {
+                "enum": ["invented", "unsupported", "entailment_mismatch"]
+              },
+              "issue": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": ["status", "issue"]
+          }
+        ]
       }
     },
     "invented_citations": {

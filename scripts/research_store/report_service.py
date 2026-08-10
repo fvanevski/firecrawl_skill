@@ -96,7 +96,13 @@ CITATION_PASS_SYSTEM_PROMPT = (
     "3. Unsupported claims are explicitly labeled. "
     "4. The relationship (supports/contradicts/qualifies/context) matches "
     "the EvidencePacket binding. "
-    "Return the validation results in the required JSON schema."
+    "For each validation result: use status='valid' with issue='' when the "
+    "reference is fully supported; use status='invented', 'unsupported', or "
+    "'entailment_mismatch' with a substantive non-empty issue description "
+    "when there is a problem. The schema enforces that status=='valid' requires "
+    "issue=='' and any error status requires a non-empty issue string. Never "
+    "use issue='none' — empty string is the only canonical no-error "
+    "representation."
 )
 
 
@@ -913,6 +919,7 @@ class LocalSynthesisService:
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
+            "prompt_version": prompt_version,
         }
 
         with uow_factory() as uow:
@@ -1293,6 +1300,7 @@ class LocalSynthesisService:
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
+            "prompt_version": prompt_version,
         }
 
         with uow_factory() as uow:
@@ -1582,6 +1590,7 @@ class LocalSynthesisService:
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
+            "prompt_version": prompt_version,
         }
 
         with uow_factory() as uow:
@@ -1634,6 +1643,10 @@ class LocalSynthesisService:
                 raise ReportServiceError(
                     f"citation-pass semantic validation failed: {exc}"
                 )
+            # Cache hit — strict rejection of noncanonical entries.
+            # The schema enforces canonical representation; any cached entry
+            # that reached this point with issue="none" would have been
+            # rejected by validate_citation_artifact above.
             with uow_factory() as uow:
                 record = uow.synthesis_stages.get_synthesis_stage(
                     run_id, "citation_pass"
@@ -1679,6 +1692,25 @@ class LocalSynthesisService:
                 "unsupported_claims": [],
                 "entailment_mismatches": [],
             }
+
+            def _validate_citation_canonicalization(payload: dict[str, Any]) -> None:
+                """Enforce canonical citation representation before persistence."""
+                for result in payload.get("validation_results", []):
+                    status = result.get("status")
+                    issue = result.get("issue", "")
+                    if status == "valid":
+                        if issue != "":
+                            raise ValueError(
+                                f"valid citation result must have empty issue, got: {issue!r}"
+                            )
+                    elif (
+                        status in ("invented", "unsupported", "entailment_mismatch")
+                        and not issue
+                    ):
+                        raise ValueError(
+                            f"error citation result must have non-empty issue, got status={status!r}"
+                        )
+
             return call_authorized_structured(
                 semantic_service=self.semantic,
                 semantic_context=context,
@@ -1691,6 +1723,7 @@ class LocalSynthesisService:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 prompt_version=prompt_version,
+                post_validate=_validate_citation_canonicalization,
             )
 
         result = self._bounded_llm_call(
@@ -1710,7 +1743,9 @@ class LocalSynthesisService:
         # ------------------------------------------------------------------
         # Stage-time acceptance: enforce terminal-grade citation validation
         # before persisting.  An invalid model response must never become a
-        # completed authoritative stage.
+        # completed authoritative stage.  Schema-level enforcement ensures
+        # the model returns canonical issue="" for valid results;
+        # validate_citation_artifact rejects any noncanonical artifact.
         # ------------------------------------------------------------------
         draft_citations: set[tuple[str, str, tuple[str, ...]]] = set()
         for section in draft_sections:
