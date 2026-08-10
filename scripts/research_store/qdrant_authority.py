@@ -188,7 +188,7 @@ def require_configured_projection_preserved(
     config: StoreConfig,
     before: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Fail closed if a probe repointed, shrank, or deleted baseline projection data."""
+    """Fail closed unless probe cleanup restores the exact baseline projection."""
     after = capture_configured_projection_state(config)
     identity_fields = (
         "required_alias_name",
@@ -215,9 +215,9 @@ def require_configured_projection_preserved(
     after_count = after.get("points_count")
     if not isinstance(before_count, int) or not isinstance(after_count, int):
         raise TypeError("projection point-count evidence is unavailable")
-    if after_count < before_count:
+    if after_count != before_count:
         raise RuntimeError(
-            f"active Qdrant projection lost points during probe: "
+            "active Qdrant projection point count changed during probe cleanup: "
             f"{before_count} -> {after_count}"
         )
 

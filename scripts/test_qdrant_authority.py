@@ -8,6 +8,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+from research_store import qdrant_authority
 from research_store.qdrant_authority import evaluate_required_alias_state
 
 
@@ -17,6 +18,20 @@ def _definition(identifier="def-1", collection="research_chunks_target"):
         "physical_collection": collection,
         "dimension": 1024,
         "distance_metric": "Cosine",
+    }
+
+
+def _projection_snapshot(points_count: int) -> dict:
+    return {
+        "required_alias_name": "research_chunks_active",
+        "target_collection": "research_chunks_target",
+        "postgres_active_definition": "def-1",
+        "dimension": 1024,
+        "distance_metric": "Cosine",
+        "schema_actual": {"size": 1024, "distance": "Cosine", "sparse": False},
+        "schema_expected": {"size": 1024, "distance": "Cosine", "sparse": False},
+        "points_count": points_count,
+        "sample_ids": (),
     }
 
 
@@ -83,3 +98,28 @@ def test_required_alias_state_requires_definition_shape():
             required_alias_name="research_chunks_active",
             active_definitions=[{"id": "def-1"}],
         )
+
+
+@pytest.mark.parametrize("after_count", [9, 11])
+def test_projection_preservation_requires_exact_point_count(monkeypatch, after_count):
+    before = _projection_snapshot(10)
+    after = _projection_snapshot(after_count)
+    monkeypatch.setattr(
+        qdrant_authority,
+        "capture_configured_projection_state",
+        lambda _config: after,
+    )
+
+    with pytest.raises(RuntimeError, match="point count changed during probe cleanup"):
+        qdrant_authority.require_configured_projection_preserved(object(), before)
+
+
+def test_projection_preservation_accepts_exact_point_count(monkeypatch):
+    before = _projection_snapshot(10)
+    monkeypatch.setattr(
+        qdrant_authority,
+        "capture_configured_projection_state",
+        lambda _config: dict(before),
+    )
+
+    assert qdrant_authority.require_configured_projection_preserved(object(), before) == before

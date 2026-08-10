@@ -77,11 +77,13 @@ of existing point IDs. After probe cleanup, verify that:
 
 - alias and active-definition identity are unchanged;
 - schema identity is unchanged;
-- total point count did not decrease; and
+- total point count returned exactly to the captured baseline; and
 - every sampled baseline point still exists.
 
-This is intentionally fail-closed. A worker probe that succeeds while damaging
-pre-existing projection state is a release-gate failure.
+Exact point-count restoration is required: both lost baseline points and leaked
+transient probe points fail the preflight. This is intentionally fail-closed. A
+worker probe that succeeds while changing pre-existing projection state or
+leaving probe state behind is a release-gate failure.
 
 ## Test isolation contract
 
