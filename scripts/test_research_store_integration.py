@@ -56,15 +56,17 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def service(tmp_path, prepared_database):
+def service(tmp_path, prepared_database, track_test_collection):
     migrate(TEST_DSN)
     config = replace(
         StoreConfig.from_env(),
         database_url=TEST_DSN,
         blob_root=tmp_path / "blobs",
-        qdrant_collection="research_integration_test",
+        qdrant_collection=f"research_integration_test_{uuid4().hex[:8]}",
         embedding_dimension=4,
+        embedding_model=f"test-{uuid4().hex[:8]}",
     )
+    track_test_collection.add(config.physical_collection)
     return build_service(config)
 
 
@@ -4191,6 +4193,7 @@ class TestIndexRebuildRecovery:
             cur.execute("DELETE FROM index_point_counts;")
             cur.execute("DELETE FROM index_jobs;")
             cur.execute("DELETE FROM embedding_manifests;")
+            cur.execute("DELETE FROM index_activation_journal;")
             cur.execute("DELETE FROM index_definitions;")
             cur.execute("DELETE FROM chunks;")
             cur.execute("DELETE FROM document_blocks;")
@@ -4201,26 +4204,111 @@ class TestIndexRebuildRecovery:
             cur.execute("DELETE FROM sources;")
             conn.commit()
 
-        import contextlib
+        from qdrant_test_support import reset_disposable_projection
+        from research_store.config import StoreConfig
 
-        import httpx
+        reset_disposable_projection(StoreConfig.from_env())
 
-        with contextlib.suppress(httpx.RequestError, KeyError, ValueError):
-            r = httpx.get(
-                "http://localhost:6333/collections",
-                timeout=2.0,
-                headers={
-                    "Authorization": f"Bearer {os.environ.get('QDRANT_API_KEY', '')}"
-                },
+    @staticmethod
+    def _build_and_activate(
+        service, source_url, doc_text, chunk_text, *, extra_config=None
+    ):
+        """Insert source/document/chunk, build, mark complete, upsert points, and activate.
+
+        Returns ``(config, definition_id, collection, chunk_id)`` so callers can
+        drive reconciliation or introduce controlled drift afterwards.
+        """
+        from research_store.cli import _activate_index, _index_build, _qdrant
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        if extra_config:
+            config = replace(config, **extra_config)
+
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                (source_url,),
             )
-            if r.status_code == 200:
-                for c in r.json().get("result", {}).get("collections", []):
-                    httpx.delete(
-                        f"http://localhost:6333/collections/{c['name']}",
-                        headers={
-                            "Authorization": f"Bearer {os.environ.get('QDRANT_API_KEY', '')}"
-                        },
-                    )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, source_url, "x" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    doc_text,
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "y" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
+                (doc_id, chunk_text, "z" * 64, "structural", "structural-v1"),
+            )
+            chunk_id = cur.fetchone()[0]
+
+        build = _index_build(config)
+        definition_id = str(build["index_definition"]["id"])
+        collection = build["index_definition"]["physical_collection"]
+
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests
+                SET index_status='complete',indexed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition_id,),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition_id,),
+            )
+
+        index = _qdrant(
+            config,
+            collection,
+            build["index_definition"]["dimension"],
+            build["index_definition"]["distance_metric"],
+        )
+        dim = build["index_definition"]["dimension"]
+        index.upsert(
+            [
+                {
+                    "id": str(chunk_id),
+                    "vector": {"dense": [1.0] + [0.0] * (dim - 1)},
+                    "payload": {
+                        "parser_version": config.parser_version,
+                        "normalization_version": config.normalization_version,
+                        "chunker_version": config.chunker_version,
+                    },
+                }
+            ]
+        )
+
+        _activate_index(config, definition_id, "activate")
+        return config, definition_id, collection, chunk_id
 
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
         """Every eligible chunk gets a manifest AND a pending job."""
@@ -4638,54 +4726,14 @@ class TestIndexRebuildRecovery:
 
     def test_doctor_includes_index_reconcile(self, service):
         """Include index reconciliation in doctor output."""
-        from research_store.cli import _doctor, _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from research_store.cli import _doctor
 
-        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-        with connect(test_dsn) as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
-                ("https://doctor.example/test",),
-            )
-            source_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO asset_snapshots(
-                    source_id,requested_url,retrieved_at,content_sha256
-                ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://doctor.example/test", "d" * 64),
-            )
-            snapshot_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO documents(
-                    snapshot_id,normalized_text,parser_name,parser_version,
-                    normalization_version,document_sha256
-                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
-                (
-                    snapshot_id,
-                    "doctor test",
-                    "markdown",
-                    "markdown-v1",
-                    "cleanup-v1",
-                    "e" * 64,
-                ),
-            )
-            doc_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO chunks(
-                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
-                ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
-                (doc_id, "doctor chunk", "f" * 64, "structural", "structural-v1"),
-            )
-
-        config = replace(
-            StoreConfig.from_env(),
-            database_url=test_dsn,
-            parser_version="markdown-v1",
-            normalization_version="cleanup-v1",
-            chunker_version="structural-v1",
+        config, _definition_id, _collection, _chunk_id = self._build_and_activate(
+            service,
+            "https://doctor.example/test",
+            "doctor test",
+            "doctor chunk",
         )
-        _index_build(config)
         checks, _failed = _doctor(config)
         assert "index_job_health" in checks
         assert checks["index_job_health"]["status"] == "pass"
@@ -4693,62 +4741,26 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_repair_flag(self, service):
         """Repair manifest/job discrepancies through an explicit rebuild."""
-        from research_store.cli import _index_build, _index_reconcile
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from research_store.cli import _index_reconcile
 
-        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-        with connect(test_dsn) as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
-                ("https://repair.example/test",),
-            )
-            source_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO asset_snapshots(
-                    source_id,requested_url,retrieved_at,content_sha256
-                ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://repair.example/test", "0" * 64),
-            )
-            snapshot_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO documents(
-                    snapshot_id,normalized_text,parser_name,parser_version,
-                    normalization_version,document_sha256
-                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
-                (
-                    snapshot_id,
-                    "repair test",
-                    "markdown",
-                    "markdown-v1",
-                    "cleanup-v1",
-                    "1" * 64,
-                ),
-            )
-            doc_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO chunks(
-                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
-                ) VALUES (%s,0,%s,%s,%s,%s)""",
-                (doc_id, "repair chunk", "2" * 64, "structural", "structural-v1"),
-            )
-
-        config = replace(
-            StoreConfig.from_env(),
-            database_url=test_dsn,
-            parser_version="markdown-v1",
-            normalization_version="cleanup-v1",
-            chunker_version="structural-v1",
+        config, definition_id, _collection, _chunk_id = self._build_and_activate(
+            service,
+            "https://repair.example/test",
+            "repair test",
+            "repair chunk",
         )
-        result = _index_build(config)
-        with connect(test_dsn) as conn, conn.cursor() as cur:
+
+        with (
+            connect(os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]) as conn,
+            conn.cursor() as cur,
+        ):
             cur.execute(
                 """DELETE FROM index_jobs
                 WHERE id IN (
                     SELECT id FROM index_jobs
-                    WHERE index_definition_id=%s AND status='pending' LIMIT 1
+                    WHERE index_definition_id=%s AND status='complete' LIMIT 1
                 )""",
-                (result["index_definition"]["id"],),
+                (definition_id,),
             )
 
         reconcile_result = _index_reconcile(config, repair=False)
@@ -4946,61 +4958,15 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_reads_from_cache(self, service):
         """Read cached point counts from PostgreSQL during reconciliation."""
-        from research_store.cli import _index_build, _index_reconcile
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from research_store.cli import _index_reconcile
 
-        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-        with connect(test_dsn) as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
-                ("https://reconcile-cache.example/test",),
-            )
-            source_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO asset_snapshots(
-                    source_id,requested_url,retrieved_at,content_sha256
-                ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://reconcile-cache.example/test", "9" * 64),
-            )
-            snapshot_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO documents(
-                    snapshot_id,normalized_text,parser_name,parser_version,
-                    normalization_version,document_sha256
-                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
-                (
-                    snapshot_id,
-                    "reconcile cache test",
-                    "markdown",
-                    "markdown-v1",
-                    "cleanup-v1",
-                    "a" * 64,
-                ),
-            )
-            doc_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO chunks(
-                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
-                ) VALUES (%s,0,%s,%s,%s,%s)""",
-                (
-                    doc_id,
-                    "reconcile cache chunk",
-                    "b" * 64,
-                    "structural",
-                    "structural-v1",
-                ),
-            )
-
-        config = replace(
-            StoreConfig.from_env(),
-            database_url=test_dsn,
-            parser_version="markdown-v1",
-            normalization_version="cleanup-v1",
-            chunker_version="structural-v1",
+        self._build_and_activate(
+            service,
+            "https://reconcile-cache.example/test",
+            "reconcile cache test",
+            "reconcile cache chunk",
         )
-        _index_build(config)
-        reconcile_result = _index_reconcile(config, repair=False)
+        reconcile_result = _index_reconcile(service.config, repair=False)
         assert reconcile_result["ok"] is True
         for collection_info in reconcile_result["qdrant"]["collections"].values():
             assert "cached_point_count" in collection_info
@@ -5008,110 +4974,15 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_complete_coverage(self, service):
         """Reconciliation reports full coverage when all chunks are indexed."""
-        from research_store.cli import _index_build, _index_reconcile
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from research_store.cli import _index_reconcile
 
-        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-        with connect(test_dsn) as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
-                ("https://complete.example/test",),
-            )
-            source_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO asset_snapshots(
-                    source_id,requested_url,retrieved_at,content_sha256
-                ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://complete.example/test", "c" * 64),
-            )
-            snapshot_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO documents(
-                    snapshot_id,normalized_text,parser_name,parser_version,
-                    normalization_version,document_sha256
-                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
-                (
-                    snapshot_id,
-                    "complete coverage",
-                    "markdown",
-                    "markdown-v1",
-                    "cleanup-v1",
-                    "d" * 64,
-                ),
-            )
-            doc_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO chunks(
-                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
-                ) VALUES (%s,0,%s,%s,%s,%s)""",
-                (doc_id, "complete chunk", "e" * 64, "structural", "structural-v1"),
-            )
-
-        config = replace(
-            StoreConfig.from_env(),
-            database_url=test_dsn,
-            embedding_dimension=4,
-            parser_version="markdown-v1",
-            normalization_version="cleanup-v1",
-            chunker_version="structural-v1",
+        self._build_and_activate(
+            service,
+            "https://complete.example/test",
+            "complete coverage",
+            "complete chunk",
         )
-        build = _index_build(config)
-        definition = build["index_definition"]
-        with connect(test_dsn) as conn, conn.cursor() as cur:
-            cur.execute(
-                """UPDATE embedding_manifests
-                SET index_status='complete',indexed_at=now()
-                WHERE index_definition_id=%s""",
-                (definition["id"],),
-            )
-            cur.execute(
-                """UPDATE index_jobs SET status='complete',completed_at=now()
-                WHERE index_definition_id=%s""",
-                (definition["id"],),
-            )
-
-        # Manually upsert points matching chunk IDs to simulate complete indexing
-
-        from research_store.cli import _qdrant
-
-        index = _qdrant(
-            config,
-            definition["physical_collection"],
-            definition["dimension"],
-            definition["distance_metric"],
-        )
-        # Get the actual chunk IDs from the database
-        with connect(test_dsn) as conn2, conn2.cursor() as cur2:
-            cur2.execute(
-                """SELECT c.id FROM chunks c
-                JOIN documents d ON d.id=c.document_id
-                WHERE d.parser_version=%s AND d.normalization_version=%s
-                  AND c.chunker_version=%s""",
-                (
-                    config.parser_version,
-                    config.normalization_version,
-                    config.chunker_version,
-                ),
-            )
-            chunk_ids = [str(row[0]) for row in cur2.fetchall()]
-
-        for chunk_id in chunk_ids:
-            index.upsert(
-                [
-                    {
-                        "id": chunk_id,
-                        "vector": {"dense": [1.0, 0.0, 0.0, 0.0]},
-                        "payload": {
-                            "parser_version": config.parser_version,
-                            "normalization_version": config.normalization_version,
-                            "chunker_version": config.chunker_version,
-                        },
-                    }
-                ]
-            )
-
-        reconcile_result = _index_reconcile(config, repair=False)
+        reconcile_result = _index_reconcile(service.config, repair=False)
         assert reconcile_result["ok"] is True
         assert reconcile_result["discrepancies"] == []
         for collection_info in reconcile_result["qdrant"]["collections"].values():
@@ -5413,55 +5284,15 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_shard_state(self, service):
         """Reconciliation includes shard state information."""
-        from research_store.cli import _index_build, _index_reconcile
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from research_store.cli import _index_reconcile
 
-        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-        with connect(test_dsn) as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
-                ("https://shard-state.example/test",),
-            )
-            source_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO asset_snapshots(
-                    source_id,requested_url,retrieved_at,content_sha256
-                ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://shard-state.example/test", "o" * 64),
-            )
-            snapshot_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO documents(
-                    snapshot_id,normalized_text,parser_name,parser_version,
-                    normalization_version,document_sha256
-                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
-                (
-                    snapshot_id,
-                    "shard state",
-                    "markdown",
-                    "markdown-v1",
-                    "cleanup-v1",
-                    "p" * 64,
-                ),
-            )
-            doc_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO chunks(
-                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
-                ) VALUES (%s,0,%s,%s,%s,%s)""",
-                (doc_id, "shard chunk", "q" * 64, "structural", "structural-v1"),
-            )
-
-        config = replace(
-            StoreConfig.from_env(),
-            database_url=test_dsn,
-            parser_version="markdown-v1",
-            normalization_version="cleanup-v1",
-            chunker_version="structural-v1",
+        self._build_and_activate(
+            service,
+            "https://shard-state.example/test",
+            "shard state",
+            "shard chunk",
         )
-        _index_build(config)
-        reconcile_result = _index_reconcile(config, repair=False)
+        reconcile_result = _index_reconcile(service.config, repair=False)
         assert reconcile_result["ok"] is True
         for collection_info in reconcile_result["qdrant"]["collections"].values():
             assert "shard_state" in collection_info
@@ -5472,61 +5303,15 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_payload_indexes(self, service):
         """Reconciliation provisions payload indexes idempotently."""
-        from research_store.cli import _index_build, _index_reconcile
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from research_store.cli import _index_reconcile
 
-        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
-        with connect(test_dsn) as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
-                ("https://payload-index.example/test",),
-            )
-            source_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO asset_snapshots(
-                    source_id,requested_url,retrieved_at,content_sha256
-                ) VALUES (%s,%s,now(),%s) RETURNING id""",
-                (source_id, "https://payload-index.example/test", "r" * 64),
-            )
-            snapshot_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO documents(
-                    snapshot_id,normalized_text,parser_name,parser_version,
-                    normalization_version,document_sha256
-                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
-                (
-                    snapshot_id,
-                    "payload index",
-                    "markdown",
-                    "markdown-v1",
-                    "cleanup-v1",
-                    "s" * 64,
-                ),
-            )
-            doc_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO chunks(
-                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
-                ) VALUES (%s,0,%s,%s,%s,%s)""",
-                (
-                    doc_id,
-                    "payload index chunk",
-                    "t" * 64,
-                    "structural",
-                    "structural-v1",
-                ),
-            )
-
-        config = replace(
-            StoreConfig.from_env(),
-            database_url=test_dsn,
-            parser_version="markdown-v1",
-            normalization_version="cleanup-v1",
-            chunker_version="structural-v1",
+        self._build_and_activate(
+            service,
+            "https://payload-index.example/test",
+            "payload index",
+            "payload index chunk",
         )
-        _index_build(config)
-        reconcile_result = _index_reconcile(config, repair=False)
+        reconcile_result = _index_reconcile(service.config, repair=False)
         assert reconcile_result["ok"] is True
         for collection_info in reconcile_result["qdrant"]["collections"].values():
             assert "payload_indexes" in collection_info
@@ -5543,7 +5328,7 @@ class TestIndexRebuildRecovery:
                 assert payload_indexes.get(field) is True
 
         # Run again to verify idempotency
-        reconcile_result2 = _index_reconcile(config, repair=False)
+        reconcile_result2 = _index_reconcile(service.config, repair=False)
         assert reconcile_result2["ok"] is True
         for collection_info in reconcile_result2["qdrant"]["collections"].values():
             payload_indexes = collection_info["payload_indexes"]
@@ -5555,3 +5340,248 @@ class TestIndexRebuildRecovery:
                 "published_at",
             ]:
                 assert payload_indexes.get(field) is True
+
+    def test_activate_index_lifecycle_activation_and_rollback(self, service, tmp_path):
+        """_activate_index drives a complete activation->rollback cycle with journal."""
+        from research_store.cli import _activate_index, _index_build, _qdrant
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://activation-lifecycle.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://activation-lifecycle.example/test", "u" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "activation lifecycle document",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "v" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
+                (doc_id, "activation chunk", "w" * 64, "structural", "structural-v1"),
+            )
+            chunk_id = cur.fetchone()[0]
+
+        config_a = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            blob_root=tmp_path / "blobs_a",
+            qdrant_collection=f"activation_test_a_{uuid4().hex[:8]}",
+            embedding_dimension=4,
+            embedding_model=f"test-model-a-{uuid4().hex[:8]}",
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        build_a = _index_build(config_a)
+        definition_a_id = str(build_a["index_definition"]["id"])
+        collection_a = build_a["index_definition"]["physical_collection"]
+
+        # Mark all jobs and manifests for definition A as complete so coverage is exact
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests
+                SET index_status='complete',indexed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition_a_id,),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition_a_id,),
+            )
+
+        # Build a second definition (B) with the same chunk but different config
+        config_b = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            blob_root=tmp_path / "blobs_b",
+            qdrant_collection=f"activation_test_b_{uuid4().hex[:8]}",
+            embedding_dimension=4,
+            embedding_model=f"test-model-b-{uuid4().hex[:8]}",
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        build_b = _index_build(config_b)
+        definition_b_id = str(build_b["index_definition"]["id"])
+        collection_b = build_b["index_definition"]["physical_collection"]
+
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests
+                SET index_status='complete',indexed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition_b_id,),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition_b_id,),
+            )
+
+        # Point both collections to the chunk and activate A through the real lifecycle
+        index_a = _qdrant(config_a, collection_a, 4, "Cosine")
+        index_a.upsert(
+            [
+                {
+                    "id": str(chunk_id),
+                    "vector": {"dense": [1.0, 0.0, 0.0, 0.0]},
+                    "payload": {
+                        "parser_version": config_a.parser_version,
+                        "normalization_version": config_a.normalization_version,
+                        "chunker_version": config_a.chunker_version,
+                    },
+                }
+            ]
+        )
+
+        index_b = _qdrant(config_b, collection_b, 4, "Cosine")
+        index_b.upsert(
+            [
+                {
+                    "id": str(chunk_id),
+                    "vector": {"dense": [1.0, 0.0, 0.0, 0.0]},
+                    "payload": {
+                        "parser_version": config_b.parser_version,
+                        "normalization_version": config_b.normalization_version,
+                        "chunker_version": config_b.chunker_version,
+                    },
+                }
+            ]
+        )
+
+        # Activate A through the supported lifecycle
+        result_activate_a = _activate_index(config_a, definition_a_id, "activate")
+        assert result_activate_a["action"] == "activate"
+        assert str(result_activate_a["index_definition_id"]) == definition_a_id
+        assert result_activate_a["collection"] == collection_a
+        assert result_activate_a["switched"] is True
+
+        # Verify Qdrant alias targets A immediately after activation
+        aliases = _qdrant(config_a).list_aliases()
+        assert aliases[config_a.qdrant_alias] == collection_a
+
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT physical_collection FROM index_definitions WHERE lifecycle_status='active'"
+            )
+            assert cur.fetchone()[0] == collection_a
+            cur.execute(
+                "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
+                (definition_a_id,),
+            )
+            assert cur.fetchone()[0] == "active"
+            cur.execute(
+                "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
+                (definition_b_id,),
+            )
+            assert cur.fetchone()[0] == "building"
+
+        # Activate B
+        result_activate = _activate_index(config_a, definition_b_id, "activate")
+        assert result_activate["action"] == "activate"
+        assert str(result_activate["index_definition_id"]) == definition_b_id
+        assert result_activate["collection"] == collection_b
+        assert result_activate["switched"] is True
+
+        # Verify Qdrant alias now targets B
+        aliases = _qdrant(config_a).list_aliases()
+        assert aliases[config_a.qdrant_alias] == collection_b
+
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            # Alias now targets B
+            cur.execute(
+                "SELECT physical_collection FROM index_definitions WHERE lifecycle_status='active'"
+            )
+            active_row = cur.fetchone()
+            assert active_row[0] == collection_b
+            # A is inactive, B is active
+            cur.execute(
+                "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
+                (definition_a_id,),
+            )
+            assert cur.fetchone()[0] == "inactive"
+            cur.execute(
+                "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
+                (definition_b_id,),
+            )
+            assert cur.fetchone()[0] == "active"
+            # Journal: previous=A, target=B, action=activate, status=complete
+            cur.execute(
+                """SELECT previous_definition_id, target_definition_id, action, status
+                FROM index_activation_journal
+                WHERE target_definition_id=%s AND action='activate'
+                ORDER BY created_at DESC LIMIT 1""",
+                (definition_b_id,),
+            )
+            journal = cur.fetchone()
+            assert str(journal[0]) == definition_a_id
+            assert str(journal[1]) == definition_b_id
+            assert journal[2] == "activate"
+            assert journal[3] == "complete"
+
+        # Rollback to A
+        result_rollback = _activate_index(config_a, definition_a_id, "rollback")
+        assert result_rollback["action"] == "rollback"
+        assert str(result_rollback["index_definition_id"]) == definition_a_id
+        assert result_rollback["collection"] == collection_a
+        assert result_rollback["switched"] is True
+
+        # Verify Qdrant alias returned to A after rollback
+        aliases = _qdrant(config_a).list_aliases()
+        assert aliases[config_a.qdrant_alias] == collection_a
+
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            # Alias returns to A
+            cur.execute(
+                "SELECT physical_collection FROM index_definitions WHERE lifecycle_status='active'"
+            )
+            active_row = cur.fetchone()
+            assert active_row[0] == collection_a
+            # A is active, B is inactive
+            cur.execute(
+                "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
+                (definition_a_id,),
+            )
+            assert cur.fetchone()[0] == "active"
+            cur.execute(
+                "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
+                (definition_b_id,),
+            )
+            assert cur.fetchone()[0] == "inactive"
+            # Rollback journal entry
+            cur.execute(
+                """SELECT previous_definition_id, target_definition_id, action, status
+                FROM index_activation_journal
+                WHERE target_definition_id=%s AND action='rollback'
+                ORDER BY created_at DESC LIMIT 1""",
+                (definition_a_id,),
+            )
+            journal = cur.fetchone()
+            assert str(journal[0]) == definition_b_id
+            assert str(journal[1]) == definition_a_id
+            assert journal[2] == "rollback"
+            assert journal[3] == "complete"

@@ -76,6 +76,12 @@ class FakeIndex:
     def ensure_schema(self):
         self.calls.append(("schema", self.collection, self.dimension, self.distance))
 
+    def require_compatible_schema(self):
+        self.calls.append(
+            ("compatible_schema", self.collection, self.dimension, self.distance)
+        )
+        return {"exists": True, "compatible": True}
+
     def upsert(self, points):
         self.calls.append(("upsert", self.collection, points))
 
@@ -118,7 +124,7 @@ def test_worker_uses_exact_manifest_collection_and_token():
     assert result["complete"] == 1 and result["failed"] == 0
     assert state["chunk_lookup"][1] is not None
     assert job[1] == state["renewals"][0][1] and job[2] is None
-    assert ("schema", "research_chunks_abc123", 3, "Cosine") in calls
+    assert ("compatible_schema", "research_chunks_abc123", 3, "Cosine") in calls
     assert next(call for call in calls if call[0] == "upsert")[2][0]["id"] == str(
         state["records"][0]["chunk_id"]
     )
@@ -322,8 +328,9 @@ def test_qdrant_ensure_schema_drops_and_recreates_sparse_vector_collection():
                     }
                 }
             },
-            {"result": {"status": "ok"}},
-            {"result": {"status": "ok"}},
+            {"result": {"aliases": []}},  # list_aliases returns empty
+            {"result": {"status": "ok"}},  # DELETE
+            {"result": {"status": "ok"}},  # PUT
         ]
     )
     result = qdrant.ensure_schema()
@@ -344,7 +351,7 @@ def test_qdrant_alias_switch_is_single_atomic_request():
                 "result": {
                     "aliases": [
                         {
-                            "alias_name": "research_chunks_active",
+                            "alias_name": "test_alias",
                             "collection_name": "old",
                         }
                     ]
@@ -353,15 +360,15 @@ def test_qdrant_alias_switch_is_single_atomic_request():
             {"result": {"status": "ok"}},
         ]
     )
-    assert qdrant.switch_alias("research_chunks_active", "new")
+    assert qdrant.switch_alias("test_alias", "new")
     method, path, payload = qdrant.requests[-1]
     assert (method, path) == ("POST", "/collections/aliases")
     assert payload["actions"] == [
-        {"delete_alias": {"alias_name": "research_chunks_active"}},
+        {"delete_alias": {"alias_name": "test_alias"}},
         {
             "create_alias": {
                 "collection_name": "new",
-                "alias_name": "research_chunks_active",
+                "alias_name": "test_alias",
             }
         },
     ]
@@ -504,6 +511,10 @@ def _fake_qdrant(state):
 
         def ensure_schema(self):
             calls.append("schema")
+
+        def require_compatible_schema(self):
+            calls.append("compatible_schema")
+            return {"exists": True, "compatible": True}
 
         def upsert(self, points):
             calls.append(("upsert", points))
@@ -1356,6 +1367,130 @@ def test_ensure_schema_compatible_collection():
     assert not result.get("recreated", False)
     # Only GET called — no DELETE or PUT
     assert call_log == [("GET", "/collections/compatible")]
+
+
+def test_ensure_schema_refuses_to_delete_aliased_collection():
+    """When a collection has an active alias, ensure_schema must NOT delete it
+    even if the schema is incompatible.  This is the safety invariant that
+    prevents the conftest-driven destructive-drift bug from recurring."""
+    call_log = []
+
+    class TrackingQdrant(QdrantIndex):
+        def _request(self, method, path, payload=None):
+            call_log.append((method, path))
+            if method == "GET" and "/collections/aliased" in path:
+                return {
+                    "result": {
+                        "config": {
+                            "params": {
+                                "vectors": {
+                                    "dense": {"size": 512, "distance": "Cosine"}
+                                }
+                            }
+                        }
+                    }
+                }
+            if method == "GET" and "/aliases" in path:
+                return {
+                    "result": {
+                        "aliases": [
+                            {"alias_name": "my_alias", "collection_name": "aliased"}
+                        ]
+                    }
+                }
+            return {"result": {"status": "ok"}}
+
+        def list_aliases(self):
+            return {"my_alias": "aliased"}
+
+    qdrant = TrackingQdrant("http://qdrant", "", "aliased", 1024, "Cosine")
+    with pytest.raises(RuntimeError, match="active alias"):
+        qdrant.ensure_schema()
+    # Verify no DELETE was attempted on the aliased collection.
+    assert not any("DELETE" in m and "aliased" in p for m, p in call_log)
+
+
+def test_ensure_schema_allows_deleting_non_aliased_incompatible_collection():
+    """ensure_schema may still destroy a collection that is NOT targeted by
+    any active alias — the guard only protects aliased collections."""
+    call_log = []
+
+    class TrackingQdrant(QdrantIndex):
+        def _request(self, method, path, payload=None):
+            call_log.append((method, path))
+            if method == "GET" and "/collections/orphan" in path:
+                return {
+                    "result": {
+                        "config": {
+                            "params": {
+                                "vectors": {
+                                    "dense": {"size": 512, "distance": "Cosine"}
+                                }
+                            }
+                        }
+                    }
+                }
+            if method == "DELETE" and "/collections/orphan" in path:
+                return {"result": {"status": "ok"}}
+            if method == "PUT" and "/collections/orphan" in path:
+                return {"result": {"status": "ok"}}
+            return {"result": {"status": "ok"}}
+
+        def list_aliases(self):
+            return {}  # no aliases
+
+    qdrant = TrackingQdrant("http://qdrant", "", "orphan", 1024, "Cosine")
+    result = qdrant.ensure_schema()
+    assert result["recreated"] is True
+    assert ("DELETE", "/collections/orphan") in call_log
+
+
+def test_worker_probe_preserves_active_collection():
+    """A routine IndexWorker processing probe must never destroy an active
+    Qdrant projection.  When ensure_schema sees an incompatible but aliased
+    collection, it raises instead of deleting — the worker should surface
+    the error rather than silently wipe vectors."""
+    call_log = []
+
+    class TrackingQdrant(QdrantIndex):
+        def _request(self, method, path, payload=None):
+            call_log.append((method, path))
+            if method == "GET" and "/collections/protected" in path:
+                return {
+                    "result": {
+                        "config": {
+                            "params": {
+                                "vectors": {
+                                    "dense": {"size": 512, "distance": "Cosine"}
+                                }
+                            }
+                        }
+                    }
+                }
+            if method == "GET" and "/aliases" in path:
+                return {
+                    "result": {
+                        "aliases": [
+                            {
+                                "alias_name": "research_chunks_active",
+                                "collection_name": "protected",
+                            }
+                        ]
+                    }
+                }
+            return {"result": {"status": "ok"}}
+
+        def list_aliases(self):
+            return {"research_chunks_active": "protected"}
+
+    # Simulate what IndexWorker._process_microbatch_group does:
+    #   index = self.index.for_collection(collection, dimension, distance)
+    #   index.ensure_schema()
+    qdrant = TrackingQdrant("http://qdrant", "", "protected", 1024, "Cosine")
+    with pytest.raises(RuntimeError, match="active alias"):
+        qdrant.ensure_schema()
+    # No destructive action taken.
+    assert not any(m == "DELETE" for m, _ in call_log)
 
 
 # ---------------------------------------------------------------------------

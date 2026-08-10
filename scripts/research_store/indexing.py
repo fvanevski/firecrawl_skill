@@ -403,7 +403,7 @@ class IndexWorker:
                 dimension = group[0].get("dimension")
                 distance = group[0].get("distance_metric", "Cosine")
                 index = self.index.for_collection(collection, dimension, distance)
-                index.ensure_schema()
+                index.require_compatible_schema()
                 index.upsert(upsert_points)
             except Exception as exc:  # noqa: BLE001
                 # Upsert failed — mark all jobs in this group as failed.
@@ -476,7 +476,7 @@ class IndexWorker:
         dimension = job.get("dimension")
         distance = job.get("distance_metric", "Cosine")
         index = self.index.for_collection(collection, dimension, distance)
-        index.ensure_schema()
+        index.require_compatible_schema()
 
         entity_id = job.get("chunk_id", job.get("entity_id"))
         if entity_id is None:

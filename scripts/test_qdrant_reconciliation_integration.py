@@ -1,8 +1,8 @@
 """Opt-in PostgreSQL + Qdrant integration coverage for issue #222.
 
-The authoritative integration suite already supplies the disposable database
-fixture. These tests import only that fixture so they share the same guarded
-schema reset without re-running destructive setup.
+The authoritative integration suite supplies the disposable database fixture.
+Qdrant mutation is separately authorized: a disposable PostgreSQL DSN never
+implies that the configured Qdrant endpoint is safe to reset.
 """
 
 from __future__ import annotations
@@ -21,8 +21,9 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+from qdrant_test_support import delete_alias, require_disposable_qdrant_url
 from research_store.asset_promotion_models import _canonical_sha256, _member_payload
-from research_store.cli import _index_build
+from research_store.cli import _index_build, _index_reconcile
 from research_store.config import StoreConfig
 from research_store.index_checkpoint_models import _membership_digest
 from research_store.postgres import connect
@@ -31,9 +32,17 @@ from research_store.reconciliation import reconcile_run
 from test_research_store_integration import prepared_database  # noqa: F401
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_QDRANT_URL = os.environ.get("RESEARCH_STORE_TEST_QDRANT_URL")
+TEST_QDRANT_ALLOW_RESET = os.environ.get("RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET")
 pytestmark = [
     pytest.mark.skipif(
         not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
+    ),
+    pytest.mark.skipif(
+        not TEST_QDRANT_URL
+        or (TEST_QDRANT_ALLOW_RESET or "").rstrip("/")
+        != (TEST_QDRANT_URL or "").rstrip("/"),
+        reason="requires explicitly authorized disposable Qdrant endpoint",
     ),
     pytest.mark.usefixtures("prepared_database"),
 ]
@@ -46,18 +55,20 @@ def _sha(text: str) -> str:
 def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
     token = uuid4().hex
     alias = f"reconcile_{token[:12]}"
+    suffix = token[:8]
     config = replace(
         StoreConfig.from_env(),
         database_url=TEST_DSN,
         blob_root=tmp_path / "blobs",
+        qdrant_url=require_disposable_qdrant_url(),
         qdrant_alias=alias,
         embedding_model=f"reconcile-{token}",
         embedding_revision="issue-222",
         embedding_dimension=4,
-        parser_version="markdown-v1",
-        normalization_version="cleanup-v1",
+        parser_version=f"markdown-v1-{suffix}",
+        normalization_version=f"cleanup-v1-{suffix}",
         chunker_name="structural",
-        chunker_version="structural-v1",
+        chunker_version=f"structural-v1-{suffix}",
     )
     external_run_id = f"fr_reconcile_{token}"
 
@@ -123,9 +134,6 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
                  VALUES(%s,%s,'acquired','{}'::jsonb)""",
             (run_id, snapshot_id),
         )
-        # The research_run_assets trigger establishes the authoritative
-        # direct-retention subject. Reuse it rather than bypassing the promotion
-        # contract with a second subject row.
         cur.execute(
             """SELECT id FROM run_asset_promotion_subjects
                  WHERE run_id=%s AND snapshot_id=%s AND role='acquired'""",
@@ -250,6 +258,9 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
                 "source_id": str(row[3]),
                 "domain": row[4],
                 "published_at": row[5].isoformat() if row[5] else None,
+                "parser_version": config.parser_version,
+                "normalization_version": config.normalization_version,
+                "chunker_version": config.chunker_version,
             },
         }
         for row in payload_rows
@@ -270,9 +281,39 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
     }
 
 
-def _cleanup(seed):
+def _delete_definition_records(definition_id) -> None:
+    """Delete PostgreSQL projection records for one exact test-owned definition."""
+    definition_id = str(definition_id)
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """DELETE FROM index_activation_journal
+               WHERE target_definition_id=%s OR previous_definition_id=%s""",
+            (definition_id, definition_id),
+        )
+        cur.execute(
+            "DELETE FROM index_point_counts WHERE index_definition_id=%s",
+            (definition_id,),
+        )
+        cur.execute(
+            "DELETE FROM index_jobs WHERE index_definition_id=%s",
+            (definition_id,),
+        )
+        cur.execute(
+            "DELETE FROM embedding_manifests WHERE index_definition_id=%s",
+            (definition_id,),
+        )
+        cur.execute("DELETE FROM index_definitions WHERE id=%s", (definition_id,))
+
+
+def _cleanup(seed) -> None:
+    """Delete only resources owned by one reconciliation seed."""
+    require_disposable_qdrant_url()
     with suppress(Exception):
-        seed["index"].delete_collection()
+        delete_alias(seed["index"], seed["config"].qdrant_alias)
+    with suppress(Exception):
+        if seed["index"].inspect_schema().get("exists"):
+            seed["index"].delete_collection()
+    _delete_definition_records(seed["definition"]["id"])
 
 
 def test_reconcile_audited_1376_exact_membership(tmp_path):
@@ -369,7 +410,10 @@ def test_reconcile_reports_alias_and_vector_schema_mismatch(tmp_path):
         assert vector_result["qdrant"]["schema"]["compatible"] is False
     finally:
         with suppress(Exception):
-            other.delete_collection()
+            delete_alias(other, seed["config"].qdrant_alias)
+        with suppress(Exception):
+            if other.inspect_schema().get("exists"):
+                other.delete_collection()
         _cleanup(seed)
 
 
@@ -430,5 +474,155 @@ def test_repair_refuses_to_repoint_alias_outside_activation_lifecycle(tmp_path):
         assert any("index-activate" in blocker for blocker in result["repair_blockers"])
     finally:
         with suppress(Exception):
-            other.delete_collection()
+            delete_alias(other, seed["config"].qdrant_alias)
+        with suppress(Exception):
+            if other.inspect_schema().get("exists"):
+                other.delete_collection()
+        _cleanup(seed)
+
+
+# ---------------------------------------------------------------------------
+# ARC-17 regression: CLI _index_reconcile() fails closed for every nonhealthy
+# cross-store activation state.
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_fails_closed_when_no_pg_active_definition(tmp_path):
+    seed = _seed_reconciliation_run(tmp_path, count=1)
+    try:
+        result = _index_reconcile(seed["config"])
+        assert result["ok"] is False
+        assert any("activation drift" in item for item in result["discrepancies"])
+        assert any(
+            "no PostgreSQL-active definition" in item
+            for item in result["discrepancies"]
+        )
+    finally:
+        _cleanup(seed)
+
+
+def test_reconcile_fails_closed_on_multiple_pg_active_definitions(tmp_path):
+    seed = _seed_reconciliation_run(tmp_path, count=1)
+    config2 = replace(
+        seed["config"],
+        embedding_model=f"second-{uuid4().hex[:8]}",
+        qdrant_collection=f"arc17_second_{uuid4().hex[:8]}",
+    )
+    build2 = _index_build(config2)
+    def2_id = str(build2["index_definition"]["id"])
+    col2 = build2["index_definition"]["physical_collection"]
+    idx2 = QdrantIndex(
+        config2.qdrant_url,
+        config2.qdrant_api_key,
+        col2,
+        build2["index_definition"]["dimension"],
+        build2["index_definition"]["distance_metric"],
+    )
+    try:
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests SET index_status='complete',indexed_at=now()
+                   WHERE index_definition_id=%s""",
+                (def2_id,),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                   WHERE index_definition_id=%s""",
+                (def2_id,),
+            )
+            cur.execute(
+                """UPDATE index_definitions SET lifecycle_status='active'
+                   WHERE id IN (%s,%s)""",
+                (str(seed["definition"]["id"]), def2_id),
+            )
+
+        idx2.switch_alias(seed["config"].qdrant_alias, col2)
+        result = _index_reconcile(seed["config"])
+        assert result["ok"] is False
+        assert any("activation drift" in item for item in result["discrepancies"])
+        assert any(
+            "active definitions" in item and "exactly one" in item
+            for item in result["discrepancies"]
+        )
+    finally:
+        with suppress(Exception):
+            delete_alias(idx2, seed["config"].qdrant_alias)
+        with suppress(Exception):
+            if idx2.inspect_schema().get("exists"):
+                idx2.delete_collection()
+        _delete_definition_records(def2_id)
+        _cleanup(seed)
+
+
+def test_reconcile_fails_closed_when_required_alias_missing(tmp_path):
+    seed = _seed_reconciliation_run(tmp_path, count=1)
+    try:
+        def_id = str(seed["definition"]["id"])
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE index_definitions SET lifecycle_status='active' WHERE id=%s",
+                (def_id,),
+            )
+        delete_alias(seed["index"], seed["config"].qdrant_alias)
+
+        result = _index_reconcile(seed["config"])
+        assert result["ok"] is False
+        assert any("activation drift" in item for item in result["discrepancies"])
+        assert any(
+            "missing" in item or "absent" in item for item in result["discrepancies"]
+        )
+    finally:
+        _cleanup(seed)
+
+
+def test_reconcile_fails_closed_when_required_alias_targets_wrong_collection(
+    tmp_path,
+):
+    seed = _seed_reconciliation_run(tmp_path, count=1)
+    wrong_name = f"arc17_wrong_{uuid4().hex[:8]}"
+    wrong_idx = QdrantIndex(
+        seed["config"].qdrant_url,
+        seed["config"].qdrant_api_key,
+        wrong_name,
+        seed["config"].embedding_dimension,
+        "Cosine",
+    )
+    try:
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE index_definitions SET lifecycle_status='active' WHERE id=%s",
+                (str(seed["definition"]["id"]),),
+            )
+        wrong_idx.ensure_schema()
+        wrong_idx.switch_alias(seed["config"].qdrant_alias, wrong_name)
+
+        result = _index_reconcile(seed["config"])
+        assert result["ok"] is False
+        assert any("activation drift" in item for item in result["discrepancies"])
+        assert any(
+            "activation drift" in item and "expected" in item
+            for item in result["discrepancies"]
+        )
+    finally:
+        with suppress(Exception):
+            delete_alias(wrong_idx, seed["config"].qdrant_alias)
+        with suppress(Exception):
+            if wrong_idx.inspect_schema().get("exists"):
+                wrong_idx.delete_collection()
+        _cleanup(seed)
+
+
+def test_reconcile_passes_when_all_invariants_hold(tmp_path):
+    seed = _seed_reconciliation_run(tmp_path, count=1)
+    try:
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE index_definitions SET lifecycle_status='active' WHERE id=%s",
+                (str(seed["definition"]["id"]),),
+            )
+
+        result = _index_reconcile(seed["config"])
+        assert result["ok"] is True
+        assert result["discrepancies"] == []
+    finally:
         _cleanup(seed)

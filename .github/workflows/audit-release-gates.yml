@@ -102,6 +102,8 @@ jobs:
           RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_arc17_test_gate
           RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_arc17_test_gate
           QDRANT_URL: http://127.0.0.1:6333
+          RESEARCH_STORE_TEST_QDRANT_URL: http://127.0.0.1:6333
+          RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET: http://127.0.0.1:6333
         run: |
           python scripts/audit_release_gate_matrix.py run \
             --phase ci \
@@ -114,6 +116,8 @@ jobs:
           RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_arc17_test_gate
           RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_arc17_test_gate
           QDRANT_URL: http://127.0.0.1:6333
+          RESEARCH_STORE_TEST_QDRANT_URL: http://127.0.0.1:6333
+          RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET: http://127.0.0.1:6333
         run: |
           python scripts/audit_release_gate_matrix.py run \
             --phase disposable \

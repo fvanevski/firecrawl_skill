@@ -116,6 +116,14 @@ class QdrantIndex:
         carries obsolete vector configuration (e.g. ``sparse_vectors``), drop
         and recreate it so the authoritative PostgreSQL state can drive a
         clean rebuild.
+
+        Safety invariant: this method NEVER deletes a collection that is
+        currently targeted by an active alias.  An active alias means some
+        PostgreSQL index definition has declared this physical collection as
+        its authoritative projection; destroying it would orphan that
+        definition without tracking the transition.  Incompatible-schema
+        situations involving an aliased collection must be resolved through
+        the explicit rebuild / activation lifecycle instead.
         """
         status = self.inspect_schema()
         if not status["exists"]:
@@ -130,6 +138,16 @@ class QdrantIndex:
             )
             return {**status, "created": True, "compatible": True}
         if not status["compatible"]:
+            aliases = self.list_aliases()
+            for target in aliases.values():
+                if target == self.collection:
+                    raise RuntimeError(
+                        f"collection {self.collection} is targeted by an active "
+                        f"alias ({', '.join(k for k, v in aliases.items() if v == self.collection)}) "
+                        f"and has incompatible schema ({status['actual']} vs "
+                        f"{status['expected']}); cannot auto-recreate — use the "
+                        f"explicit rebuild/activation lifecycle instead"
+                    )
             self._request(
                 "DELETE",
                 f"/collections/{urllib.parse.quote(self.collection, safe='')}",
@@ -195,6 +213,29 @@ class QdrantIndex:
         self._request(
             "DELETE", f"/collections/{urllib.parse.quote(self.collection, safe='')}"
         )
+
+    def require_compatible_schema(self) -> dict:
+        """Verify the collection exists and is compatible without mutating it.
+
+        Contract:
+          - collection missing       -> raise RuntimeError
+          - collection incompatible  -> raise RuntimeError
+          - collection compatible    -> return status dict
+          - NO delete, NO recreation, NO alias mutation
+        """
+        status = self.inspect_schema()
+        if not status["exists"]:
+            raise RuntimeError(
+                f"collection {self.collection} is missing; "
+                "routine worker cannot create collections — use index-build"
+            )
+        if not status["compatible"]:
+            raise RuntimeError(
+                f"collection {self.collection} has incompatible schema "
+                f"({status['actual']} vs {status['expected']}); "
+                "routine worker cannot recreate — use the explicit rebuild/activation lifecycle"
+            )
+        return {**status, "created": False}
 
     def search(self, vector, filters, limit):
         payload = {

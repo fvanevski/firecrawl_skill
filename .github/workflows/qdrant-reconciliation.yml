@@ -60,7 +60,10 @@ jobs:
           RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_reconcile_test"
           RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_reconcile_test"
           QDRANT_URL: "http://127.0.0.1:6333"
+          RESEARCH_STORE_TEST_QDRANT_URL: "http://127.0.0.1:6333"
+          RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET: "http://127.0.0.1:6333"
         run: |
           python -m pytest -q -p no:cacheprovider \
+            scripts/test_qdrant_authority.py \
             scripts/test_qdrant_reconciliation_contract.py \
             scripts/test_qdrant_reconciliation_integration.py
