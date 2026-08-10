@@ -823,11 +823,12 @@ def validate_citation_artifact(
             raise CompletionProvenanceError(
                 "citation validation result is not a mapping"
             )
-        # Allow the canonical no-error sentinel ("none") only when status is
-        # already valid; substantive issues on invalid results must remain
-        # visible to downstream validators.
+        # Only the canonical empty-string representation is accepted for a
+        # valid result. Any non-empty issue text — including the historical
+        # "none" sentinel produced by some generative models — is treated as
+        # an unresolved failure at the terminal boundary.
         issue = result.get("issue") or ""
-        if result.get("status") != "valid" or (issue and issue != "none"):
+        if result.get("status") != "valid" or issue:
             raise CompletionProvenanceError(
                 "citation-pass semantic artifact contains unresolved validation results"
             )

@@ -96,12 +96,50 @@ CITATION_PASS_SYSTEM_PROMPT = (
     "3. Unsupported claims are explicitly labeled. "
     "4. The relationship (supports/contradicts/qualifies/context) matches "
     "the EvidencePacket binding. "
-    "Return the validation results in the required JSON schema."
+    "For each validation result: use status='valid' with issue='' when the "
+    "reference is fully supported; use status='invented', 'unsupported', or "
+    "'entailment_mismatch' with a substantive non-empty issue description "
+    "when there is a problem. Never use issue='none' — empty string is the "
+    "only canonical no-error representation."
 )
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _canonicalize_citation_issue(citation_payload: dict[str, Any]) -> None:
+    """Normalize the historical 'none' sentinel to canonical empty string.
+
+    Only applies when all of:
+    * pass_status == "passed"
+    * every validation result has status == "valid" and issue == "none"
+    * invented_citations is empty
+    * unsupported_claims is empty
+    * entailment_mismatches is empty
+
+    Does NOT erase substantive issue text or reclassify an invalid result.
+    """
+    if citation_payload.get("pass_status") != "passed":
+        return
+    if (
+        citation_payload.get("invented_citations")
+        or citation_payload.get("unsupported_claims")
+        or citation_payload.get("entailment_mismatches")
+    ):
+        return
+    for result in citation_payload.get("validation_results") or ():
+        if not isinstance(result, dict):
+            return
+        if result.get("status") != "valid" or result.get("issue") not in (
+            "",
+            "none",
+        ):
+            return
+    # All conditions met — normalize "none" to "" in-place.
+    for result in citation_payload.get("validation_results") or ():
+        if isinstance(result, dict) and result.get("issue") == "none":
+            result["issue"] = ""
 
 
 class ReportServiceError(RuntimeError):
@@ -1637,6 +1675,8 @@ class LocalSynthesisService:
                 raise ReportServiceError(
                     f"citation-pass semantic validation failed: {exc}"
                 )
+            # Cache hit — normalize before persisting.
+            _canonicalize_citation_issue(cached)
             with uow_factory() as uow:
                 record = uow.synthesis_stages.get_synthesis_stage(
                     run_id, "citation_pass"
@@ -1709,6 +1749,15 @@ class LocalSynthesisService:
                 uow_factory, run_id, "citation_pass", result.error
             )
             raise ReportServiceError(f"citation pass stage failed: {result.error}")
+
+        # ------------------------------------------------------------------
+        # Pre-validation canonicalization: normalize the historical "none"
+        # sentinel to the canonical empty-string representation before any
+        # validation or persistence.  This is a narrow, stage-specific
+        # normalization that never erases substantive issue text or
+        # reclassifies an invalid result as valid.
+        # ------------------------------------------------------------------
+        _canonicalize_citation_issue(result.value)
 
         # ------------------------------------------------------------------
         # Stage-time acceptance: enforce terminal-grade citation validation
