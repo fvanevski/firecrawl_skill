@@ -199,7 +199,9 @@ def require_configured_projection_preserved(
         "schema_actual",
         "schema_expected",
     )
-    changed = [field for field in identity_fields if after.get(field) != before.get(field)]
+    changed = [
+        field for field in identity_fields if after.get(field) != before.get(field)
+    ]
     if changed:
         raise RuntimeError(
             "active Qdrant projection identity changed during probe: "

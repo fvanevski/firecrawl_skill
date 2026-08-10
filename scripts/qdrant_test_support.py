@@ -129,7 +129,9 @@ def track_test_collection() -> set[str]:
 def cleanup_owned_qdrant_collections(track_test_collection: set[str]):
     """Delete only collections explicitly registered as test-owned."""
     yield
-    if not track_test_collection or not os.environ.get("RESEARCH_STORE_TEST_QDRANT_URL"):
+    if not track_test_collection or not os.environ.get(
+        "RESEARCH_STORE_TEST_QDRANT_URL"
+    ):
         return
     try:
         url = require_disposable_qdrant_url()

@@ -122,7 +122,9 @@ def test_require_compatible_schema_is_non_destructive_on_missing_collection(tmp_
     assert index.inspect_schema()["exists"] is False
 
 
-def test_require_compatible_schema_is_non_destructive_on_incompatible_collection(tmp_path):
+def test_require_compatible_schema_is_non_destructive_on_incompatible_collection(
+    tmp_path,
+):
     config = _make_config(tmp_path, dimension=8)
     name = f"arc17_incompatible_{uuid4().hex}"
     created = _create_collection(config, name, dimension=4)
