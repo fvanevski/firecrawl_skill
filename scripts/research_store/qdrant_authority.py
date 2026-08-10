@@ -8,7 +8,8 @@ implement subtly different alias rules.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from .config import StoreConfig
 from .postgres import connect
@@ -211,7 +212,7 @@ def require_configured_projection_preserved(
     before_count = before.get("points_count")
     after_count = after.get("points_count")
     if not isinstance(before_count, int) or not isinstance(after_count, int):
-        raise RuntimeError("projection point-count evidence is unavailable")
+        raise TypeError("projection point-count evidence is unavailable")
     if after_count < before_count:
         raise RuntimeError(
             f"active Qdrant projection lost points during probe: "

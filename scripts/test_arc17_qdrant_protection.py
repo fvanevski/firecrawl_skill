@@ -31,7 +31,7 @@ HOST_ALIAS = os.environ.get("QDRANT_ALIAS", "research_chunks_active")
 pytestmark = pytest.mark.skipif(
     not TEST_DSN
     or not TEST_QDRANT_URL
-    or TEST_QDRANT_ALLOW_RESET.rstrip("/") != TEST_QDRANT_URL.rstrip("/"),
+    or (TEST_QDRANT_ALLOW_RESET or "").rstrip("/") != TEST_QDRANT_URL.rstrip("/"),
     reason="requires explicitly authorized disposable PostgreSQL and Qdrant endpoints",
 )
 
@@ -156,7 +156,7 @@ def test_ensure_schema_refuses_to_recreate_any_aliased_collection(tmp_path):
 def test_ensure_schema_may_rebuild_unaliased_disposable_collection(tmp_path):
     config = _make_config(tmp_path, dimension=8)
     name = f"arc17_unaliased_{uuid4().hex}"
-    created = _create_collection(config, name, dimension=4)
+    _create_collection(config, name, dimension=4)
     requested = QdrantIndex(config.qdrant_url, config.qdrant_api_key, name, 8)
     try:
         result = requested.ensure_schema()
