@@ -1145,170 +1145,341 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
 
 
 @_pg_skip
-def test_none_sentinel_allows_valid_citation_to_pass_terminal():
-    """A citation artifact using the observed 'none' sentinel must be
-    normalized to canonical empty string before immutable semantic
-    persistence, and the persisted artifact must pass terminal validation.
+def test_autonomous_none_rejected_then_canonical_accepted():
+    """A real autonomous_local run must reject noncanonical issue='none' at
+    the schema boundary and accept the corrected canonical response on retry.
+    The persisted semantic artifact must contain issue='' and terminal
+    completion must succeed with research_runs.state == 'completed'."""
+    import json
+    from dataclasses import replace
 
-    Uses deterministic_debug mode so the full ingest_deterministic_fixture
-    path creates real semantic_call / semantic_artifact rows without mocking
-    the model gateway."""
-    import os
+    import model_gateway
+    from budget_policy import DEFAULT_POLICY
+    from completion_provenance_test_support import (
+        seed_authoritative_completion_provenance,
+    )
+    from research_store.completion_provenance import (
+        load_authoritative_completion_provenance,
+    )
+    from research_store.config import StoreConfig
+    from research_store.container import (
+        build_run_service,
+        build_service,
+        build_workflow_operation_service,
+    )
+    from research_store.domain import IngestRequest
+    from research_store.evidence import EvidenceService
+    from research_store.postgres import connect, migrate
+    from research_store.report_service import LocalSynthesisService
+    from research_store.semantic_service import SemanticCallService
 
-    os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
-    try:
-        from dataclasses import replace
+    migrate(_PG_DSN)
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=_PG_DSN,
+        blob_root=Path("/tmp/arc17-pg-test-blobs"),
+        qdrant_collection=f"arc17-none-{uuid4().hex}",
+        embedding_dimension=4,
+    )
 
-        from research_store.config import StoreConfig
-        from research_store.container import build_service
-        from research_store.postgres import connect, migrate
-
-        migrate(_PG_DSN)
-
-        run_id = uuid4()
-        with connect(_PG_DSN) as conn, conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO research_runs
-                   (id, objective, query_plan, skill_version, llm_model, state, execution_mode)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)
-                   ON CONFLICT (id) DO NOTHING""",
-                (
-                    str(run_id),
-                    "test request",
-                    "{}",
-                    "1.0",
-                    "test",
-                    "created",
-                    "deterministic_debug",
-                ),
+    runs = build_run_service(config)
+    corpus = build_service(config)
+    external_id = f"arc17-none-{uuid4().hex}"
+    status = runs.create(
+        "arc17 autonomous none test",
+        external_id,
+        execution_mode="autonomous_local",
+    )
+    manifest = corpus.ingest_batch(
+        f"fc-{uuid4().hex}",
+        "scrape",
+        [
+            IngestRequest(
+                f"https://example/{uuid4().hex}",
+                b"# Test evidence\n\nPostgreSQL owns authoritative provenance.",
             )
-            conn.commit()
+        ],
+        research_run_external_id=external_id,
+    )
+    assert manifest["failure_count"] == 0
 
-        config = replace(
-            StoreConfig.from_env(),
-            database_url=_PG_DSN,
-            blob_root=Path("/tmp/arc17-pg-test-blobs"),
+    revision = status.lifecycle_revision
+    for next_state in (
+        "planning",
+        "corpus_review",
+        "acquiring",
+        "extracting",
+        "indexing",
+    ):
+        runs.transition(
+            status.id,
+            next_state,
+            expected_revision=revision,
+            idempotency_key=f"test:{external_id}:{next_state}",
+            actor_type="integration-test",
         )
-        svc = build_service(config)
-        uow_factory = svc.uow_factory
+        revision += 1
 
-        draft_artifact = {
-            "schema_version": "synthesis-draft-v1",
-            "run_id": str(run_id),
-            "evidence_packet_revision": 1,
-            "report_sections": [
+    with connect(_PG_DSN) as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """UPDATE index_jobs job
+                  SET status='complete', completed_at=now(), error=NULL,
+                      lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL
+                 FROM embedding_manifests manifest
+                 JOIN chunks chunk ON chunk.id=manifest.chunk_id
+                 JOIN documents document ON document.id=chunk.document_id
+                 JOIN research_run_assets asset
+                   ON asset.snapshot_id=document.snapshot_id
+                WHERE job.manifest_id=manifest.id AND asset.run_id=%s""",
+            (status.id,),
+        )
+        assert cursor.rowcount > 0
+        cursor.execute(
+            """UPDATE embedding_manifests manifest
+                  SET index_status='complete', indexed_at=now(), error=NULL
+                 FROM chunks chunk
+                 JOIN documents document ON document.id=chunk.document_id
+                 JOIN research_run_assets asset
+                   ON asset.snapshot_id=document.snapshot_id
+                WHERE manifest.chunk_id=chunk.id AND asset.run_id=%s""",
+            (status.id,),
+        )
+
+    workflow = build_workflow_operation_service(config)
+    workflow._finalize_indexing(
+        external_id,
+        f"test:{external_id}:finalize-indexing",
+    )
+    status = runs.status(run_id=status.id)
+    assert status.state == "coverage_review"
+    run_id = status.id
+
+    # Seed authoritative completion provenance first — it creates the evidence
+    # packet, claims, passages, and pre-seeded synthesis stages we need.
+    seed_authoritative_completion_provenance(runs.uow_factory, run_id)
+
+    # Read back the seeded packet and draft to learn the actual IDs.
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT packet_revision, payload FROM evidence_packets WHERE run_id=%s ORDER BY packet_revision DESC LIMIT 1",
+            (str(run_id),),
+        )
+        packet_row = cur.fetchone()
+        assert packet_row is not None
+        packet_revision = packet_row[0]
+        packet = packet_row[1]
+        del packet  # Only need packet_revision; payload read later from draft
+
+        cur.execute(
+            "SELECT artifact FROM synthesis_stages WHERE run_id=%s AND stage_name='draft'",
+            (str(run_id),),
+        )
+        draft_row = cur.fetchone()
+        assert draft_row is not None
+        draft = draft_row[0]
+
+    # Extract the actual claim/passage IDs from the seeded draft.
+    draft_section = draft["report_sections"][0]
+    claim_id = str(draft_section["claim_references"][0]["claim_id"])
+    passage_id = str(draft_section["claim_references"][0]["passage_ids"][0])
+    section_id = draft_section["section_id"]
+
+    # The seeded provenance already created outline, binding, draft stages.
+    # We only need to remove citation_pass so the test can exercise actual execution.
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM synthesis_stages WHERE run_id=%s AND stage_name='citation_pass'",
+            (str(run_id),),
+        )
+        assert cur.rowcount == 1
+        cur.execute(
+            "DELETE FROM semantic_artifacts sa USING semantic_calls sc "
+            "WHERE sa.semantic_call_id=sc.id AND sc.run_id=%s AND sc.stage='citation_pass'",
+            (str(run_id),),
+        )
+        cur.execute(
+            "DELETE FROM semantic_calls WHERE run_id=%s AND stage='citation_pass'",
+            (str(run_id),),
+        )
+
+    # Mock _request_json to return noncanonical then canonical responses.
+    # Use the actual claim_id and passage_id from the seeded packet.
+    responses_iter = iter(
+        [
+            # First call: issue="none" — will fail schema validation
+            (
                 {
-                    "section_id": "s1",
-                    "title": "Findings",
-                    "body": "Test findings",
-                    "claim_references": [
+                    "id": "attempt-1",
+                    "model": "local-model",
+                    "choices": [
                         {
-                            "claim_id": "00000000-0000-0000-0000-000000000102",
-                            "passage_ids": ["00000000-0000-0000-0000-000000000601"],
-                            "relationship": "qualifies",
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "schema_version": "synthesis-citation-pass-v1",
+                                        "run_id": str(run_id),
+                                        "evidence_packet_revision": packet_revision,
+                                        "draft_revision": 1,
+                                        "pass_status": "passed",
+                                        "validation_results": [
+                                            {
+                                                "section_id": section_id,
+                                                "claim_id": claim_id,
+                                                "passage_ids": [passage_id],
+                                                "status": "valid",
+                                                "issue": "none",
+                                            }
+                                        ],
+                                        "invented_citations": [],
+                                        "unsupported_claims": [],
+                                        "entailment_mismatches": [],
+                                    }
+                                )
+                            },
                         }
                     ],
-                }
-            ],
-            "unsupported_claims": [],
-            "limitations": [],
-        }
-        _seed_synthesis_stages_in_pg(uow_factory, run_id, draft_artifact)
-
-        with uow_factory() as uow:
-            uow.persist_evidence_packet(
-                run_id=run_id,
-                research_spec_id=UUID("00000000-0000-0000-0000-000000000100"),
-                coverage_revision=2,
-                packet_revision=1,
-                payload={
-                    "schema_version": "evidence-packet-v1",
-                    "run_id": str(run_id),
-                    "research_spec_id": "00000000-0000-0000-0000-000000000100",
-                    "coverage_revision": 2,
-                    "claims": [
-                        {
-                            "claim_id": "00000000-0000-0000-0000-000000000102",
-                            "statement": "The documented behavior is reproducible.",
-                            "semantic_status": "qualified",
-                            "uncertainty": "Only one source has been acquired.",
-                        }
-                    ],
-                    "passages": [
-                        {
-                            "passage_id": "00000000-0000-0000-0000-000000000601",
-                            "candidate_id": "00000000-0000-0000-0000-000000000301",
-                            "snapshot_id": "00000000-0000-0000-0000-000000000602",
-                            "chunk_id": "00000000-0000-0000-0000-000000000603",
-                            "text": "The fixture passage records the documented behavior.",
-                            "source_url": "https://fixture.invalid/docs",
-                        }
-                    ],
-                    "omitted_passages": [],
-                    "claim_evidence_bindings": [
-                        {
-                            "binding_id": "00000000-0000-0000-0000-000000000604",
-                            "claim_id": "00000000-0000-0000-0000-000000000102",
-                            "passage_ids": ["00000000-0000-0000-0000-000000000601"],
-                            "relationship": "qualifies",
-                            "confidence": 0.7,
-                            "uncertainty": "Independent replication is missing.",
-                        }
-                    ],
+                    "usage": {},
                 },
-            )
+                "req-1",
+                200,
+            ),
+            # Second call: issue="" — canonical, passes schema
+            (
+                {
+                    "id": "attempt-2",
+                    "model": "local-model",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "schema_version": "synthesis-citation-pass-v1",
+                                        "run_id": str(run_id),
+                                        "evidence_packet_revision": packet_revision,
+                                        "draft_revision": 1,
+                                        "pass_status": "passed",
+                                        "validation_results": [
+                                            {
+                                                "section_id": section_id,
+                                                "claim_id": claim_id,
+                                                "passage_ids": [passage_id],
+                                                "status": "valid",
+                                                "issue": "",
+                                            }
+                                        ],
+                                        "invented_citations": [],
+                                        "unsupported_claims": [],
+                                        "entailment_mismatches": [],
+                                    }
+                                )
+                            },
+                        }
+                    ],
+                    "usage": {},
+                },
+                "req-2",
+                200,
+            ),
+        ]
+    )
 
-        from budget_policy import DEFAULT_POLICY
-        from research_store.evidence import EvidenceService
-        from research_store.semantic_service import SemanticCallService
+    def fake_request(_url, payload, _headers, _timeout):
+        return next(responses_iter)
 
-        semantic = SemanticCallService(uow_factory)
-        evidence = EvidenceService(uow_factory, budget_policy=DEFAULT_POLICY)
+    original_request = model_gateway._request_json
+    try:
+        model_gateway._request_json = fake_request
+        model_gateway.probe_local = lambda *_a, **_k: {"status": "available"}
+
+        semantic = SemanticCallService(runs.uow_factory)
+        evidence = EvidenceService(runs.uow_factory, budget_policy=DEFAULT_POLICY)
         service = LocalSynthesisService(
             semantic_service=semantic,
             evidence_service=evidence,
             config=config,
         )
 
-        # In deterministic_debug mode, outline/binding/draft are skipped
-        # because they are pre-seeded as completed. Only citation_pass runs.
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=1,
-            model_name="",
+            model_name="local-model",
         )
-
         assert summary["overall_status"] == "completed"
         assert summary["stages"]["citation_pass"]["status"] == "completed"
-
-        # Fresh UOW readback proves the completed state is durable.
-        record = _read_citation_stage(uow_factory, run_id)
-        assert record["stage_status"] == "completed"
-        assert record.get("artifact", {}).get("pass_status") == "passed"
-        # The normalization must have converted "none" to "" in the persisted artifact.
-        issue_values = [
-            r.get("issue")
-            for r in record.get("artifact", {}).get("validation_results", [])
-        ]
-        assert all(i == "" for i in issue_values), (
-            f"persisted citation artifact must have canonical empty issue, got: {issue_values}"
-        )
-        # Real semantic call/artifact rows must exist.
-        with connect(_PG_DSN) as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM semantic_calls WHERE run_id=%s AND stage='citation_pass'",
-                (str(run_id),),
-            )
-            assert cur.fetchone() is not None
-            cur.execute(
-                """SELECT a.id FROM semantic_artifacts a
-                   JOIN semantic_calls c ON c.id=a.semantic_call_id
-                   WHERE c.run_id=%s AND c.stage='citation_pass'""",
-                (str(run_id),),
-            )
-            assert cur.fetchone() is not None
     finally:
-        del os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"]
+        model_gateway._request_json = original_request
+
+    # Verify PostgreSQL contains real semantic_calls and semantic_artifacts.
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM semantic_calls WHERE run_id=%s AND stage='citation_pass'",
+            (str(run_id),),
+        )
+        call_row = cur.fetchone()
+        assert call_row is not None
+        call_id = call_row[0]
+
+        cur.execute(
+            "SELECT id, payload FROM semantic_artifacts WHERE semantic_call_id=%s",
+            (call_id,),
+        )
+        artifacts = cur.fetchall()
+        assert len(artifacts) > 0
+        payload = artifacts[0][1]
+        assert isinstance(payload, dict)
+        assert payload.get("pass_status") == "passed"
+        issues = [r.get("issue") for r in payload.get("validation_results", [])]
+        assert all(i == "" for i in issues), (
+            f"immutable semantic artifact must have canonical empty issue, got: {issues}"
+        )
+
+    # Prove content hash matches the exact canonical payload.
+    import hashlib
+
+    expected_hash = hashlib.sha256(
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+    ).hexdigest()
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT content_sha256 FROM semantic_artifacts WHERE id=%s",
+            (str(artifacts[0][0]),),
+        )
+        stored_hash = cur.fetchone()[0]
+        assert stored_hash == expected_hash
+
+    # Prove synthesis stage artifact equals semantic artifact payload.
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT artifact FROM synthesis_stages WHERE run_id=%s AND stage_name='citation_pass'",
+            (str(run_id),),
+        )
+        stage_artifact = cur.fetchone()[0]
+        assert stage_artifact == payload
+
+    # Load authoritative completion provenance.
+    with runs.uow_factory() as uow:
+        provenance = load_authoritative_completion_provenance(uow, run_id)
+        assert provenance is not None
+        assert provenance.run_id == run_id
+        assert provenance.citation_artifact_sha256 == expected_hash
+
+    # Invoke terminal completion.
+    finished = workflow.finish_run(status.external_id, outcome="satisfied")
+    assert finished.state == "completed"
+
+    # Fresh connection proves research_runs.state == "completed".
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT state, completed_at IS NOT NULL FROM research_runs WHERE id=%s",
+            (str(run_id),),
+        )
+        row = cur.fetchone()
+        assert row[0] == "completed"
+        assert row[1] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1450,6 +1621,13 @@ def test_deterministic_prompt_version_matches_stage_and_call():
 
         # Every synthesis stage must have empty model and the same prompt version.
         expected_prompt_version = "synthesis-v1"
+        from research_store.domain import SynthesisStageName as _Stage
+
+        expected_stages = {s.value for s in _Stage}
+        actual_stages = {s[0] for s in stages}
+        assert actual_stages == expected_stages, (
+            f"expected stages {expected_stages}, got {actual_stages}"
+        )
         for stage_name, prompt_version, model_name in stages:
             assert model_name == "", f"{stage_name} model_name must be empty"
             assert prompt_version == expected_prompt_version, (
@@ -1719,6 +1897,163 @@ def test_env_manifest_integration_strict_verifier_accepts_safe_evidence(
 
     for field in ENVIRONMENT_FIELDS:
         assert field in manifest, f"missing required field: {field}"
+
+
+def test_validate_environment_accepts_complete_manifest(monkeypatch):
+    """validate_environment must accept a complete, correct environment manifest."""
+    from hashlib import sha256
+    from pathlib import Path
+
+    from verify_release_campaign import WorkflowIdentity, validate_environment
+
+    monkeypatch.setenv("GENERATIVE_MODEL", "test-model")
+    monkeypatch.setenv("EMBEDDING_MODEL", "test-embed")
+    monkeypatch.setenv("EMBEDDING_REVISION", "2024-01-01")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "1536")
+    monkeypatch.setenv("RERANKER_MODEL", "test-rerank")
+
+    candidate_sha = "b" * 40
+    dataset_hash = sha256(b"").hexdigest()
+    tree_hash = sha256(b"tree").hexdigest()
+
+    manifest = _build_env_manifest(
+        candidate_sha=candidate_sha,
+        dataset_path=Path("/dev/null"),
+        dataset_hash=dataset_hash,
+    )
+    manifest["strict"] = True
+    manifest["execution_modes"] = ["autonomous_local", "deterministic_debug"]
+    # Ensure tree_hash matches what we pass to validate_environment.
+    manifest["tree_hash"] = tree_hash
+
+    identity = WorkflowIdentity(
+        candidate_sha=candidate_sha,
+        dispatch_sha=tree_hash,
+        workflow_sha=tree_hash,
+        dispatch_ref="refs/heads/main",
+        repository="test/repo",
+        run_id="test-run",
+        run_attempt="1",
+        workflow_ref="refs/workflows/test",
+    )
+    errors = validate_environment(
+        manifest,
+        campaign_label="A",
+        identity=identity,
+        tree_hash=tree_hash,
+        dataset_hash=dataset_hash,
+    )
+    assert errors == [], f"expected no errors, got: {errors}"
+
+
+def test_validate_environment_rejects_missing_fields(monkeypatch):
+    """validate_environment must reject manifests missing required fields."""
+    from verify_release_campaign import WorkflowIdentity, validate_environment
+
+    identity = WorkflowIdentity(
+        candidate_sha="a" * 40,
+        dispatch_sha="t" * 40,
+        workflow_sha="t" * 40,
+        dispatch_ref="refs/heads/main",
+        repository="test/repo",
+        run_id="test-run",
+        run_attempt="1",
+        workflow_ref="refs/workflows/test",
+    )
+    errors = validate_environment(
+        {},
+        campaign_label="B",
+        identity=identity,
+        tree_hash="t" * 40,
+        dataset_hash="d" * 64,
+    )
+    assert any("lacks" in e for e in errors), (
+        f"expected missing-field errors, got: {errors}"
+    )
+
+
+def test_validate_environment_rejects_mismatched_hashes():
+    """validate_environment must reject mismatched candidate/tree/dataset hashes."""
+    from verify_release_campaign import WorkflowIdentity, validate_environment
+
+    identity = WorkflowIdentity(
+        candidate_sha="wrong-sha" * 3,
+        dispatch_sha="wrong-tree" * 3,
+        workflow_sha="wrong-tree" * 3,
+        dispatch_ref="refs/heads/main",
+        repository="test/repo",
+        run_id="test-run",
+        run_attempt="1",
+        workflow_ref="refs/workflows/test",
+    )
+    wrong_tree = "wrong-tree" * 3
+    env = {
+        "candidate_sha": "correct-sha" * 3,
+        "tree_hash": "correct-tree" * 3,
+        "dataset_hash": "correct-dataset" * 3,
+        "strict": True,
+        "execution_modes": ["autonomous_local", "deterministic_debug"],
+        "GENERATIVE_MODEL": "test",
+        "EMBEDDING_MODEL": "test",
+        "EMBEDDING_REVISION": "test",
+        "EMBEDDING_DIMENSION": "1536",
+        "RERANKER_MODEL": "test",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "python_version": "3.12",
+        "platform": "linux",
+        "machine": "x86_64",
+    }
+    errors = validate_environment(
+        env,
+        campaign_label="C",
+        identity=identity,
+        tree_hash=wrong_tree,
+        dataset_hash="wrong-dataset" * 3,
+    )
+    assert any("candidate mismatch" in e for e in errors)
+    assert any("tree mismatch" in e for e in errors)
+    assert any("dataset mismatch" in e for e in errors)
+
+
+def test_validate_environment_rejects_non_strict_and_wrong_modes():
+    """validate_environment must reject non-strict and wrong execution modes."""
+    from verify_release_campaign import WorkflowIdentity, validate_environment
+
+    identity = WorkflowIdentity(
+        candidate_sha="a" * 40,
+        dispatch_sha="t" * 40,
+        workflow_sha="t" * 40,
+        dispatch_ref="refs/heads/main",
+        repository="test/repo",
+        run_id="test-run",
+        run_attempt="1",
+        workflow_ref="refs/workflows/test",
+    )
+    env = {
+        "candidate_sha": "a" * 40,
+        "tree_hash": "t" * 40,
+        "dataset_hash": "d" * 64,
+        "strict": False,
+        "execution_modes": ["agent_led"],
+        "GENERATIVE_MODEL": "test",
+        "EMBEDDING_MODEL": "test",
+        "EMBEDDING_REVISION": "test",
+        "EMBEDDING_DIMENSION": "1536",
+        "RERANKER_MODEL": "test",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "python_version": "3.12",
+        "platform": "linux",
+        "machine": "x86_64",
+    }
+    errors = validate_environment(
+        env,
+        campaign_label="D",
+        identity=identity,
+        tree_hash="t" * 40,
+        dataset_hash="d" * 64,
+    )
+    assert any("not strict" in e for e in errors)
+    assert any("modes are not authoritative" in e for e in errors)
 
 
 # ---------------------------------------------------------------------------

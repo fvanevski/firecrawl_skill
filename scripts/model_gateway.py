@@ -216,6 +216,7 @@ def call_structured(
     semantic_persistence=None,
     semantic_context=None,
     enable_thinking=False,
+    post_validate=None,
 ):
     system_prompt = _redact(system_prompt)
     user_prompt = _redact(user_prompt)
@@ -373,6 +374,12 @@ def call_structured(
                 else ["empty content"]
             )
             valid = not validation_errors
+            if valid and post_validate is not None:
+                try:
+                    post_validate(parsed)
+                except ValueError as exc:
+                    valid = False
+                    validation_errors = [f"post_validate failed: {exc}"]
             attempt = {
                 "attempt": attempt_number,
                 "api_surface": config["api_surface"],

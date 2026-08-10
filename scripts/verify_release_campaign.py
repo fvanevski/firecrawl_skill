@@ -155,6 +155,37 @@ def _nonempty(value: Any) -> bool:
     return True
 
 
+def validate_environment(
+    environment: Mapping[str, Any],
+    *,
+    campaign_label: str,
+    identity: WorkflowIdentity,
+    tree_hash: str,
+    dataset_hash: str,
+) -> list[str]:
+    """Validate an environment manifest against release-campaign requirements.
+
+    Returns a list of error strings; empty means valid.
+    """
+    errors: list[str] = []
+    for field in ENVIRONMENT_FIELDS:
+        if not _nonempty(environment.get(field)):
+            errors.append(f"campaign {campaign_label} environment lacks {field}")
+    if environment.get("candidate_sha") != identity.candidate_sha:
+        errors.append(f"campaign {campaign_label} environment candidate mismatch")
+    if environment.get("tree_hash") != tree_hash:
+        errors.append(f"campaign {campaign_label} environment tree mismatch")
+    if environment.get("dataset_hash") != dataset_hash:
+        errors.append(f"campaign {campaign_label} environment dataset mismatch")
+    if environment.get("strict") is not True:
+        errors.append(f"campaign {campaign_label} environment is not strict")
+    if environment.get("execution_modes") != list(EXPECTED_MODES):
+        errors.append(
+            f"campaign {campaign_label} environment modes are not authoritative"
+        )
+    return errors
+
+
 def validate_metric_record(
     metric: Mapping[str, Any],
     *,
@@ -565,19 +596,15 @@ def verify(
         ):
             errors.append(f"raw manifest campaign {label} run list mismatch")
 
-        for field in ENVIRONMENT_FIELDS:
-            if not _nonempty(environment.get(field)):
-                errors.append(f"campaign {label} environment lacks {field}")
-        if environment.get("candidate_sha") != identity.candidate_sha:
-            errors.append(f"campaign {label} environment candidate mismatch")
-        if environment.get("tree_hash") != tree_hash:
-            errors.append(f"campaign {label} environment tree mismatch")
-        if environment.get("dataset_hash") != dataset_hash:
-            errors.append(f"campaign {label} environment dataset mismatch")
-        if environment.get("strict") is not True:
-            errors.append(f"campaign {label} environment is not strict")
-        if environment.get("execution_modes") != list(EXPECTED_MODES):
-            errors.append(f"campaign {label} environment modes are not authoritative")
+        errors.extend(
+            validate_environment(
+                environment,
+                campaign_label=label,
+                identity=identity,
+                tree_hash=tree_hash,
+                dataset_hash=dataset_hash,
+            )
+        )
 
         campaigns[key] = {
             "campaign_id": result.get("campaign_id"),
