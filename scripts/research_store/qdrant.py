@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 import urllib.error
 import urllib.parse
@@ -215,6 +214,29 @@ class QdrantIndex:
             "DELETE", f"/collections/{urllib.parse.quote(self.collection, safe='')}"
         )
 
+    def require_compatible_schema(self) -> dict:
+        """Verify the collection exists and is compatible without mutating it.
+
+        Contract:
+          - collection missing       -> raise RuntimeError
+          - collection incompatible  -> raise RuntimeError
+          - collection compatible    -> return status dict
+          - NO delete, NO recreation, NO alias mutation
+        """
+        status = self.inspect_schema()
+        if not status["exists"]:
+            raise RuntimeError(
+                f"collection {self.collection} is missing; "
+                "routine worker cannot create collections — use index-build"
+            )
+        if not status["compatible"]:
+            raise RuntimeError(
+                f"collection {self.collection} has incompatible schema "
+                f"({status['actual']} vs {status['expected']}); "
+                "routine worker cannot recreate — use the explicit rebuild/activation lifecycle"
+            )
+        return {**status, "created": False}
+
     def search(self, vector, filters, limit):
         payload = {
             "query": vector,
@@ -250,20 +272,8 @@ class QdrantIndex:
         aliases = self._request("GET", "/aliases").get("result", {}).get("aliases", [])
         return {item["alias_name"]: item["collection_name"] for item in aliases}
 
-    def has_active_alias(self, collection: str) -> bool:
-        """Return True when *collection* is currently targeted by any alias."""
-        return collection in set(self.list_aliases().values())
-
     def switch_alias(self, alias: str, target_collection: str) -> bool:
         """Atomically repoint an alias, returning False when already active."""
-        # Guard against repointing the production alias.  Production aliases are
-        # authoritative state; test suites must never move them.
-        production_alias = os.environ.get("QDRANT_ALIAS", "research_chunks_active")
-        if alias == production_alias:
-            raise RuntimeError(
-                f"refusing to repoint production alias {alias!r}; "
-                "use index-activate to change the active projection"
-            )
         aliases = self.list_aliases()
         current = aliases.get(alias)
         if current == target_collection:

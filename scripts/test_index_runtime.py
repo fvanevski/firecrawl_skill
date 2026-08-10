@@ -76,6 +76,10 @@ class FakeIndex:
     def ensure_schema(self):
         self.calls.append(("schema", self.collection, self.dimension, self.distance))
 
+    def require_compatible_schema(self):
+        self.calls.append(("compatible_schema", self.collection, self.dimension, self.distance))
+        return {"exists": True, "compatible": True}
+
     def upsert(self, points):
         self.calls.append(("upsert", self.collection, points))
 
@@ -118,7 +122,7 @@ def test_worker_uses_exact_manifest_collection_and_token():
     assert result["complete"] == 1 and result["failed"] == 0
     assert state["chunk_lookup"][1] is not None
     assert job[1] == state["renewals"][0][1] and job[2] is None
-    assert ("schema", "research_chunks_abc123", 3, "Cosine") in calls
+    assert ("compatible_schema", "research_chunks_abc123", 3, "Cosine") in calls
     assert next(call for call in calls if call[0] == "upsert")[2][0]["id"] == str(
         state["records"][0]["chunk_id"]
     )
@@ -505,6 +509,10 @@ def _fake_qdrant(state):
 
         def ensure_schema(self):
             calls.append("schema")
+
+        def require_compatible_schema(self):
+            calls.append("compatible_schema")
+            return {"exists": True, "compatible": True}
 
         def upsert(self, points):
             calls.append(("upsert", points))

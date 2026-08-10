@@ -9,6 +9,7 @@ that case.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import sys
 from pathlib import Path
@@ -20,6 +21,16 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+_logger = logging.getLogger(__name__)
+
+# Track Qdrant collections created by the test suite for owned-resource cleanup.
+_test_collections: set[str] = set()
+
+
+@pytest.fixture(scope="session")
+def track_test_collection():
+    """Session fixture that tracks which Qdrant collections belong to tests."""
+    return _test_collections
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -70,74 +81,6 @@ def pytest_runtest_setup(item):
                CASCADE"""
         )
 
-    qdrant_url = os.environ.get("QDRANT_URL")
-    if qdrant_url:
-        from research_store.qdrant import QdrantIndex
-
-        # Guard against deleting production collections.  The test suite runs
-        # against a disposable PostgreSQL instance but shares the host Qdrant
-        # service; wiping every Qdrant collection would destroy active
-        # projections whose PostgreSQL authority remains intact.  Only remove
-        # collections whose names do not match any known active alias target.
-        protection_prefixes = ("research_chunks_",)
-
-        cleanup = QdrantIndex(
-            qdrant_url,
-            os.environ.get("QDRANT_API_KEY", ""),
-            "__test_cleanup__",
-            1,
-        )
-        try:
-            response = cleanup._request("GET", "/collections")
-            collections = response.get("result", {}).get("collections", [])
-            import logging
-
-            _logger = logging.getLogger(__name__)
-            _logger.info(
-                "conftest cleanup RUNNING: found %d collections, protection_prefixes=%s, item=%s",
-                len(collections),
-                protection_prefixes,
-                item.name,
-            )
-            # Protect production aliases — never delete or repoint them.
-            production_aliases = set()
-            try:
-                from research_store.config import StoreConfig
-
-                prod_config = StoreConfig.from_env()
-                production_aliases.add(prod_config.qdrant_alias)
-            except Exception as exc:  # noqa: BLE001
-                _logger.warning("Failed to load production alias config: %s", exc)
-            aliases_resp = cleanup._request("GET", "/aliases")
-            protected_alias_targets = set()
-            for alias_entry in aliases_resp.get("result", {}).get("aliases", []):
-                alias_name = alias_entry.get("alias_name")
-                collection_name = alias_entry.get("collection_name")
-                if alias_name in production_aliases:
-                    _logger.info(
-                        "  protecting alias %s -> %s (production alias)",
-                        alias_name,
-                        collection_name,
-                    )
-                    if collection_name:
-                        protected_alias_targets.add(collection_name)
-            for collection in collections:
-                name = collection.get("name")
-                if not name:
-                    continue
-                # Skip collections that belong to an active projection.
-                # Check both direct name match and alias targeting.
-                if any(name.startswith(p) for p in protection_prefixes):
-                    _logger.info("  protecting %s (prefix match)", name)
-                    continue
-                if name in protected_alias_targets:
-                    _logger.info("  protecting %s (protected alias target)", name)
-                    continue
-                _logger.info("  deleting %s", name)
-                cleanup.for_collection(name, 1).delete_collection()
-        except Exception as exc:  # noqa: BLE001
-            pytest.fail(f"Failed to reset disposable Qdrant test state: {exc}")
-
 
 @pytest.fixture(scope="session", autouse=True)
 def _apply_db_schema():
@@ -163,6 +106,61 @@ def _apply_db_schema():
             f"Failed to apply Alembic migrations to test database: {exc}\n"
             f"DSN: {TEST_DSN[:40]}..."
         )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_test_qdrant_collections(track_test_collection):
+    """Delete only Qdrant collections owned by the test suite.
+
+    Tests must clean up resources they own, not enumerate/delete arbitrary
+    shared-Qdrant resources.  This fixture deletes exactly the collections
+    registered during the test session via ``track_test_collection``.
+    """
+    yield
+    if not TEST_DSN:
+        return
+    qdrant_url = os.environ.get("QDRANT_URL")
+    if not qdrant_url:
+        return
+    from research_store.config import StoreConfig
+    from research_store.qdrant import QdrantIndex
+
+    # Load production config to protect the exact production alias target.
+    try:
+        prod_config = StoreConfig.from_env()
+        production_collection = prod_config.physical_collection
+        # production_alias protected
+    except Exception:  # noqa: BLE001
+        production_collection = None
+
+    cleanup = QdrantIndex(
+        qdrant_url,
+        os.environ.get("QDRANT_API_KEY", ""),
+        "__test_cleanup__",
+        1,
+    )
+    try:
+        response = cleanup._request("GET", "/collections")
+        collections = response.get("result", {}).get("collections", [])
+        deleted = 0
+        for collection in collections:
+            name = collection.get("name")
+            if not name:
+                continue
+            # Never delete the production alias target regardless of ownership.
+            if name == production_collection:
+                _logger.info("preserving production collection %s", name)
+                continue
+            if name in track_test_collection:
+                try:
+                    cleanup.for_collection(name, 1).delete_collection()
+                    deleted += 1
+                    _logger.info("deleted test collection %s", name)
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning("failed to delete test collection %s: %s", name, exc)
+        _logger.info("test cleanup: deleted %d collections", deleted)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("test Qdrant cleanup failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------

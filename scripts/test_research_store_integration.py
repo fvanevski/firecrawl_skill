@@ -4178,6 +4178,8 @@ class TestIndexRebuildRecovery:
     - alias cutover only happens after complete verification
     """
 
+    _owned_collections: set[str] = set()
+
     def setup_method(self):
         """Truncate test data between tests to avoid accumulation."""
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
@@ -4206,97 +4208,36 @@ class TestIndexRebuildRecovery:
 
         import httpx
 
-        # Protect production Qdrant collections.  The test suite shares the
-        # host Qdrant service; wiping every collection would destroy active
-        # projections whose PostgreSQL authority remains intact.  Only skip
-        # collections that are currently targeted by an active alias — test-
-        # scoped collections under the same name prefix remain deletable.
-        with contextlib.suppress(httpx.RequestError, KeyError, ValueError):
-            r = httpx.get(
-                "http://localhost:6333/collections",
-                timeout=2.0,
-                headers={
-                    "Authorization": f"Bearer {os.environ.get('QDRANT_API_KEY', '')}"
-                },
+        # Delete only Qdrant collections owned by this test class.
+        # Tests sharing a host Qdrant service must clean up resources they own,
+        # not perform global sweeps. Production collections are never deleted.
+        from research_store.config import StoreConfig
+        from research_store.qdrant import QdrantIndex
+
+        qdrant_url = os.environ.get("QDRANT_URL")
+        if qdrant_url:
+            try:
+                prod_config = StoreConfig.from_env()
+                production_collection = prod_config.physical_collection
+            except Exception:  # noqa: BLE001
+                production_collection = None
+            cleanup = QdrantIndex(
+                qdrant_url,
+                os.environ.get("QDRANT_API_KEY", ""),
+                "__test_cleanup__",
+                1,
             )
-            if r.status_code == 200:
-                alias_targets = set()
-                try:
-                    aliases_resp = httpx.get(
-                        "http://localhost:6333/aliases",
-                        timeout=2.0,
-                        headers={
-                            "Authorization": f"Bearer {os.environ.get('QDRANT_API_KEY', '')}"
-                        },
-                    )
-                    if aliases_resp.status_code == 200:
-                        alias_targets = {
-                            a["collection_name"]
-                            for a in aliases_resp.json()
-                            .get("result", {})
-                            .get("aliases", [])
-                        }
-                except Exception as exc:  # noqa: BLE001
-                    import logging
-
-                    logging.getLogger(__name__).warning(
-                        "Failed to fetch Qdrant aliases: %s", exc
-                    )
-                # Protect the production Qdrant collection.  The test suite shares
-                # the host Qdrant service; wiping every collection would destroy
-                # active projections whose PostgreSQL authority remains intact.
-                # Only skip the known production collection — test-scoped
-                # collections under the same name prefix remain deletable so that
-                # per-test isolation is preserved.
-                production_collections = set()
-                try:
-                    from research_store.config import StoreConfig
-
-                    prod_config = StoreConfig.from_env()
-                    production_collections.add(prod_config.physical_collection)
-                except Exception as exc:  # noqa: BLE001
-                    import logging
-
-                    logging.getLogger(__name__).warning(
-                        "Failed to load production config for cleanup: %s", exc
-                    )
-                # Also protect collections targeted by production aliases.
-                try:
-                    aliases_resp = httpx.get(
-                        "http://localhost:6333/aliases",
-                        timeout=2.0,
-                        headers={
-                            "Authorization": f"Bearer {os.environ.get('QDRANT_API_KEY', '')}"
-                        },
-                    )
-                    if aliases_resp.status_code == 200:
-                        for a in (
-                            aliases_resp.json().get("result", {}).get("aliases", [])
-                        ):
-                            if a.get("alias_name") == os.environ.get(
-                                "QDRANT_ALIAS", "research_chunks_active"
-                            ):
-                                target = a.get("collection_name")
-                                if target:
-                                    production_collections.add(target)
-                except Exception as exc:  # noqa: BLE001
-                    import logging
-
-                    logging.getLogger(__name__).warning(
-                        "Failed to fetch production alias targets: %s", exc
-                    )
-                for c in r.json().get("result", {}).get("collections", []):
-                    name = c.get("name")
-                    if not name:
+            with contextlib.suppress(Exception):
+                response = cleanup._request("GET", "/collections")
+                for collection in response.get("result", {}).get("collections", []):
+                    name = collection.get("name")
+                    if not name or name == production_collection:
                         continue
-                    if name in alias_targets or name in production_collections:
-                        continue
-                    httpx.delete(
-                        f"http://localhost:6333/collections/{name}",
-                        headers={
-                            "Authorization": f"Bearer {os.environ.get('QDRANT_API_KEY', '')}"
-                        },
-                    )
+                    if name in self._owned_collections:
+                        try:
+                            cleanup.for_collection(name, 1).delete_collection()
+                        except Exception:  # noqa: BLE001
+                            pass
 
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
         """Every eligible chunk gets a manifest AND a pending job."""
