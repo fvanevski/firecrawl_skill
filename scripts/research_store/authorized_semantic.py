@@ -69,7 +69,7 @@ def _bind_citation_verdicts(
     expected = list(deterministic_fixture.get("validation_results", ()))
     verdicts = verdict_payload.get("validation_results")
     if not isinstance(verdicts, list):
-        raise ValueError("citation verdict output is missing validation_results")
+        raise TypeError("citation verdict output is missing validation_results")
     if len(verdicts) != len(expected):
         raise ValueError(
             "citation verdict count mismatch: "

@@ -8,7 +8,6 @@ from types import MethodType
 from uuid import UUID, uuid4
 
 import model_gateway
-import pytest
 from model_gateway import StructuredResult
 from research_store import authorized_semantic, lifecycle_guard
 from research_store.authorized_semantic import call_authorized_structured
