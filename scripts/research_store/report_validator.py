@@ -137,6 +137,7 @@ class ReportValidationResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "validation_status": "valid" if self.is_valid else "invalid",
             "is_valid": self.is_valid,
             "is_complete": self.is_complete,
             "report_hash": self.report_hash,

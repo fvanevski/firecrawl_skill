@@ -1411,67 +1411,110 @@ def test_autonomous_none_rejected_then_canonical_accepted():
     finally:
         model_gateway._request_json = original_request
 
-    # Verify PostgreSQL contains real semantic_calls and semantic_artifacts.
+    # ------------------------------------------------------------------
+    # Blocker A: distinguish rejected attempt evidence from accepted stage.
+    # ------------------------------------------------------------------
+
+    # 1. Query the citation_pass stage and require FK linkage.
     with connect(_PG_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id FROM semantic_calls WHERE run_id=%s AND stage='citation_pass'",
+            "SELECT semantic_call_id, semantic_artifact_id, artifact"
+            " FROM synthesis_stages"
+            " WHERE run_id=%s AND stage_name='citation_pass'",
             (str(run_id),),
         )
-        call_row = cur.fetchone()
-        assert call_row is not None
-        call_id = call_row[0]
-
-        cur.execute(
-            "SELECT id, payload FROM semantic_artifacts WHERE semantic_call_id=%s",
-            (call_id,),
+        stage_row = cur.fetchone()
+        assert stage_row is not None, "citation_pass stage must exist"
+        stage_call_id, stage_artifact_id, stage_artifact = stage_row
+        assert stage_call_id is not None, (
+            "citation_pass stage must link a semantic_call"
         )
-        artifacts = cur.fetchall()
-        assert len(artifacts) > 0
-        payload = artifacts[0][1]
-        assert isinstance(payload, dict)
-        assert payload.get("pass_status") == "passed"
-        issues = [r.get("issue") for r in payload.get("validation_results", [])]
+        assert stage_artifact_id is not None, (
+            "citation_pass stage must link a semantic_artifact"
+        )
+
+    # 2. Query the exact stage-linked artifact and prove it is the accepted one.
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, semantic_call_id, payload, content_sha256,"
+            " validation_status, validation_errors, idempotency_key"
+            " FROM semantic_artifacts WHERE id=%s",
+            (str(stage_artifact_id),),
+        )
+        accepted_row = cur.fetchone()
+        assert accepted_row is not None
+        acc_id, acc_call_id, acc_payload, acc_hash, acc_status, _, _ = accepted_row
+        assert acc_id == stage_artifact_id
+        assert acc_call_id == stage_call_id
+        assert acc_status == "valid"
+        issues = [r.get("issue") for r in acc_payload.get("validation_results", [])]
         assert all(i == "" for i in issues), (
-            f"immutable semantic artifact must have canonical empty issue, got: {issues}"
+            f"accepted artifact must have canonical empty issue, got: {issues}"
         )
+        assert acc_payload == stage_artifact
+        import hashlib
 
-    # Prove content hash matches the exact canonical payload.
-    import hashlib
+        expected_hash = hashlib.sha256(
+            json.dumps(
+                acc_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        assert acc_hash == expected_hash
 
-    expected_hash = hashlib.sha256(
-        json.dumps(
-            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        ).encode("utf-8")
-    ).hexdigest()
+    # 3. Query ALL artifacts for the call — prove both rejected and accepted.
     with connect(_PG_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT content_sha256 FROM semantic_artifacts WHERE id=%s",
-            (str(artifacts[0][0]),),
+            "SELECT id, payload, validation_status, validation_errors,"
+            " idempotency_key FROM semantic_artifacts WHERE semantic_call_id=%s",
+            (str(stage_call_id),),
         )
-        stored_hash = cur.fetchone()[0]
-        assert stored_hash == expected_hash
-
-    # Prove synthesis stage artifact equals semantic artifact payload.
-    with connect(_PG_DSN) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT artifact FROM synthesis_stages WHERE run_id=%s AND stage_name='citation_pass'",
-            (str(run_id),),
+        all_artifacts = cur.fetchall()
+        assert len(all_artifacts) >= 2, (
+            f"expected at least 2 attempt artifacts, got {len(all_artifacts)}"
         )
-        stage_artifact = cur.fetchone()[0]
-        assert stage_artifact == payload
 
-    # Load authoritative completion provenance.
+    rejected = None
+    accepted_from_list = None
+    for art_id, art_payload, art_status, art_errors, art_ik in all_artifacts:
+        issues = [r.get("issue") for r in art_payload.get("validation_results", [])]
+        if art_status == "invalid" and "none" in issues:
+            rejected = (art_id, art_payload, art_status, art_errors, art_ik)
+        elif art_status == "valid" and all(i == "" for i in issues):
+            accepted_from_list = (
+                art_id,
+                art_payload,
+                art_status,
+                art_errors,
+                art_ik,
+            )
+
+    assert rejected is not None, "rejected 'none' artifact must be durably stored"
+    assert accepted_from_list is not None, (
+        "accepted canonical artifact must be durably stored"
+    )
+    rej_id, _, rej_status, _, _ = rejected
+    assert rej_status == "invalid"
+    assert rej_id != stage_artifact_id
+
+    acc_from_list_id, _, acc_from_list_status, _, _ = accepted_from_list
+    assert acc_from_list_status == "valid"
+    assert acc_from_list_id == stage_artifact_id
+
+    # 4. Terminal proof: authoritative provenance succeeds.
     with runs.uow_factory() as uow:
         provenance = load_authoritative_completion_provenance(uow, run_id)
         assert provenance is not None
         assert provenance.run_id == run_id
         assert provenance.citation_artifact_sha256 == expected_hash
 
-    # Invoke terminal completion.
+    # 5. Terminal completion.
     finished = workflow.finish_run(status.external_id, outcome="satisfied")
     assert finished.state == "completed"
 
-    # Fresh connection proves research_runs.state == "completed".
+    # 6. Fresh readback proves research_runs.state == "completed".
     with connect(_PG_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT state, completed_at IS NOT NULL FROM research_runs WHERE id=%s",
@@ -1492,9 +1535,9 @@ def test_deterministic_prompt_version_matches_stage_and_call():
     """Deterministic-debug synthesis stages must carry the same truthful
     prompt_version into both the stage record and the immutable semantic call.
 
-    This test constructs a real pre-synthesis run and executes the full
-    synthesis pipeline without pre-seeding completed stages. Stage and call
-    identities are read directly from PostgreSQL after execution.
+    This test constructs a real pre-synthesis run through normal services,
+    establishes completion prerequisites, executes real synthesis, verifies
+    stage/call identities, and exercises the terminal boundary via finish_run().
     """
     import os
 
@@ -1503,145 +1546,151 @@ def test_deterministic_prompt_version_matches_stage_and_call():
     try:
         from dataclasses import replace
 
+        from completion_provenance_test_support import (
+            seed_completion_prerequisites,
+        )
         from research_store.config import StoreConfig
-        from research_store.container import build_service
+        from research_store.container import (
+            build_run_service,
+            build_service,
+            build_workflow_operation_service,
+        )
+        from research_store.domain import IngestRequest, SynthesisStageName
         from research_store.postgres import connect, migrate
         from research_store.semantic_service import SemanticCallService
 
         migrate(_PG_DSN)
-
-        run_id = uuid4()
-        with connect(_PG_DSN) as conn, conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO research_runs
-                   (id, objective, query_plan, skill_version, llm_model, state, execution_mode)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)
-                   ON CONFLICT (id) DO NOTHING""",
-                (
-                    str(run_id),
-                    "test request",
-                    "{}",
-                    "1.0",
-                    "test",
-                    "created",
-                    "deterministic_debug",
-                ),
-            )
-            conn.commit()
-
         config = replace(
             StoreConfig.from_env(),
             database_url=_PG_DSN,
             blob_root=Path("/tmp/arc17-pg-test-blobs"),
+            qdrant_collection=f"arc17-determ-{uuid4().hex}",
+            embedding_dimension=4,
         )
-        svc = build_service(config)
-        uow_factory = svc.uow_factory
 
-        with uow_factory() as uow:
-            uow.persist_evidence_packet(
-                run_id=run_id,
-                research_spec_id=UUID("00000000-0000-0000-0000-000000000100"),
-                coverage_revision=1,
-                packet_revision=1,
-                payload={
-                    "schema_version": "evidence-packet-v1",
-                    "run_id": str(run_id),
-                    "research_spec_id": "00000000-0000-0000-0000-000000000100",
-                    "coverage_revision": 1,
-                    "claims": [
-                        {
-                            "claim_id": "00000000-0000-0000-0000-000000000102",
-                            "statement": "The documented behavior is reproducible.",
-                            "semantic_status": "qualified",
-                            "uncertainty": "Only one source has been acquired.",
-                        }
-                    ],
-                    "passages": [
-                        {
-                            "passage_id": "00000000-0000-0000-0000-000000000601",
-                            "candidate_id": "00000000-0000-0000-0000-000000000301",
-                            "snapshot_id": "00000000-0000-0000-0000-000000000602",
-                            "chunk_id": "00000000-0000-0000-0000-000000000603",
-                            "text": "The fixture passage records the documented behavior.",
-                            "source_url": "https://fixture.invalid/docs",
-                        }
-                    ],
-                    "omitted_passages": [],
-                    "claim_evidence_bindings": [
-                        {
-                            "binding_id": "00000000-0000-0000-0000-000000000604",
-                            "claim_id": "00000000-0000-0000-0000-000000000102",
-                            "passage_ids": ["00000000-0000-0000-0000-000000000601"],
-                            "relationship": "qualifies",
-                            "confidence": 0.7,
-                            "uncertainty": "Independent replication is missing.",
-                        }
-                    ],
-                },
+        runs = build_run_service(config)
+        corpus = build_service(config)
+        external_id = f"arc17-determ-{uuid4().hex}"
+
+        # --- Build run through normal services to coverage_review ---
+        status = runs.create(
+            "arc17 deterministic test",
+            external_id,
+            execution_mode="deterministic_debug",
+        )
+        manifest = corpus.ingest_batch(
+            f"fc-{uuid4().hex}",
+            "scrape",
+            [
+                IngestRequest(
+                    f"https://example/{uuid4().hex}",
+                    b"# Test evidence\n\nPostgreSQL owns authoritative provenance.",
+                )
+            ],
+            research_run_external_id=external_id,
+        )
+        assert manifest["failure_count"] == 0
+        revision = status.lifecycle_revision
+        for next_state in (
+            "planning",
+            "corpus_review",
+            "acquiring",
+            "extracting",
+            "indexing",
+        ):
+            runs.transition(
+                status.id,
+                next_state,
+                expected_revision=revision,
+                idempotency_key=f"test:{external_id}:{next_state}",
+                actor_type="integration-test",
             )
+            revision += 1
+        with connect(_PG_DSN) as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """UPDATE index_jobs job
+                      SET status='complete', completed_at=now(), error=NULL,
+                          lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL
+                     FROM embedding_manifests manifest
+                     JOIN chunks chunk ON chunk.id=manifest.chunk_id
+                     JOIN documents document ON document.id=chunk.document_id
+                     JOIN research_run_assets asset
+                       ON asset.snapshot_id=document.snapshot_id
+                    WHERE job.manifest_id=manifest.id AND asset.run_id=%s""",
+                (status.id,),
+            )
+            assert cursor.rowcount > 0
+            cursor.execute(
+                """UPDATE embedding_manifests manifest
+                      SET index_status='complete', indexed_at=now(), error=NULL
+                     FROM chunks chunk
+                     JOIN documents document ON document.id=chunk.document_id
+                     JOIN research_run_assets asset
+                       ON asset.snapshot_id=document.snapshot_id
+                    WHERE manifest.chunk_id=chunk.id AND asset.run_id=%s""",
+                (status.id,),
+            )
+        workflow = build_workflow_operation_service(config)
+        workflow._finalize_indexing(
+            external_id,
+            f"test:{external_id}:finalize-indexing",
+        )
+        status = runs.status(run_id=status.id)
+        assert status.state == "coverage_review"
+        run_id = status.id
 
+        # --- Establish non-synthesis prerequisites ---
+        seed_completion_prerequisites(runs.uow_factory, run_id)
+
+        # --- Execute real synthesis ---
         from budget_policy import DEFAULT_POLICY
         from research_store.evidence import EvidenceService
 
-        semantic = SemanticCallService(uow_factory)
-        evidence = EvidenceService(uow_factory, budget_policy=DEFAULT_POLICY)
+        semantic = SemanticCallService(runs.uow_factory)
+        evidence = EvidenceService(runs.uow_factory, budget_policy=DEFAULT_POLICY)
         service = LocalSynthesisService(
             semantic_service=semantic,
             evidence_service=evidence,
             config=config,
         )
 
-        # Execute synthesis from pre-synthesis state — no stages pre-seeded.
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=1,
             model_name="",
         )
-
         assert summary["overall_status"] == "completed"
 
-        # Read stage + semantic call identities from a fresh UOW.
+        # --- Verify all five synthesis stages exist and are completed ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT stage_name, prompt_version, model_name
+                """SELECT stage_name, prompt_version, model_name,
+                          semantic_call_id, semantic_artifact_id
                    FROM synthesis_stages WHERE run_id=%s ORDER BY id""",
                 (str(run_id),),
             )
             stages = cur.fetchall()
 
-        with connect(_PG_DSN) as conn, conn.cursor() as cur:
-            cur.execute(
-                """SELECT sc.stage, sc.prompt_version, sc.model
-                   FROM semantic_calls sc
-                   JOIN synthesis_stages ss ON ss.run_id=sc.run_id AND ss.stage_name=sc.stage
-                   WHERE sc.run_id=%s""",
-                (str(run_id),),
-            )
-            calls = cur.fetchall()
-
-        # Every synthesis stage must have empty model and the same prompt version.
         expected_prompt_version = "synthesis-v1"
-        from research_store.domain import SynthesisStageName as _Stage
-
-        expected_stages = {s.value for s in _Stage}
-        actual_stages = {s[0] for s in stages}
-        assert actual_stages == expected_stages, (
-            f"expected stages {expected_stages}, got {actual_stages}"
+        expected_stage_names = {s.value for s in SynthesisStageName}
+        actual_stage_names = {s[0] for s in stages}
+        assert actual_stage_names == expected_stage_names, (
+            f"expected stages {expected_stage_names}, got {actual_stage_names}"
         )
-        for stage_name, prompt_version, model_name in stages:
+        # Stages that always produce semantic calls vs. those that may skip.
+        _STAGES_WITH_CALLS = {"outline", "draft", "citation_pass"}
+        for stage_name, prompt_version, model_name, call_id, artifact_id in stages:
             assert model_name == "", f"{stage_name} model_name must be empty"
             assert prompt_version == expected_prompt_version, (
                 f"{stage_name} prompt_version={prompt_version!r} != {expected_prompt_version!r}"
             )
+            if stage_name in _STAGES_WITH_CALLS:
+                assert call_id is not None, f"{stage_name} must link a semantic_call"
+                assert artifact_id is not None, (
+                    f"{stage_name} must link a semantic_artifact"
+                )
 
-        # Every semantic call must match the stage prompt version.
-        for stage, prompt_version, model in calls:
-            assert model == "", f"{stage} model must be empty"
-            assert prompt_version == expected_prompt_version, (
-                f"{stage} prompt_version={prompt_version!r} != {expected_prompt_version!r}"
-            )
-
-        # Verify exact linkage between stages and semantic calls.
+        # --- Verify semantic calls match stage identities ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT ss.stage_name, ss.semantic_call_id, ss.semantic_artifact_id,
@@ -1667,6 +1716,35 @@ def test_deterministic_prompt_version_matches_stage_and_call():
                 f"{stage_name} call prompt_version={call_pv!r} != {expected_prompt_version!r}"
             )
             assert call_model == "", f"{stage_name} call model={call_model!r} != ''"
+
+        # --- Verify each semantic artifact is valid ---
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT sa.id, sa.validation_status
+                   FROM semantic_artifacts sa
+                   JOIN synthesis_stages ss ON ss.semantic_artifact_id=sa.id
+                   WHERE ss.run_id=%s""",
+                (str(run_id),),
+            )
+            artifacts = cur.fetchall()
+        for art_id, art_status in artifacts:
+            assert art_status == "valid", (
+                f"artifact {art_id} must be valid, got {art_status}"
+            )
+
+        # --- Exercise terminal boundary: finish_run ---
+        finished = workflow.finish_run(status.external_id, outcome="satisfied")
+        assert finished.state == "completed"
+
+        # --- Fresh readback proves research_runs.state == "completed" ---
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT state, completed_at IS NOT NULL FROM research_runs WHERE id=%s",
+                (str(run_id),),
+            )
+            row = cur.fetchone()
+            assert row[0] == "completed"
+            assert row[1] is True
     finally:
         del os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"]
 
@@ -1679,8 +1757,14 @@ def test_deterministic_prompt_version_matches_stage_and_call():
 @_pg_skip
 def test_prompt_version_divergence_fails_terminal_completion():
     """A synthesis stage whose prompt_version diverges from its semantic call
-    must be rejected at terminal completion time. The stage is altered in-place
-    while the immutable semantic call remains unchanged."""
+    must be rejected at terminal completion time. The test executes real
+    production synthesis, records the immutable call's prompt_version, then
+    mutates only the draft stage record before invoking the terminal gate.
+
+    The immutable semantic call is left untouched; only the stage row is
+    corrupted to demonstrate that one side of the persisted authority chain
+    was tampered with and terminal validation catches it.
+    """
     import os
 
     os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
@@ -1689,7 +1773,7 @@ def test_prompt_version_divergence_fails_terminal_completion():
         from dataclasses import replace
 
         from completion_provenance_test_support import (
-            seed_authoritative_completion_provenance,
+            seed_completion_prerequisites,
         )
         from research_store.config import StoreConfig
         from research_store.container import (
@@ -1699,6 +1783,7 @@ def test_prompt_version_divergence_fails_terminal_completion():
         )
         from research_store.domain import IngestRequest
         from research_store.postgres import connect, migrate
+        from research_store.semantic_service import SemanticCallService
         from research_store.workflow_service import WorkflowBoundaryError
 
         migrate(_PG_DSN)
@@ -1706,99 +1791,184 @@ def test_prompt_version_divergence_fails_terminal_completion():
             StoreConfig.from_env(),
             database_url=_PG_DSN,
             blob_root=Path("/tmp/arc17-pg-test-blobs"),
-            qdrant_collection=f"arc17_{uuid4().hex}",
+            qdrant_collection=f"arc17-div-{uuid4().hex}",
             embedding_dimension=4,
         )
-
-        def _seed_and_finalize(corpus, runs, external_id, execution_mode):
-            status = runs.create(
-                "arc17 test run",
-                external_id,
-                execution_mode=execution_mode,
-            )
-            manifest = corpus.ingest_batch(
-                f"fc-{uuid4().hex}",
-                "scrape",
-                [
-                    IngestRequest(
-                        f"https://example/{uuid4().hex}",
-                        b"# Test evidence\n\nPostgreSQL owns authoritative provenance.",
-                    )
-                ],
-                research_run_external_id=external_id,
-            )
-            assert manifest["failure_count"] == 0
-            revision = status.lifecycle_revision
-            for next_state in (
-                "planning",
-                "corpus_review",
-                "acquiring",
-                "extracting",
-                "indexing",
-            ):
-                runs.transition(
-                    status.id,
-                    next_state,
-                    expected_revision=revision,
-                    idempotency_key=f"test:{external_id}:{next_state}",
-                    actor_type="integration-test",
-                )
-                revision += 1
-            with connect(_PG_DSN) as conn, conn.cursor() as cursor:
-                cursor.execute(
-                    """UPDATE index_jobs job
-                          SET status='complete', completed_at=now(), error=NULL,
-                              lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL
-                         FROM embedding_manifests manifest
-                         JOIN chunks chunk ON chunk.id=manifest.chunk_id
-                         JOIN documents document ON document.id=chunk.document_id
-                         JOIN research_run_assets asset
-                           ON asset.snapshot_id=document.snapshot_id
-                        WHERE job.manifest_id=manifest.id AND asset.run_id=%s""",
-                    (status.id,),
-                )
-                assert cursor.rowcount > 0
-                cursor.execute(
-                    """UPDATE embedding_manifests manifest
-                          SET index_status='complete', indexed_at=now(), error=NULL
-                         FROM chunks chunk
-                         JOIN documents document ON document.id=chunk.document_id
-                         JOIN research_run_assets asset
-                           ON asset.snapshot_id=document.snapshot_id
-                        WHERE manifest.chunk_id=chunk.id AND asset.run_id=%s""",
-                    (status.id,),
-                )
-            workflow = build_workflow_operation_service(config)
-            workflow._finalize_indexing(
-                external_id,
-                f"test:{external_id}:finalize-indexing",
-            )
-            status = runs.status(run_id=status.id)
-            assert status.state == "coverage_review"
-            return runs, status, workflow
 
         runs = build_run_service(config)
         corpus = build_service(config)
         external_id = f"arc17-diverge-pv-{uuid4().hex}"
-        runs, status, _workflow = _seed_and_finalize(
-            corpus, runs, external_id, "deterministic_debug"
-        )
-        seed_authoritative_completion_provenance(runs.uow_factory, status.id)
 
-        # Introduce divergence: alter draft stage prompt_version only.
+        # --- Build run through normal services to coverage_review ---
+        status = runs.create(
+            "arc17 divergence test",
+            external_id,
+            execution_mode="deterministic_debug",
+        )
+        manifest = corpus.ingest_batch(
+            f"fc-{uuid4().hex}",
+            "scrape",
+            [
+                IngestRequest(
+                    f"https://example/{uuid4().hex}",
+                    b"# Test evidence\n\nPostgreSQL owns authoritative provenance.",
+                )
+            ],
+            research_run_external_id=external_id,
+        )
+        assert manifest["failure_count"] == 0
+        revision = status.lifecycle_revision
+        for next_state in (
+            "planning",
+            "corpus_review",
+            "acquiring",
+            "extracting",
+            "indexing",
+        ):
+            runs.transition(
+                status.id,
+                next_state,
+                expected_revision=revision,
+                idempotency_key=f"test:{external_id}:{next_state}",
+                actor_type="integration-test",
+            )
+            revision += 1
+        with connect(_PG_DSN) as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """UPDATE index_jobs job
+                      SET status='complete', completed_at=now(), error=NULL,
+                          lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL
+                     FROM embedding_manifests manifest
+                     JOIN chunks chunk ON chunk.id=manifest.chunk_id
+                     JOIN documents document ON document.id=chunk.document_id
+                     JOIN research_run_assets asset
+                       ON asset.snapshot_id=document.snapshot_id
+                    WHERE job.manifest_id=manifest.id AND asset.run_id=%s""",
+                (status.id,),
+            )
+            assert cursor.rowcount > 0
+            cursor.execute(
+                """UPDATE embedding_manifests manifest
+                      SET index_status='complete', indexed_at=now(), error=NULL
+                     FROM chunks chunk
+                     JOIN documents document ON document.id=chunk.document_id
+                     JOIN research_run_assets asset
+                       ON asset.snapshot_id=document.snapshot_id
+                    WHERE manifest.chunk_id=chunk.id AND asset.run_id=%s""",
+                (status.id,),
+            )
+        workflow = build_workflow_operation_service(config)
+        workflow._finalize_indexing(
+            external_id,
+            f"test:{external_id}:finalize-indexing",
+        )
+        status = runs.status(run_id=status.id)
+        assert status.state == "coverage_review"
+        run_id = status.id
+
+        # --- Establish non-synthesis prerequisites ---
+        seed_completion_prerequisites(runs.uow_factory, run_id)
+
+        # --- Execute real deterministic synthesis ---
+        from budget_policy import DEFAULT_POLICY
+        from research_store.evidence import EvidenceService
+
+        semantic = SemanticCallService(runs.uow_factory)
+        evidence = EvidenceService(runs.uow_factory, budget_policy=DEFAULT_POLICY)
+        service = LocalSynthesisService(
+            semantic_service=semantic,
+            evidence_service=evidence,
+            config=config,
+        )
+
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="",
+        )
+        assert summary["overall_status"] == "completed"
+
+        # --- Record the immutable semantic call's prompt_version ---
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT sc.stage, sc.prompt_version, sc.model
+                   FROM semantic_calls sc
+                   JOIN synthesis_stages ss ON ss.run_id=sc.run_id AND ss.stage_name=sc.stage
+                   WHERE sc.run_id=%s AND ss.stage_name='draft'""",
+                (str(run_id),),
+            )
+            draft_call_row = cur.fetchone()
+            assert draft_call_row is not None
+            _, original_draft_pv, _ = draft_call_row
+            assert original_draft_pv == "synthesis-v1", (
+                f"immutable call must have canonical prompt_version, got {original_draft_pv!r}"
+            )
+
+        # --- Verify initial stage/call identities are consistent ---
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT ss.stage_name, ss.prompt_version, sc.prompt_version AS call_pv
+                   FROM synthesis_stages ss
+                   LEFT JOIN semantic_calls sc ON sc.id=ss.semantic_call_id
+                   WHERE ss.run_id=%s""",
+                (str(run_id),),
+            )
+            pre_mutation = cur.fetchall()
+        for stage_name, stage_pv, call_pv in pre_mutation:
+            if call_pv is not None:
+                assert stage_pv == call_pv, (
+                    f"pre-mutation: {stage_name} stage={stage_pv!r} != call={call_pv!r}"
+                )
+
+        # --- Mutate ONLY the draft stage prompt_version ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "UPDATE synthesis_stages SET prompt_version='divergent-v2' "
                 "WHERE run_id=%s AND stage_name='draft'",
-                (str(status.id),),
+                (str(run_id),),
             )
             assert cur.rowcount == 1
 
-        workflow = build_workflow_operation_service(config)
+        # --- Prove immutable semantic call is untouched ---
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT prompt_version FROM semantic_calls "
+                "WHERE run_id=%s AND stage='draft'",
+                (str(run_id),),
+            )
+            call_row = cur.fetchone()
+            assert call_row is not None
+            assert call_row[0] == "synthesis-v1", (
+                "immutable semantic call must remain at synthesis-v1"
+            )
+
+        # --- Prove stage now carries the divergent value ---
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT prompt_version FROM synthesis_stages "
+                "WHERE run_id=%s AND stage_name='draft'",
+                (str(run_id),),
+            )
+            stage_row = cur.fetchone()
+            assert stage_row is not None
+            assert stage_row[0] == "divergent-v2", (
+                "mutated stage must carry divergent prompt_version"
+            )
+
+        # --- Invoke real terminal completion: must reject ---
         with pytest.raises(
             WorkflowBoundaryError, match="prompt version does not match"
         ):
             workflow.finish_run(status.external_id, outcome="satisfied")
+
+        # --- Post-failure readback: run must NOT be completed ---
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute("SELECT state FROM research_runs WHERE id=%s", (str(run_id),))
+            row = cur.fetchone()
+            assert row is not None
+            assert row[0] != "completed", (
+                "run must not transition to completed after rejected finish"
+            )
     finally:
         del os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"]
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID, uuid4
 
 from research_store.asset_promotion_models import _canonical_sha256, _member_payload
@@ -208,10 +209,14 @@ def _ensure_membership(uow, run_id: UUID):
         }
 
 
-def seed_authoritative_completion_provenance(
-    uow_factory, run_id: UUID
-) -> SeededCompletionProvenance:
-    """Persist one exact, reproducible PostgreSQL authority chain for a run."""
+def seed_completion_prerequisites(uow_factory, run_id: UUID) -> dict[str, Any]:
+    """Establish legitimate completion prerequisites without creating synthesis
+    stages, semantic calls, or semantic artifacts.
+
+    Returns a dict with:
+        membership_sha256, packet_revision, claim_id, chunk_id,
+        snapshot_id, passage_rows, execution_mode, provider, authority, model
+    """
     with uow_factory() as uow:
         membership = _ensure_membership(uow, run_id)
         chunk_id = membership["chunk_ids"][0]
@@ -301,164 +306,196 @@ def seed_authoritative_completion_provenance(
                 (packet_id, run_id, uuid4(), packet_revision, json.dumps(packet)),
             )
 
-            packet_ref = f"packet-{run_id}-r{packet_revision}"
-            prompt_version = "synthesis-v1"
-            draft_payload = {
-                "schema_version": "synthesis-draft-v1",
-                "run_id": str(run_id),
-                "evidence_packet_revision": packet_revision,
-                "report_sections": [
-                    {
-                        "section_id": "findings",
-                        "title": "Findings",
-                        "body": statement,
-                        "claim_references": [
-                            {
-                                "claim_id": str(claim_id),
-                                "passage_ids": [str(chunk_id)],
-                                "relationship": "supports",
-                            }
-                        ],
-                    }
-                ],
-                "unsupported_claims": [],
-                "limitations": [],
-            }
-            citation_payload = {
-                "schema_version": "synthesis-citation-pass-v1",
-                "run_id": str(run_id),
-                "evidence_packet_revision": packet_revision,
-                "draft_revision": 1,
-                "pass_status": "passed",
-                "validation_results": [
-                    {
-                        "section_id": "findings",
-                        "claim_id": str(claim_id),
-                        "passage_ids": [str(chunk_id)],
-                        "status": "valid",
-                        "issue": "",
-                    }
-                ],
-                "invented_citations": [],
-                "unsupported_claims": [],
-                "entailment_mismatches": [],
-            }
+    return {
+        "membership_sha256": membership["membership_sha256"],
+        "packet_revision": packet_revision,
+        "claim_id": claim_id,
+        "chunk_id": chunk_id,
+        "snapshot_id": snapshot_id,
+        "passage_rows": passage_rows,
+        "execution_mode": execution_mode,
+        "provider": provider,
+        "authority": authority,
+        "model": model,
+    }
 
-            semantic = {}
-            for stage_name, schema_name, payload in (
-                ("draft", "synthesis-draft-v1", draft_payload),
-                ("citation_pass", "synthesis-citation-pass-v1", citation_payload),
-            ):
-                request = {
-                    "authority": authority,
-                    "schema_name": schema_name,
-                    "schema_version": 1,
-                    "input_artifact_ids": [packet_ref],
-                    "policy_version": "issue-218-test-v1",
+
+def seed_authoritative_completion_provenance(
+    uow_factory, run_id: UUID
+) -> SeededCompletionProvenance:
+    """Persist one exact, reproducible PostgreSQL authority chain for a run.
+
+    Reuses :func:`seed_completion_prerequisites` for prerequisite setup, then
+    adds pre-seeded semantic calls, artifacts, and completed synthesis stages
+    for tests that intentionally exercise the terminal guard with a seeded
+    authority chain.
+    """
+    prereq = seed_completion_prerequisites(uow_factory, run_id)
+    chunk_id = prereq["chunk_id"]
+    packet_revision = prereq["packet_revision"]
+    claim_id = prereq["claim_id"]
+    provider = prereq["provider"]
+    authority = prereq["authority"]
+    model = prereq["model"]
+    prompt_version = "synthesis-v1"
+
+    with uow_factory() as uow, uow.connection.cursor() as cursor:
+        draft_payload = {
+            "schema_version": "synthesis-draft-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": packet_revision,
+            "report_sections": [
+                {
+                    "section_id": "findings",
+                    "title": "Findings",
+                    "body": "Persisted PostgreSQL evidence supports authoritative completion.",
+                    "claim_references": [
+                        {
+                            "claim_id": str(claim_id),
+                            "passage_ids": [str(chunk_id)],
+                            "relationship": "supports",
+                        }
+                    ],
                 }
-                call_id = uuid4()
-                cursor.execute(
-                    """INSERT INTO semantic_calls(
-                           id,run_id,stage,provider,model,model_revision,
-                           prompt_version,input_sha256,request,response_metadata,
-                           status,idempotency_key,started_at,completed_at)
-                         VALUES(%s,%s,%s,%s,%s,'',%s,%s,%s::jsonb,'{}'::jsonb,
-                                'complete',%s,now(),now())""",
-                    (
-                        call_id,
-                        run_id,
-                        stage_name,
-                        provider,
-                        model,
-                        prompt_version,
-                        _json_sha256(request),
-                        json.dumps(request),
-                        f"issue-218:{run_id}:{packet_revision}:{stage_name}:call",
-                    ),
-                )
-                artifact_id = uuid4()
-                content_hash = _json_sha256(payload)
-                cursor.execute(
-                    """INSERT INTO semantic_artifacts(
-                           id,run_id,semantic_call_id,artifact_type,schema_name,
-                           schema_version,payload,content_sha256,validation_status,
-                           validation_errors,idempotency_key)
-                         VALUES(%s,%s,%s,%s,%s,1,%s::jsonb,%s,'valid',
-                                '[]'::jsonb,%s)""",
-                    (
-                        artifact_id,
-                        run_id,
-                        call_id,
-                        stage_name,
-                        schema_name,
-                        json.dumps(payload),
-                        content_hash,
-                        f"issue-218:{run_id}:{packet_revision}:{stage_name}:artifact",
-                    ),
-                )
-                semantic[stage_name] = (call_id, artifact_id, payload, content_hash)
+            ],
+            "unsupported_claims": [],
+            "limitations": [],
+        }
+        citation_payload = {
+            "schema_version": "synthesis-citation-pass-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": packet_revision,
+            "draft_revision": 1,
+            "pass_status": "passed",
+            "validation_results": [
+                {
+                    "section_id": "findings",
+                    "claim_id": str(claim_id),
+                    "passage_ids": [str(chunk_id)],
+                    "status": "valid",
+                    "issue": "",
+                }
+            ],
+            "invented_citations": [],
+            "unsupported_claims": [],
+            "entailment_mismatches": [],
+        }
 
-            report_hash = _validation_report_sha256(citation_payload)
-            validation_artifact = {
-                "report_hash": report_hash,
-                "current_packet_revision": packet_revision,
-                "stale_packet": False,
-                "validation_status": "valid",
-                "is_complete": True,
-                "claim_manifest": [
-                    {
-                        "claim_id": str(claim_id),
-                        "statement": statement,
-                        "resolution": "supported",
-                        "cited_passage_ids": [str(chunk_id)],
-                        "binding_relationship": "supports",
-                        "issues": [],
-                    }
-                ],
-                "validation_errors_count": 0,
-                "validation_warnings_count": 0,
-                "summary": "All claims supported.",
+        semantic = {}
+        for stage_name, schema_name, payload in (
+            ("draft", "synthesis-draft-v1", draft_payload),
+            ("citation_pass", "synthesis-citation-pass-v1", citation_payload),
+        ):
+            request = {
+                "authority": authority,
+                "schema_name": schema_name,
+                "schema_version": 1,
+                "input_artifact_ids": [f"packet-{run_id}-r{packet_revision}"],
+                "policy_version": "issue-218-test-v1",
             }
-            stage_values = {
-                "outline": (None, None, {"outline_sections": []}),
-                "binding": (None, None, {"new_packet_revision": packet_revision}),
-                "draft": semantic["draft"][:3],
-                "citation_pass": semantic["citation_pass"][:3],
-                "validation": (None, None, validation_artifact),
-            }
-            for stage_name, (call_id, artifact_id, artifact) in stage_values.items():
-                cursor.execute(
-                    """INSERT INTO synthesis_stages(
-                           id,run_id,stage_name,stage_status,semantic_call_id,
-                           semantic_artifact_id,evidence_packet_revision,model_name,
-                           prompt_version,schema_version,artifact,error,attempts,
-                           created_at,updated_at)
-                         VALUES(%s,%s,%s,'completed',%s,%s,%s,%s,%s,1,
-                                %s::jsonb,NULL,1,now(),now())
-                         ON CONFLICT(run_id,stage_name) DO UPDATE SET
-                           stage_status=EXCLUDED.stage_status,
-                           semantic_call_id=EXCLUDED.semantic_call_id,
-                           semantic_artifact_id=EXCLUDED.semantic_artifact_id,
-                           evidence_packet_revision=EXCLUDED.evidence_packet_revision,
-                           model_name=EXCLUDED.model_name,
-                           prompt_version=EXCLUDED.prompt_version,
-                           schema_version=EXCLUDED.schema_version,
-                           artifact=EXCLUDED.artifact,error=NULL,updated_at=now()""",
-                    (
-                        uuid4(),
-                        run_id,
-                        stage_name,
-                        call_id,
-                        artifact_id,
-                        packet_revision,
-                        model,
-                        prompt_version,
-                        json.dumps(artifact),
-                    ),
-                )
+            call_id = uuid4()
+            cursor.execute(
+                """INSERT INTO semantic_calls(
+                       id,run_id,stage,provider,model,model_revision,
+                       prompt_version,input_sha256,request,response_metadata,
+                       status,idempotency_key,started_at,completed_at)
+                     VALUES(%s,%s,%s,%s,%s,'',%s,%s,%s::jsonb,'{}'::jsonb,
+                            'complete',%s,now(),now())""",
+                (
+                    call_id,
+                    run_id,
+                    stage_name,
+                    provider,
+                    model,
+                    prompt_version,
+                    _json_sha256(request),
+                    json.dumps(request),
+                    f"issue-218:{run_id}:{packet_revision}:{stage_name}:call",
+                ),
+            )
+            artifact_id = uuid4()
+            content_hash = _json_sha256(payload)
+            cursor.execute(
+                """INSERT INTO semantic_artifacts(
+                       id,run_id,semantic_call_id,artifact_type,schema_name,
+                       schema_version,payload,content_sha256,validation_status,
+                       validation_errors,idempotency_key)
+                     VALUES(%s,%s,%s,%s,%s,1,%s::jsonb,%s,'valid',
+                            '[]'::jsonb,%s)""",
+                (
+                    artifact_id,
+                    run_id,
+                    call_id,
+                    stage_name,
+                    schema_name,
+                    json.dumps(payload),
+                    content_hash,
+                    f"issue-218:{run_id}:{packet_revision}:{stage_name}:artifact",
+                ),
+            )
+            semantic[stage_name] = (call_id, artifact_id, payload, content_hash)
+
+        report_hash = _validation_report_sha256(citation_payload)
+        validation_artifact = {
+            "report_hash": report_hash,
+            "current_packet_revision": packet_revision,
+            "stale_packet": False,
+            "validation_status": "valid",
+            "is_complete": True,
+            "claim_manifest": [
+                {
+                    "claim_id": str(claim_id),
+                    "statement": "Persisted PostgreSQL evidence supports authoritative completion.",
+                    "resolution": "supported",
+                    "cited_passage_ids": [str(chunk_id)],
+                    "binding_relationship": "supports",
+                    "issues": [],
+                }
+            ],
+            "validation_errors_count": 0,
+            "validation_warnings_count": 0,
+            "summary": "All claims supported.",
+        }
+        stage_values = {
+            "outline": (None, None, {"outline_sections": []}),
+            "binding": (None, None, {"new_packet_revision": packet_revision}),
+            "draft": semantic["draft"][:3],
+            "citation_pass": semantic["citation_pass"][:3],
+            "validation": (None, None, validation_artifact),
+        }
+        for stage_name, (call_id, artifact_id, artifact) in stage_values.items():
+            cursor.execute(
+                """INSERT INTO synthesis_stages(
+                       id,run_id,stage_name,stage_status,semantic_call_id,
+                       semantic_artifact_id,evidence_packet_revision,model_name,
+                       prompt_version,schema_version,artifact,error,attempts,
+                       created_at,updated_at)
+                     VALUES(%s,%s,%s,'completed',%s,%s,%s,%s,%s,1,
+                            %s::jsonb,NULL,1,now(),now())
+                     ON CONFLICT(run_id,stage_name) DO UPDATE SET
+                       stage_status=EXCLUDED.stage_status,
+                       semantic_call_id=EXCLUDED.semantic_call_id,
+                       semantic_artifact_id=EXCLUDED.semantic_artifact_id,
+                       evidence_packet_revision=EXCLUDED.evidence_packet_revision,
+                       model_name=EXCLUDED.model_name,
+                       prompt_version=EXCLUDED.prompt_version,
+                       schema_version=EXCLUDED.schema_version,
+                       artifact=EXCLUDED.artifact,error=NULL,updated_at=now()""",
+                (
+                    uuid4(),
+                    run_id,
+                    stage_name,
+                    call_id,
+                    artifact_id,
+                    packet_revision,
+                    model,
+                    prompt_version,
+                    json.dumps(artifact),
+                ),
+            )
 
     return SeededCompletionProvenance(
-        source_manifest_sha256=membership["membership_sha256"],
+        source_manifest_sha256=prereq["membership_sha256"],
         answer_sha256=semantic["draft"][3],
         evidence_packet_revision=packet_revision,
         draft_artifact_id=semantic["draft"][1],
