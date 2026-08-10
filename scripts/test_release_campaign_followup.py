@@ -279,9 +279,7 @@ def test_citation_model_supplies_verdicts_but_persisted_artifact_has_exact_ids(
             schema=kwargs["schema"],
             input_token_estimate=10,
         )
-        verdict = {
-            "validation_results": [{"status": "valid", "issue": ""}]
-        }
+        verdict = {"validation_results": [{"status": "valid", "issue": ""}]}
         kwargs["post_validate"](verdict)
         artifact_ids = persistence.finish_model_call(
             context,
@@ -395,7 +393,9 @@ def test_terminal_stage_completion_hydrates_authoritative_provenance(monkeypatch
         calls.append((run_id, for_update))
         return _PreparedProvenance()
 
-    monkeypatch.setattr(lifecycle_guard, "load_authoritative_completion_provenance", load)
+    monkeypatch.setattr(
+        lifecycle_guard, "load_authoritative_completion_provenance", load
+    )
     run_id = uuid4()
     result = service.complete(
         run_id,
