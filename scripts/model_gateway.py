@@ -366,6 +366,17 @@ def call_structured(
                         **envelope,
                     }
                 )
+                hit_output_limit = envelope.get(
+                    "finish_reason"
+                ) in LENGTH_FINISH_REASONS or (
+                    not content and envelope.get("reasoning_excerpt")
+                )
+                if hit_output_limit:
+                    last_error = (
+                        f"model output reached the {output_budget}-token output limit"
+                    )
+                    if expand_output_on_length:
+                        output_budget = min(output_budget * 2, 32768)
                 continue
             parsed = redact_sensitive(parsed)
             validation_errors = (
