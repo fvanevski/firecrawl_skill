@@ -1,15 +1,17 @@
 """Session-scoped test database setup for integration tests (B-3 fix).
 
 Applies the Alembic migration to the disposable test database before any
-integration test runs.  Integration tests are skipped automatically when
-RESEARCH_STORE_TEST_DATABASE_URL is not set — this fixture is a no-op in
-that case.
+integration test runs. Integration tests are skipped automatically when
+RESEARCH_STORE_TEST_DATABASE_URL is not set — this fixture is a no-op in that
+case.
+
+Qdrant-mutating tests use the qdrant_test_support plugin. A disposable
+PostgreSQL test DSN does not authorize mutation of the host Qdrant endpoint.
 """
 
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
 import sys
 from pathlib import Path
@@ -20,22 +22,14 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+pytest_plugins = ("qdrant_test_support",)
+
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
-_logger = logging.getLogger(__name__)
-
-# Track Qdrant collections created by the test suite for owned-resource cleanup.
-_test_collections: set[str] = set()
-
-
-@pytest.fixture(scope="session")
-def track_test_collection():
-    """Session fixture that tracks which Qdrant collections belong to tests."""
-    return _test_collections
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item):
-    """Clear guarded ledgers and Qdrant before legacy rebuild-test cleanup.
+    """Prepare the disposable recovery-test database before class setup.
 
     ``TestIndexRebuildRecovery.setup_method`` resets shared corpus/index rows
     with dependency-ordered ``DELETE`` statements. Production append-only and
@@ -44,11 +38,10 @@ def pytest_runtest_setup(item):
     class on the explicitly disposable integration database, truncate those
     ledgers before pytest invokes the class setup.
 
-    The class also assumes an empty projection for each method. PostgreSQL is
-    reset per method while the disposable Qdrant service is process-scoped, so
-    leaving prior collections behind makes a one-page test cleanup order
-    dependent. Clear all disposable Qdrant collections here to keep the two
-    authorities at the same test boundary rather than weakening orphan checks.
+    The recovery class also mutates Qdrant. It may run only when an exact
+    disposable Qdrant endpoint is explicitly authorized. This check happens
+    before ``setup_method`` so a host Qdrant can never be treated as scratch
+    state by the class cleanup path.
     """
     if (
         not TEST_DSN
@@ -57,33 +50,34 @@ def pytest_runtest_setup(item):
     ):
         return
 
+    from qdrant_test_support import require_disposable_qdrant_url
+
+    try:
+        require_disposable_qdrant_url()
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
+
     from research_store.postgres import connect
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        # Guard: skip truncation if schema hasn't been applied yet.
-        # The pytest_runtest_setup hook can fire before session fixtures run,
-        # so verify the target tables exist before attempting TRUNCATE.
+        # The hook can fire before session fixtures have applied migrations.
         cursor.execute(
-            """SELECT EXISTS (
-                SELECT FROM information_schema.tables
-                WHERE table_schema = 'public'
-                AND table_name IN (
+            """SELECT COUNT(*)
+                 FROM information_schema.tables
+                WHERE table_schema='public'
+                  AND table_name IN (
                     'claim_evidence_links','research_claims','evidence_packets',
                     'synthesis_stages','semantic_artifacts','semantic_calls',
                     'run_asset_promotion_events','run_asset_membership_members',
                     'indexing_checkpoint_observations','run_asset_membership_seals'
-                )
-            )"""
+                  )"""
         )
-        if not cursor.fetchone()[0]:
+        if int(cursor.fetchone()[0]) != 10:
             return
 
         # TRUNCATE does not fire the row-level append-only/terminal guards.
         # This hook is deliberately scoped to TestIndexRebuildRecovery and an
         # explicit disposable test DSN; it is not a production cleanup path.
-        # Clear completion-critical provenance first so the class's later
-        # DELETE FROM chunks/documents/assets cannot cascade into terminal
-        # claim/evidence rows. CASCADE handles the checkpoint membership FKs.
         cursor.execute(
             """TRUNCATE TABLE
                    claim_evidence_links,
@@ -104,16 +98,12 @@ def pytest_runtest_setup(item):
 def _apply_db_schema():
     """Apply Alembic migrations to the test database once per session.
 
-    Skipped when RESEARCH_STORE_TEST_DATABASE_URL is not set so that unit
-    tests continue to run without a database.
-
-    The migration target is "head" so that every integration test run
-    always executes against the latest schema.  The database must already
-    exist — only schema objects (tables, indexes, extensions) are created,
-    never the database itself.
+    Skipped when RESEARCH_STORE_TEST_DATABASE_URL is not set so unit tests
+    continue to run without a database. The database must already exist; only
+    schema objects are created.
     """
     if not TEST_DSN:
-        return  # No DB available; integration tests will self-skip via _integration()
+        return
 
     from research_store.postgres import migrate
 
@@ -124,63 +114,6 @@ def _apply_db_schema():
             f"Failed to apply Alembic migrations to test database: {exc}\n"
             f"DSN: {TEST_DSN[:40]}..."
         )
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _cleanup_test_qdrant_collections(track_test_collection):
-    """Delete only Qdrant collections owned by the test suite.
-
-    Tests must clean up resources they own, not enumerate/delete arbitrary
-    shared-Qdrant resources.  This fixture deletes exactly the collections
-    registered during the test session via ``track_test_collection``.
-    """
-    yield
-    if not TEST_DSN:
-        return
-    qdrant_url = os.environ.get("QDRANT_URL")
-    if not qdrant_url:
-        return
-    from research_store.config import StoreConfig
-    from research_store.qdrant import QdrantIndex
-
-    # Load production config to protect the exact production alias target.
-    try:
-        prod_config = StoreConfig.from_env()
-        production_collection = prod_config.physical_collection
-        # production_alias protected
-    except Exception:  # noqa: BLE001
-        production_collection = None
-
-    cleanup = QdrantIndex(
-        qdrant_url,
-        os.environ.get("QDRANT_API_KEY", ""),
-        "__test_cleanup__",
-        1,
-    )
-    try:
-        response = cleanup._request("GET", "/collections")
-        collections = response.get("result", {}).get("collections", [])
-        deleted = 0
-        for collection in collections:
-            name = collection.get("name")
-            if not name:
-                continue
-            # Never delete the production alias target regardless of ownership.
-            if name == production_collection:
-                _logger.info("preserving production collection %s", name)
-                continue
-            if name in track_test_collection:
-                try:
-                    cleanup.for_collection(name, 1).delete_collection()
-                    deleted += 1
-                    _logger.info("deleted test collection %s", name)
-                except Exception as exc:  # noqa: BLE001
-                    _logger.warning(
-                        "failed to delete test collection %s: %s", name, exc
-                    )
-        _logger.info("test cleanup: deleted %d collections", deleted)
-    except Exception as exc:  # noqa: BLE001
-        _logger.warning("test Qdrant cleanup failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +152,6 @@ def ensure_passage_and_snapshot_exist(dsn, passage_id, snapshot_id):
     source_id = uuid4()
 
     with connect(dsn) as conn, conn.cursor() as cur:
-        # 1. Create a source record (sources table)
         cur.execute(
             """INSERT INTO sources (id, canonical_url, source_type, registered_domain)
             VALUES (%s, %s, %s, %s)
@@ -231,8 +163,6 @@ def ensure_passage_and_snapshot_exist(dsn, passage_id, snapshot_id):
                 "example.com",
             ),
         )
-
-        # 2. Create an asset snapshot (asset_snapshots table)
         cur.execute(
             """INSERT INTO asset_snapshots
                 (id, source_id, requested_url, final_url, retrieved_at,
@@ -253,10 +183,6 @@ def ensure_passage_and_snapshot_exist(dsn, passage_id, snapshot_id):
                 "{}",
             ),
         )
-
-        # 3. Create a document (documents table) referencing the snapshot.
-        #    No ON CONFLICT clause — if the snapshot_id does not exist, the
-        #    FK constraint will raise, making test setup failures visible.
         cur.execute(
             """INSERT INTO documents
                 (id, snapshot_id, title, parser_name, parser_version,
@@ -273,11 +199,12 @@ def ensure_passage_and_snapshot_exist(dsn, passage_id, snapshot_id):
                 "{}",
             ),
         )
-
-        # 4. Create a chunk (chunks table) referencing the document
         cur.execute(
-            """INSERT INTO chunks (id, document_id, ordinal, text, content_sha256, token_count, chunker_name, chunker_version, tokenizer_name)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+            """INSERT INTO chunks
+                (id, document_id, ordinal, text, content_sha256, token_count,
+                 chunker_name, chunker_version, tokenizer_name)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING""",
             (
                 str(passage_id),
                 str(document_id),
@@ -295,12 +222,7 @@ def ensure_passage_and_snapshot_exist(dsn, passage_id, snapshot_id):
 
 @pytest.fixture(scope="session")
 def prepared_database_for_claims():
-    """Reset and migrate the test database to the current Alembic head.
-
-    Drops and recreates the public schema so every integration test starts
-    from a clean slate.  Migrates to the current head (not just 0017) so
-    that all tables required by downstream fixtures are present.
-    """
+    """Reset and migrate the test database to the current Alembic head."""
     from research_store.postgres import (
         connect,
         migrate,
@@ -313,8 +235,6 @@ def prepared_database_for_claims():
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("DROP SCHEMA public CASCADE")
         cur.execute("CREATE SCHEMA public")
-    # Migrates to the current Alembic head.
-    # The assertion confirms the migration returned a non-zero revision count.
     assert migrate(TEST_DSN) >= 1
 
 

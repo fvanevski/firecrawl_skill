@@ -113,6 +113,9 @@ jobs:
         env:
           RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_telemetry_test"
           RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_telemetry_test"
+          QDRANT_URL: "http://127.0.0.1:6333"
+          RESEARCH_STORE_TEST_QDRANT_URL: "http://127.0.0.1:6333"
+          RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET: "http://127.0.0.1:6333"
           PYTEST_JUNIT: ${{ runner.temp }}/pytest-${{ matrix.python-version }}.xml
           PYTEST_SKIP_REPORT: ${{ runner.temp }}/pytest-skips-${{ matrix.python-version }}.json
         run: |
@@ -130,6 +133,8 @@ jobs:
             scripts/test_workflow_service.py \
             scripts/test_budget_policy.py \
             scripts/test_index_runtime.py \
+            scripts/test_qdrant_authority.py \
+            scripts/test_arc17_qdrant_protection.py \
             scripts/test_index_census.py \
             scripts/test_index_drain.py \
             scripts/test_evidence_packet.py \
