@@ -569,8 +569,7 @@ def test_reconcile_fails_closed_when_required_alias_missing(tmp_path):
         assert result["ok"] is False
         assert any("activation drift" in item for item in result["discrepancies"])
         assert any(
-            "missing" in item or "absent" in item
-            for item in result["discrepancies"]
+            "missing" in item or "absent" in item for item in result["discrepancies"]
         )
     finally:
         _cleanup(seed)
