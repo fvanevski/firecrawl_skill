@@ -2062,17 +2062,18 @@ def _index_reconcile(config, repair=False):
                 discrepancies.append(f"Qdrant collection {collection_name}: {exc}")
                 definitions_with_discrepancies.add(def_id)
 
-    # Check cross-store activation drift: active PG definition + missing/wrong
-    # production alias must be reported as a discrepancy regardless of coverage.
+    # Check cross-store activation drift: any nonhealthy alias state is a
+    # discrepancy regardless of coverage. The authority helper intentionally
+    # leaves postgres_active_definition=None for no_active_definition and
+    # multiple_active_definitions; gating on it would suppress those states.
     alias_state = _qdrant_alias_state(config)
-    if (
-        alias_state["status"] != "healthy"
-        and alias_state["postgres_active_definition"] is not None
-    ):
+    if alias_state["status"] != "healthy":
         discrepancies.append(
-            f"activation drift: PostgreSQL active definition {alias_state['postgres_active_definition']} "
-            f"but {config.qdrant_alias} -> {alias_state['actual_required_alias_target'] or 'absent'} "
-            f"(expected -> {alias_state['expected_active_collection']})"
+            f"activation drift: {alias_state['actual']} "
+            f"(expected {alias_state['expected']})"
+        )
+        definitions_with_discrepancies.update(
+            alias_state.get("postgres_active_definitions", [])
         )
 
     # Check all definitions for manifest/job mismatches, even those without

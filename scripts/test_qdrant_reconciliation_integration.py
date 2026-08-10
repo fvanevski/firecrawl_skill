@@ -21,6 +21,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+from qdrant_test_support import delete_alias
 from research_store.asset_promotion_models import _canonical_sha256, _member_payload
 from research_store.cli import _index_build
 from research_store.config import StoreConfig
@@ -44,6 +45,8 @@ def _sha(text: str) -> str:
 
 
 def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
+    from research_store.postgres import connect
+
     token = uuid4().hex
     alias = f"reconcile_{token[:12]}"
     config = replace(
@@ -250,6 +253,9 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
                 "source_id": str(row[3]),
                 "domain": row[4],
                 "published_at": row[5].isoformat() if row[5] else None,
+                "parser_version": config.parser_version,
+                "normalization_version": config.normalization_version,
+                "chunker_version": config.chunker_version,
             },
         }
         for row in payload_rows
@@ -257,6 +263,17 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
     for start in range(0, len(points), 256):
         index.upsert(points[start : start + 256])
     index.switch_alias(config.qdrant_alias, definition["physical_collection"])
+
+    # Debug: check state after seeding
+    from research_store.postgres import connect
+
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id,lifecycle_status FROM index_definitions ORDER BY created_at"
+        )
+        defs = cur.fetchall()
+    with open("/tmp/after_seed.txt", "w") as _f:
+        _f.write(f"After seed: {[(str(d[0]), d[1]) for d in defs]}\n")
 
     return {
         "config": config,
@@ -273,6 +290,27 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
 def _cleanup(seed):
     with suppress(Exception):
         seed["index"].delete_collection()
+
+
+def _reset_active_definitions():
+    """Reset all index definitions to 'building' to prevent test pollution."""
+    from research_store.postgres import connect
+
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        cur.execute("SELECT id,lifecycle_status FROM index_definitions")
+        before = cur.fetchall()
+        cur.execute("UPDATE index_definitions SET lifecycle_status='building'")
+        print(
+            f"_reset_active_definitions: resetting {len(before)} defs",
+            file=__import__("sys").stderr,
+        )
+        # Verify
+        cur.execute("SELECT id,lifecycle_status FROM index_definitions")
+        after = cur.fetchall()
+        print(
+            f"_reset_active_definitions: after={[(str(d[0]), d[1]) for d in after]}",
+            file=__import__("sys").stderr,
+        )
 
 
 def test_reconcile_audited_1376_exact_membership(tmp_path):
@@ -294,6 +332,7 @@ def test_reconcile_audited_1376_exact_membership(tmp_path):
         assert result["qdrant"]["payload_scan"]["mismatch_count"] == 0
     finally:
         _cleanup(seed)
+        _reset_active_definitions()
 
 
 def test_reconcile_missing_and_orphaned_points(tmp_path):
@@ -317,6 +356,7 @@ def test_reconcile_missing_and_orphaned_points(tmp_path):
         assert orphan_id in result["qdrant"]["definition_coverage"]["orphaned_ids"]
     finally:
         _cleanup(seed)
+        _reset_active_definitions()
 
 
 def test_reconcile_detects_real_payload_drift_without_membership_gap(tmp_path):
@@ -334,6 +374,7 @@ def test_reconcile_detects_real_payload_drift_without_membership_gap(tmp_path):
         assert scan["mismatches"][0]["point_id"] == point["id"]
     finally:
         _cleanup(seed)
+        _reset_active_definitions()
 
 
 def test_reconcile_reports_alias_and_vector_schema_mismatch(tmp_path):
@@ -369,7 +410,8 @@ def test_reconcile_reports_alias_and_vector_schema_mismatch(tmp_path):
         assert vector_result["qdrant"]["schema"]["compatible"] is False
     finally:
         with suppress(Exception):
-            other.delete_collection()
+            delete_alias(other, "")  # no-op if no alias
+        other.delete_collection()
         _cleanup(seed)
 
 
@@ -385,6 +427,7 @@ def test_payload_indexes_are_typed_and_idempotent_on_real_qdrant(tmp_path):
         } == PAYLOAD_INDEX_SCHEMAS
     finally:
         _cleanup(seed)
+        _reset_active_definitions()
 
 
 def test_read_only_reconciliation_does_not_create_missing_payload_index(tmp_path):
@@ -411,6 +454,7 @@ def test_read_only_reconciliation_does_not_create_missing_payload_index(tmp_path
         assert after_repair[field]["compatible"] is True
     finally:
         _cleanup(seed)
+        _reset_active_definitions()
 
 
 def test_repair_refuses_to_repoint_alias_outside_activation_lifecycle(tmp_path):
@@ -430,5 +474,199 @@ def test_repair_refuses_to_repoint_alias_outside_activation_lifecycle(tmp_path):
         assert any("index-activate" in blocker for blocker in result["repair_blockers"])
     finally:
         with suppress(Exception):
-            other.delete_collection()
+            delete_alias(other, "")  # no-op if no alias
+        other.delete_collection()
         _cleanup(seed)
+
+
+# ---------------------------------------------------------------------------
+# ARC-17 regression: _index_reconcile() fail-closed for all nonhealthy alias
+# states.  These exercise the CLI reconciliation path directly (not
+# reconcile_run) so the cross-store activation-drift invariant is tested at
+# the boundary where doctor/CI consume it.
+# ---------------------------------------------------------------------------
+
+from research_store.cli import _index_reconcile
+
+
+def test_reconcile_fails_closed_when_no_pg_active_definition(tmp_path):
+    """Alias exists and collection is healthy, but no PostgreSQL definition is
+    active => reconciliation must fail with activation drift."""
+    seed = _seed_reconciliation_run(tmp_path, count=1)
+    try:
+        # Seed creates a definition in 'building' state. Leave it there — no
+        # activation — but the Qdrant alias already points at the collection.
+        # Debug: check aliases before reconcile
+        result = _index_reconcile(seed["config"])
+        assert result["ok"] is False
+        assert any("activation drift" in d for d in result["discrepancies"])
+        assert any(
+            "no PostgreSQL-active definition" in d for d in result["discrepancies"]
+        )
+    finally:
+        _cleanup(seed)
+        _reset_active_definitions()
+        _reset_active_definitions()
+
+
+def test_reconcile_fails_closed_on_multiple_pg_active_definitions(tmp_path):
+    """Two definitions both marked active while the alias targets one of them
+    => reconciliation must fail with activation drift identifying the conflict."""
+    seed = _seed_reconciliation_run(tmp_path, count=1)
+    try:
+        from research_store.cli import _index_build, _qdrant
+
+        # Build a second definition and mark it active as well.
+        config2 = replace(
+            seed["config"],
+            embedding_model=f"second-{uuid4().hex[:8]}",
+            qdrant_collection=f"arc17_second_{uuid4().hex[:8]}",
+        )
+        build2 = _index_build(config2)
+        def2_id = str(build2["index_definition"]["id"])
+        col2 = build2["index_definition"]["physical_collection"]
+
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests SET index_status='complete',
+                       indexed_at=now() WHERE index_definition_id=%s""",
+                (def2_id,),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                   WHERE index_definition_id=%s""",
+                (def2_id,),
+            )
+            # Force both definitions to 'active' — invalid by construction.
+            cur.execute(
+                "UPDATE index_definitions SET lifecycle_status='active' "
+                "WHERE id IN (%s, %s)",
+                (str(seed["definition"]["id"]), def2_id),
+            )
+
+        # Repoint the alias to the second collection so the alias resolves
+        # but two PG definitions are simultaneously active.
+        idx2 = _qdrant(config2, col2, config2.embedding_dimension, "Cosine")
+        idx2.switch_alias(seed["config"].qdrant_alias, col2)
+
+        # Debug: check aliases before reconcile
+        result = _index_reconcile(seed["config"])
+        assert result["ok"] is False
+        assert any("activation drift" in d for d in result["discrepancies"])
+        assert any(
+            "active definitions" in d and "exactly one" in d
+            for d in result["discrepancies"]
+        )
+    finally:
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            # Reset both definitions to building so they don't pollute
+            # subsequent tests that expect a single active definition.
+            cur.execute(
+                "UPDATE index_definitions SET lifecycle_status='building' "
+                "WHERE id IN (%s, %s)",
+                (str(seed["definition"]["id"]), str(build2["index_definition"]["id"])),
+            )
+        with suppress(Exception):
+            _cleanup(seed)
+        with suppress(Exception):
+            idx2.delete_collection()
+        _reset_active_definitions()
+
+
+def test_reconcile_fails_closed_when_required_alias_missing(tmp_path):
+    """One active PG definition + correct collection, but the required alias
+    is absent => reconciliation must fail with activation drift."""
+    seed = _seed_reconciliation_run(tmp_path, count=1)
+    try:
+        def_id = str(seed["definition"]["id"])
+        # Mark only this definition active; deactivate any others.
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE index_definitions SET lifecycle_status='building' "
+                "WHERE id != %s AND lifecycle_status='active'",
+                (def_id,),
+            )
+            cur.execute(
+                "UPDATE index_definitions SET lifecycle_status='active' WHERE id = %s",
+                (def_id,),
+            )
+
+        # Delete the alias so the configured production alias is absent.
+        alias = seed["config"].qdrant_alias
+        with suppress(Exception):
+            delete_alias(seed["index"], alias)
+
+        # Debug: check aliases before reconcile
+        result = _index_reconcile(seed["config"])
+        assert result["ok"] is False
+        assert any("activation drift" in d for d in result["discrepancies"])
+        assert any(
+            "missing" in d or "absent" in d or "missing_required_alias" in d
+            for d in result["discrepancies"]
+        )
+    finally:
+        _cleanup(seed)
+        _reset_active_definitions()
+
+
+def test_reconcile_fails_closed_when_required_alias_targets_wrong_collection(
+    tmp_path,
+):
+    """One active PG definition + correct collection, but the required alias
+    points at a different collection => reconciliation must fail."""
+    from research_store.postgres import connect
+
+    seed = _seed_reconciliation_run(tmp_path, count=1)
+    try:
+        from research_store.cli import _qdrant
+
+        # Mark the definition active directly.
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE index_definitions SET lifecycle_status='active' WHERE id = %s",
+                (str(seed["definition"]["id"]),),
+            )
+
+        # Point the alias at a wrong collection.
+        wrong_name = f"arc17_wrong_{uuid4().hex[:8]}"
+        wrong_idx = _qdrant(
+            seed["config"], wrong_name, seed["config"].embedding_dimension, "Cosine"
+        )
+        wrong_idx._request(
+            "PUT",
+            f"/collections/{wrong_name}",
+            {"vectors": {"dense": {"size": 4, "distance": "Cosine"}}},
+        )
+        wrong_idx.switch_alias(seed["config"].qdrant_alias, wrong_name)
+
+        # Debug: check aliases before reconcile
+        result = _index_reconcile(seed["config"])
+        assert result["ok"] is False
+        assert any("activation drift" in d for d in result["discrepancies"])
+        assert any(
+            "activation drift" in d and "expected" in d for d in result["discrepancies"]
+        )
+    finally:
+        with suppress(Exception):
+            wrong_idx.delete_collection()
+        _cleanup(seed)
+        _reset_active_definitions()
+
+
+def test_reconcile_passes_when_all_invariants_hold(tmp_path):
+    """Exactly one active PG definition + exact required alias target +
+    healthy coverage/schema => reconciliation passes."""
+    seed = _seed_reconciliation_run(tmp_path, count=1)
+    try:
+        # Mark the definition active directly; the alias was set during seed.
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE index_definitions SET lifecycle_status='active' WHERE lifecycle_status='building'"
+            )
+
+        result = _index_reconcile(seed["config"])
+        assert result["ok"] is True
+        assert result["discrepancies"] == []
+    finally:
+        _cleanup(seed)
+        _reset_active_definitions()
