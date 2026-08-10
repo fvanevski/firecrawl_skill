@@ -194,6 +194,16 @@
       "source_result": "pending"
     },
     {
+      "id": "corrective_defects",
+      "title": "ARC-17 corrective defects — transaction boundary and secret-scanner fixture",
+      "execution_phase": "disposable",
+      "command": "python -m pytest -q -p no:cacheprovider scripts/test_arc17_corrective_defects.py",
+      "expected_evidence": "stage-failure commits through UOW boundary; scanner-negative fixture uses runtime-constructed token",
+      "artifact": "gate-evidence/corrective_defects stdout+stderr digests",
+      "blocking": true,
+      "source_result": "pending"
+    },
+    {
       "id": "verifier_zero_object",
       "title": "Verifier zero-object inconclusive behavior",
       "execution_phase": "disposable",

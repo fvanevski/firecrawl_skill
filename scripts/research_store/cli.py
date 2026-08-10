@@ -4126,12 +4126,12 @@ def main(argv=None):
         # NOTE: config.embedding_model is an embedding model name (e.g.
         # "text-embedding-3-small") which is NOT a suitable synthesis model.
         # The user is expected to pass --model explicitly; the fallback is
-        # provided only to avoid a complete failure when no model is given.
+        # config.generative_model, the authoritative synthesis identity.
         try:
             summary = report_service.run_synthesis(
                 run_id=run_id,
                 packet_revision=packet_revision,
-                model_name=args.model or config.embedding_model,
+                model_name=args.model or config.generative_model,
                 prompt_version=args.prompt_version,
                 allow_commercial_fallback=allow_commercial,
             )
@@ -4196,12 +4196,13 @@ def main(argv=None):
 
         # NOTE: config.embedding_model is an embedding model name (e.g.
         # "text-embedding-3-small") which is NOT a suitable synthesis model.
-        # The user is expected to pass --model explicitly.
+        # The user is expected to pass --model explicitly; the fallback is
+        # config.generative_model, the authoritative synthesis identity.
         try:
             summary = report_service.resume_failed_synthesis(
                 run_id=run_id,
                 packet_revision=packet_revision,
-                model_name=args.model or config.embedding_model,
+                model_name=args.model or config.generative_model,
                 prompt_version=args.prompt_version,
                 allow_commercial_fallback=allow_commercial,
             )
