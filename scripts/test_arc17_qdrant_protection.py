@@ -186,3 +186,61 @@ def test_owned_cleanup_does_not_enumerate_or_delete_unrelated_collection(tmp_pat
     finally:
         _cleanup(owned_index, config.qdrant_alias)
         _cleanup(unrelated_index)
+
+
+def test_probe_index_worker_contains_capture_and_preservation_wiring():
+    """Source-level assertion that probe_index_worker wires both hooks."""
+    import inspect
+
+    from research_store import preflight
+
+    source = inspect.getsource(preflight.probe_index_worker)
+    assert "capture_configured_projection_state" in source
+    assert "require_configured_projection_preserved" in source
+    assert "projection_before" in source
+    assert "Qdrant projection preservation failed" in source
+
+
+def test_preservation_failure_propagates_as_preflight_failure(monkeypatch, tmp_path):
+    """A projection-preservation failure becomes a preflight failure, not swallowed."""
+    from research_store import preflight
+
+    fake_error = RuntimeError("active Qdrant projection identity changed during probe")
+
+    def fake_capture(*_args, **_kwargs):
+        return {
+            "required_alias_name": "test_alias",
+            "target_collection": "test_collection",
+            "postgres_active_definition": "def-1",
+            "dimension": 4,
+            "distance_metric": "Cosine",
+            "schema_actual": {"size": 4, "distance": "Cosine"},
+            "schema_expected": {"size": 4, "distance": "Cosine"},
+            "points_count": 0,
+            "sample_ids": (),
+        }
+
+    monkeypatch.setattr(preflight, "capture_configured_projection_state", fake_capture)
+    monkeypatch.setattr(
+        preflight,
+        "require_configured_projection_preserved",
+        lambda *_a, **_k: (_ for _ in []).throw(fake_error),
+    )
+    monkeypatch.setattr(
+        preflight,
+        "_worker_heartbeat_is_fresh",
+        lambda *_a, **_k: True,
+    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("RESEARCH_STORE_TEST_QDRANT_URL", "http://127.0.0.1:6335")
+    monkeypatch.setenv(
+        "RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET", "http://127.0.0.1:6335"
+    )
+
+    with pytest.raises(RuntimeError, match="Qdrant projection preservation failed"):
+        preflight.probe_index_worker(
+            database_url="postgresql://localhost/test",
+            blob_root=tmp_path / "blobs",
+            qdrant_url="http://127.0.0.1:6335",
+            qdrant_api_key="",
+        )

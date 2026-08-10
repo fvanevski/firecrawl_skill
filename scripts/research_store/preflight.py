@@ -20,6 +20,10 @@ from .container import build_service
 from .domain import IngestRequest
 from .indexing import OpenAICompatibleEmbedder
 from .qdrant import QdrantIndex
+from .qdrant_authority import (
+    capture_configured_projection_state,
+    require_configured_projection_preserved,
+)
 from .resource_sampler import ResourceSampler
 from .retrieval import CohereCompatibleReranker
 from .valkey_queue import ValkeyQueue
@@ -475,6 +479,7 @@ def probe_index_worker(
         qdrant_url=qdrant_url,
         qdrant_api_key=qdrant_api_key,
     )
+    projection_before = capture_configured_projection_state(config)
     probe_id = uuid4()
     service = build_service(config)
     request = IngestRequest(
@@ -673,6 +678,11 @@ def probe_index_worker(
                 blob_path.unlink(missing_ok=True)
             except Exception as exc:  # noqa: BLE001
                 cleanup_errors.append(f"blob cleanup failed: {exc}")
+
+    try:
+        require_configured_projection_preserved(config, projection_before)
+    except Exception as exc:  # noqa: BLE001
+        cleanup_errors.append(f"Qdrant projection preservation failed: {exc}")
 
     if primary_error is not None:
         detail = f"; cleanup: {'; '.join(cleanup_errors)}" if cleanup_errors else ""

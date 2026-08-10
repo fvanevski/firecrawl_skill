@@ -25,6 +25,7 @@ from .indexing import IndexWorker, OpenAICompatibleEmbedder
 from .normalization import NORMALIZATION_VERSION
 from .postgres import PostgresUnitOfWork, connect
 from .qdrant import QdrantIndex
+from .qdrant_authority import read_required_alias_state
 from .retrieval import CohereCompatibleReranker
 from .service import dumps, json_default
 from .valkey_queue import ValkeyQueue
@@ -1162,69 +1163,7 @@ def _schema_state(config):
 
 
 def _qdrant_alias_state(config):
-    """Derive the authoritative alias state for cross-store drift detection.
-
-    Returns a dict with:
-      - postgres_active_definition: id of the PostgreSQL-active index definition, or None
-      - required_alias_name: config.qdrant_alias
-      - actual_required_alias_target: collection name the production alias targets, or None
-      - expected_active_collection: physical_collection of the active PG definition
-      - status: one of "healthy", "missing_required_alias", "wrong_required_alias_target"
-      - expected: human-readable description of the expected state
-      - actual: human-readable description of the actual state
-    """
-    aliases = _qdrant(config).list_aliases()
-    with _db(config) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT id, physical_collection FROM index_definitions WHERE lifecycle_status='active' LIMIT 1"
-        )
-        active_row = cur.fetchone()
-    postgres_active_definition = str(active_row[0]) if active_row else None
-    expected_active_collection = active_row[1] if active_row else None
-    actual_required_alias_target = aliases.get(config.qdrant_alias)
-
-    if postgres_active_definition is None:
-        return {
-            "postgres_active_definition": None,
-            "required_alias_name": config.qdrant_alias,
-            "actual_required_alias_target": actual_required_alias_target,
-            "expected_active_collection": None,
-            "status": "no_active_definition",
-            "expected": "no PostgreSQL-active index definition",
-            "actual": f"alias {config.qdrant_alias} -> {actual_required_alias_target or 'none'}",
-        }
-
-    if actual_required_alias_target is None:
-        return {
-            "postgres_active_definition": postgres_active_definition,
-            "required_alias_name": config.qdrant_alias,
-            "actual_required_alias_target": None,
-            "expected_active_collection": expected_active_collection,
-            "status": "missing_required_alias",
-            "expected": f"{config.qdrant_alias} -> {expected_active_collection}",
-            "actual": f"{config.qdrant_alias} is absent",
-        }
-
-    if actual_required_alias_target != expected_active_collection:
-        return {
-            "postgres_active_definition": postgres_active_definition,
-            "required_alias_name": config.qdrant_alias,
-            "actual_required_alias_target": actual_required_alias_target,
-            "expected_active_collection": expected_active_collection,
-            "status": "wrong_required_alias_target",
-            "expected": f"{config.qdrant_alias} -> {expected_active_collection}",
-            "actual": f"{config.qdrant_alias} -> {actual_required_alias_target}",
-        }
-
-    return {
-        "postgres_active_definition": postgres_active_definition,
-        "required_alias_name": config.qdrant_alias,
-        "actual_required_alias_target": actual_required_alias_target,
-        "expected_active_collection": expected_active_collection,
-        "status": "healthy",
-        "expected": f"{config.qdrant_alias} -> {expected_active_collection}",
-        "actual": f"{config.qdrant_alias} -> {actual_required_alias_target}",
-    }
+    return read_required_alias_state(config)
 
 
 def _resolve_run_id(config, external_id):

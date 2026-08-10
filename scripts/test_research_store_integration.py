@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
-from typing import ClassVar
 from uuid import UUID, uuid4
 
 import pytest
@@ -57,7 +56,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def service(tmp_path, prepared_database):
+def service(tmp_path, prepared_database, track_test_collection):
     migrate(TEST_DSN)
     config = replace(
         StoreConfig.from_env(),
@@ -67,6 +66,7 @@ def service(tmp_path, prepared_database):
         embedding_dimension=4,
         embedding_model=f"test-{uuid4().hex[:8]}",
     )
+    track_test_collection.add(config.physical_collection)
     return build_service(config)
 
 
@@ -4179,8 +4179,6 @@ class TestIndexRebuildRecovery:
     - alias cutover only happens after complete verification
     """
 
-    _owned_collections: ClassVar[set[str]] = set()
-
     def setup_method(self):
         """Truncate test data between tests to avoid accumulation."""
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
@@ -4205,42 +4203,10 @@ class TestIndexRebuildRecovery:
             cur.execute("DELETE FROM sources;")
             conn.commit()
 
-        import contextlib
-
-        # Delete all disposable Qdrant collections before each test.
-        # This preserves the original behavior where tests share a host Qdrant
-        # service and must clean up all disposable collections to avoid drift.
-        # Production collections are never deleted.
+        from qdrant_test_support import reset_disposable_projection
         from research_store.config import StoreConfig
-        from research_store.qdrant import QdrantIndex
 
-        qdrant_url = os.environ.get("QDRANT_URL")
-        if qdrant_url:
-            try:
-                prod_config = StoreConfig.from_env()
-                production_collection = prod_config.physical_collection
-            except Exception:  # noqa: BLE001
-                production_collection = None
-            cleanup = QdrantIndex(
-                qdrant_url,
-                os.environ.get("QDRANT_API_KEY", ""),
-                "__test_cleanup__",
-                1,
-            )
-            with contextlib.suppress(Exception):
-                response = cleanup._request("GET", "/collections")
-                for collection in response.get("result", {}).get("collections", []):
-                    name = collection.get("name")
-                    if not name or name == production_collection:
-                        continue
-                    try:
-                        cleanup.for_collection(name, 1).delete_collection()
-                    except Exception as exc:  # noqa: BLE001
-                        import logging
-
-                        logging.getLogger(__name__).warning(
-                            "Failed to delete test collection %s: %s", name, exc
-                        )
+        reset_disposable_projection(StoreConfig.from_env())
 
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
         """Every eligible chunk gets a manifest AND a pending job."""
@@ -5575,3 +5541,221 @@ class TestIndexRebuildRecovery:
                 "published_at",
             ]:
                 assert payload_indexes.get(field) is True
+
+    def test_activate_index_lifecycle_activation_and_rollback(self, service, tmp_path):
+        """_activate_index drives a complete activation->rollback cycle with journal."""
+        from research_store.cli import _activate_index, _index_build, _qdrant
+        from research_store.config import StoreConfig
+        from research_store.postgres import connect
+
+        test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
+                ("https://activation-lifecycle.example/test",),
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO asset_snapshots(
+                    source_id,requested_url,retrieved_at,content_sha256
+                ) VALUES (%s,%s,now(),%s) RETURNING id""",
+                (source_id, "https://activation-lifecycle.example/test", "u" * 64),
+            )
+            snapshot_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO documents(
+                    snapshot_id,normalized_text,parser_name,parser_version,
+                    normalization_version,document_sha256
+                ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    snapshot_id,
+                    "activation lifecycle document",
+                    "markdown",
+                    "markdown-v1",
+                    "cleanup-v1",
+                    "v" * 64,
+                ),
+            )
+            doc_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO chunks(
+                    document_id,ordinal,text,content_sha256,chunker_name,chunker_version
+                ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
+                (doc_id, "activation chunk", "w" * 64, "structural", "structural-v1"),
+            )
+            chunk_id = cur.fetchone()[0]
+
+        config_a = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            blob_root=tmp_path / "blobs_a",
+            qdrant_collection=f"activation_test_a_{uuid4().hex[:8]}",
+            embedding_dimension=4,
+            embedding_model=f"test-model-a-{uuid4().hex[:8]}",
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        build_a = _index_build(config_a)
+        definition_a_id = str(build_a["index_definition"]["id"])
+        collection_a = build_a["index_definition"]["physical_collection"]
+
+        # Mark all jobs and manifests for definition A as complete so coverage is exact
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests
+                SET index_status='complete',indexed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition_a_id,),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition_a_id,),
+            )
+
+        # Build a second definition (B) with the same chunk but different config
+        config_b = replace(
+            StoreConfig.from_env(),
+            database_url=test_dsn,
+            blob_root=tmp_path / "blobs_b",
+            qdrant_collection=f"activation_test_b_{uuid4().hex[:8]}",
+            embedding_dimension=4,
+            embedding_model=f"test-model-b-{uuid4().hex[:8]}",
+            parser_version="markdown-v1",
+            normalization_version="cleanup-v1",
+            chunker_version="structural-v1",
+        )
+        build_b = _index_build(config_b)
+        definition_b_id = str(build_b["index_definition"]["id"])
+        collection_b = build_b["index_definition"]["physical_collection"]
+
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE embedding_manifests
+                SET index_status='complete',indexed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition_b_id,),
+            )
+            cur.execute(
+                """UPDATE index_jobs SET status='complete',completed_at=now()
+                WHERE index_definition_id=%s""",
+                (definition_b_id,),
+            )
+
+        # Point both collections to the chunk and activate A
+        index_a = _qdrant(config_a, collection_a, 4, "Cosine")
+        index_a.upsert(
+            [
+                {
+                    "id": str(chunk_id),
+                    "vector": {"dense": [1.0, 0.0, 0.0, 0.0]},
+                    "payload": {
+                        "parser_version": config_a.parser_version,
+                        "normalization_version": config_a.normalization_version,
+                        "chunker_version": config_a.chunker_version,
+                    },
+                }
+            ]
+        )
+        index_a.switch_alias(config_a.qdrant_alias, collection_a)
+
+        # Establish definition A as PostgreSQL-active
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE index_definitions SET lifecycle_status='active',activated_at=now() WHERE id=%s",
+                (definition_a_id,),
+            )
+
+        index_b = _qdrant(config_b, collection_b, 4, "Cosine")
+        index_b.upsert(
+            [
+                {
+                    "id": str(chunk_id),
+                    "vector": {"dense": [1.0, 0.0, 0.0, 0.0]},
+                    "payload": {
+                        "parser_version": config_b.parser_version,
+                        "normalization_version": config_b.normalization_version,
+                        "chunker_version": config_b.chunker_version,
+                    },
+                }
+            ]
+        )
+
+        # Activate B
+        result_activate = _activate_index(config_a, definition_b_id, "activate")
+        assert result_activate["action"] == "activate"
+        assert str(result_activate["index_definition_id"]) == definition_b_id
+        assert result_activate["collection"] == collection_b
+        assert result_activate["switched"] is True
+
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            # Alias now targets B
+            cur.execute(
+                "SELECT physical_collection FROM index_definitions WHERE lifecycle_status='active'"
+            )
+            active_row = cur.fetchone()
+            assert active_row[0] == collection_b
+            # A is inactive, B is active
+            cur.execute(
+                "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
+                (definition_a_id,),
+            )
+            assert cur.fetchone()[0] == "inactive"
+            cur.execute(
+                "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
+                (definition_b_id,),
+            )
+            assert cur.fetchone()[0] == "active"
+            # Journal: previous=A, target=B, action=activate, status=complete
+            cur.execute(
+                """SELECT previous_definition_id, target_definition_id, action, status
+                FROM index_activation_journal
+                WHERE target_definition_id=%s AND action='activate'
+                ORDER BY created_at DESC LIMIT 1""",
+                (definition_b_id,),
+            )
+            journal = cur.fetchone()
+            assert str(journal[0]) == definition_a_id
+            assert str(journal[1]) == definition_b_id
+            assert journal[2] == "activate"
+            assert journal[3] == "complete"
+
+        # Rollback to A
+        result_rollback = _activate_index(config_a, definition_a_id, "rollback")
+        assert result_rollback["action"] == "rollback"
+        assert str(result_rollback["index_definition_id"]) == definition_a_id
+        assert result_rollback["collection"] == collection_a
+        assert result_rollback["switched"] is True
+
+        with connect(test_dsn) as conn, conn.cursor() as cur:
+            # Alias returns to A
+            cur.execute(
+                "SELECT physical_collection FROM index_definitions WHERE lifecycle_status='active'"
+            )
+            active_row = cur.fetchone()
+            assert active_row[0] == collection_a
+            # A is active, B is inactive
+            cur.execute(
+                "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
+                (definition_a_id,),
+            )
+            assert cur.fetchone()[0] == "active"
+            cur.execute(
+                "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
+                (definition_b_id,),
+            )
+            assert cur.fetchone()[0] == "inactive"
+            # Rollback journal entry
+            cur.execute(
+                """SELECT previous_definition_id, target_definition_id, action, status
+                FROM index_activation_journal
+                WHERE target_definition_id=%s AND action='rollback'
+                ORDER BY created_at DESC LIMIT 1""",
+                (definition_a_id,),
+            )
+            journal = cur.fetchone()
+            assert str(journal[0]) == definition_b_id
+            assert str(journal[1]) == definition_a_id
+            assert journal[2] == "rollback"
+            assert journal[3] == "complete"
