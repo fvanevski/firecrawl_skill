@@ -11,6 +11,7 @@ from uuid import UUID
 import model_gateway
 from model_gateway import StructuredResult
 
+from .completion_provenance import CompletionProvenanceError, validate_citation_artifact
 from .execution_policy import ExecutionModeError
 from .semantic_service import validate_structured_payload
 
@@ -93,6 +94,20 @@ def _bind_citation_verdicts(
         for identity, verdict in zip(expected, verdicts, strict=True)
     ]
     return canonical
+
+
+def _citation_identity_tuples(
+    deterministic_fixture: Mapping[str, Any],
+) -> set[tuple[str, str, tuple[str, ...]]]:
+    """Return the exact immutable draft citation tuples represented by a fixture."""
+    return {
+        (
+            str(item["section_id"]),
+            str(item["claim_id"]),
+            tuple(sorted(str(value) for value in item["passage_ids"])),
+        )
+        for item in deterministic_fixture.get("validation_results", ())
+    }
 
 
 class _CitationPersistence:
@@ -236,8 +251,19 @@ def _call_autonomous_citation(
         return result
 
     try:
+        # A semantically negative verdict is a legitimate citation failure,
+        # not a formatting defect to repair into a positive verdict. Apply the
+        # existing terminal-grade acceptance contract only after the bounded
+        # structured call has completed, so such a verdict fails closed without
+        # biasing a retry toward "valid". This also preserves the established
+        # ARC-17 diagnostic classification for invalid citation artifacts.
+        rebound = _bind_citation_verdicts(deterministic_fixture, result.value or {})
+        validate_citation_artifact(
+            rebound,
+            _citation_identity_tuples(deterministic_fixture),
+        )
         canonical = _validate_canonical(result.value or {})
-    except (KeyError, TypeError, ValueError) as exc:
+    except (CompletionProvenanceError, KeyError, TypeError, ValueError) as exc:
         message = str(exc)
         if "citation-pass semantic validation failed" not in message:
             message = f"citation-pass semantic validation failed: {message}"
