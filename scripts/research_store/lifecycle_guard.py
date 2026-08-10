@@ -343,10 +343,34 @@ class GuardedResearchRunService(ResearchRunService):
         error = command.pop("error", None)
         semantic_proposal_id = command.pop("semantic_proposal_id", None)
         triggering_event = command.pop("triggering_event", None)
-        completion = dict(command.pop("completion", None) or {})
+        supplied_completion = command.pop("completion", None)
+        completion = dict(supplied_completion or {})
         if command:
             unsupported = ", ".join(sorted(command))
             raise TypeError(f"unsupported terminal command fields: {unsupported}")
+
+        # TerminalStage is the one production caller whose completed transition
+        # is driven entirely by persisted workflow state. Hydrate its caller
+        # assertion from PostgreSQL before entering the guarded transaction,
+        # then let commit_terminal_decision re-load the same provenance under
+        # the run lock and require an exact match. Other callers must continue
+        # to supply their completion assertions explicitly.
+        if (
+            next_state == "completed"
+            and supplied_completion is None
+            and actor_type == "orchestrator"
+            and actor_identifier == "TerminalStage"
+        ):
+            try:
+                with self.uow_factory() as uow:
+                    completion = load_authoritative_completion_provenance(
+                        uow, run_id, for_update=False
+                    ).completion_fields()
+            except CompletionProvenanceError as exc:
+                raise TerminalDecisionError(
+                    "authoritative completion provenance could not be prepared "
+                    f"for TerminalStage: {exc}"
+                ) from exc
 
         default_reason_code = (
             str(triggering_event).replace(".", "_")

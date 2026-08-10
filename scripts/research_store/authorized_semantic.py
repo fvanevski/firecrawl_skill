@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any, Protocol
 from uuid import UUID
 
 import model_gateway
 from model_gateway import StructuredResult
 
+from .completion_provenance import CompletionProvenanceError, validate_citation_artifact
 from .execution_policy import ExecutionModeError
+from .semantic_service import validate_structured_payload
 
 
 class HostArtifactSupplier(Protocol):
@@ -23,6 +26,269 @@ class HostArtifactSupplier(Protocol):
     ) -> StructuredResult:
         """Provide a genuinely external host-authored semantic artifact."""
         ...
+
+
+def _citation_verdict_schema(
+    full_schema: Mapping[str, Any], expected_count: int
+) -> dict[str, Any]:
+    """Return the semantic-only schema used by the autonomous citation model.
+
+    Citation identity is immutable draft state, not a semantic decision. The
+    local model therefore supplies only one ordered status/issue verdict per
+    draft reference. Exact section/claim/passage identity is rebound
+    deterministically after the model call. Extra fields are tolerated at the
+    transport boundary for model/backward compatibility but are ignored by the
+    deterministic binder and never acquire authority.
+    """
+    item_schema = full_schema["properties"]["validation_results"]["items"]
+    properties = item_schema["properties"]
+    verdict_item = {
+        "type": "object",
+        "required": ["status", "issue"],
+        "properties": {
+            "status": deepcopy(properties["status"]),
+            "issue": deepcopy(properties["issue"]),
+        },
+        "additionalProperties": True,
+    }
+    if "oneOf" in item_schema:
+        verdict_item["oneOf"] = deepcopy(item_schema["oneOf"])
+    return {
+        "type": "object",
+        "required": ["validation_results"],
+        "properties": {
+            "validation_results": {
+                "type": "array",
+                "minItems": expected_count,
+                "maxItems": expected_count,
+                "items": verdict_item,
+            }
+        },
+        "additionalProperties": True,
+    }
+
+
+def _bind_citation_verdicts(
+    deterministic_fixture: Mapping[str, Any], verdict_payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Bind ordered semantic verdicts to exact deterministic citation identity."""
+    expected = list(deterministic_fixture.get("validation_results", ()))
+    verdicts = verdict_payload.get("validation_results")
+    if not isinstance(verdicts, list):
+        raise TypeError("citation verdict output is missing validation_results")
+    if len(verdicts) != len(expected):
+        raise ValueError(
+            "citation verdict count mismatch: "
+            f"expected {len(expected)}, got {len(verdicts)}"
+        )
+
+    canonical = deepcopy(dict(deterministic_fixture))
+    canonical["validation_results"] = [
+        {
+            "section_id": identity["section_id"],
+            "claim_id": identity["claim_id"],
+            "passage_ids": list(identity["passage_ids"]),
+            "status": verdict["status"],
+            "issue": verdict["issue"],
+        }
+        for identity, verdict in zip(expected, verdicts, strict=True)
+    ]
+    return canonical
+
+
+def _citation_identity_tuples(
+    deterministic_fixture: Mapping[str, Any],
+) -> set[tuple[str, str, tuple[str, ...]]]:
+    """Return the exact immutable draft citation tuples represented by a fixture."""
+    return {
+        (
+            str(item["section_id"]),
+            str(item["claim_id"]),
+            tuple(sorted(str(value) for value in item["passage_ids"])),
+        )
+        for item in deterministic_fixture.get("validation_results", ())
+    }
+
+
+class _CitationPersistence:
+    """Persist canonical citation artifacts while the model emits verdicts only."""
+
+    def __init__(
+        self,
+        delegate: Any,
+        *,
+        full_schema: Mapping[str, Any],
+        deterministic_fixture: Mapping[str, Any],
+    ) -> None:
+        self.delegate = delegate
+        self.full_schema = full_schema
+        self.deterministic_fixture = deterministic_fixture
+
+    def start_model_call(self, context: Mapping[str, Any], **kwargs: Any) -> UUID:
+        # The recorded request schema remains the truthful schema presented to
+        # the model (semantic verdicts only).
+        return self.delegate.start_model_call(context, **kwargs)
+
+    def finish_model_call(
+        self,
+        context: Mapping[str, Any],
+        call_id: UUID,
+        *,
+        status: str,
+        provenance: Mapping[str, Any],
+        attempts: list[Mapping[str, Any]],
+        artifacts: list[Mapping[str, Any]],
+        error: str = "",
+    ) -> tuple[UUID, ...]:
+        transformed: list[dict[str, Any]] = []
+        for artifact in artifacts:
+            validation_errors = list(artifact.get("validation_errors", ()))
+            try:
+                payload = _bind_citation_verdicts(
+                    self.deterministic_fixture,
+                    artifact.get("payload") or {},
+                )
+                validation_errors.extend(
+                    validate_structured_payload(payload, self.full_schema)
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                payload = {
+                    "model_verdict": deepcopy(artifact.get("payload")),
+                }
+                validation_errors.append(
+                    f"deterministic citation identity binding failed: {exc}"
+                )
+            transformed.append(
+                {
+                    **dict(artifact),
+                    "payload": payload,
+                    "validation_errors": validation_errors,
+                }
+            )
+
+        persisted_status = status
+        persisted_error = error
+        if status == "complete" and (
+            not transformed or transformed[-1]["validation_errors"]
+        ):
+            persisted_status = "failed"
+            persisted_error = persisted_error or (
+                "canonical citation artifact failed deterministic identity binding"
+            )
+
+        return self.delegate.finish_model_call(
+            context,
+            call_id,
+            status=persisted_status,
+            provenance={
+                **dict(provenance),
+                "citation_identity_binding": "deterministic",
+            },
+            attempts=attempts,
+            artifacts=transformed,
+            error=persisted_error,
+        )
+
+
+def _call_autonomous_citation(
+    *,
+    semantic_service: Any,
+    semantic_context: dict[str, Any],
+    deterministic_fixture: dict[str, Any],
+    call_kwargs: dict[str, Any],
+) -> StructuredResult:
+    """Run citation semantics without delegating immutable IDs to the model."""
+    full_schema = call_kwargs["schema"]
+    expected_count = len(deterministic_fixture.get("validation_results", ()))
+    verdict_schema = _citation_verdict_schema(full_schema, expected_count)
+    original_post_validate = call_kwargs.get("post_validate")
+
+    def _validate_canonical(payload: Mapping[str, Any]) -> dict[str, Any]:
+        canonical = _bind_citation_verdicts(deterministic_fixture, payload)
+        validation_errors = validate_structured_payload(canonical, full_schema)
+        if validation_errors:
+            raise ValueError("; ".join(validation_errors[:10]))
+        if original_post_validate is not None:
+            original_post_validate(canonical)
+        return canonical
+
+    def _validate_verdicts(payload: dict[str, Any]) -> None:
+        verdicts = payload.get("validation_results")
+        if not isinstance(verdicts, list) or len(verdicts) != expected_count:
+            raise ValueError(
+                "citation verdict count mismatch: "
+                f"expected {expected_count}, got "
+                f"{len(verdicts) if isinstance(verdicts, list) else 'non-array'}"
+            )
+        _validate_canonical(payload)
+
+    kwargs = dict(call_kwargs)
+    kwargs["schema"] = verdict_schema
+    kwargs["post_validate"] = _validate_verdicts
+    kwargs["system_prompt"] = (
+        str(call_kwargs["system_prompt"])
+        + " Immutable citation identity is bound deterministically outside the model."
+        + " Return only validation_results, with exactly one status/issue verdict"
+        + " for each draft claim reference in traversal order. Do not reproduce"
+        + " section_id, claim_id, or passage_ids."
+    )
+    # Preserve the caller's JSON-only user prompt. Some deterministic consumers
+    # parse it directly, and the exact verdict count is already constrained by
+    # the response schema's minItems/maxItems.
+    kwargs["user_prompt"] = str(call_kwargs["user_prompt"])
+
+    persistence = _CitationPersistence(
+        semantic_service,
+        full_schema=full_schema,
+        deterministic_fixture=deterministic_fixture,
+    )
+    result = model_gateway.call_structured(
+        **kwargs,
+        semantic_persistence=persistence,
+        semantic_context=semantic_context,
+    )
+    if result.error:
+        return result
+
+    try:
+        # A semantically negative verdict is a legitimate citation failure,
+        # not a formatting defect to repair into a positive verdict. Apply the
+        # existing terminal-grade acceptance contract only after the bounded
+        # structured call has completed, so such a verdict fails closed without
+        # biasing a retry toward "valid". This also preserves the established
+        # ARC-17 diagnostic classification for invalid citation artifacts.
+        rebound = _bind_citation_verdicts(deterministic_fixture, result.value or {})
+        validate_citation_artifact(
+            rebound,
+            _citation_identity_tuples(deterministic_fixture),
+        )
+        canonical = _validate_canonical(result.value or {})
+    except (CompletionProvenanceError, KeyError, TypeError, ValueError) as exc:
+        message = str(exc)
+        if "citation-pass semantic validation failed" not in message:
+            message = f"citation-pass semantic validation failed: {message}"
+        return StructuredResult(
+            None,
+            {
+                **dict(result.provenance),
+                "citation_identity_binding": "deterministic",
+            },
+            result.attempts,
+            message,
+            semantic_call_id=result.semantic_call_id,
+            artifact_ids=result.artifact_ids,
+        )
+
+    return StructuredResult(
+        canonical,
+        {
+            **dict(result.provenance),
+            "citation_identity_binding": "deterministic",
+        },
+        result.attempts,
+        semantic_call_id=result.semantic_call_id,
+        artifact_ids=result.artifact_ids,
+    )
 
 
 def call_authorized_structured(
@@ -46,6 +312,22 @@ def call_authorized_structured(
     mode = status["execution_mode"]
 
     if mode == "autonomous_local":
+        if semantic_context.get("stage") == "citation_pass":
+            return _call_autonomous_citation(
+                semantic_service=semantic_service,
+                semantic_context=semantic_context,
+                deterministic_fixture=deterministic_fixture,
+                call_kwargs=dict(call_kwargs),
+            )
+        if semantic_context.get("stage") == "claim_binding":
+            # Claim binding is compact but occasionally reaches the local
+            # completion limit with malformed/truncated JSON. The gateway now
+            # expands length-truncated JSON retries; opt this stage into that
+            # recovery rather than failing all attempts at the initial budget.
+            call_kwargs = {
+                **call_kwargs,
+                "expand_output_on_length": True,
+            }
         return model_gateway.call_structured(
             **call_kwargs,
             semantic_persistence=semantic_service,
