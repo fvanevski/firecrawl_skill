@@ -122,4 +122,7 @@ def test_projection_preservation_accepts_exact_point_count(monkeypatch):
         lambda _config: dict(before),
     )
 
-    assert qdrant_authority.require_configured_projection_preserved(object(), before) == before
+    assert (
+        qdrant_authority.require_configured_projection_preserved(object(), before)
+        == before
+    )
