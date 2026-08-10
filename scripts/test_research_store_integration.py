@@ -4237,6 +4237,7 @@ class TestIndexRebuildRecovery:
                             cleanup.for_collection(name, 1).delete_collection()
                         except Exception as exc:  # noqa: BLE001
                             import logging
+
                             logging.getLogger(__name__).warning(
                                 "Failed to delete test collection %s: %s", name, exc
                             )

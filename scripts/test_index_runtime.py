@@ -77,7 +77,9 @@ class FakeIndex:
         self.calls.append(("schema", self.collection, self.dimension, self.distance))
 
     def require_compatible_schema(self):
-        self.calls.append(("compatible_schema", self.collection, self.dimension, self.distance))
+        self.calls.append(
+            ("compatible_schema", self.collection, self.dimension, self.distance)
+        )
         return {"exists": True, "compatible": True}
 
     def upsert(self, points):
