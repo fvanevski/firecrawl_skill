@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from typing import ClassVar
 from uuid import UUID, uuid4
 
 import pytest
@@ -4178,7 +4179,7 @@ class TestIndexRebuildRecovery:
     - alias cutover only happens after complete verification
     """
 
-    _owned_collections: set[str] = set()
+    _owned_collections: ClassVar[set[str]] = set()
 
     def setup_method(self):
         """Truncate test data between tests to avoid accumulation."""
@@ -4205,8 +4206,6 @@ class TestIndexRebuildRecovery:
             conn.commit()
 
         import contextlib
-
-        import httpx
 
         # Delete only Qdrant collections owned by this test class.
         # Tests sharing a host Qdrant service must clean up resources they own,
@@ -4236,8 +4235,11 @@ class TestIndexRebuildRecovery:
                     if name in self._owned_collections:
                         try:
                             cleanup.for_collection(name, 1).delete_collection()
-                        except Exception:  # noqa: BLE001
-                            pass
+                        except Exception as exc:  # noqa: BLE001
+                            import logging
+                            logging.getLogger(__name__).warning(
+                                "Failed to delete test collection %s: %s", name, exc
+                            )
 
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
         """Every eligible chunk gets a manifest AND a pending job."""
