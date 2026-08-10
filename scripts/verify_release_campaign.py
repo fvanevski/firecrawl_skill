@@ -31,6 +31,10 @@ EXPECTED_TOTAL_RUNS = 20
 ALLOWED_NOT_APPLICABLE = frozenset({("deterministic_debug", "total_tokens")})
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 BASE_PROVENANCE_FIELDS = ("table", "column", "run_id", "method")
+# Secret-safe environment identity fields.
+# Raw endpoint URLs (GENERATIVE_URL, EMBEDDING_URL, RERANKER_URL) must never
+# appear in release evidence; they are injected from GitHub Secrets at runtime
+# and their absence proves the security contract is respected.
 ENVIRONMENT_FIELDS = (
     "candidate_sha",
     "tree_hash",
@@ -41,12 +45,12 @@ ENVIRONMENT_FIELDS = (
     "platform",
     "machine",
     "timestamp",
+    # Safe model/revision/dimension identity — no raw URLs.
     "GENERATIVE_MODEL",
-    "GENERATIVE_URL",
     "EMBEDDING_MODEL",
-    "EMBEDDING_URL",
+    "EMBEDDING_REVISION",
+    "EMBEDDING_DIMENSION",
     "RERANKER_MODEL",
-    "RERANKER_URL",
 )
 
 

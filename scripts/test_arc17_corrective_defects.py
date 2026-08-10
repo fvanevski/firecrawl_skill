@@ -1137,3 +1137,550 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
     final_record = _read_citation_stage(uow_factory, run_id)
     assert final_record["stage_status"] == "completed"
     assert final_record.get("artifact", {}).get("pass_status") == "passed"
+
+
+# ---------------------------------------------------------------------------
+# Defect 1 — PostgreSQL-backed citation canonicalization with "none" sentinel
+# ---------------------------------------------------------------------------
+
+
+@_pg_skip
+def test_none_sentinel_allows_valid_citation_to_pass_terminal():
+    """A citation artifact using the observed 'none' sentinel must be accepted
+    by validate_citation_artifact and allow terminal completion to succeed.
+
+    This is the exact shape produced by the failed campaign's autonomous_local
+    runs: status='valid', issue='none'. The old code rejected this because any
+    non-empty issue string was treated as an unresolved failure.
+    """
+    from dataclasses import replace
+
+    from research_store.config import StoreConfig
+    from research_store.container import build_service
+    from research_store.postgres import connect, migrate
+    from research_store.semantic_service import SemanticCallService
+
+    migrate(_PG_DSN)
+
+    run_id = uuid4()
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs
+               (id, objective, query_plan, skill_version, llm_model, state, execution_mode)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (id) DO NOTHING""",
+            (
+                str(run_id),
+                "test request",
+                "{}",
+                "1.0",
+                "test",
+                "created",
+                "autonomous_local",
+            ),
+        )
+        conn.commit()
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=_PG_DSN,
+        blob_root=Path("/tmp/arc17-pg-test-blobs"),
+    )
+    svc = build_service(config)
+    uow_factory = svc.uow_factory
+
+    draft_artifact = {
+        "schema_version": "synthesis-draft-v1",
+        "run_id": str(run_id),
+        "evidence_packet_revision": 1,
+        "report_sections": [
+            {
+                "section_id": "s1",
+                "title": "Findings",
+                "body": "Test findings",
+                "claim_references": [
+                    {
+                        "claim_id": "00000000-0000-0000-0000-000000000102",
+                        "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                        "relationship": "qualifies",
+                    }
+                ],
+            }
+        ],
+        "unsupported_claims": [],
+        "limitations": [],
+    }
+    _seed_synthesis_stages_in_pg(uow_factory, run_id, draft_artifact)
+
+    with uow_factory() as uow:
+        uow.persist_evidence_packet(
+            run_id=run_id,
+            research_spec_id=UUID("00000000-0000-0000-0000-000000000100"),
+            coverage_revision=2,
+            packet_revision=1,
+            payload={
+                "schema_version": "evidence-packet-v1",
+                "run_id": str(run_id),
+                "research_spec_id": "00000000-0000-0000-0000-000000000100",
+                "coverage_revision": 2,
+                "claims": [
+                    {
+                        "claim_id": "00000000-0000-0000-0000-000000000102",
+                        "statement": "The documented behavior is reproducible.",
+                        "semantic_status": "qualified",
+                        "uncertainty": "Only one source has been acquired.",
+                    }
+                ],
+                "passages": [
+                    {
+                        "passage_id": "00000000-0000-0000-0000-000000000601",
+                        "candidate_id": "00000000-0000-0000-0000-000000000301",
+                        "snapshot_id": "00000000-0000-0000-0000-000000000602",
+                        "chunk_id": "00000000-0000-0000-0000-000000000603",
+                        "text": "The fixture passage records the documented behavior.",
+                        "source_url": "https://fixture.invalid/docs",
+                    }
+                ],
+                "omitted_passages": [],
+                "claim_evidence_bindings": [
+                    {
+                        "binding_id": "00000000-0000-0000-0000-000000000604",
+                        "claim_id": "00000000-0000-0000-0000-000000000102",
+                        "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                        "relationship": "qualifies",
+                        "confidence": 0.7,
+                        "uncertainty": "Independent replication is missing.",
+                    }
+                ],
+            },
+        )
+
+    # The observed campaign shape: valid status with "none" sentinel.
+    none_sentinel_citation = {
+        "schema_version": "synthesis-citation-pass-v1",
+        "run_id": str(run_id),
+        "evidence_packet_revision": 1,
+        "draft_revision": 1,
+        "pass_status": "passed",
+        "validation_results": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                "status": "valid",
+                "issue": "none",
+            }
+        ],
+        "invented_citations": [],
+        "unsupported_claims": [],
+        "entailment_mismatches": [],
+    }
+
+    from budget_policy import DEFAULT_POLICY
+    from research_store.evidence import EvidenceService
+
+    semantic = SemanticCallService(uow_factory)
+    evidence = EvidenceService(uow_factory, budget_policy=DEFAULT_POLICY)
+    service = LocalSynthesisService(
+        semantic_service=semantic,
+        evidence_service=evidence,
+        config=config,
+    )
+
+    with patch("model_gateway.call_structured") as mock_call:
+        mock_result = MagicMock()
+        mock_result.error = None
+        mock_result.value = none_sentinel_citation
+        # Use None for semantic_call_id to avoid FK violations on semantic_calls.
+        mock_result.semantic_call_id = None
+        mock_result.artifact_ids = []
+        mock_call.return_value = mock_result
+
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="test-model",
+        )
+
+    assert summary["overall_status"] == "completed"
+    assert summary["stages"]["citation_pass"]["status"] == "completed"
+
+    # Fresh UOW readback proves the completed state is durable.
+    record = _read_citation_stage(uow_factory, run_id)
+    assert record["stage_status"] == "completed"
+    assert record.get("artifact", {}).get("pass_status") == "passed"
+
+
+# ---------------------------------------------------------------------------
+# Defect 2 — PostgreSQL-backed deterministic prompt-version provenance
+# ---------------------------------------------------------------------------
+
+
+@_pg_skip
+def test_deterministic_prompt_version_matches_stage_and_call():
+    """Deterministic-debug synthesis stages must carry the same truthful
+    prompt_version into both the stage record and the immutable semantic call.
+
+    Before the fix, stages recorded ``prompt_version='synthesis-v1'`` while
+    semantic calls fell back to ``'deterministic-fixture-supplied'`` because
+    the context dict never carried prompt_version through to
+    ``_ingest_supplied_artifact``.
+    """
+    import os
+
+    os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
+
+    try:
+        from dataclasses import replace
+
+        from research_store.config import StoreConfig
+        from research_store.container import build_service
+        from research_store.postgres import connect, migrate
+        from research_store.semantic_service import SemanticCallService
+
+        migrate(_PG_DSN)
+
+        run_id = uuid4()
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_runs
+                   (id, objective, query_plan, skill_version, llm_model, state, execution_mode)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (id) DO NOTHING""",
+                (
+                    str(run_id),
+                    "test request",
+                    "{}",
+                    "1.0",
+                    "test",
+                    "created",
+                    "deterministic_debug",
+                ),
+            )
+            conn.commit()
+
+        config = replace(
+            StoreConfig.from_env(),
+            database_url=_PG_DSN,
+            blob_root=Path("/tmp/arc17-pg-test-blobs"),
+        )
+        svc = build_service(config)
+        uow_factory = svc.uow_factory
+
+        draft_artifact = {
+            "schema_version": "synthesis-draft-v1",
+            "run_id": str(run_id),
+            "evidence_packet_revision": 1,
+            "report_sections": [
+                {
+                    "section_id": "s1",
+                    "title": "Findings",
+                    "body": "Test findings",
+                    "claim_references": [
+                        {
+                            "claim_id": "00000000-0000-0000-0000-000000000102",
+                            "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                            "relationship": "qualifies",
+                        }
+                    ],
+                }
+            ],
+            "unsupported_claims": [],
+            "limitations": [],
+        }
+        _seed_synthesis_stages_in_pg(uow_factory, run_id, draft_artifact)
+
+        with uow_factory() as uow:
+            uow.persist_evidence_packet(
+                run_id=run_id,
+                research_spec_id=UUID("00000000-0000-0000-0000-000000000100"),
+                coverage_revision=2,
+                packet_revision=1,
+                payload={
+                    "schema_version": "evidence-packet-v1",
+                    "run_id": str(run_id),
+                    "research_spec_id": "00000000-0000-0000-0000-000000000100",
+                    "coverage_revision": 2,
+                    "claims": [
+                        {
+                            "claim_id": "00000000-0000-0000-0000-000000000102",
+                            "statement": "The documented behavior is reproducible.",
+                            "semantic_status": "qualified",
+                            "uncertainty": "Only one source has been acquired.",
+                        }
+                    ],
+                    "passages": [
+                        {
+                            "passage_id": "00000000-0000-0000-0000-000000000601",
+                            "candidate_id": "00000000-0000-0000-0000-000000000301",
+                            "snapshot_id": "00000000-0000-0000-0000-000000000602",
+                            "chunk_id": "00000000-0000-0000-0000-000000000603",
+                            "text": "The fixture passage records the documented behavior.",
+                            "source_url": "https://fixture.invalid/docs",
+                        }
+                    ],
+                    "omitted_passages": [],
+                    "claim_evidence_bindings": [
+                        {
+                            "binding_id": "00000000-0000-0000-0000-000000000604",
+                            "claim_id": "00000000-0000-0000-0000-000000000102",
+                            "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                            "relationship": "qualifies",
+                            "confidence": 0.7,
+                            "uncertainty": "Independent replication is missing.",
+                        }
+                    ],
+                },
+            )
+
+        from budget_policy import DEFAULT_POLICY
+        from research_store.evidence import EvidenceService
+
+        # Pre-seeded stages carry model_name='test-model' and prompt_version='v1';
+        # in deterministic_debug mode run_synthesis expects empty model_name and
+        # prompt_version='synthesis-v1' on every stage. Update them so the test
+        # asserts the prompt_version contract without fighting the pre-seeded
+        # fixture.
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE synthesis_stages SET model_name='', prompt_version='synthesis-v1' WHERE run_id=%s",
+                (str(run_id),),
+            )
+
+        semantic = SemanticCallService(uow_factory)
+        evidence = EvidenceService(uow_factory, budget_policy=DEFAULT_POLICY)
+        service = LocalSynthesisService(
+            semantic_service=semantic,
+            evidence_service=evidence,
+            config=config,
+        )
+
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="",
+        )
+
+        assert summary["overall_status"] == "completed"
+
+        # Read stage + semantic call identities from a fresh UOW.
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT stage_name, prompt_version, model_name
+                   FROM synthesis_stages WHERE run_id=%s ORDER BY id""",
+                (str(run_id),),
+            )
+            stages = cur.fetchall()
+
+        with connect(_PG_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT sc.stage, sc.prompt_version, sc.model
+                   FROM semantic_calls sc
+                   JOIN synthesis_stages ss ON ss.run_id=sc.run_id
+                   WHERE sc.run_id=%s""",
+                (str(run_id),),
+            )
+            calls = cur.fetchall()
+
+        # Every synthesis stage must have empty model and the same prompt version.
+        expected_prompt_version = "synthesis-v1"
+        for stage_name, prompt_version, model_name in stages:
+            assert model_name == "", f"{stage_name} model_name must be empty"
+            assert prompt_version == expected_prompt_version, (
+                f"{stage_name} prompt_version={prompt_version!r} != {expected_prompt_version!r}"
+            )
+
+        # Every semantic call must match the stage prompt version.
+        for stage, prompt_version, model in calls:
+            assert model == "", f"{stage} model must be empty"
+            assert prompt_version == expected_prompt_version, (
+                f"{stage} prompt_version={prompt_version!r} != {expected_prompt_version!r}"
+            )
+    finally:
+        del os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"]
+
+
+# ---------------------------------------------------------------------------
+# Defect 3 — Contract test: ENVIRONMENT_FIELDS must not reintroduce raw URLs
+# ---------------------------------------------------------------------------
+
+
+def test_environment_fields_contract_no_raw_urls():
+    """verify_release_campaign.ENVIRONMENT_FIELDS must never contain raw URL
+    keys. This contract test prevents regression where someone adds
+    GENERATIVE_URL/EMBEDDING_URL/RERANKER_URL back into the required fields."""
+    from verify_release_campaign import ENVIRONMENT_FIELDS
+
+    raw_url_keys = frozenset(("GENERATIVE_URL", "EMBEDDING_URL", "RERANKER_URL"))
+    present = raw_url_keys & set(ENVIRONMENT_FIELDS)
+    assert not present, (
+        f"ENVIRONMENT_FIELDS must not contain raw secret URLs, found: {present}"
+    )
+
+    # Safe identity fields must be present.
+    safe_required = frozenset(
+        (
+            "GENERATIVE_MODEL",
+            "EMBEDDING_MODEL",
+            "EMBEDDING_REVISION",
+            "EMBEDDING_DIMENSION",
+            "RERANKER_MODEL",
+        )
+    )
+    missing = safe_required - set(ENVIRONMENT_FIELDS)
+    assert not missing, f"ENVIRONMENT_FIELDS missing safe identity fields: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Negative test: substantive issue text still fails closed
+# ---------------------------------------------------------------------------
+
+
+def test_substantive_issue_text_still_fails_closed():
+    """A validation result with a real issue string must still be rejected,
+    even when status='valid'. Only the canonical 'none' sentinel is allowed."""
+    bad = {
+        "schema_version": "synthesis-citation-pass-v1",
+        "run_id": "00000000-0000-0000-0000-000000000401",
+        "evidence_packet_revision": 1,
+        "draft_revision": 1,
+        "pass_status": "passed",
+        "validation_results": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                "status": "valid",
+                "issue": "actual problem found",
+            }
+        ],
+        "invented_citations": [],
+        "unsupported_claims": [],
+        "entailment_mismatches": [],
+    }
+    with pytest.raises(
+        CompletionProvenanceError, match="unresolved validation results"
+    ):
+        validate_citation_artifact(bad, set())
+
+
+# ---------------------------------------------------------------------------
+# Negative test: invented citations still fail
+# ---------------------------------------------------------------------------
+
+
+def test_invented_citations_still_fail():
+    """Invented citations must continue to fail regardless of validation_results."""
+    bad = {
+        "schema_version": "synthesis-citation-pass-v1",
+        "run_id": "00000000-0000-0000-0000-000000000401",
+        "evidence_packet_revision": 1,
+        "draft_revision": 1,
+        "pass_status": "passed",
+        "validation_results": [],
+        "invented_citations": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "passage_ids": ["00000000-0000-0000-0000-000000000999"],
+            }
+        ],
+        "unsupported_claims": [],
+        "entailment_mismatches": [],
+    }
+    with pytest.raises(CompletionProvenanceError, match="unresolved failures"):
+        validate_citation_artifact(bad, set())
+
+
+# ---------------------------------------------------------------------------
+# Negative test: unsupported claims still fail
+# ---------------------------------------------------------------------------
+
+
+def test_unsupported_claims_still_fail():
+    """Unsupported claims must continue to fail regardless of validation_results."""
+    bad = {
+        "schema_version": "synthesis-citation-pass-v1",
+        "run_id": "00000000-0000-0000-0000-000000000401",
+        "evidence_packet_revision": 1,
+        "draft_revision": 1,
+        "pass_status": "passed",
+        "validation_results": [],
+        "invented_citations": [],
+        "unsupported_claims": [
+            {
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "statement": "Unsubstantiated claim.",
+            }
+        ],
+        "entailment_mismatches": [],
+    }
+    with pytest.raises(CompletionProvenanceError, match="unresolved failures"):
+        validate_citation_artifact(bad, set())
+
+
+# ---------------------------------------------------------------------------
+# Negative test: entailment mismatches still fail
+# ---------------------------------------------------------------------------
+
+
+def test_entailment_mismatches_still_fail():
+    """Entailment mismatches must continue to fail regardless of validation_results."""
+    bad = {
+        "schema_version": "synthesis-citation-pass-v1",
+        "run_id": "00000000-0000-0000-0000-000000000401",
+        "evidence_packet_revision": 1,
+        "draft_revision": 1,
+        "pass_status": "passed",
+        "validation_results": [],
+        "invented_citations": [],
+        "unsupported_claims": [],
+        "entailment_mismatches": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "expected_relationship": "supports",
+                "cited_relationship": "contradicts",
+            }
+        ],
+    }
+    with pytest.raises(CompletionProvenanceError, match="unresolved failures"):
+        validate_citation_artifact(bad, set())
+
+
+# ---------------------------------------------------------------------------
+# Negative test: wrong citation tuples still fail
+# ---------------------------------------------------------------------------
+
+
+def test_wrong_citation_tuples_still_fail():
+    """A validation result referencing different passages than the draft must
+    be rejected — the tuple comparison is independent of issue normalization."""
+    bad = {
+        "schema_version": "synthesis-citation-pass-v1",
+        "run_id": "00000000-0000-0000-0000-000000000401",
+        "evidence_packet_revision": 1,
+        "draft_revision": 1,
+        "pass_status": "passed",
+        "validation_results": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "passage_ids": ["00000000-0000-0000-0000-000000000999"],
+                "status": "valid",
+                "issue": "none",
+            }
+        ],
+        "invented_citations": [],
+        "unsupported_claims": [],
+        "entailment_mismatches": [],
+    }
+    draft_citations = {
+        (
+            "s1",
+            "00000000-0000-0000-0000-000000000102",
+            ("00000000-0000-0000-0000-000000000601",),
+        )
+    }
+    with pytest.raises(CompletionProvenanceError, match="does not exactly validate"):
+        validate_citation_artifact(bad, draft_citations)

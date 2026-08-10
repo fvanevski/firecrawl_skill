@@ -913,6 +913,7 @@ class LocalSynthesisService:
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
+            "prompt_version": prompt_version,
         }
 
         with uow_factory() as uow:
@@ -1293,6 +1294,7 @@ class LocalSynthesisService:
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
+            "prompt_version": prompt_version,
         }
 
         with uow_factory() as uow:
@@ -1582,6 +1584,7 @@ class LocalSynthesisService:
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
+            "prompt_version": prompt_version,
         }
 
         with uow_factory() as uow:

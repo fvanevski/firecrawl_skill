@@ -823,7 +823,11 @@ def validate_citation_artifact(
             raise CompletionProvenanceError(
                 "citation validation result is not a mapping"
             )
-        if result.get("status") != "valid" or result.get("issue"):
+        # Allow the canonical no-error sentinel ("none") only when status is
+        # already valid; substantive issues on invalid results must remain
+        # visible to downstream validators.
+        issue = result.get("issue") or ""
+        if result.get("status") != "valid" or (issue and issue != "none"):
             raise CompletionProvenanceError(
                 "citation-pass semantic artifact contains unresolved validation results"
             )
