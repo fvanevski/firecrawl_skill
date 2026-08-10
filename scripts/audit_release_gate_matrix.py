@@ -35,6 +35,7 @@ REQUIRED_GATE_IDS = (
     "bounded_empty_extraction",
     "ingestion_batch_truth",
     "authoritative_synthesis",
+    "corrective_defects",
     "verifier_zero_object",
     "doctor_separation",
     "offline_export_late32",
