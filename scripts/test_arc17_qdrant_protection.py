@@ -91,7 +91,7 @@ def _seed_active_definition(config: StoreConfig, collection: str, dimension: int
                 dimension,
                 "Cosine",
                 config.normalization_version,
-                ""
+                "",
             ),
         )
         cur.execute(
@@ -106,7 +106,9 @@ def _seed_points(index: QdrantIndex, count: int = 3):
     points = [
         {
             "id": i,
-            "vector": {"dense": [1.0 if j == 0 else 0.0 for j in range(index.dimension)]},
+            "vector": {
+                "dense": [1.0 if j == 0 else 0.0 for j in range(index.dimension)]
+            },
             "payload": {"chunk_id": str(i), "source": "test"},
         }
         for i in range(count)
@@ -241,7 +243,8 @@ class TestDriftDiagnosis:
         assert checks["qdrant_projection"]["status"] == "failure"
         # Either missing or wrong is a failure condition
         assert checks["qdrant_projection"]["alias_state"]["status"] in (
-            "missing_required_alias", "wrong_required_alias_target"
+            "missing_required_alias",
+            "wrong_required_alias_target",
         )
 
         with suppress(Exception):
@@ -265,7 +268,10 @@ class TestDriftDiagnosis:
         checks, _failed = _doctor(config)
         assert _failed
         assert checks["qdrant_projection"]["status"] == "failure"
-        assert checks["qdrant_projection"]["alias_state"]["status"] == "wrong_required_alias_target"
+        assert (
+            checks["qdrant_projection"]["alias_state"]["status"]
+            == "wrong_required_alias_target"
+        )
         assert (
             checks["qdrant_projection"]["alias_state"]["expected"]
             == f"{config.qdrant_alias} -> {active_collection}"
@@ -294,7 +300,8 @@ class TestDriftDiagnosis:
         assert checks["qdrant_projection"]["status"] == "failure"
         # Either missing or wrong is a failure condition
         assert checks["qdrant_projection"]["alias_state"]["status"] in (
-            "missing_required_alias", "wrong_required_alias_target"
+            "missing_required_alias",
+            "wrong_required_alias_target",
         )
 
         with suppress(Exception):
@@ -399,7 +406,9 @@ class TestWorkerSafety:
             idx._request(
                 "PUT",
                 f"/collections/{name}",
-                {"vectors": {"dense": {"size": 4, "distance": "Cosine"}}},  # Create 4-dim
+                {
+                    "vectors": {"dense": {"size": 4, "distance": "Cosine"}}
+                },  # Create 4-dim
             )
             # Now try with 8-dim index - should be incompatible
             idx_8dim = QdrantIndex(url, key, name, 8)
@@ -439,7 +448,9 @@ class TestWorkerSafety:
             idx._request(
                 "PUT",
                 f"/collections/{name}",
-                {"vectors": {"dense": {"size": 4, "distance": "Cosine"}}},  # Create 4-dim
+                {
+                    "vectors": {"dense": {"size": 4, "distance": "Cosine"}}
+                },  # Create 4-dim
             )
             result = idx.ensure_schema()
             assert result["recreated"] is True
@@ -460,7 +471,9 @@ class TestWorkerSafety:
             idx._request(
                 "PUT",
                 f"/collections/{name}",
-                {"vectors": {"dense": {"size": 4, "distance": "Cosine"}}},  # Create 4-dim
+                {
+                    "vectors": {"dense": {"size": 4, "distance": "Cosine"}}
+                },  # Create 4-dim
             )
             idx.switch_alias(alias_name, name)
             with pytest.raises(RuntimeError, match="active alias"):

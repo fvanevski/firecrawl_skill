@@ -157,7 +157,9 @@ def _cleanup_test_qdrant_collections(track_test_collection):
                     deleted += 1
                     _logger.info("deleted test collection %s", name)
                 except Exception as exc:  # noqa: BLE001
-                    _logger.warning("failed to delete test collection %s: %s", name, exc)
+                    _logger.warning(
+                        "failed to delete test collection %s: %s", name, exc
+                    )
         _logger.info("test cleanup: deleted %d collections", deleted)
     except Exception as exc:  # noqa: BLE001
         _logger.warning("test Qdrant cleanup failed: %s", exc)

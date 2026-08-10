@@ -2126,7 +2126,10 @@ def _index_reconcile(config, repair=False):
     # Check cross-store activation drift: active PG definition + missing/wrong
     # production alias must be reported as a discrepancy regardless of coverage.
     alias_state = _qdrant_alias_state(config)
-    if alias_state["status"] != "healthy" and alias_state["postgres_active_definition"] is not None:
+    if (
+        alias_state["status"] != "healthy"
+        and alias_state["postgres_active_definition"] is not None
+    ):
         discrepancies.append(
             f"activation drift: PostgreSQL active definition {alias_state['postgres_active_definition']} "
             f"but {config.qdrant_alias} -> {alias_state['actual_required_alias_target'] or 'absent'} "
