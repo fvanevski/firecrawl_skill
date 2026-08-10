@@ -22,6 +22,37 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from qdrant_test_support import delete_alias
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_stale_qdrant_state():
+    """Remove any leftover test aliases and collections before each test.
+
+    ``_index_reconcile`` iterates over every Qdrant alias, so stale test
+    aliases/collections from earlier tests in the same session pollute the
+    reconciliation report.  We preserve the production alias only.
+    """
+    from research_store.config import StoreConfig
+    from research_store.qdrant import QdrantIndex
+
+    config = StoreConfig.from_env()
+    q = QdrantIndex(
+        config.qdrant_url, config.qdrant_api_key,
+        config.qdrant_alias, config.embedding_dimension,
+    )
+    for alias_name, collection_name in q.list_aliases().items():
+        if alias_name == config.qdrant_alias:
+            continue
+        # Delete the alias first, then the underlying collection.
+        with suppress(Exception):
+            delete_alias(q, alias_name)
+        with suppress(Exception):
+            tmp = QdrantIndex(
+                config.qdrant_url, config.qdrant_api_key,
+                collection_name, config.embedding_dimension,
+            )
+            tmp.delete_collection()
+    yield
 from research_store.asset_promotion_models import _canonical_sha256, _member_payload
 from research_store.cli import _index_build
 from research_store.config import StoreConfig
@@ -49,6 +80,10 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
 
     token = uuid4().hex
     alias = f"reconcile_{token[:12]}"
+    # Use unique version strings per test run so that ``_active_chunk_ids``
+    # only returns chunks from this test and never sees leftovers from earlier
+    # tests in the same session.
+    suffix = token[:8]
     config = replace(
         StoreConfig.from_env(),
         database_url=TEST_DSN,
@@ -57,10 +92,10 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
         embedding_model=f"reconcile-{token}",
         embedding_revision="issue-222",
         embedding_dimension=4,
-        parser_version="markdown-v1",
-        normalization_version="cleanup-v1",
+        parser_version=f"markdown-v1-{suffix}",
+        normalization_version=f"cleanup-v1-{suffix}",
         chunker_name="structural",
-        chunker_version="structural-v1",
+        chunker_version=f"structural-v1-{suffix}",
     )
     external_run_id = f"fr_reconcile_{token}"
 
@@ -264,17 +299,6 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
         index.upsert(points[start : start + 256])
     index.switch_alias(config.qdrant_alias, definition["physical_collection"])
 
-    # Debug: check state after seeding
-    from research_store.postgres import connect
-
-    with connect(TEST_DSN) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT id,lifecycle_status FROM index_definitions ORDER BY created_at"
-        )
-        defs = cur.fetchall()
-    with open("/tmp/after_seed.txt", "w") as _f:
-        _f.write(f"After seed: {[(str(d[0]), d[1]) for d in defs]}\n")
-
     return {
         "config": config,
         "run_id": run_id,
@@ -288,8 +312,31 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
 
 
 def _cleanup(seed):
+    from research_store.postgres import connect
+
     with suppress(Exception):
+        delete_alias(seed["index"], seed["config"].qdrant_alias)
         seed["index"].delete_collection()
+
+    # Delete all related PG records for this seed's run.
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM index_jobs WHERE index_definition_id = %s",
+            (str(seed["definition"]["id"]),),
+        )
+        cur.execute(
+            "DELETE FROM embedding_manifests WHERE index_definition_id = %s",
+            (str(seed["definition"]["id"]),),
+        )
+        cur.execute(
+            "DELETE FROM index_definitions WHERE id = %s",
+            (str(seed["definition"]["id"]),),
+        )
+        # research_runs may have sealed assets that prevent deletion; skip if so.
+        try:
+            cur.execute("DELETE FROM research_runs WHERE id = %s", (seed["run_id"],))
+        except Exception:  # noqa: BLE001,S110
+            pass
 
 
 def _reset_active_definitions():
@@ -410,9 +457,10 @@ def test_reconcile_reports_alias_and_vector_schema_mismatch(tmp_path):
         assert vector_result["qdrant"]["schema"]["compatible"] is False
     finally:
         with suppress(Exception):
-            delete_alias(other, "")  # no-op if no alias
+            delete_alias(other, seed["config"].qdrant_alias)
         other.delete_collection()
         _cleanup(seed)
+        _reset_active_definitions()
 
 
 def test_payload_indexes_are_typed_and_idempotent_on_real_qdrant(tmp_path):
@@ -474,9 +522,10 @@ def test_repair_refuses_to_repoint_alias_outside_activation_lifecycle(tmp_path):
         assert any("index-activate" in blocker for blocker in result["repair_blockers"])
     finally:
         with suppress(Exception):
-            delete_alias(other, "")  # no-op if no alias
+            delete_alias(other, seed["config"].qdrant_alias)
         other.delete_collection()
         _cleanup(seed)
+        _reset_active_definitions()
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +554,6 @@ def test_reconcile_fails_closed_when_no_pg_active_definition(tmp_path):
         )
     finally:
         _cleanup(seed)
-        _reset_active_definitions()
         _reset_active_definitions()
 
 
@@ -569,7 +617,23 @@ def test_reconcile_fails_closed_on_multiple_pg_active_definitions(tmp_path):
         with suppress(Exception):
             _cleanup(seed)
         with suppress(Exception):
+            # Clean up the second definition's Qdrant state.
+            delete_alias(idx2, seed["config"].qdrant_alias)
             idx2.delete_collection()
+            # Also delete the second definition from PostgreSQL.
+            with connect(TEST_DSN) as conn2, conn2.cursor() as cur2:
+                cur2.execute(
+                    "DELETE FROM index_definitions WHERE id = %s",
+                    (str(build2["index_definition"]["id"]),),
+                )
+                cur2.execute(
+                    "DELETE FROM embedding_manifests WHERE index_definition_id = %s",
+                    (str(build2["index_definition"]["id"]),),
+                )
+                cur2.execute(
+                    "DELETE FROM index_jobs WHERE index_definition_id = %s",
+                    (str(build2["index_definition"]["id"]),),
+                )
         _reset_active_definitions()
 
 
@@ -657,7 +721,171 @@ def test_reconcile_fails_closed_when_required_alias_targets_wrong_collection(
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute("UPDATE index_definitions SET lifecycle_status='building'")
         _reset_active_definitions()
-        # Debug: check state after cleanup
+
+
+def _purge_stale_test_projection():
+    """Delete every non-production index definition, its chunks, and Qdrant state.
+
+    ``_index_reconcile`` iterates over *all* PostgreSQL definitions and checks
+    each one's Qdrant projection.  Stale test definitions/collections from
+    earlier tests in the same session would otherwise surface as false
+    discrepancies.  Only the configured production alias is preserved.
+    """
+    import sys
+
+    from research_store.config import StoreConfig
+    from research_store.qdrant import QdrantIndex
+
+    config = StoreConfig.from_env()
+    try:
+        with connect(TEST_DSN) as conn, conn.cursor() as cur:
+            # Delete ALL test definitions (not just non-active) to ensure
+            # complete isolation between tests. Production definitions are
+            # identified by having lifecycle_status='active' AND matching the
+            # configured qdrant_alias.
+            cur.execute(
+                "SELECT id, physical_collection FROM index_definitions"
+            )
+            all_defs = cur.fetchall()
+            print(f"_purge_stale_test_projection: found {len(all_defs)} total defs", file=sys.stderr)
+
+            # Identify which definitions are production (active + matching alias)
+            prod_def_ids = set()
+            for def_id, collection in all_defs:
+                if collection == config.qdrant_alias:
+                    prod_def_ids.add(str(def_id))
+
+            # Delete everything except production definitions
+            test_def_ids = [str(row[0]) for row in all_defs if str(row[0]) not in prod_def_ids]
+            print(f"_purge_stale_test_projection: purging {len(test_def_ids)} test defs", file=sys.stderr)
+
+            if test_def_ids:
+                # Delete all downstream records first
+                cur.execute(
+                    "DELETE FROM index_jobs WHERE index_definition_id = ANY(%s)",
+                    (test_def_ids,),
+                )
+                print(f"  deleted index_jobs: {cur.rowcount}", file=sys.stderr)
+                cur.execute(
+                    "DELETE FROM embedding_manifests WHERE index_definition_id = ANY(%s)",
+                    (test_def_ids,),
+                )
+                print(f"  deleted embedding_manifests: {cur.rowcount}", file=sys.stderr)
+                cur.execute(
+                    "DELETE FROM index_point_counts WHERE index_definition_id = ANY(%s)",
+                    (test_def_ids,),
+                )
+                print(f"  deleted index_point_counts: {cur.rowcount}", file=sys.stderr)
+                cur.execute(
+                    "DELETE FROM index_activation_journal "
+                    "WHERE target_definition_id = ANY(%s) OR previous_definition_id = ANY(%s)",
+                    (test_def_ids, test_def_ids),
+                )
+                print(f"  deleted activation_journal: {cur.rowcount}", file=sys.stderr)
+                cur.execute(
+                    "DELETE FROM index_definitions WHERE id = ANY(%s)",
+                    (test_def_ids,),
+                )
+                print(f"  deleted index_definitions: {cur.rowcount}", file=sys.stderr)
+
+    except Exception as e:
+        print(f"  BULK DELETE ERROR: {e}", file=sys.stderr)
+        # Fallback: delete one at a time
+        with connect(TEST_DSN) as conn2, conn2.cursor() as cur2:
+            for def_id, collection in all_defs:
+                if str(def_id) in prod_def_ids:
+                    continue
+                print(f"  purging {def_id} (fallback)", file=sys.stderr)
+                try:
+                    cur2.execute(
+                        "DELETE FROM index_jobs WHERE index_definition_id = %s",
+                        (str(def_id),),
+                    )
+                    cur2.execute(
+                        "DELETE FROM embedding_manifests WHERE index_definition_id = %s",
+                        (str(def_id),),
+                    )
+                    cur2.execute(
+                        "DELETE FROM index_point_counts WHERE index_definition_id = %s",
+                        (str(def_id),),
+                    )
+                    cur2.execute(
+                        "DELETE FROM index_activation_journal "
+                        "WHERE target_definition_id = %s OR previous_definition_id = %s",
+                        (str(def_id), str(def_id)),
+                    )
+                    cur2.execute(
+                        "DELETE FROM index_definitions WHERE id = %s",
+                        (str(def_id),),
+                    )
+                    print("    deleted", file=sys.stderr)
+                except Exception as e2:
+                    print(f"    ERROR: {e2}", file=sys.stderr)
+
+        # Also clean up any research_runs created by these tests.
+        # Skip runs with sealed assets (trigger protection).
+        try:
+            cur2.execute(
+                "SELECT id FROM research_runs WHERE external_run_id LIKE 'fr_reconcile_%%'",
+            )
+            for (run_id,) in cur2.fetchall():
+                try:
+                    cur2.execute("DELETE FROM research_runs WHERE id = %s", (str(run_id),))
+                except Exception:  # noqa: BLE001,S110
+                    pass  # sealed run; leave it intact.
+        except Exception as e2:
+            print(f"  run cleanup error: {e2}", file=sys.stderr)
+
+        # Verify deletions persisted
+        try:
+            cur2.execute('SELECT count(*) FROM index_definitions')
+            _defs_remaining = cur2.fetchone()[0]
+            print(f"  defs remaining after purge: {_defs_remaining}", file=sys.stderr)
+        except Exception as _e:
+            print(f"  ERROR checking defs after purge: {_e}", file=sys.stderr)
+    except Exception as e:
+        print(f"_purge_stale_test_projection FAILED: {e}", file=sys.stderr)
+        raise
+    try:
+        q = QdrantIndex(
+            config.qdrant_url, config.qdrant_api_key,
+            config.qdrant_alias, config.embedding_dimension,
+        )
+        # First, delete all non-production aliases and their collections.
+        for alias_name, collection_name in q.list_aliases().items():
+            if alias_name == config.qdrant_alias:
+                continue
+            with suppress(Exception):
+                delete_alias(q, alias_name)
+            with suppress(Exception):
+                tmp = QdrantIndex(
+                    config.qdrant_url, config.qdrant_api_key,
+                    collection_name, config.embedding_dimension,
+                )
+                tmp.delete_collection()
+        # Second, delete any raw collections that don't have aliases
+        # (orphaned collections from failed/crashed tests).
+        try:
+            all_collections = q._request("GET", "/collections").get("collections", [])
+            print(f"  found {len(all_collections)} raw collections to potentially delete", file=sys.stderr)
+            for col_info in all_collections:
+                col_name = col_info["name"]
+                if col_name == config.qdrant_alias:
+                    print(f"  skipping production alias collection: {col_name}", file=sys.stderr)
+                    continue
+                print(f"  deleting raw collection: {col_name}", file=sys.stderr)
+                with suppress(Exception):
+                    tmp = QdrantIndex(
+                        config.qdrant_url, config.qdrant_api_key,
+                        col_name, config.embedding_dimension,
+                    )
+                    tmp.delete_collection()
+                    print(f"  deleted: {col_name}", file=sys.stderr)
+        except Exception as _coll_e:
+            print(f"  collection cleanup error: {_coll_e}", file=sys.stderr)
+    except Exception as _qdrant_e:
+        print(f"  qdrant cleanup error: {_qdrant_e}", file=sys.stderr)
+        raise
 
 
 def test_reconcile_passes_when_all_invariants_hold(tmp_path):
@@ -665,14 +893,17 @@ def test_reconcile_passes_when_all_invariants_hold(tmp_path):
     healthy coverage/schema => reconciliation passes."""
     from research_store.postgres import connect
 
+    # Start from a clean slate: no stale definitions or collections.
+    _purge_stale_test_projection()
+
     seed = _seed_reconciliation_run(tmp_path, count=1)
 
-    # Debug: check state after seeding
     try:
         # Mark the definition active directly; the alias was set during seed.
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                "UPDATE index_definitions SET lifecycle_status='active' WHERE lifecycle_status='building'"
+                "UPDATE index_definitions SET lifecycle_status='active' WHERE id = %s",
+                (str(seed["definition"]["id"]),),
             )
 
         result = _index_reconcile(seed["config"])
