@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from ._catalog import CANONICAL_MODELS
 from .codec import (
     DomainValidationError,
     dumps,
@@ -14,7 +15,6 @@ from .codec import (
     to_dict,
     write_schema,
 )
-from .models import CANONICAL_MODELS
 from .validation import ValidationContext, validate_references
 
 MODEL_BY_VERSION = {model.SCHEMA_VERSION: model for model in CANONICAL_MODELS}
