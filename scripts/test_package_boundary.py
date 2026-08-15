@@ -54,9 +54,7 @@ def _absolute_import_roots(path: Path) -> set[str]:
 
 def _research_store_support_module_closure() -> set[str]:
     top_level_modules = {
-        path.stem: path
-        for path in SCRIPTS.glob("*.py")
-        if path.name != "__init__.py"
+        path.stem: path for path in SCRIPTS.glob("*.py") if path.name != "__init__.py"
     }
     pending = list((SCRIPTS / "research_store").rglob("*.py"))
     inspected: set[Path] = set()
