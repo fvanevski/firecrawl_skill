@@ -116,39 +116,69 @@ added_modes:
 # initial prompt for the project. It will always be given to the LLM upon activating the project
 # (contrary to the memories, which are loaded on demand).
 initial_prompt: |
-  Use Serena as the preferred repository code-intelligence and precise
-  file-manipulation interface.
+  Follow the repository-level agent contract in AGENTS.md and the current assigned
+  GitHub issue/gate. This project prompt only defines Serena's role; do not use it
+  to override repository architecture, acceptance criteria, or current source.
 
-  For Python symbols and semantic relationships, begin with
-  get_symbols_overview, find_symbol, find_declaration,
-  find_referencing_symbols, or find_implementations rather than broad
-  whole-file reads or textual grep.
+  Use Serena as the primary semantic interface for current Python code. Prefer
+  {{ tool_names['get_symbols_overview'] }}, {{ tool_names['find_symbol'] }},
+  {{ tool_names['find_declaration'] }}, {{ tool_names['find_referencing_symbols'] }},
+  and {{ tool_names['find_implementations'] }} before broad textual reads when the
+  question is about symbols, callers, implementations, or code structure.
 
-  Retrieve symbol bodies only when their implementation is needed.
+  Retrieve symbol bodies only when implementation details are needed. After moving,
+  renaming, replacing, or deleting symbols, re-check references and diagnostics.
+  Prefer {{ tool_names['rename_symbol'] }} for symbol renames and
+  {{ tool_names['safe_delete_symbol'] }} for deletions when their semantics match
+  the requested change.
 
-  For literal text, configuration keys, SQL fragments, error strings,
-  schema fields, comments, or cases where the relevant symbol is not known,
-  prefer search_for_pattern.
+  {% if 'get_diagnostics_for_symbol' in available_tools %}
+  Use get_diagnostics_for_symbol for focused post-edit validation when relevant.
+  {% endif %}
 
-  Use read_file for bounded file inspection when semantic retrieval is
-  insufficient or the file is not naturally symbol-oriented. Avoid reading
-  an entire large Python module when the required symbols can be retrieved
-  directly.
+  {% if 'search_for_pattern' in available_tools %}
+  For literal text, configuration keys, SQL fragments, error strings, schema fields,
+  comments, or cases where no useful symbol is known, use search_for_pattern.
+  {% endif %}
 
-  Prefer symbol-scoped edits such as replace_symbol_body,
-  insert_before_symbol, insert_after_symbol, and rename_symbol when the
-  requested change aligns with a code symbol.
+  {% if 'read_file' in available_tools %}
+  Use read_file only for bounded inspection when semantic retrieval is insufficient
+  or the file is not naturally symbol-oriented. Avoid whole-file reads of large
+  Python modules when targeted symbol retrieval is sufficient.
+  {% endif %}
 
-  For precise textual edits that do not align with a whole symbol, use the
-  native Qwen edit tool. For controlled repeated changes across files,
-  consider replace_in_files and inspect its preview before applying replacements.
+  Prefer symbol-scoped edits such as {{ tool_names['replace_symbol_body'] }},
+  {{ tool_names['insert_before_symbol'] }}, and
+  {{ tool_names['insert_after_symbol'] }} when the requested change aligns with a
+  complete code symbol.
 
-  Do not use Serena execute_shell_command. Use the host Qwen/RTK shell path
-  for Git, GitHub, tests, linting, Docker, database commands, and project CLI
-  execution.
+  {% if 'replace_content' in available_tools %}
+  Use replace_content for precise non-symbol text edits when it is safer than
+  replacing a whole symbol.
+  {% endif %}
+  {% if 'replace_in_files' in available_tools %}
+  For controlled repeated textual changes across files, use replace_in_files only
+  after inspecting its dry-run preview.
+  {% endif %}
 
-  Do not use Serena memory as durable project memory. OpenViking owns that
-  role.
+  Probe, when available, is provisional broad discovery only. Treat Probe results as
+  candidate locations, then use Serena to resolve authoritative Python symbols,
+  references, implementations, diagnostics, and edits. Do not duplicate a Serena
+  semantic search with Probe without a concrete reason.
+
+  Do not use Serena for shell execution. Git, GitHub, tests, linting, Docker,
+  PostgreSQL, Qdrant, Valkey, and project CLI execution belong to the host OpenCode
+  agent using RTK/native tools according to AGENTS.md. Exact/raw acceptance evidence
+  must not be inferred from compressed command summaries.
+
+  Serena memory is intentionally disabled for this project. OpenViking owns bounded
+  durable cross-session rationale; current source, GitHub, CI, and runtime state
+  remain authoritative in their native systems.
+
+  While structural-refactor epic #246 is open, repository paths are transitional.
+  Follow current symbols/references and issue-declared compatibility boundaries
+  instead of assuming scripts/ or any legacy module path is permanent. Optimize for
+  semantic locality and cohesive symbols, not arbitrary file-count or LOC targets.
 
 # time budget (seconds) per tool call for the retrieval of additional symbol information
 # such as docstrings or parameter information.
