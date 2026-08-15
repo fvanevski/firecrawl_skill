@@ -18,7 +18,7 @@ def run(args, config, deps):
     service = deps.build_service(config)
     if args.command == "corpus-overview":
         service.corpus_overview()
-        return None
+        return
     if args.command == "search-assets":
         filters = {
             key: value
@@ -54,10 +54,10 @@ def run(args, config, deps):
             },
             "candidates": candidates,
         }
-        return None
+        return
     if args.command == "inspect-asset":
         service.inspect_asset(UUID(args.id))
-        return None
+        return
     if args.command == "fetch-passages":
         retrieval_admin.fetch_passages(
             service,
@@ -66,7 +66,7 @@ def run(args, config, deps):
             resolve_run_id=deps._resolve_run_id,
             uow_factory=deps._uow_factory,
         )
-        return None
+        return
     if args.command == "expand-relationships":
         service.expand_relationships(
             [UUID(value) for value in args.ids],
@@ -74,10 +74,10 @@ def run(args, config, deps):
             max_results=args.max_results,
             max_tokens=args.max_tokens,
         )
-        return None
+        return
     if args.command == "build-evidence-packet":
         service.build_evidence_packet(
             [UUID(value) for value in args.ids], max_tokens=args.max_tokens
         )
-        return None
+        return
     raise AssertionError(args.command)

@@ -29,9 +29,10 @@ def run(args, config, deps):
         print(deps.dumps(result))
         return 0
     if command == "packet-validate":
+        from research_domain.registry import load_model
+
         from ..container import build_evidence_service
         from ..packet_validator import EvidencePacketValidator
-        from research_domain.registry import load_model
 
         packet_rec = build_evidence_service(config).export_packet(
             UUID(args.run_id), args.revision
@@ -66,12 +67,13 @@ def run(args, config, deps):
             raise
         return None
     if command == "packet-inspect":
+        from research_domain.registry import load_model
+
         from ..container import build_evidence_service
         from ..packet_validator import (
             EvidencePacketValidator,
             bounded_citation_ready_output,
         )
-        from research_domain.registry import load_model
 
         packet_rec = build_evidence_service(config).export_packet(
             UUID(args.run_id), args.revision
@@ -105,9 +107,10 @@ def run(args, config, deps):
             raise
         return None
     if command == "packet-diff":
+        from research_domain.registry import load_model
+
         from ..container import build_evidence_service
         from ..packet_diff import diff_packets
-        from research_domain.registry import load_model
 
         evidence_svc = build_evidence_service(config)
         run_id = UUID(args.run_id)

@@ -9,22 +9,32 @@ implementation rather than duplicating policy.
 from __future__ import annotations
 
 import argparse
-import os
+import os as os
 import sys
 from pathlib import Path
 
-from .. import derivation_admin, index_admin, resource_admin, run_lookup, store_admin
+from .. import (
+    derivation_admin,
+    export_serialization,
+    index_admin,
+    resource_admin,
+    run_lookup,
+    store_admin,
+    store_runtime,
+)
 from ..config import StoreConfig
 from ..container import (
-    build_audit_service,
-    build_resource_governor,
-    build_run_service,
-    build_service,
-    build_workflow_operation_service,
+    build_audit_service as build_audit_service,
 )
-from ..export_serialization import (
-    canonical_export_json as _canonical_export_json,
-    export_json as _export_json,
+from ..container import (
+    build_resource_governor as build_resource_governor,
+)
+from ..container import (
+    build_run_service as build_run_service,
+)
+from ..container import build_service
+from ..container import (
+    build_workflow_operation_service as build_workflow_operation_service,
 )
 from ..projection_reconciliation import reconcile_projection_compat
 from ..reconciliation import ReconciliationError, reconcile_run
@@ -34,8 +44,7 @@ from ..run_integrity_export import (
     build_integrity_report,
     build_run_export,
 )
-from ..service import dumps, json_default
-from ..store_runtime import database as _db, uow_factory as _uow_factory
+from ..service import dumps, json_default as json_default
 from . import acquisition, admin, audit, benchmark, derivation, evidence, indexing
 from . import retrieval, runs, synthesis
 from .parser import parser
@@ -43,6 +52,10 @@ from .parser import parser
 # Historical helper seams used by tests and transitional callers.  These names
 # delegate to non-CLI implementations so compatibility does not recreate the
 # former monolith.
+_canonical_export_json = export_serialization.canonical_export_json
+_export_json = export_serialization.export_json
+_db = store_runtime.database
+_uow_factory = store_runtime.uow_factory
 _qdrant = index_admin.qdrant
 _worker = index_admin.worker
 _index_rows = index_admin.index_rows

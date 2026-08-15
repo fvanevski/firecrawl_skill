@@ -6,7 +6,6 @@ import ast
 from pathlib import Path
 
 import pytest
-
 from research_store import cli
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +17,7 @@ def _parser_commands() -> set[str]:
     root = cli.parser()
     subparser_action = next(
         action
-        for action in root._actions  # noqa: SLF001 - parser contract inspection
+        for action in root._actions
         if hasattr(action, "choices") and isinstance(action.choices, dict)
     )
     return set(subparser_action.choices)

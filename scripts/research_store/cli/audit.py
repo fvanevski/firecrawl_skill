@@ -41,7 +41,7 @@ def run(args, config, deps):
             audit_packet_manifest=manifest,
         )
         print(deps.dumps(assessment))
-        return None
+        return
     if command == "audit-status":
         run_id = deps._resolve_any_run_id(config, args.external_id)
         if run_id is None:
@@ -51,7 +51,7 @@ def run(args, config, deps):
         if result is None:
             raise SystemExit(f"no assessments found for run: {args.external_id}")
         print(deps.dumps(result))
-        return None
+        return
     if command == "audit-query":
         run_id = deps._resolve_any_run_id(config, args.external_id)
         if run_id is None:
@@ -63,7 +63,7 @@ def run(args, config, deps):
             offset=args.offset,
         )
         print(deps.dumps({"run_id": str(run_id), "assessments": assessments}))
-        return None
+        return
     if command == "audit-export":
         export = audit_svc.export_assessment(UUID(args.assessment_id))
         if export is None:
@@ -81,7 +81,7 @@ def run(args, config, deps):
             except BaseException:
                 os.unlink(tmp_path)
                 raise
-        return None
+        return
     if command == "audit-staleness":
         run_id = deps._resolve_run_id(config, args.external_id)
         if run_id is None:
@@ -95,5 +95,5 @@ def run(args, config, deps):
             current_hash=args.target_hash,
         )
         print(deps.dumps({"run_id": str(run_id), "stale_assessments": stale}))
-        return None
+        return
     raise AssertionError(command)

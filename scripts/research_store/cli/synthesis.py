@@ -16,7 +16,7 @@ def run(args, config, deps):
             build_resource_governor=deps.build_resource_governor,
         )
         print(deps.dumps(result))
-        return None
+        return
     except CommercialFallbackError:
         raise SystemExit(
             "commercial fallback not permitted. Use --commercial-fallback to enable."
