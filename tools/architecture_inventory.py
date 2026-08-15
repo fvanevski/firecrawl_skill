@@ -54,7 +54,8 @@ def _category(rel_path: str) -> str:
     if "/cli/" in path or "cli" in stem or stem.endswith("command"):
         return "entrypoint-cli"
     if any(
-        token in stem for token in ("repository", "store", "uow", "blob", "persistence")
+        token in stem
+        for token in ("repository", "store", "uow", "blob", "persistence", "postgres")
     ):
         return "persistence"
     if any(
