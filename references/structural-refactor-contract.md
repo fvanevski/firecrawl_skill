@@ -150,7 +150,7 @@ For each in-scope module the inventory records the columns declared in `module_c
 - AST-resolved imports to other unambiguously named in-scope modules;
 - local fan-out and fan-in counts.
 
-The import graph is intentionally conservative. If more than one in-scope path maps to the same importable module name, that name is listed in `ambiguous_module_names`, imports targeting it are not assigned to either path, and its fan-in is recorded as `null`. This prevents a structural name collision from being misreported as precise dependency evidence.
+The import graph is intentionally conservative. Each physical source path contributes its independently resolved outgoing edges to fan-in counts for uniquely named targets, even when the source path's own importable module name is ambiguous. If more than one in-scope path maps to the same importable target module name, that target name is listed in `ambiguous_module_names`, imports targeting it are not assigned to either path, and its fan-in is recorded as `null`. This preserves reliable physical-source evidence without inventing precision for ambiguous targets.
 
 Dynamic imports, subprocess execution, extensionless shell/Python wrappers, dependency injection, and runtime call graphs are outside this metric and must not be inferred from it.
 

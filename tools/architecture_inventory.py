@@ -191,7 +191,7 @@ def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
     }
 
     records: list[dict[str, object]] = []
-    imports_by_module: dict[str, list[str]] = {}
+    imports_by_source_path: dict[str, list[str]] = {}
     for path in paths:
         rel_path = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8")
@@ -203,8 +203,7 @@ def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
             is_package=is_package,
             resolvable_module_names=resolvable_module_names,
         )
-        if module_name in resolvable_module_names:
-            imports_by_module[module_name] = local_imports
+        imports_by_source_path[rel_path] = local_imports
         records.append(
             {
                 "path": rel_path,
@@ -219,7 +218,7 @@ def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
 
     fan_in = Counter(
         dependency
-        for dependencies in imports_by_module.values()
+        for dependencies in imports_by_source_path.values()
         for dependency in dependencies
     )
     module_rows = [
@@ -254,8 +253,9 @@ def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
             "physical_loc_definition": "len(file_text.splitlines())",
             "symbol_definition": "[kind, name] for module-level class/function/async-function definitions",
             "import_graph_definition": (
-                "AST-resolved imports between uniquely named in-scope modules only; "
-                "ambiguous module targets are excluded"
+                "AST-resolved imports from each in-scope physical source path to "
+                "uniquely named in-scope module targets; ambiguous module targets "
+                "are excluded"
             ),
         },
         "summary": {
