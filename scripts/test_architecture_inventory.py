@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
-import json
+import io
+import subprocess
+import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,17 +27,36 @@ def _rows_by_path(inventory):
     }
 
 
-def test_checked_in_architecture_baseline_is_canonical_snapshot():
-    # The baseline is immutable historical evidence for BASELINE_SHA. Current HEAD is
-    # expected to diverge as the refactor progresses, so comparing the current source
-    # tree to that historical snapshot would incorrectly require rewriting the baseline.
+def _materialize_baseline_scripts(tmp_path: Path) -> None:
+    # Reproduce the immutable baseline from its exact historical source tree rather
+    # than comparing it to the legitimately evolving current working tree.
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "archive",
+            "--format=zip",
+            BASELINE_SHA,
+            "scripts",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    with zipfile.ZipFile(io.BytesIO(result.stdout)) as archive:
+        archive.extractall(tmp_path)
+
+
+def test_checked_in_architecture_baseline_matches_exact_source_tree(tmp_path):
+    _materialize_baseline_scripts(tmp_path)
+    generated = architecture_inventory.render_inventory(
+        architecture_inventory.build_inventory(tmp_path, BASELINE_SHA)
+    )
     checked_in = (REPO_ROOT / "references" / "architecture-baseline.json").read_text(
         encoding="utf-8"
     )
-    baseline = json.loads(checked_in)
 
-    assert baseline["source_sha"] == BASELINE_SHA
-    assert checked_in == architecture_inventory.render_inventory(baseline)
+    assert checked_in == generated
 
 
 def test_architecture_inventory_generator_is_deterministic_for_current_tree():
