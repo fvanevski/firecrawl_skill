@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
 import sys
 import textwrap
 import zipfile
+from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import sys
 from importlib import import_module
 from importlib.abc import Loader, MetaPathFinder
 from importlib.machinery import ModuleSpec
 from importlib.util import spec_from_loader
-import sys
 from types import ModuleType
 from typing import Any
 
