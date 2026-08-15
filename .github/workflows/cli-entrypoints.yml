@@ -1,0 +1,50 @@
+name: CLI entrypoint contracts
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: "CLI entrypoint contracts — Python ${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements-research-store.txt \
+            pytest
+
+      - name: Run CLI entrypoint contract regressions
+        run: |
+          python -m pytest \
+            -q \
+            -p no:cacheprovider \
+            scripts/test_cli_entrypoints.py
