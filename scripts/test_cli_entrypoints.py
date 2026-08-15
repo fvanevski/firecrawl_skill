@@ -32,7 +32,10 @@ def test_command_families_are_disjoint_and_cover_non_overlay_parser_commands() -
             )
             claimed[command] = family.__name__
 
-    assert _parser_commands() - cli._SPECIAL_COMMANDS == set(claimed) - cli._SPECIAL_COMMANDS
+    assert (
+        _parser_commands() - cli._SPECIAL_COMMANDS
+        == set(claimed) - cli._SPECIAL_COMMANDS
+    )
 
 
 def test_canonical_root_is_dispatch_only_and_does_not_exec_legacy_monolith() -> None:
@@ -75,17 +78,18 @@ def test_artifact_overlay_rejects_unknown_schema_version() -> None:
     assert exc.value.code == 2
 
 
-def test_reconciliation_overlay_preserves_optional_run_and_repair(monkeypatch, capsys) -> None:
+def test_reconciliation_overlay_preserves_optional_run_and_repair(
+    monkeypatch, capsys
+) -> None:
     config = object()
     calls = []
     monkeypatch.setattr(cli.StoreConfig, "from_env", lambda: config)
     monkeypatch.setattr(
         cli,
         "reconcile_run",
-        lambda actual_config, run, repair=False: calls.append(
-            (actual_config, run, repair)
-        )
-        or {"ok": True, "scope": "run"},
+        lambda actual_config, run, repair=False: (
+            calls.append((actual_config, run, repair)) or {"ok": True, "scope": "run"}
+        ),
     )
 
     assert cli.main(["reconcile-qdrant", "fr_test", "--repair"]) == 0

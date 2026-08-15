@@ -140,15 +140,21 @@ def parser_info(config) -> dict[str, Any]:
 
 def ingest_result(config, args, build_service):
     path = Path(args.file)
-    return build_service(config).ingest(
-        IngestRequest(
-            requested_url=args.url,
-            content=path.read_bytes(),
-            mime_type="application/json" if path.suffix == ".json" else "text/markdown",
-            title=args.title,
-            metadata=json.loads(args.metadata_json),
+    return (
+        build_service(config)
+        .ingest(
+            IngestRequest(
+                requested_url=args.url,
+                content=path.read_bytes(),
+                mime_type="application/json"
+                if path.suffix == ".json"
+                else "text/markdown",
+                title=args.title,
+                metadata=json.loads(args.metadata_json),
+            )
         )
-    ).__dict__
+        .__dict__
+    )
 
 
 def blob_health(config, *, database_fn=database) -> dict[str, Any]:
@@ -283,7 +289,9 @@ def doctor(config, deps) -> tuple[dict[str, Any], bool]:
             workers = checks["worker"]["workers"]
             threshold = max(90, config.worker_poll_seconds * 4)
             age = (
-                (datetime.now(timezone.utc) - workers[0]["heartbeat_at"]).total_seconds()
+                (
+                    datetime.now(timezone.utc) - workers[0]["heartbeat_at"]
+                ).total_seconds()
                 if workers
                 else None
             )
@@ -373,9 +381,7 @@ def doctor(config, deps) -> tuple[dict[str, Any], bool]:
                         offset = page.get("next_page_offset")
                         if not offset:
                             break
-                    chunk_ids = {
-                        str(value) for value in deps._active_chunk_ids(config)
-                    }
+                    chunk_ids = {str(value) for value in deps._active_chunk_ids(config)}
                     qdrant["coverage"] = {
                         "missing": len(chunk_ids - point_ids),
                         "orphaned": len(point_ids - chunk_ids),

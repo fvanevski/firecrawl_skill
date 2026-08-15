@@ -17,6 +17,7 @@ from .. import (
     derivation_admin,
     export_serialization,
     index_admin,
+    postgres,
     resource_admin,
     run_lookup,
     store_admin,
@@ -78,7 +79,13 @@ _recover_activation = index_admin.recover_activation
 _activate_index = index_admin.activate_index
 _qdrant_alias_state = index_admin.qdrant_alias_state
 _schema_state = store_admin.schema_state
-_blob_health = store_admin.blob_health
+PostgresUnitOfWork = postgres.PostgresUnitOfWork
+
+
+def _blob_health(config):
+    return store_admin.blob_health(config, database_fn=_db)
+
+
 _classify_connectivity_failure = store_admin.classify_connectivity_failure
 _endpoint_health = resource_admin.endpoint_health
 _resource_status = resource_admin.resource_status
@@ -120,14 +127,18 @@ def _cmd_derivation_list(config, args) -> int:
 
 
 def _cmd_derivation_activate(config, args) -> int:
-    output, exit_code = derivation_admin.activate_derivation(config, args, build_service)
+    output, exit_code = derivation_admin.activate_derivation(
+        config, args, build_service
+    )
     for item in output:
         print(dumps(item))
     return exit_code
 
 
 def _cmd_derivation_compare(config, args) -> int:
-    output, exit_code = derivation_admin.compare_derivations(config, args, build_service)
+    output, exit_code = derivation_admin.compare_derivations(
+        config, args, build_service
+    )
     print(dumps(output))
     return exit_code
 

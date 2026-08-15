@@ -297,10 +297,18 @@ def normalize(config, args, *, database_fn=database) -> dict:
                 "content_sha256": doc_key[3],
                 "source_block_count": len(typed_blocks),
                 "kept": len(
-                    [block for block in norm_result.blocks if block.disposition == "keep"]
+                    [
+                        block
+                        for block in norm_result.blocks
+                        if block.disposition == "keep"
+                    ]
                 ),
                 "altered": len(
-                    [block for block in norm_result.blocks if block.disposition == "alter"]
+                    [
+                        block
+                        for block in norm_result.blocks
+                        if block.disposition == "alter"
+                    ]
                 ),
                 "suppressed": len(norm_result.suppressed_blocks),
                 "removed": len(norm_result.removed_blocks),

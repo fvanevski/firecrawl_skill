@@ -9,7 +9,7 @@ from .handoff import HandoffBuilder
 from .postgres import PostgresUnitOfWork
 
 
-def build_handoff(config, args) -> dict:
+def build_handoff(config, args, *, uow_type=PostgresUnitOfWork) -> dict:
     config.require_database()
     token_limits = {}
     if args.token_limit_max_input is not None:
@@ -19,7 +19,7 @@ def build_handoff(config, args) -> dict:
     if args.token_limit_max_retrieval is not None:
         token_limits["max_retrieval_candidates"] = args.token_limit_max_retrieval
     factory = partial(
-        PostgresUnitOfWork,
+        uow_type,
         config.database_url,
         config.physical_collection,
         config.embedding_model,
@@ -30,9 +30,13 @@ def build_handoff(config, args) -> dict:
         config.chunker_version,
         config.chunker_name,
     )
-    return HandoffBuilder(
-        factory,
-        token_limits=token_limits if token_limits else None,
-        max_passages=args.max_passages,
-        max_claims=args.max_claims,
-    ).build(UUID(args.run_id)).to_dict()
+    return (
+        HandoffBuilder(
+            factory,
+            token_limits=token_limits if token_limits else None,
+            max_passages=args.max_passages,
+            max_claims=args.max_claims,
+        )
+        .build(UUID(args.run_id))
+        .to_dict()
+    )

@@ -180,7 +180,7 @@ def run(args, config, deps):
     if command == "handoff":
         from ..handoff_admin import build_handoff
 
-        output_dict = build_handoff(config, args)
+        output_dict = build_handoff(config, args, uow_type=deps.PostgresUnitOfWork)
         if args.output != "-":
             output_path = Path(args.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,9 @@ from .report_service import LocalSynthesisService
 from .semantic_service import SemanticCallService
 
 
-def execute(config, args, *, build_run_service, resolve_run_id, build_resource_governor):
+def execute(
+    config, args, *, build_run_service, resolve_run_id, build_resource_governor
+):
     config.require_database()
     run_service = build_run_service(config)
     run_id = resolve_run_id(config, args.external_id)

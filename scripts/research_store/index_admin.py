@@ -67,10 +67,20 @@ def index_rows(config) -> list[dict[str, Any]]:
             GROUP BY d.id ORDER BY d.created_at DESC"""
         )
         keys = (
-            "id", "fingerprint", "physical_collection", "model_name",
-            "model_revision", "dimension", "distance_metric", "normalization",
-            "instruction_template_hash", "lifecycle_status", "created_at",
-            "activated_at", "manifest_count", "complete_count",
+            "id",
+            "fingerprint",
+            "physical_collection",
+            "model_name",
+            "model_revision",
+            "dimension",
+            "distance_metric",
+            "normalization",
+            "instruction_template_hash",
+            "lifecycle_status",
+            "created_at",
+            "activated_at",
+            "manifest_count",
+            "complete_count",
         )
         return [dict(zip(keys, row)) for row in cur.fetchall()]
 
@@ -127,7 +137,9 @@ def index_build(config, document_id=None, *, repair_orphans=False):
         if not offset:
             break
     missing_chunk_ids = selected_chunk_ids - indexed_ids
-    orphaned_chunk_ids = indexed_ids - selected_chunk_ids if document_id is None else set()
+    orphaned_chunk_ids = (
+        indexed_ids - selected_chunk_ids if document_id is None else set()
+    )
     deleted_orphaned = 0
     if repair_orphans and orphaned_chunk_ids:
         index.delete(sorted(orphaned_chunk_ids, key=str))
@@ -145,10 +157,14 @@ def index_build(config, document_id=None, *, repair_orphans=False):
             SET qdrant_collection=excluded.qdrant_collection
             RETURNING id,chunk_id,index_status""",
             (
-                definition["model_name"], definition["model_revision"],
-                definition["dimension"], definition["distance_metric"],
-                definition["normalization"], definition["instruction_template_hash"],
-                definition["physical_collection"], definition["id"],
+                definition["model_name"],
+                definition["model_revision"],
+                definition["dimension"],
+                definition["distance_metric"],
+                definition["normalization"],
+                definition["instruction_template_hash"],
+                definition["physical_collection"],
+                definition["id"],
                 list(selected_chunk_ids),
             ),
         )
@@ -286,8 +302,10 @@ def activate_index(config, identifier, action):
               AND d.parser_version=%s AND d.normalization_version=%s
               AND c.chunker_version=%s""",
             (
-                definition_id, config.parser_version,
-                config.normalization_version, config.chunker_version,
+                definition_id,
+                config.parser_version,
+                config.normalization_version,
+                config.chunker_version,
             ),
         )
         complete = cur.fetchone()[0]
@@ -368,7 +386,9 @@ def list_index_state(config) -> dict[str, Any]:
     }
 
 
-def prune_indexes(config, *, dry_run: bool, force: bool, keep_last: int, index_id: str | None) -> dict[str, Any]:
+def prune_indexes(
+    config, *, dry_run: bool, force: bool, keep_last: int, index_id: str | None
+) -> dict[str, Any]:
     if dry_run and force:
         raise SystemExit("--dry-run and --force are mutually exclusive")
     if force and not index_id:

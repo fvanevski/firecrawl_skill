@@ -86,7 +86,9 @@ def run(args, config, deps) -> int:
     if command == "search-response-get":
         print(
             deps.dumps(
-                deps.build_run_service(config).get_search_response(UUID(args.response_id))
+                deps.build_run_service(config).get_search_response(
+                    UUID(args.response_id)
+                )
             )
         )
         return 0
@@ -171,9 +173,7 @@ def run(args, config, deps) -> int:
             config.require_database()
             run_svc = deps.build_run_service(config)
             status = run_svc.status(external_id=args.external_id)
-            context = require_authoritative_acquisition(
-                run_id=status.id, config=config
-            )
+            context = require_authoritative_acquisition(run_id=status.id, config=config)
             acq_svc = build_acquisition_service(config)
         except (AcquisitionPreflightError, KeyError, RuntimeError, ValueError) as exc:
             print(
@@ -238,7 +238,9 @@ def run(args, config, deps) -> int:
 
         run_svc = deps.build_run_service(config)
         status = run_svc.status(external_id=args.external_id)
-        reconciled = build_acquisition_service(config).reconcile_pending_searches(status.id)
+        reconciled = build_acquisition_service(config).reconcile_pending_searches(
+            status.id
+        )
         print(deps.dumps(reconciled))
         return 0
     if command == "candidate-list-paginated":

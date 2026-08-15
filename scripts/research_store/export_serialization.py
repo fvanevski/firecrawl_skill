@@ -29,7 +29,9 @@ def export_json(
     path: Path,
     payload: Any,
     *,
-    replace_fn: Callable[[str | os.PathLike[str], str | os.PathLike[str]], None] = os.replace,
+    replace_fn: Callable[
+        [str | os.PathLike[str], str | os.PathLike[str]], None
+    ] = os.replace,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
