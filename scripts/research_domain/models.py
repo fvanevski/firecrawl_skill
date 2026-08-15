@@ -5,7 +5,7 @@ as the temporary legacy import surface required by the structural-refactor
 campaign.
 """
 
-from ._catalog import CANONICAL_MODELS
+from ._catalog import CANONICAL_MODELS as CANONICAL_MODELS
 from .acquisition import *
 from .assessment import *
 from .release import *

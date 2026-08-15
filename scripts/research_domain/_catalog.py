@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 from .acquisition import CandidateAssessment
 from .assessment import EvidencePacket
 from .release import (
@@ -64,7 +62,7 @@ CANONICAL_MODELS = (
 )
 
 
-def _schema_owners(models: Iterable[type]) -> dict[str, type]:
+def _schema_owners(models: tuple[type, ...]) -> dict[str, type]:
     """Return the unique canonical owner for every readable schema version."""
 
     owners: dict[str, type] = {}
