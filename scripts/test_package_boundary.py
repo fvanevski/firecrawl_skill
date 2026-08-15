@@ -97,7 +97,6 @@ def test_package_configuration_builds_canonical_and_compatibility_packages(
             "pip",
             "wheel",
             "--no-deps",
-            "--no-build-isolation",
             "--wheel-dir",
             str(tmp_path),
             str(ROOT),
