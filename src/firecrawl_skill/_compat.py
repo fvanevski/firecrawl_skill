@@ -84,8 +84,7 @@ def expose_canonical_package(legacy_name: str, canonical_name: str) -> ModuleTyp
     expected_canonical = _LEGACY_TO_CANONICAL.get(legacy_name)
     if expected_canonical != canonical_name:
         raise ImportError(
-            f"unsupported package-boundary alias: {legacy_name!r} -> "
-            f"{canonical_name!r}"
+            f"unsupported package-boundary alias: {legacy_name!r} -> {canonical_name!r}"
         )
 
     install_legacy_import_facades()
