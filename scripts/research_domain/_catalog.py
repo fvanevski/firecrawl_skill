@@ -42,7 +42,9 @@ def _schema_owners(models: tuple[type, ...]) -> dict[str, type]:
 
     for model in models:
         if model in seen_models:
-            raise RuntimeError(f"duplicate canonical model registration: {model.__name__}")
+            raise RuntimeError(
+                f"duplicate canonical model registration: {model.__name__}"
+            )
         seen_models.add(model)
 
         existing_name = names.get(model.__name__)

@@ -172,12 +172,15 @@ def test_schema_owner_validation_rejects_cross_model_version_collision():
 
 
 def test_legacy_registry_schema_generation_remains_bound_to_current_model_schema():
-    assert schema_registry()["quality-measurement-v1"] == schema_registry()[
-        "quality-measurement-v3"
-    ]
-    assert schema_registry()["quality-measurement-v2"] == schema_registry()[
-        "quality-measurement-v3"
-    ]
-    assert schema_registry()["performance-measurement-v1"] == schema_registry()[
-        "performance-measurement-v2"
-    ]
+    assert (
+        schema_registry()["quality-measurement-v1"]
+        == schema_registry()["quality-measurement-v3"]
+    )
+    assert (
+        schema_registry()["quality-measurement-v2"]
+        == schema_registry()["quality-measurement-v3"]
+    )
+    assert (
+        schema_registry()["performance-measurement-v1"]
+        == schema_registry()["performance-measurement-v2"]
+    )
