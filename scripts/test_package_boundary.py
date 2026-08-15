@@ -7,10 +7,10 @@ import os
 import subprocess
 import sys
 import textwrap
-import tomllib
 import zipfile
 from pathlib import Path
 
+import tomllib
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
