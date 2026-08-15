@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "firecrawl-skill"
+version = "1.0.0"
+description = "Firecrawl research skill package boundary"
+
+[tool.setuptools]
+packages = [
+  "firecrawl_skill",
+  "firecrawl_skill.research_store",
+  "firecrawl_skill.research_domain",
+  "research_store",
+  "research_store.cli",
+  "research_store.parsing",
+  "research_domain",
+]
+
+[tool.setuptools.package-dir]
+firecrawl_skill = "src/firecrawl_skill"
+"firecrawl_skill.research_store" = "src/firecrawl_skill/research_store"
+"firecrawl_skill.research_domain" = "src/firecrawl_skill/research_domain"
+research_store = "scripts/research_store"
+"research_store.cli" = "scripts/research_store/cli"
+"research_store.parsing" = "scripts/research_store/parsing"
+research_domain = "scripts/research_domain"
+
+[tool.setuptools.package-data]
+research_store = [
+  "alembic/*.py",
+  "alembic/*.mako",
+  "alembic/versions/*.py",
+]
