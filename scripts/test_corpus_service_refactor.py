@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 
 import research_store
-import research_store.service as compatibility_service
+from research_store import service as compatibility_service
 from research_store.corpus_service import CorpusService, ParsedContent, PreparedIngest
 
 
