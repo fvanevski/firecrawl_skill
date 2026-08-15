@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,12 @@ def canonical_export_json(payload: Any) -> str:
     )
 
 
-def export_json(path: Path, payload: Any) -> None:
+def export_json(
+    path: Path,
+    payload: Any,
+    *,
+    replace_fn: Callable[[str | os.PathLike[str], str | os.PathLike[str]], None] = os.replace,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
@@ -40,7 +46,7 @@ def export_json(path: Path, payload: Any) -> None:
             temporary.flush()
             os.fsync(temporary.fileno())
             temporary_path = Path(temporary.name)
-        os.replace(temporary_path, path)
+        replace_fn(temporary_path, path)
         temporary_path = None
     finally:
         if temporary_path is not None:

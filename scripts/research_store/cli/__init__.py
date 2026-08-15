@@ -9,7 +9,7 @@ implementation rather than duplicating policy.
 from __future__ import annotations
 
 import argparse
-import os  # noqa: F401 - compatibility seam for callers monkeypatching cli.os
+import os
 import sys
 from pathlib import Path
 
@@ -57,7 +57,6 @@ from .parser import parser
 # delegate to non-CLI implementations so compatibility does not recreate the
 # former monolith.
 _canonical_export_json = export_serialization.canonical_export_json
-_export_json = export_serialization.export_json
 _db = store_runtime.database
 _uow_factory = store_runtime.uow_factory
 _qdrant = index_admin.qdrant
@@ -74,6 +73,10 @@ _blob_health = store_admin.blob_health
 _classify_connectivity_failure = store_admin.classify_connectivity_failure
 _endpoint_health = resource_admin.endpoint_health
 _resource_status = resource_admin.resource_status
+
+
+def _export_json(path, payload):
+    return export_serialization.export_json(path, payload, replace_fn=os.replace)
 
 
 def _resolve_run_id(config, external_id):
