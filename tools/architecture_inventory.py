@@ -43,17 +43,35 @@ def _category(rel_path: str) -> str:
         return "domain-contract"
     if "cli" in stem or stem.endswith("command"):
         return "entrypoint-cli"
-    if any(token in stem for token in ("repository", "store", "uow", "blob", "persistence")):
+    if any(
+        token in stem for token in ("repository", "store", "uow", "blob", "persistence")
+    ):
         return "persistence"
-    if any(token in stem for token in ("retrieval", "index", "qdrant", "embedding", "rerank")):
+    if any(
+        token in stem
+        for token in ("retrieval", "index", "qdrant", "embedding", "rerank")
+    ):
         return "retrieval-indexing"
     if any(token in stem for token in ("evidence", "claim", "report", "audit")):
         return "evidence-report-audit"
     if any(token in stem for token in ("release", "benchmark", "campaign")):
         return "release-benchmark"
-    if any(token in stem for token in ("acquisition", "extract", "scrape", "firecrawl", "candidate")):
+    if any(
+        token in stem
+        for token in ("acquisition", "extract", "scrape", "firecrawl", "candidate")
+    ):
         return "acquisition-extraction"
-    if any(token in stem for token in ("workflow", "orchestr", "coverage", "policy", "semantic", "planning")):
+    if any(
+        token in stem
+        for token in (
+            "workflow",
+            "orchestr",
+            "coverage",
+            "policy",
+            "semantic",
+            "planning",
+        )
+    ):
         return "application-orchestration"
     if path.startswith("scripts/research_store/"):
         return "application-service"
@@ -137,16 +155,16 @@ def _local_imports(
 
 def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
     if not SHA_RE.fullmatch(source_sha):
-        raise ValueError("source_sha must be an exact 40-character hexadecimal commit SHA")
+        raise ValueError(
+            "source_sha must be an exact 40-character hexadecimal commit SHA"
+        )
     root = root.resolve()
     scripts_root = root / "scripts"
     if not scripts_root.is_dir():
         raise ValueError(f"missing scripts directory under {root}")
 
     paths = sorted(
-        path
-        for path in scripts_root.rglob("*.py")
-        if _is_in_scope(path, scripts_root)
+        path for path in scripts_root.rglob("*.py") if _is_in_scope(path, scripts_root)
     )
     module_meta: dict[Path, tuple[str, bool]] = {
         path: _module_name(path, scripts_root) for path in paths
@@ -205,7 +223,9 @@ def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
         },
         "summary": {
             "module_count": len(records),
-            "physical_loc_total": sum(int(record["physical_loc"]) for record in records),
+            "physical_loc_total": sum(
+                int(record["physical_loc"]) for record in records
+            ),
             "categories": dict(sorted(categories.items())),
         },
         "modules": records,

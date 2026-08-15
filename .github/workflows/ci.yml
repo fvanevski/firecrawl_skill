@@ -177,6 +177,13 @@ jobs:
             --allowlist references/pytest-skip-allowlist.json \
             --output "$PYTEST_SKIP_REPORT"
 
+      - name: Capture structural-refactor architecture baseline
+        run: |
+          python tools/architecture_inventory.py \
+            --root . \
+            --source-sha c730b562343e10193fecaf4684925dcee0dc1403 \
+            --output "${RUNNER_TEMP}/architecture-baseline.json"
+
       - name: Upload broad-suite test and skip evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -185,6 +192,7 @@ jobs:
           path: |
             ${{ runner.temp }}/pytest-${{ matrix.python-version }}.xml
             ${{ runner.temp }}/pytest-skips-${{ matrix.python-version }}.json
+            ${{ runner.temp }}/architecture-baseline.json
           if-no-files-found: warn
           retention-days: 90
 
