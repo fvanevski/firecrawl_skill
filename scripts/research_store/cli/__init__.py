@@ -8,10 +8,8 @@ implementation rather than duplicating policy.
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
-from pathlib import Path
 
 from .. import (
     derivation_admin,
@@ -54,6 +52,7 @@ from . import (
     admin,
     audit,
     benchmark,
+    compatibility,
     derivation,
     evidence,
     indexing,
@@ -149,101 +148,7 @@ def _cmd_normalize(config, args) -> int:
     return 1 if result.get("error") == "specify --document <uuid> or --all" else 0
 
 
-def _artifact_parser(command: str) -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog=f"research-db {command}")
-    root.add_argument("id")
-    root.add_argument("--output", required=True)
-    if command == "export-run":
-        root.add_argument(
-            "--schema-version",
-            choices=EXPORT_RUN_SCHEMA_VERSIONS,
-            default="export-run-v2",
-        )
-    else:
-        root.add_argument(
-            "--schema-version",
-            choices=INTEGRITY_SCHEMA_VERSIONS,
-            default="integrity-v1",
-        )
-    return root
-
-
-def _artifact_main(command: str, argv: list[str]) -> int:
-    args = _artifact_parser(command).parse_args(argv)
-    config = StoreConfig.from_env()
-    if command == "export-run":
-        result = build_run_export(config, args.id, args.schema_version)
-    else:
-        result = build_integrity_report(config, args.id, args.schema_version)
-    output = Path(args.output)
-    _export_json(output, result)
-    if command == "integrity":
-        print(
-            dumps(
-                {
-                    "status": "written",
-                    "path": str(output),
-                    "schema_version": result["schema_version"],
-                    "integrity_status": result["diagnostics"]["overall_status"],
-                    "run_id": str(result["run"]["id"]),
-                }
-            )
-        )
-    return 0
-
-
-def _reconcile_parser(command: str) -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog=f"research-db {command}")
-    root.add_argument(
-        "run",
-        nargs="?",
-        help=(
-            "research run UUID or external_run_id; when omitted, report only "
-            "current projection-wide compatibility (no historical run claim)"
-        ),
-    )
-    root.add_argument(
-        "--repair",
-        action="store_true",
-        help=(
-            "explicitly perform bounded projection repairs (requeue exact chunks, "
-            "delete PostgreSQL-orphaned points, create missing payload indexes)"
-        ),
-    )
-    return root
-
-
-def _reconcile_main(command: str, argv: list[str]) -> int:
-    args = _reconcile_parser(command).parse_args(argv)
-    config = StoreConfig.from_env()
-    try:
-        if args.run:
-            result = reconcile_run(config, args.run, repair=args.repair)
-        else:
-            result = reconcile_projection_compat(
-                config,
-                repair=args.repair,
-                index_build=_index_build,
-            )
-    except ReconciliationError as exc:
-        print(
-            dumps(
-                {
-                    "schema_version": "qdrant-reconciliation-v2",
-                    "ok": False,
-                    "scope": "run" if args.run else "projection",
-                    "error": str(exc),
-                }
-            ),
-            file=sys.stderr,
-        )
-        return 2
-    print(dumps(result))
-    final = result.get("post_repair") or result
-    return 0 if final.get("ok", False) else 1
-
-
-_FAMILIES = (
+_PARSED_FAMILIES = (
     admin,
     indexing,
     derivation,
@@ -255,20 +160,20 @@ _FAMILIES = (
     synthesis,
     benchmark,
 )
-_SPECIAL_COMMANDS = {"export-run", "integrity", "index-reconcile", "reconcile-qdrant"}
+_RAW_ARGV_FAMILIES = (compatibility,)
+_FAMILIES = _PARSED_FAMILIES + _RAW_ARGV_FAMILIES
 
 
 def main(argv: list[str] | None = None):
     """Parse and dispatch one research-store CLI invocation."""
     resolved = list(sys.argv[1:] if argv is None else argv)
-    if resolved and resolved[0] in {"export-run", "integrity"}:
-        return _artifact_main(resolved[0], resolved[1:])
-    if resolved and resolved[0] in {"index-reconcile", "reconcile-qdrant"}:
-        return _reconcile_main(resolved[0], resolved[1:])
+    for family in _RAW_ARGV_FAMILIES:
+        if resolved and resolved[0] in family.COMMANDS:
+            return family.run_argv(resolved[0], resolved[1:], sys.modules[__name__])
 
     args = parser().parse_args(resolved)
     config = StoreConfig.from_env()
-    for family in _FAMILIES:
+    for family in _PARSED_FAMILIES:
         if args.command in family.COMMANDS:
             return family.run(args, config, sys.modules[__name__])
     raise AssertionError(f"unrouted CLI command: {args.command}")

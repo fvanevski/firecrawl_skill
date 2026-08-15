@@ -203,7 +203,7 @@ def classify_connectivity_failure(exc: BaseException) -> dict[str, str]:
         }
     if any(
         token in message
-        for token in ("connection refused", "connect econnrefused", "errno111")
+        for token in ("connection refused", "connect ECONNREFUSED", "errno111")
     ):
         return {
             "status": "failure",
