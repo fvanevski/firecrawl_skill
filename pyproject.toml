@@ -18,7 +18,7 @@ packages = [
   "research_store.parsing",
   "research_domain",
 ]
-py-modules = ["budget_policy"]
+py-modules = ["budget_policy", "drain_index_jobs"]
 
 [tool.setuptools.package-dir]
 "" = "scripts"
