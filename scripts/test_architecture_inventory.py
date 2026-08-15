@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_SHA = "c730b562343e10193fecaf4684925dcee0dc1403"
+BASELINE_BLOB_SHA = "27a5b8c581d83ba1a9ed0717151b215170336613"
 
 _SPEC = importlib.util.spec_from_file_location(
     "architecture_inventory",
@@ -24,14 +27,34 @@ def _rows_by_path(inventory):
     }
 
 
-def test_checked_in_architecture_baseline_matches_generator():
-    generated = architecture_inventory.render_inventory(
-        architecture_inventory.build_inventory(REPO_ROOT, BASELINE_SHA)
+def test_checked_in_architecture_baseline_is_immutable_snapshot():
+    # The baseline is immutable historical evidence for BASELINE_SHA. Pin its Git blob
+    # identity so later refactor changes cannot silently turn it into a living snapshot.
+    baseline_path = REPO_ROOT / "references" / "architecture-baseline.json"
+    result = subprocess.run(
+        ["git", "hash-object", str(baseline_path)],
+        check=True,
+        capture_output=True,
+        text=True,
     )
-    checked_in = (REPO_ROOT / "references" / "architecture-baseline.json").read_text(
-        encoding="utf-8"
+    checked_in = baseline_path.read_text(encoding="utf-8")
+    baseline = json.loads(checked_in)
+
+    assert result.stdout.strip() == BASELINE_BLOB_SHA
+    assert baseline["source_sha"] == BASELINE_SHA
+    assert checked_in == architecture_inventory.render_inventory(baseline)
+
+
+def test_architecture_inventory_generator_is_deterministic_for_current_tree():
+    source_sha = "f" * 40
+    first = architecture_inventory.render_inventory(
+        architecture_inventory.build_inventory(REPO_ROOT, source_sha)
     )
-    assert checked_in == generated
+    second = architecture_inventory.render_inventory(
+        architecture_inventory.build_inventory(REPO_ROOT, source_sha)
+    )
+
+    assert first == second
 
 
 def test_fan_in_counts_resolved_edges_from_ambiguous_source_paths(tmp_path):
