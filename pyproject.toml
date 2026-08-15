@@ -45,3 +45,6 @@ research_domain = "src/research_domain"
   "migrations/*.sql",
 ]
 "firecrawl_skill._data" = ["budget-policy-v1.json"]
+
+[tool.ruff]
+src = ["scripts", "src"]

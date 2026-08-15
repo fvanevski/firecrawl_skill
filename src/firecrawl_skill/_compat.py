@@ -133,4 +133,6 @@ def load_source_implementation(
         spec.submodule_search_locations = [str(implementation_dir)]
 
     code = compile(init_path.read_bytes(), str(init_path), "exec")
-    exec(code, package_globals, package_globals)
+    # The executed code is the fixed, repository-owned package __init__.py at
+    # the deterministic path above; no external or model-generated input is used.
+    exec(code, package_globals, package_globals)  # noqa: S102

@@ -216,8 +216,7 @@ def test_package_configuration_builds_and_runs_without_repository_path(
         "firecrawl_skill/research_domain/models.py",
         "research_store/__init__.py",
         "research_domain/__init__.py",
-        "firecrawl_skill/research_store/alembic/versions/"
-        "0044_terminal_provenance_guard.py",
+        "firecrawl_skill/research_store/alembic/versions/0044_terminal_provenance_guard.py",
         "firecrawl_skill/research_store/migrations/001_initial.sql",
     }
     assert required <= names
