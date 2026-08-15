@@ -19,6 +19,8 @@ def test_corpus_types_live_in_canonical_slice_with_bounded_service_facade() -> N
     assert service.CorpusService is corpus_type
     assert service.ParsedContent is corpus_service.ParsedContent
     assert service.PreparedIngest is corpus_service.PreparedIngest
+    assert service.IngestRequest is corpus_service.IngestRequest
+    assert service.IngestResult is corpus_service.IngestResult
     assert __import__("research_store").CorpusService is corpus_type
 
     assert {"CorpusService", "ParsedContent", "PreparedIngest"}.isdisjoint(
