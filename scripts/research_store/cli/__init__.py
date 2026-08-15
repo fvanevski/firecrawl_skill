@@ -39,8 +39,18 @@ from ..run_integrity_export import (
     build_run_export,
 )
 from ..service import dumps, json_default as json_default
-from . import acquisition, admin, audit, benchmark, derivation, evidence, indexing
-from . import retrieval, runs, synthesis
+from . import (
+    acquisition,
+    admin,
+    audit,
+    benchmark,
+    derivation,
+    evidence,
+    indexing,
+    retrieval,
+    runs,
+    synthesis,
+)
 from .parser import parser
 
 # Historical helper seams used by tests and transitional callers.  These names
