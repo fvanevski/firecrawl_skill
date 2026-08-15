@@ -19,7 +19,9 @@ _SPEC.loader.exec_module(architecture_inventory)
 
 def _rows_by_path(inventory):
     columns = inventory["module_columns"]
-    return {row[0]: dict(zip(columns, row, strict=True)) for row in inventory["modules"]}
+    return {
+        row[0]: dict(zip(columns, row, strict=True)) for row in inventory["modules"]
+    }
 
 
 def test_checked_in_architecture_baseline_matches_generator():
