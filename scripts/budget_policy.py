@@ -21,7 +21,20 @@ from research_domain.models import (
     TimeWindow,
 )
 
-POLICY_PATH = Path(__file__).parents[1] / "references" / "budget-policy-v1.json"
+_REPOSITORY_POLICY_PATH = (
+    Path(__file__).parents[1] / "references" / "budget-policy-v1.json"
+)
+_PACKAGED_POLICY_PATH = (
+    Path(__file__).parent
+    / "firecrawl_skill"
+    / "_data"
+    / "budget-policy-v1.json"
+)
+POLICY_PATH = (
+    _REPOSITORY_POLICY_PATH
+    if _REPOSITORY_POLICY_PATH.is_file()
+    else _PACKAGED_POLICY_PATH
+)
 TIER_ORDER = ("focused", "standard", "intensive")
 
 

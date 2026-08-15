@@ -10,6 +10,7 @@ description = "Firecrawl research skill package boundary"
 [tool.setuptools]
 packages = [
   "firecrawl_skill",
+  "firecrawl_skill._data",
   "firecrawl_skill.research_store",
   "firecrawl_skill.research_domain",
   "research_store",
@@ -17,9 +18,12 @@ packages = [
   "research_store.parsing",
   "research_domain",
 ]
+py-modules = ["budget_policy"]
 
 [tool.setuptools.package-dir]
+"" = "scripts"
 firecrawl_skill = "src/firecrawl_skill"
+"firecrawl_skill._data" = "references"
 "firecrawl_skill.research_store" = "src/firecrawl_skill/research_store"
 "firecrawl_skill.research_domain" = "src/firecrawl_skill/research_domain"
 research_store = "scripts/research_store"
@@ -32,4 +36,6 @@ research_store = [
   "alembic/*.py",
   "alembic/*.mako",
   "alembic/versions/*.py",
+  "migrations/*.sql",
 ]
+"firecrawl_skill._data" = ["budget-policy-v1.json"]

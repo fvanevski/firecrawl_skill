@@ -87,7 +87,7 @@ def test_legacy_first_imports_share_canonical_module_identity() -> None:
     )
 
 
-def test_package_configuration_builds_canonical_and_compatibility_packages(
+def test_package_configuration_builds_and_runs_without_repository_path(
     tmp_path: Path,
 ) -> None:
     result = subprocess.run(
@@ -110,19 +110,61 @@ def test_package_configuration_builds_canonical_and_compatibility_packages(
 
     wheels = list(tmp_path.glob("firecrawl_skill-1.0.0-*.whl"))
     assert len(wheels) == 1
-    with zipfile.ZipFile(wheels[0]) as wheel:
-        names = set(wheel.namelist())
+    wheel = wheels[0]
+    installed = tmp_path / "installed"
+    with zipfile.ZipFile(wheel) as archive:
+        names = set(archive.namelist())
+        archive.extractall(installed)
 
     required = {
+        "budget_policy.py",
         "firecrawl_skill/__init__.py",
         "firecrawl_skill/_compat.py",
+        "firecrawl_skill/_data/budget-policy-v1.json",
         "firecrawl_skill/research_store/__init__.py",
         "firecrawl_skill/research_domain/__init__.py",
         "research_store/__init__.py",
         "research_domain/__init__.py",
         "research_store/alembic/versions/0044_terminal_provenance_guard.py",
+        "research_store/migrations/001_initial.sql",
     }
     assert required <= names
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(installed)
+    isolated = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                """
+                import importlib
+                from pathlib import Path
+
+                import budget_policy
+
+                canonical_domain = importlib.import_module(
+                    "firecrawl_skill.research_domain"
+                )
+                canonical_store = importlib.import_module(
+                    "firecrawl_skill.research_store"
+                )
+                legacy_domain = importlib.import_module("research_domain")
+                legacy_store = importlib.import_module("research_store")
+
+                assert canonical_domain is legacy_domain
+                assert canonical_store is legacy_store
+                assert Path(budget_policy.POLICY_PATH).is_file()
+                """
+            ),
+        ],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert isolated.returncode == 0, isolated.stderr
 
 
 def test_existing_operator_entrypoint_targets_are_unchanged() -> None:
