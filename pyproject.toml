@@ -47,4 +47,4 @@ research_domain = "src/research_domain"
 "firecrawl_skill._data" = ["budget-policy-v1.json"]
 
 [tool.ruff]
-src = ["scripts", "src"]
+src = ["scripts"]
