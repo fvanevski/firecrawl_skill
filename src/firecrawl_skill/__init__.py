@@ -1,8 +1,8 @@
 """Canonical Python package boundary for the Firecrawl research skill.
 
 Phase 1 establishes this namespace without relocating the existing implementation
-packages.  The temporary compatibility layer keeps canonical and legacy imports
-bound to one module graph until later refactor issues own source movement.
+trees. Temporary legacy names delegate to modules whose authoritative identity is
+``firecrawl_skill.*`` until the owning cleanup issue removes those facades.
 """
 
 from ._compat import install_legacy_import_facades as _install_legacy_import_facades

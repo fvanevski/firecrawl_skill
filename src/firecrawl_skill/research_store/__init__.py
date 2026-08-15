@@ -1,10 +1,6 @@
-"""Temporary canonical facade for the existing ``research_store`` package.
+"""Canonical source-checkout bootstrap for the retained research-store implementation."""
 
-The implementation remains under ``scripts/research_store`` for Phase 1.  This
-facade intentionally aliases that package rather than re-exporting copied symbols,
-so import-time wiring and mutable module state have one identity.
-"""
+from .._compat import load_source_implementation as _load_source_implementation
 
-from .._compat import expose_legacy_package as _expose_legacy_package
-
-_expose_legacy_package(__name__, "research_store")
+_load_source_implementation(globals(), "research_store")
+del _load_source_implementation

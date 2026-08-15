@@ -1,9 +1,6 @@
-"""Temporary canonical facade for the existing ``research_domain`` package.
+"""Canonical source-checkout bootstrap for the retained research-domain implementation."""
 
-The implementation remains under ``scripts/research_domain`` until an owning
-refactor issue moves it.  Canonical and legacy imports share one module graph.
-"""
+from .._compat import load_source_implementation as _load_source_implementation
 
-from .._compat import expose_legacy_package as _expose_legacy_package
-
-_expose_legacy_package(__name__, "research_domain")
+_load_source_implementation(globals(), "research_domain")
+del _load_source_implementation

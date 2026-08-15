@@ -75,15 +75,24 @@ def _research_store_support_module_closure() -> set[str]:
     return required
 
 
-def test_canonical_first_imports_share_legacy_module_identity() -> None:
+def test_canonical_first_imports_preserve_canonical_module_identity() -> None:
     _assert_python_ok(
         """
         import importlib
 
+        def assert_canonical(module, name):
+            assert module.__name__ == name
+            assert module.__spec__ is not None
+            assert module.__spec__.name == name
+            expected_package = name if hasattr(module, "__path__") else name.rpartition(".")[0]
+            assert module.__package__ == expected_package
+
         canonical_domain = importlib.import_module("firecrawl_skill.research_domain")
         canonical_models = importlib.import_module("firecrawl_skill.research_domain.models")
         canonical_store = importlib.import_module("firecrawl_skill.research_store")
-        canonical_postgres = importlib.import_module("firecrawl_skill.research_store.postgres")
+        canonical_postgres = importlib.import_module(
+            "firecrawl_skill.research_store.postgres"
+        )
 
         legacy_domain = importlib.import_module("research_domain")
         legacy_models = importlib.import_module("research_domain.models")
@@ -96,14 +105,35 @@ def test_canonical_first_imports_share_legacy_module_identity() -> None:
         assert canonical_postgres is legacy_postgres
         assert canonical_domain.HandoffPayload is legacy_domain.HandoffPayload
         assert canonical_store.ResearchRunService is legacy_store.ResearchRunService
+
+        sentinel = object()
+        legacy_postgres._phase1_identity_probe = sentinel
+        assert canonical_postgres._phase1_identity_probe is sentinel
+        del canonical_postgres._phase1_identity_probe
+
+        assert_canonical(canonical_domain, "firecrawl_skill.research_domain")
+        assert_canonical(
+            canonical_models, "firecrawl_skill.research_domain.models"
+        )
+        assert_canonical(canonical_store, "firecrawl_skill.research_store")
+        assert_canonical(
+            canonical_postgres, "firecrawl_skill.research_store.postgres"
+        )
         """
     )
 
 
-def test_legacy_first_imports_share_canonical_module_identity() -> None:
+def test_legacy_first_imports_delegate_to_canonical_module_identity() -> None:
     _assert_python_ok(
         """
         import importlib
+
+        def assert_canonical(module, name):
+            assert module.__name__ == name
+            assert module.__spec__ is not None
+            assert module.__spec__.name == name
+            expected_package = name if hasattr(module, "__path__") else name.rpartition(".")[0]
+            assert module.__package__ == expected_package
 
         legacy_domain = importlib.import_module("research_domain")
         legacy_models = importlib.import_module("research_domain.models")
@@ -113,12 +143,21 @@ def test_legacy_first_imports_share_canonical_module_identity() -> None:
         canonical_domain = importlib.import_module("firecrawl_skill.research_domain")
         canonical_models = importlib.import_module("firecrawl_skill.research_domain.models")
         canonical_store = importlib.import_module("firecrawl_skill.research_store")
-        canonical_postgres = importlib.import_module("firecrawl_skill.research_store.postgres")
+        canonical_postgres = importlib.import_module(
+            "firecrawl_skill.research_store.postgres"
+        )
 
         assert canonical_domain is legacy_domain
         assert canonical_models is legacy_models
         assert canonical_store is legacy_store
         assert canonical_postgres is legacy_postgres
+
+        assert_canonical(legacy_domain, "firecrawl_skill.research_domain")
+        assert_canonical(legacy_models, "firecrawl_skill.research_domain.models")
+        assert_canonical(legacy_store, "firecrawl_skill.research_store")
+        assert_canonical(
+            legacy_postgres, "firecrawl_skill.research_store.postgres"
+        )
         """
     )
 
@@ -172,13 +211,18 @@ def test_package_configuration_builds_and_runs_without_repository_path(
         "firecrawl_skill/_compat.py",
         "firecrawl_skill/_data/budget-policy-v1.json",
         "firecrawl_skill/research_store/__init__.py",
+        "firecrawl_skill/research_store/postgres.py",
         "firecrawl_skill/research_domain/__init__.py",
+        "firecrawl_skill/research_domain/models.py",
         "research_store/__init__.py",
         "research_domain/__init__.py",
-        "research_store/alembic/versions/0044_terminal_provenance_guard.py",
-        "research_store/migrations/001_initial.sql",
+        "firecrawl_skill/research_store/alembic/versions/"
+        "0044_terminal_provenance_guard.py",
+        "firecrawl_skill/research_store/migrations/001_initial.sql",
     }
     assert required <= names
+    assert "research_store/postgres.py" not in names
+    assert "research_domain/models.py" not in names
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(installed)
@@ -196,14 +240,41 @@ def test_package_configuration_builds_and_runs_without_repository_path(
                 canonical_domain = importlib.import_module(
                     "firecrawl_skill.research_domain"
                 )
+                canonical_models = importlib.import_module(
+                    "firecrawl_skill.research_domain.models"
+                )
                 canonical_store = importlib.import_module(
                     "firecrawl_skill.research_store"
                 )
+                canonical_postgres = importlib.import_module(
+                    "firecrawl_skill.research_store.postgres"
+                )
                 legacy_domain = importlib.import_module("research_domain")
+                legacy_models = importlib.import_module("research_domain.models")
                 legacy_store = importlib.import_module("research_store")
+                legacy_postgres = importlib.import_module("research_store.postgres")
 
                 assert canonical_domain is legacy_domain
+                assert canonical_models is legacy_models
                 assert canonical_store is legacy_store
+                assert canonical_postgres is legacy_postgres
+
+                assert canonical_domain.__name__ == "firecrawl_skill.research_domain"
+                assert canonical_domain.__spec__.name == "firecrawl_skill.research_domain"
+                assert canonical_models.__name__ == (
+                    "firecrawl_skill.research_domain.models"
+                )
+                assert canonical_models.__spec__.name == (
+                    "firecrawl_skill.research_domain.models"
+                )
+                assert canonical_store.__name__ == "firecrawl_skill.research_store"
+                assert canonical_store.__spec__.name == "firecrawl_skill.research_store"
+                assert canonical_postgres.__name__ == (
+                    "firecrawl_skill.research_store.postgres"
+                )
+                assert canonical_postgres.__spec__.name == (
+                    "firecrawl_skill.research_store.postgres"
+                )
                 assert Path(budget_policy.POLICY_PATH).is_file()
                 """
             ),
@@ -215,6 +286,93 @@ def test_package_configuration_builds_and_runs_without_repository_path(
         text=True,
     )
     assert isolated.returncode == 0, isolated.stderr
+
+
+def test_research_db_help_preserves_operator_cli_behavior() -> None:
+    env = os.environ.copy()
+    env["FIRECRAWL_RESEARCH_AUTO_ENV"] = "0"
+    result = subprocess.run(
+        [str(SCRIPTS / "research-db"), "--help"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage: research-db" in result.stdout
+    assert "Authoritative research asset store" in result.stdout
+
+
+def test_frun_requires_authoritative_database_before_dispatch() -> None:
+    env = os.environ.copy()
+    env["FIRECRAWL_RESEARCH_AUTO_ENV"] = "0"
+    env.pop("DATABASE_URL", None)
+    result = subprocess.run(
+        [str(SCRIPTS / "frun"), "status", "fr_test"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "ERROR: frun requires the authoritative PostgreSQL store" in result.stderr
+
+
+def test_frun_status_dispatches_through_research_db_without_mutation(
+    tmp_path: Path,
+) -> None:
+    frun = tmp_path / "frun"
+    frun.write_bytes((SCRIPTS / "frun").read_bytes())
+    frun.chmod(0o755)
+
+    call_log = tmp_path / "research-db-calls.txt"
+    research_db = tmp_path / "research-db"
+    research_db.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$CALL_LOG"
+case "${1:-}" in
+  ingest-ready)
+    exit 0
+    ;;
+  run-status)
+    printf '{"state":"created"}\\n'
+    exit 0
+    ;;
+  *)
+    echo "unexpected research-db call: $*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    research_db.chmod(0o755)
+
+    env = os.environ.copy()
+    env["FIRECRAWL_RESEARCH_AUTO_ENV"] = "0"
+    env["DATABASE_URL"] = "postgresql://package-boundary.invalid/review"
+    env["CALL_LOG"] = str(call_log)
+    result = subprocess.run(
+        [str(frun), "status", "fr_test"],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == '{"state":"created"}\n'
+    assert call_log.read_text(encoding="utf-8").splitlines() == [
+        "ingest-ready",
+        "run-status fr_test",
+    ]
 
 
 def test_existing_operator_entrypoint_targets_are_unchanged() -> None:
