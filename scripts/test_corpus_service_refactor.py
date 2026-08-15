@@ -4,12 +4,8 @@ import ast
 from pathlib import Path
 
 import research_store
+import research_store.service as compatibility_service
 from research_store.corpus_service import CorpusService, ParsedContent, PreparedIngest
-from research_store.service import (
-    CorpusService as CompatibilityCorpusService,
-    ParsedContent as CompatibilityParsedContent,
-    PreparedIngest as CompatibilityPreparedIngest,
-)
 
 
 _STORE = Path(__file__).resolve().parent / "research_store"
@@ -22,9 +18,9 @@ def _class_names(path: Path) -> set[str]:
 
 def test_corpus_types_live_in_canonical_slice_with_bounded_service_facade() -> None:
     assert CorpusService.__module__.endswith(".corpus_service")
-    assert CompatibilityCorpusService is CorpusService
-    assert CompatibilityParsedContent is ParsedContent
-    assert CompatibilityPreparedIngest is PreparedIngest
+    assert compatibility_service.CorpusService is CorpusService
+    assert compatibility_service.ParsedContent is ParsedContent
+    assert compatibility_service.PreparedIngest is PreparedIngest
     assert research_store.CorpusService is CorpusService
 
     assert {"CorpusService", "ParsedContent", "PreparedIngest"}.isdisjoint(
