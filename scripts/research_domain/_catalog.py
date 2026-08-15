@@ -2,63 +2,35 @@
 
 from __future__ import annotations
 
-from .acquisition import CandidateAssessment
-from .assessment import EvidencePacket
-from .release import (
-    BenchmarkDataset,
-    BenchmarkObjective,
-    BenchmarkSource,
-    DeterministicIntegrityCheck,
-    PerformanceMeasurement,
-    QualityMeasurement,
-    ReleaseRecommendation,
-    WorkflowComparison,
-    WorkflowRunResult,
-)
-from .reporting import HandoffPayload
-from .research import (
-    CoverageLedger,
-    ResearchSpec,
-    SearchPlan,
-    StrategyRevisionProposal,
-    TerminalDecision,
-)
-from .telemetry import (
-    CacheEvent,
-    EmbeddingThroughputRecord,
-    EndpointUsageRecord,
-    PerformanceTelemetrySummary,
-    ResourceSample,
-    TokenAccounting,
-)
+from . import acquisition, assessment, release, reporting, research, telemetry
 
 
 CANONICAL_MODELS = (
-    ResearchSpec,
-    SearchPlan,
-    CandidateAssessment,
-    CoverageLedger,
-    StrategyRevisionProposal,
-    EvidencePacket,
-    TerminalDecision,
-    HandoffPayload,
+    research.ResearchSpec,
+    research.SearchPlan,
+    acquisition.CandidateAssessment,
+    research.CoverageLedger,
+    research.StrategyRevisionProposal,
+    assessment.EvidencePacket,
+    research.TerminalDecision,
+    reporting.HandoffPayload,
     # Phase 7, issue #67 — Release benchmark campaign
-    BenchmarkDataset,
-    BenchmarkObjective,
-    BenchmarkSource,
-    QualityMeasurement,
-    PerformanceMeasurement,
-    DeterministicIntegrityCheck,
-    WorkflowRunResult,
-    WorkflowComparison,
-    ReleaseRecommendation,
+    release.BenchmarkDataset,
+    release.BenchmarkObjective,
+    release.BenchmarkSource,
+    release.QualityMeasurement,
+    release.PerformanceMeasurement,
+    release.DeterministicIntegrityCheck,
+    release.WorkflowRunResult,
+    release.WorkflowComparison,
+    release.ReleaseRecommendation,
     # Phase 7, issue #143 — Run-scoped performance telemetry
-    TokenAccounting,
-    CacheEvent,
-    EmbeddingThroughputRecord,
-    ResourceSample,
-    EndpointUsageRecord,
-    PerformanceTelemetrySummary,
+    telemetry.TokenAccounting,
+    telemetry.CacheEvent,
+    telemetry.EmbeddingThroughputRecord,
+    telemetry.ResourceSample,
+    telemetry.EndpointUsageRecord,
+    telemetry.PerformanceTelemetrySummary,
 )
 
 
