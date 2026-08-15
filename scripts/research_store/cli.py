@@ -7,7 +7,13 @@ same parser and dispatcher.
 
 from __future__ import annotations
 
-from research_store.cli import main, parser
+import sys
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from research_store.cli import main, parser  # noqa: E402
 
 __all__ = ["main", "parser"]
 

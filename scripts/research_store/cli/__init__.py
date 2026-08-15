@@ -13,7 +13,7 @@ import os
 import sys
 from pathlib import Path
 
-from .. import derivation_admin, index_admin, run_lookup, store_admin
+from .. import derivation_admin, index_admin, resource_admin, run_lookup, store_admin
 from ..config import StoreConfig
 from ..container import (
     build_audit_service,
@@ -55,8 +55,8 @@ _qdrant_alias_state = index_admin.qdrant_alias_state
 _schema_state = store_admin.schema_state
 _blob_health = store_admin.blob_health
 _classify_connectivity_failure = store_admin.classify_connectivity_failure
-_endpoint_health = store_admin.endpoint_health if hasattr(store_admin, "endpoint_health") else None
-_resource_status = store_admin.resource_status if hasattr(store_admin, "resource_status") else None
+_endpoint_health = resource_admin.endpoint_health
+_resource_status = resource_admin.resource_status
 
 
 def _resolve_run_id(config, external_id):
