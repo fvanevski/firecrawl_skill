@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
 import textwrap
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -37,6 +39,42 @@ def _run_python(source: str, *, cwd: Path = ROOT) -> subprocess.CompletedProcess
 def _assert_python_ok(source: str) -> None:
     result = _run_python(source)
     assert result.returncode == 0, result.stderr
+
+
+def _absolute_import_roots(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            roots.add(node.module.split(".", 1)[0])
+    return roots
+
+
+def _research_store_support_module_closure() -> set[str]:
+    top_level_modules = {
+        path.stem: path
+        for path in SCRIPTS.glob("*.py")
+        if path.name != "__init__.py"
+    }
+    pending = list((SCRIPTS / "research_store").rglob("*.py"))
+    inspected: set[Path] = set()
+    required: set[str] = set()
+
+    while pending:
+        path = pending.pop()
+        if path in inspected:
+            continue
+        inspected.add(path)
+        for root in _absolute_import_roots(path):
+            support_path = top_level_modules.get(root)
+            if support_path is None or root in required:
+                continue
+            required.add(root)
+            pending.append(support_path)
+
+    return required
 
 
 def test_canonical_first_imports_share_legacy_module_identity() -> None:
@@ -87,6 +125,18 @@ def test_legacy_first_imports_share_canonical_module_identity() -> None:
     )
 
 
+def test_package_configuration_matches_support_module_closure() -> None:
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    configured = set(config["tool"]["setuptools"]["py-modules"])
+    required = _research_store_support_module_closure()
+
+    assert configured == required, (
+        f"py-modules must equal the research_store support-module closure; "
+        f"missing={sorted(required - configured)}, "
+        f"extra={sorted(configured - required)}"
+    )
+
+
 def test_package_configuration_builds_and_runs_without_repository_path(
     tmp_path: Path,
 ) -> None:
@@ -116,8 +166,10 @@ def test_package_configuration_builds_and_runs_without_repository_path(
         names = set(archive.namelist())
         archive.extractall(installed)
 
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    support_modules = set(config["tool"]["setuptools"]["py-modules"])
     required = {
-        "budget_policy.py",
+        *(f"{module}.py" for module in support_modules),
         "firecrawl_skill/__init__.py",
         "firecrawl_skill/_compat.py",
         "firecrawl_skill/_data/budget-policy-v1.json",
