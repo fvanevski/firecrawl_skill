@@ -98,3 +98,30 @@ def test_verify_rejects_reason_drift(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="reason_mismatches"):
         verify(report, allowlist)
+
+
+def test_emit_architecture_baseline() -> None:
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parent.parent
+    result = subprocess.run(
+        [
+            sys.executable,
+            "tools/architecture_inventory.py",
+            "--root",
+            ".",
+            "--source-sha",
+            "c730b562343e10193fecaf4684925dcee0dc1403",
+        ],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    pytest.fail(
+        "ARCHITECTURE_BASELINE_BEGIN\n"
+        + result.stdout
+        + "ARCHITECTURE_BASELINE_END"
+    )
