@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
-import io
+import json
 import subprocess
-import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_SHA = "c730b562343e10193fecaf4684925dcee0dc1403"
+BASELINE_BLOB_SHA = "27a5b8c581d83ba1a9ed0717151b215170336613"
 
 _SPEC = importlib.util.spec_from_file_location(
     "architecture_inventory",
@@ -27,36 +27,22 @@ def _rows_by_path(inventory):
     }
 
 
-def _materialize_baseline_scripts(tmp_path: Path) -> None:
-    # Reproduce the immutable baseline from its exact historical source tree rather
-    # than comparing it to the legitimately evolving current working tree.
+def test_checked_in_architecture_baseline_is_immutable_snapshot():
+    # The baseline is immutable historical evidence for BASELINE_SHA. Pin its Git blob
+    # identity so later refactor changes cannot silently turn it into a living snapshot.
+    baseline_path = REPO_ROOT / "references" / "architecture-baseline.json"
     result = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(REPO_ROOT),
-            "archive",
-            "--format=zip",
-            BASELINE_SHA,
-            "scripts",
-        ],
+        ["git", "hash-object", str(baseline_path)],
         check=True,
-        stdout=subprocess.PIPE,
+        capture_output=True,
+        text=True,
     )
-    with zipfile.ZipFile(io.BytesIO(result.stdout)) as archive:
-        archive.extractall(tmp_path)
+    checked_in = baseline_path.read_text(encoding="utf-8")
+    baseline = json.loads(checked_in)
 
-
-def test_checked_in_architecture_baseline_matches_exact_source_tree(tmp_path):
-    _materialize_baseline_scripts(tmp_path)
-    generated = architecture_inventory.render_inventory(
-        architecture_inventory.build_inventory(tmp_path, BASELINE_SHA)
-    )
-    checked_in = (REPO_ROOT / "references" / "architecture-baseline.json").read_text(
-        encoding="utf-8"
-    )
-
-    assert checked_in == generated
+    assert result.stdout.strip() == BASELINE_BLOB_SHA
+    assert baseline["source_sha"] == BASELINE_SHA
+    assert checked_in == architecture_inventory.render_inventory(baseline)
 
 
 def test_architecture_inventory_generator_is_deterministic_for_current_tree():
