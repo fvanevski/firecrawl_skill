@@ -3,8 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from research_store import corpus_service
-from research_store import service
+from research_store import corpus_service, service
 
 _STORE = Path(__file__).resolve().parent / "research_store"
 
