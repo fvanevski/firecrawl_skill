@@ -184,48 +184,50 @@ def normalize(config, args, *, database_fn=database) -> dict:
         else:
             return {"error": "specify --document <uuid> or --all"}
 
-        if not rows:
-            return {"message": "no blocks found", "normalized": 0}
+    if not rows:
+        return {"message": "no blocks found", "normalized": 0}
 
-        docs: dict[tuple, list] = {}
-        for row in rows:
-            docs.setdefault((str(row[0]), row[1], row[2], row[3]), []).append(row)
+    docs: dict[tuple, list] = {}
+    for row in rows:
+        docs.setdefault((str(row[0]), row[1], row[2], row[3]), []).append(row)
 
-        service = NormalizationService(
-            aggressive=args.aggressive,
+    service = NormalizationService(
+        aggressive=args.aggressive,
+        document_type=args.document_type,
+    )
+    results = []
+    upserted_blocks = 0
+    upserted_transforms = 0
+
+    for doc_key, doc_rows in docs.items():
+        doc_id = UUID(doc_key[0])
+        block_ids = [UUID(row[4]) for row in doc_rows]
+        typed_blocks = [
+            TypedBlock(
+                ordinal=int(row[5]),
+                block_type=row[6],
+                text=row[9] or "",
+                heading_path=(),
+                char_start=int(row[7]) if row[7] is not None else None,
+                char_end=int(row[8]) if row[8] is not None else None,
+                parser_version=row[10] or "canonical-v1",
+            )
+            for row in doc_rows
+        ]
+        norm_result = service.normalize(
+            blocks=typed_blocks,
+            source_block_ids=block_ids,
+            document_id=doc_id,
             document_type=args.document_type,
         )
-        results = []
-        upserted_blocks = 0
-        upserted_transforms = 0
 
-        for doc_key, doc_rows in docs.items():
-            doc_id = UUID(doc_key[0])
-            block_ids = [UUID(row[4]) for row in doc_rows]
-            typed_blocks = [
-                TypedBlock(
-                    ordinal=int(row[5]),
-                    block_type=row[6],
-                    text=row[9] or "",
-                    heading_path=(),
-                    char_start=int(row[7]) if row[7] is not None else None,
-                    char_end=int(row[8]) if row[8] is not None else None,
-                    parser_version=row[10] or "canonical-v1",
-                )
-                for row in doc_rows
-            ]
-            norm_result = service.normalize(
-                blocks=typed_blocks,
-                source_block_ids=block_ids,
-                document_id=doc_id,
-                document_type=args.document_type,
-            )
+        with conn.cursor() as block_cur:
             for nb in (
                 norm_result.blocks
                 + norm_result.suppressed_blocks
                 + norm_result.removed_blocks
             ):
-                cur.execute(
+                block_cur.execute(
                     """INSERT INTO normalized_blocks
                        (id, source_block_id, document_id, ordinal, block_type,
                         text, heading_path, char_start, char_end, disposition,
@@ -234,55 +236,78 @@ def normalize(config, args, *, database_fn=database) -> dict:
                        ON CONFLICT (source_block_id, rule_version) DO UPDATE SET
                          disposition = EXCLUDED.disposition,
                          transformation_reason = EXCLUDED.transformation_reason,
-                         text = EXCLUDED.text, char_start = EXCLUDED.char_start,
-                         char_end = EXCLUDED.char_end, parser_version = EXCLUDED.parser_version""",
+                         text = EXCLUDED.text,
+                         char_start = EXCLUDED.char_start,
+                         char_end = EXCLUDED.char_end,
+                         parser_version = EXCLUDED.parser_version""",
                     (
-                        str(nb.id), str(nb.source_block_id),
+                        str(nb.id),
+                        str(nb.source_block_id),
                         str(nb.document_id) if nb.document_id else None,
-                        nb.ordinal, nb.block_type,
+                        nb.ordinal,
+                        nb.block_type,
                         nb.text if nb.disposition != "remove" else "",
                         list(nb.heading_path) if nb.heading_path else None,
-                        nb.char_start, nb.char_end, nb.disposition, nb.rule_version,
-                        nb.transformation_reason, nb.parser_version,
+                        nb.char_start,
+                        nb.char_end,
+                        nb.disposition,
+                        nb.rule_version,
+                        nb.transformation_reason,
+                        nb.parser_version,
                     ),
                 )
+
+        with conn.cursor() as transform_cur:
             for tr in norm_result.transformations:
-                cur.execute(
+                transform_cur.execute(
                     """INSERT INTO transformation_records
                        (id, normalized_block_id, rule_id, rule_version,
                         reason, before_text, after_text, confidence)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                        ON CONFLICT (normalized_block_id, rule_id) DO UPDATE SET
-                         rule_id = EXCLUDED.rule_id, reason = EXCLUDED.reason,
-                         before_text = EXCLUDED.before_text, after_text = EXCLUDED.after_text,
+                         rule_id = EXCLUDED.rule_id,
+                         reason = EXCLUDED.reason,
+                         before_text = EXCLUDED.before_text,
+                         after_text = EXCLUDED.after_text,
                          confidence = EXCLUDED.confidence""",
                     (
                         str(tr.id),
                         str(tr.normalized_block_id) if tr.normalized_block_id else None,
-                        tr.rule_id, tr.rule_version, tr.reason,
-                        tr.before_text, tr.after_text, tr.confidence,
+                        tr.rule_id,
+                        tr.rule_version,
+                        tr.reason,
+                        tr.before_text,
+                        tr.after_text,
+                        tr.confidence,
                     ),
                 )
             conn.commit()
-            upserted_blocks += len(
-                norm_result.blocks + norm_result.suppressed_blocks + norm_result.removed_blocks
-            )
-            upserted_transforms += len(norm_result.transformations)
-            results.append(
-                {
-                    "document_id": str(doc_id),
-                    "title": doc_key[1],
-                    "url": doc_key[2],
-                    "content_sha256": doc_key[3],
-                    "source_block_count": len(typed_blocks),
-                    "kept": len([b for b in norm_result.blocks if b.disposition == "keep"]),
-                    "altered": len([b for b in norm_result.blocks if b.disposition == "alter"]),
-                    "suppressed": len(norm_result.suppressed_blocks),
-                    "removed": len(norm_result.removed_blocks),
-                    "transformations": len(norm_result.transformations),
-                    "diagnostics": norm_result.diagnostics(),
-                }
-            )
+
+        upserted_blocks += len(
+            norm_result.blocks
+            + norm_result.suppressed_blocks
+            + norm_result.removed_blocks
+        )
+        upserted_transforms += len(norm_result.transformations)
+        results.append(
+            {
+                "document_id": str(doc_id),
+                "title": doc_key[1],
+                "url": doc_key[2],
+                "content_sha256": doc_key[3],
+                "source_block_count": len(typed_blocks),
+                "kept": len(
+                    [block for block in norm_result.blocks if block.disposition == "keep"]
+                ),
+                "altered": len(
+                    [block for block in norm_result.blocks if block.disposition == "alter"]
+                ),
+                "suppressed": len(norm_result.suppressed_blocks),
+                "removed": len(norm_result.removed_blocks),
+                "transformations": len(norm_result.transformations),
+                "diagnostics": norm_result.diagnostics(),
+            }
+        )
 
     return {
         "rule_version": NORMALIZATION_VERSION,
