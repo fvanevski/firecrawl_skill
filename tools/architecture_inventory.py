@@ -13,6 +13,16 @@ from pathlib import Path
 
 SCHEMA_VERSION = "architecture-inventory-v1"
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+MODULE_COLUMNS = [
+    "path",
+    "module",
+    "physical_loc",
+    "architectural_category",
+    "top_level_symbols",
+    "local_imports",
+    "fan_out",
+    "fan_in",
+]
 
 
 def _is_in_scope(path: Path, scripts_root: Path) -> bool:
@@ -41,7 +51,7 @@ def _category(rel_path: str) -> str:
         return "migration"
     if rel_path.startswith("scripts/research_domain/") or stem in {"domain", "models"}:
         return "domain-contract"
-    if "cli" in stem or stem.endswith("command"):
+    if "/cli/" in path or "cli" in stem or stem.endswith("command"):
         return "entrypoint-cli"
     if any(
         token in stem for token in ("repository", "store", "uow", "blob", "persistence")
@@ -78,15 +88,15 @@ def _category(rel_path: str) -> str:
     return "tooling"
 
 
-def _top_level_symbols(tree: ast.Module) -> list[dict[str, str]]:
-    symbols: list[dict[str, str]] = []
+def _top_level_symbols(tree: ast.Module) -> list[list[str]]:
+    symbols: list[list[str]] = []
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
-            symbols.append({"kind": "class", "name": node.name})
+            symbols.append(["class", node.name])
         elif isinstance(node, ast.AsyncFunctionDef):
-            symbols.append({"kind": "async_function", "name": node.name})
+            symbols.append(["async_function", node.name])
         elif isinstance(node, ast.FunctionDef):
-            symbols.append({"kind": "function", "name": node.name})
+            symbols.append(["function", node.name])
     return symbols
 
 
@@ -122,13 +132,13 @@ def _local_imports(
     *,
     module_name: str,
     is_package: bool,
-    module_names: set[str],
+    resolvable_module_names: set[str],
 ) -> list[str]:
     dependencies: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                matched = _match_local_module(alias.name, module_names)
+                matched = _match_local_module(alias.name, resolvable_module_names)
                 if matched and matched != module_name:
                     dependencies.add(matched)
         elif isinstance(node, ast.ImportFrom):
@@ -141,13 +151,15 @@ def _local_imports(
             alias_match_found = False
             for alias in node.names:
                 candidate = f"{base}.{alias.name}" if base else alias.name
-                matched = _match_local_module(candidate, module_names)
+                matched = _match_local_module(candidate, resolvable_module_names)
                 if matched and matched != module_name:
                     dependencies.add(matched)
                     alias_match_found = True
             if alias_match_found:
                 continue
-            matched = _match_local_module(base, module_names) if base else None
+            matched = (
+                _match_local_module(base, resolvable_module_names) if base else None
+            )
             if matched and matched != module_name:
                 dependencies.add(matched)
     return sorted(dependencies)
@@ -169,7 +181,13 @@ def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
     module_meta: dict[Path, tuple[str, bool]] = {
         path: _module_name(path, scripts_root) for path in paths
     }
-    module_names = {name for name, _ in module_meta.values() if name}
+    module_name_counts = Counter(name for name, _ in module_meta.values() if name)
+    ambiguous_module_names = sorted(
+        name for name, count in module_name_counts.items() if count > 1
+    )
+    resolvable_module_names = {
+        name for name, count in module_name_counts.items() if count == 1
+    }
 
     records: list[dict[str, object]] = []
     imports_by_module: dict[str, list[str]] = {}
@@ -182,9 +200,10 @@ def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
             tree,
             module_name=module_name,
             is_package=is_package,
-            module_names=module_names,
+            resolvable_module_names=resolvable_module_names,
         )
-        imports_by_module[module_name] = local_imports
+        if module_name in resolvable_module_names:
+            imports_by_module[module_name] = local_imports
         records.append(
             {
                 "path": rel_path,
@@ -202,13 +221,27 @@ def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
         for dependencies in imports_by_module.values()
         for dependency in dependencies
     )
-    for record in records:
-        record["fan_in"] = fan_in.get(str(record["module"]), 0)
-
+    module_rows = [
+        [
+            record["path"],
+            record["module"],
+            record["physical_loc"],
+            record["architectural_category"],
+            record["top_level_symbols"],
+            record["local_imports"],
+            record["fan_out"],
+            fan_in.get(str(record["module"]), 0)
+            if record["module"] in resolvable_module_names
+            else None,
+        ]
+        for record in records
+    ]
     categories = Counter(str(record["architectural_category"]) for record in records)
     return {
         "schema_version": SCHEMA_VERSION,
         "source_sha": source_sha.lower(),
+        "module_columns": MODULE_COLUMNS,
+        "ambiguous_module_names": ambiguous_module_names,
         "scope": {
             "included": "scripts/**/*.py production and maintenance modules",
             "excluded": [
@@ -218,8 +251,11 @@ def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
                 "fixtures/",
             ],
             "physical_loc_definition": "len(file_text.splitlines())",
-            "symbol_definition": "module-level class, function, and async-function definitions",
-            "import_graph_definition": "AST-resolved imports between in-scope modules only",
+            "symbol_definition": "[kind, name] for module-level class/function/async-function definitions",
+            "import_graph_definition": (
+                "AST-resolved imports between uniquely named in-scope modules only; "
+                "ambiguous module targets are excluded"
+            ),
         },
         "summary": {
             "module_count": len(records),
@@ -228,12 +264,12 @@ def build_inventory(root: Path, source_sha: str) -> dict[str, object]:
             ),
             "categories": dict(sorted(categories.items())),
         },
-        "modules": records,
+        "modules": module_rows,
     }
 
 
 def render_inventory(inventory: dict[str, object]) -> str:
-    return json.dumps(inventory, indent=2, sort_keys=True) + "\n"
+    return json.dumps(inventory, sort_keys=True, separators=(",", ":")) + "\n"
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -41,7 +41,7 @@ Unless an issue explicitly requires a behavioral change and maps that change bac
 
 ### Migration authority
 
-- Alembic remains the sole schema-migration authority. At the baseline SHA, the documented clean schema head is `0040_asset_promotion_membership`; this issue does not change it.
+- Alembic remains the sole schema-migration authority. The baseline source tree's current revision tip is `0044_terminal_provenance_guard`, whose `down_revision` is `0043_ingestion_batch_semantics`; no later baseline revision declares `0044_terminal_provenance_guard` as its predecessor. This source evidence supersedes the older `0040_asset_promotion_membership` head statement in `references/migration-guide.md` for the purpose of this baseline.
 - Structural movement must preserve current migration path discovery and current-head behavior.
 - Existing forward-only/forward-repair rules remain intact. No manual schema stamping, compatibility table resurrection, or migration bypass is permitted as a structural shortcut.
 - Migration modules may move only when Alembic configuration, version discovery, and upgrade behavior are proven equivalent.
@@ -140,17 +140,19 @@ The inventory scope is every `scripts/**/*.py` module except:
 
 Alembic environment/version modules are included because migration topology is an architectural boundary. Maintenance/release Python modules are also included; their category distinguishes them from runtime application modules.
 
-For each in-scope module the inventory records:
+For each in-scope module the inventory records the columns declared in `module_columns`:
 
 - repository-relative path;
 - importable module name;
 - physical LOC (`len(file_text.splitlines())`);
 - deterministic architectural category;
-- module-level classes/functions/async functions;
-- AST-resolved imports to other in-scope modules;
+- module-level `[kind, name]` pairs for classes/functions/async functions;
+- AST-resolved imports to other unambiguously named in-scope modules;
 - local fan-out and fan-in counts.
 
-The import graph is intentionally limited to statically resolvable imports between inventoried modules. Dynamic imports, subprocess execution, extensionless shell/Python wrappers, dependency injection, and runtime call graphs are outside this metric and must not be inferred from it.
+The import graph is intentionally conservative. If more than one in-scope path maps to the same importable module name, that name is listed in `ambiguous_module_names`, imports targeting it are not assigned to either path, and its fan-in is recorded as `null`. This prevents a structural name collision from being misreported as precise dependency evidence.
+
+Dynamic imports, subprocess execution, extensionless shell/Python wrappers, dependency injection, and runtime call graphs are outside this metric and must not be inferred from it.
 
 Regenerate the baseline with:
 
@@ -170,7 +172,7 @@ python tools/architecture_inventory.py \
   --check references/architecture-baseline.json
 ```
 
-The generator contains no timestamp, machine path, Python-version field, or environment-derived ordering. The same source tree and source SHA therefore produce byte-stable JSON.
+The generator contains no timestamp, machine path, Python-version field, or environment-derived ordering. The same source tree and source SHA therefore produce byte-stable JSON. Compact JSON serialization is used to keep the committed inventory reviewable as a single generated artifact rather than inflating it with repeated formatting-only lines.
 
 ## How later issues use the baseline
 
