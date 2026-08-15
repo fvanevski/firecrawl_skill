@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - "refactor/**"
   pull_request:
     branches:
       - main
@@ -28,6 +29,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Verify exact checked-out commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git rev-parse HEAD
+          git diff --check
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
@@ -40,7 +49,21 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install \
             -r requirements-research-store.txt \
-            pytest
+            pytest \
+            ruff
+
+      - name: Run focused Ruff checks
+        run: |
+          ruff check \
+            scripts/research_store/cli/__init__.py \
+            scripts/research_store/cli/compatibility.py \
+            scripts/research_store/store_admin.py \
+            scripts/test_cli_entrypoints.py
+          ruff format --check \
+            scripts/research_store/cli/__init__.py \
+            scripts/research_store/cli/compatibility.py \
+            scripts/research_store/store_admin.py \
+            scripts/test_cli_entrypoints.py
 
       - name: Run CLI entrypoint contract regressions
         run: |
