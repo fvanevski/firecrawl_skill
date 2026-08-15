@@ -9,7 +9,7 @@ implementation rather than duplicating policy.
 from __future__ import annotations
 
 import argparse
-import os as os
+import os  # noqa: F401 - compatibility seam for callers monkeypatching cli.os
 import sys
 from pathlib import Path
 
