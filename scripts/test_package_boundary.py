@@ -142,5 +142,7 @@ def test_alembic_path_and_current_head_remain_authoritative() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     script = ScriptDirectory.from_config(config)
 
-    assert Path(script.dir).resolve() == (SCRIPTS / "research_store" / "alembic").resolve()
+    assert (
+        Path(script.dir).resolve() == (SCRIPTS / "research_store" / "alembic").resolve()
+    )
     assert script.get_heads() == ["0044_terminal_provenance_guard"]

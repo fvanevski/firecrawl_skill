@@ -61,7 +61,7 @@ class _CanonicalAliasFinder(MetaPathFinder):
         del path, target
         for canonical_prefix, legacy_prefix in _CANONICAL_TO_LEGACY.items():
             if fullname.startswith(f"{canonical_prefix}."):
-                legacy_name = f"{legacy_prefix}{fullname[len(canonical_prefix):]}"
+                legacy_name = f"{legacy_prefix}{fullname[len(canonical_prefix) :]}"
                 return spec_from_loader(fullname, _AliasLoader(legacy_name))
         return None
 
