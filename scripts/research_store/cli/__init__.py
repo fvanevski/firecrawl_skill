@@ -25,15 +25,9 @@ from .. import (
 from ..config import StoreConfig
 from ..container import (
     build_audit_service as build_audit_service,
-)
-from ..container import (
     build_resource_governor as build_resource_governor,
-)
-from ..container import (
     build_run_service as build_run_service,
-)
-from ..container import build_service
-from ..container import (
+    build_service,
     build_workflow_operation_service as build_workflow_operation_service,
 )
 from ..projection_reconciliation import reconcile_projection_compat

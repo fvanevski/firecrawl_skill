@@ -6,9 +6,9 @@ from uuid import UUID
 from .blob import ContentAddressedBlobStore
 from .derivation_service import DerivationService
 from .domain import IngestRequest
+from .export_serialization import export_json
 from .normalization import NORMALIZATION_VERSION, NormalizationService
 from .parsing.interfaces import TypedBlock
-from .export_serialization import export_json
 from .store_runtime import database, uow_factory
 
 

@@ -8,8 +8,8 @@ from .indexing import IndexWorker, OpenAICompatibleEmbedder
 from .postgres import PostgresUnitOfWork
 from .qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
 from .qdrant_authority import read_required_alias_state
-from .valkey_queue import ValkeyQueue
 from .store_runtime import database
+from .valkey_queue import ValkeyQueue
 
 
 def uow_factory(config):
