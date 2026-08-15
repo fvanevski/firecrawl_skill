@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from . import acquisition, assessment, release, reporting, research, telemetry
 
-
 CANONICAL_MODELS = (
     research.ResearchSpec,
     research.SearchPlan,

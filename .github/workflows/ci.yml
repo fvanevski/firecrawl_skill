@@ -269,9 +269,6 @@ jobs:
           python -m pip install ruff
           ruff --version
 
-      - name: Show Ruff import autofix diagnostic
-        run: ruff check --select I001 --fix --diff scripts/research_domain/_catalog.py || true
-
       - name: Run Ruff lint checks
         run: ruff check --output-format=github .
 
