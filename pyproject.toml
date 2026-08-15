@@ -46,5 +46,8 @@ research_domain = "src/research_domain"
 ]
 "firecrawl_skill._data" = ["budget-policy-v1.json"]
 
-[tool.ruff]
-src = ["scripts"]
+[tool.ruff.lint.isort]
+# These public compatibility roots historically live below scripts/ and Ruff
+# classified them with external imports. Keep that classification stable while
+# their temporary src/ facades exist; #269 owns removal of the facades.
+known-third-party = ["research_domain", "research_store"]
