@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "firecrawl-skill"
+version = "1.0.0"
+description = "Firecrawl research skill package boundary"
+
+[tool.setuptools]
+packages = [
+  "firecrawl_skill",
+  "firecrawl_skill._data",
+  "firecrawl_skill.research_store",
+  "firecrawl_skill.research_store.cli",
+  "firecrawl_skill.research_store.parsing",
+  "firecrawl_skill.research_domain",
+  "research_store",
+  "research_domain",
+]
+py-modules = [
+  "budget_policy",
+  "candidate_ranking",
+  "classifier",
+  "drain_index_jobs",
+  "model_gateway",
+]
+
+[tool.setuptools.package-dir]
+"" = "scripts"
+firecrawl_skill = "src/firecrawl_skill"
+"firecrawl_skill._data" = "references"
+"firecrawl_skill.research_store" = "scripts/research_store"
+"firecrawl_skill.research_store.cli" = "scripts/research_store/cli"
+"firecrawl_skill.research_store.parsing" = "scripts/research_store/parsing"
+"firecrawl_skill.research_domain" = "scripts/research_domain"
+research_store = "src/research_store"
+research_domain = "src/research_domain"
+
+[tool.setuptools.package-data]
+"firecrawl_skill.research_store" = [
+  "alembic/*.py",
+  "alembic/*.mako",
+  "alembic/versions/*.py",
+  "migrations/*.sql",
+]
+"firecrawl_skill._data" = ["budget-policy-v1.json"]
+
+[tool.ruff.lint.isort]
+# These public compatibility roots historically live below scripts/ and Ruff
+# classified them with external imports. Keep that classification stable while
+# their temporary src/ facades exist; #269 owns removal of the facades.
+known-third-party = ["research_domain", "research_store"]

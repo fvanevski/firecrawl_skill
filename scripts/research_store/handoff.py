@@ -23,7 +23,6 @@ from uuid import UUID
 
 from research_domain.models import HandoffPayload
 from research_domain.registry import load_model
-
 from research_store.packet_validator import bounded_citation_ready_output
 
 logger = logging.getLogger(__name__)

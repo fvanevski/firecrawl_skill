@@ -57,7 +57,8 @@ jobs:
             scripts/test_smoke_test.py \
             scripts/test_release_campaign_verifier.py \
             scripts/test_exact_head_ci_evidence.py \
-            scripts/test_pytest_skip_verifier.py
+            scripts/test_pytest_skip_verifier.py \
+            scripts/test_package_boundary.py
 
   test:
     name: "Test — Python ${{ matrix.python-version }}"
