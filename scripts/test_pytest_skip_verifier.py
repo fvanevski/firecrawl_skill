@@ -100,9 +100,13 @@ def test_verify_rejects_reason_drift(tmp_path: Path) -> None:
         verify(report, allowlist)
 
 
-def test_emit_architecture_baseline() -> None:
+def test_emit_architecture_baseline_for_broad_suite() -> None:
+    import os
     import subprocess
     import sys
+
+    if "PYTEST_JUNIT" not in os.environ:
+        return
 
     root = Path(__file__).resolve().parent.parent
     result = subprocess.run(

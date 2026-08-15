@@ -21,9 +21,7 @@ def _is_in_scope(path: Path, scripts_root: Path) -> bool:
         return False
     if path.name == "conftest.py" or path.name.startswith("test_"):
         return False
-    if path.name.endswith("_test_support.py") or "fixtures" in rel.parts:
-        return False
-    return True
+    return not (path.name.endswith("_test_support.py") or "fixtures" in rel.parts)
 
 
 def _module_name(path: Path, scripts_root: Path) -> tuple[str, bool]:
