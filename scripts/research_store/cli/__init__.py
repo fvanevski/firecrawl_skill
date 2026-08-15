@@ -1,80 +1,119 @@
-"""Canonical research-store CLI compatibility surface.
+"""Canonical thin research-store CLI entrypoint.
 
-The historical monolithic ``research_store/cli.py`` is executed into this
-canonical module namespace so existing imports, monkeypatches, and command
-helpers retain their established module-global seams.  Corrective command
-implementations are overlaid here when their contracts require stronger
-PostgreSQL authority than the historical parser can express.
+Command grammar and command-family adapters live under this package.  This
+module intentionally retains a small set of historical helper names as
+compatibility seams; each delegates to the canonical application/runtime
+implementation rather than duplicating policy.
 """
 
 from __future__ import annotations
 
-import argparse
+import os
 import sys
-from pathlib import Path
 
-# Preserve the historical module path while executing its code in this package
-# namespace. Legacy helpers derive the repository root from ``__file__`` at call
-# time, so retaining cli.py here is part of the compatibility contract.
-_PACKAGE_INIT_PATH = Path(__file__).resolve()
-_LEGACY_PATH = _PACKAGE_INIT_PATH.parents[1] / "cli.py"
-__package__ = "research_store"
-__file__ = str(_LEGACY_PATH)
-exec(  # noqa: S102 - compatibility loader for this repository-owned module
-    compile(_LEGACY_PATH.read_text(encoding="utf-8"), str(_LEGACY_PATH), "exec"),
-    globals(),
+from .. import (
+    derivation_admin,
+    export_serialization,
+    index_admin,
+    postgres,
+    resource_admin,
+    run_lookup,
+    store_admin,
+    store_runtime,
 )
-_legacy_main = globals()["main"]
-_legacy_export_json = globals()["_export_json"]
-_legacy_dumps = globals()["dumps"]
-_legacy_index_build = globals()["_index_build"]
-
-from research_store.config import StoreConfig
-from research_store.projection_reconciliation import reconcile_projection_compat
-from research_store.qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
-from research_store.reconciliation import ReconciliationError, reconcile_run
-from research_store.run_integrity_export import (
-    EXPORT_RUN_SCHEMA_VERSIONS,
-    INTEGRITY_SCHEMA_VERSIONS,
-    build_integrity_report,
-    build_run_export,
+from ..config import StoreConfig
+from ..container import (
+    build_audit_service as build_audit_service,
 )
+from ..container import (
+    build_resource_governor as build_resource_governor,
+)
+from ..container import (
+    build_run_service as build_run_service,
+)
+from ..container import (
+    build_service,
+)
+from ..container import (
+    build_workflow_operation_service as build_workflow_operation_service,
+)
+from ..projection_reconciliation import reconcile_projection_compat
+from ..reconciliation import (
+    ReconciliationError as ReconciliationError,
+)
+from ..reconciliation import (
+    reconcile_run as reconcile_run,
+)
+from ..run_integrity_export import (
+    EXPORT_RUN_SCHEMA_VERSIONS as EXPORT_RUN_SCHEMA_VERSIONS,
+)
+from ..run_integrity_export import (
+    INTEGRITY_SCHEMA_VERSIONS as INTEGRITY_SCHEMA_VERSIONS,
+)
+from ..run_integrity_export import (
+    build_integrity_report as build_integrity_report,
+)
+from ..run_integrity_export import (
+    build_run_export as build_run_export,
+)
+from ..service import dumps
+from ..service import json_default as json_default
+from . import (
+    acquisition,
+    admin,
+    audit,
+    benchmark,
+    compatibility,
+    derivation,
+    evidence,
+    indexing,
+    retrieval,
+    runs,
+    synthesis,
+)
+from .parser import parser
+
+# Historical helper seams used by tests and transitional callers.  These names
+# delegate to non-CLI implementations so compatibility does not recreate the
+# former monolith.
+_canonical_export_json = export_serialization.canonical_export_json
+_db = store_runtime.database
+_uow_factory = store_runtime.uow_factory
+_qdrant = index_admin.qdrant
+_worker = index_admin.worker
+_index_rows = index_admin.index_rows
+_active_chunk_ids = index_admin.active_chunk_ids
+_derivation_filter = index_admin.derivation_filter
+_index_build = index_admin.index_build
+_recover_activation = index_admin.recover_activation
+_activate_index = index_admin.activate_index
+_qdrant_alias_state = index_admin.qdrant_alias_state
+_schema_state = store_admin.schema_state
+PostgresUnitOfWork = postgres.PostgresUnitOfWork
 
 
-def _index_build(config, document_id=None, *, repair_orphans=False):
-    """Legacy build plus typed payload-index provisioning.
+def _blob_health(config):
+    return store_admin.blob_health(config, database_fn=_db)
 
-    ``index-build`` is an explicit write path, so this is the appropriate place
-    to create missing Qdrant payload indexes. Read-only reconciliation never
-    calls this wrapper unless ``--repair`` was explicitly requested.
-    """
-    result = _legacy_index_build(
-        config,
-        document_id,
-        repair_orphans=repair_orphans,
-    )
-    definition = result["index_definition"]
-    index = QdrantIndex(
-        config.qdrant_url,
-        config.qdrant_api_key,
-        definition["physical_collection"],
-        definition["dimension"],
-        definition["distance_metric"],
-    )
-    result["payload_indexes"] = index.ensure_payload_indexes(
-        PAYLOAD_INDEX_SCHEMAS,
-        create_missing=True,
-    )
-    return result
+
+_classify_connectivity_failure = store_admin.classify_connectivity_failure
+_endpoint_health = resource_admin.endpoint_health
+_resource_status = resource_admin.resource_status
+
+
+def _export_json(path, payload):
+    return export_serialization.export_json(path, payload, replace_fn=os.replace)
+
+
+def _resolve_run_id(config, external_id):
+    return run_lookup.resolve_run_id(config, external_id, database_fn=_db)
+
+
+def _resolve_any_run_id(config, external_id):
+    return run_lookup.resolve_any_run_id(config, external_id, database_fn=_db)
 
 
 def _index_reconcile(config, repair=False):
-    """Projection-wide compatibility seam for legacy imports and ``doctor``.
-
-    This scope is deliberately not presented as historical run provenance. The
-    first-class CLI command accepts a run identifier and uses the immutable
-    checkpoint/seal authority in :mod:`research_store.reconciliation`.
-    """
     return reconcile_projection_compat(
         config,
         repair=repair,
@@ -82,104 +121,70 @@ def _index_reconcile(config, repair=False):
     )
 
 
-def _artifact_parser(command: str) -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog=f"research-db {command}")
-    root.add_argument("id")
-    root.add_argument("--output", required=True)
-    if command == "export-run":
-        root.add_argument(
-            "--schema-version",
-            choices=EXPORT_RUN_SCHEMA_VERSIONS,
-            default="export-run-v2",
-        )
-    else:
-        root.add_argument(
-            "--schema-version",
-            choices=INTEGRITY_SCHEMA_VERSIONS,
-            default="integrity-v1",
-        )
-    return root
+def _doctor(config):
+    return store_admin.doctor(config, sys.modules[__name__])
 
 
-def _artifact_main(command: str, argv: list[str]) -> int:
-    args = _artifact_parser(command).parse_args(argv)
-    config = StoreConfig.from_env()
-    if command == "export-run":
-        result = build_run_export(config, args.id, args.schema_version)
-    else:
-        result = build_integrity_report(config, args.id, args.schema_version)
-    output = Path(args.output)
-    _legacy_export_json(output, result)
-    if command == "integrity":
-        print(
-            _legacy_dumps(
-                {
-                    "status": "written",
-                    "path": str(output),
-                    "schema_version": result["schema_version"],
-                    "integrity_status": result["diagnostics"]["overall_status"],
-                    "run_id": str(result["run"]["id"]),
-                }
-            )
-        )
+def _cmd_rederive_v2(config, args) -> int:
+    result = derivation_admin.rederive_v2(config, args, build_service)
+    print(dumps(result))
     return 0
 
 
-def _reconcile_parser(command: str) -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog=f"research-db {command}")
-    root.add_argument(
-        "run",
-        nargs="?",
-        help=(
-            "research run UUID or external_run_id; when omitted, report only "
-            "current projection-wide compatibility (no historical run claim)"
-        ),
+def _cmd_derivation_list(config, args) -> int:
+    print(dumps(derivation_admin.list_derivations(config, args, build_service)))
+    return 0
+
+
+def _cmd_derivation_activate(config, args) -> int:
+    output, exit_code = derivation_admin.activate_derivation(
+        config, args, build_service
     )
-    root.add_argument(
-        "--repair",
-        action="store_true",
-        help=(
-            "explicitly perform bounded projection repairs (requeue exact chunks, "
-            "delete PostgreSQL-orphaned points, create missing payload indexes)"
-        ),
+    for item in output:
+        print(dumps(item))
+    return exit_code
+
+
+def _cmd_derivation_compare(config, args) -> int:
+    output, exit_code = derivation_admin.compare_derivations(
+        config, args, build_service
     )
-    return root
+    print(dumps(output))
+    return exit_code
 
 
-def _reconcile_main(command: str, argv: list[str]) -> int:
-    args = _reconcile_parser(command).parse_args(argv)
-    config = StoreConfig.from_env()
-    try:
-        if args.run:
-            result = reconcile_run(config, args.run, repair=args.repair)
-        else:
-            result = reconcile_projection_compat(
-                config,
-                repair=args.repair,
-                index_build=_index_build,
-            )
-    except ReconciliationError as exc:
-        print(
-            _legacy_dumps(
-                {
-                    "schema_version": "qdrant-reconciliation-v2",
-                    "ok": False,
-                    "scope": "run" if args.run else "projection",
-                    "error": str(exc),
-                }
-            ),
-            file=sys.stderr,
-        )
-        return 2
-    print(_legacy_dumps(result))
-    final = result.get("post_repair") or result
-    return 0 if final.get("ok", False) else 1
+def _cmd_normalize(config, args) -> int:
+    result = derivation_admin.normalize(config, args, database_fn=_db)
+    print(dumps(result))
+    return 1 if result.get("error") == "specify --document <uuid> or --all" else 0
 
 
-def main(argv: list[str] | None = None) -> int:
+_PARSED_FAMILIES = (
+    admin,
+    indexing,
+    derivation,
+    runs,
+    acquisition,
+    retrieval,
+    evidence,
+    audit,
+    synthesis,
+    benchmark,
+)
+_RAW_ARGV_FAMILIES = (compatibility,)
+_FAMILIES = _PARSED_FAMILIES + _RAW_ARGV_FAMILIES
+
+
+def main(argv: list[str] | None = None):
+    """Parse and dispatch one research-store CLI invocation."""
     resolved = list(sys.argv[1:] if argv is None else argv)
-    if resolved and resolved[0] in {"export-run", "integrity"}:
-        return _artifact_main(resolved[0], resolved[1:])
-    if resolved and resolved[0] in {"index-reconcile", "reconcile-qdrant"}:
-        return _reconcile_main(resolved[0], resolved[1:])
-    return _legacy_main(resolved)
+    for family in _RAW_ARGV_FAMILIES:
+        if resolved and resolved[0] in family.COMMANDS:
+            return family.run_argv(resolved[0], resolved[1:], sys.modules[__name__])
+
+    args = parser().parse_args(resolved)
+    config = StoreConfig.from_env()
+    for family in _PARSED_FAMILIES:
+        if args.command in family.COMMANDS:
+            return family.run(args, config, sys.modules[__name__])
+    raise AssertionError(f"unrouted CLI command: {args.command}")
