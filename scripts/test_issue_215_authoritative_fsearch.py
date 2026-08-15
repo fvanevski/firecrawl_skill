@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -84,7 +85,16 @@ def _prepared_run(config, objective="issue 215 candidate policy"):
     return runs, status, external_id
 
 
-def test_fsearch_persists_selected_and_rejected_ranking_provenance(policy_store):
+def test_fsearch_persists_selected_and_rejected_ranking_provenance(
+    policy_store, monkeypatch
+):
+    # Keep the qdr:w freshness assertion independent of the wall-clock date.
+    evaluation_time = datetime(2026, 8, 12, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        "research_store.fsearch_policy_service.utcnow",
+        lambda: evaluation_time,
+    )
+
     runs, status, external_id = _prepared_run(policy_store)
     adapter = _StaticSearchAdapter(
         [
