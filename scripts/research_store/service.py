@@ -151,6 +151,8 @@ class ClaimManifestService:
         claims = manifest.get("claims", [])
         links = manifest.get("links", [])
 
+        # Dry-run phase: validate all references in a single UoW to avoid
+        # opening O(n) connections (one per passage/snapshot check).
         unknown_passages = []
         unknown_snapshots = []
         malformed_claim_ids = []
@@ -198,6 +200,7 @@ class ClaimManifestService:
         if dry_run or (malformed_claim_ids or unknown_passages or unknown_snapshots):
             return dry_run_result
 
+        # Apply phase: commit claims and links
         failed_claims = []
         failed_links = []
         inserted_claims = 0
@@ -281,6 +284,11 @@ class ClaimManifestService:
         """Check if snapshot_id exists in asset_snapshots."""
         with self.uow_factory() as uow:
             return uow.validate_snapshot_id(snapshot_id)
+
+
+# ---------------------------------------------------------------------------
+# Audit service (issue #33)
+# ---------------------------------------------------------------------------
 
 
 AUDIT_IDENTITY_VERSION = "audit-identity-v1"
