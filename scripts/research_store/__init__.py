@@ -81,9 +81,8 @@ _orchestrator.AcquisitionStage = BoundedAcquisitionStage
 _orchestrator.ExtractionStage = BoundedExtractionStage
 
 # Issue #255 establishes explicit repository objects on the canonical UoW while
-# retaining the existing PostgreSQL domain methods as temporary delegates. The
-# later Phase-3 repository-extraction issues replace those delegates without
-# changing the one-connection transaction boundary established here.
+# retaining temporary compatibility delegates. Issue #259 completes the
+# extraction so those delegates contain no domain SQL of their own.
 install_shared_repository_context(_postgres)
 
 # Issue #258 keeps candidate ranking policy and persistence routing explicit in
@@ -91,12 +90,24 @@ install_shared_repository_context(_postgres)
 # the canonical candidate repository, so no import-time method replacement is
 # required and source-level navigation matches runtime behavior.
 
-# Issue #217 installs the authoritative batch timing/outcome/selection contract
-# on the canonical corpus production extension point. The installer mutates the
-# already-imported class in place so existing compatibility references held by
-# builders, tests, and checkpoint wrappers receive the exact same PostgreSQL
-# behavior.
+# Issue #217 installs the authoritative batch timing/outcome/selection contract.
+# PostgresCorpusRepository already calls these exact functions through its
+# private connection adapter. Retain the service/orchestrator patches, then
+# remove the duplicate UoW class methods so PostgresUnitOfWork remains only the
+# transaction/composition boundary established by Phase 3.
 install_issue_217_contract(_postgres, _corpus_service, _bounded_orchestrator)
+for _uow_domain_method in (
+    "_has_constituent_timing_columns",
+    "start_ingestion_batch",
+    "record_batch_asset",
+    "finish_ingestion_batch",
+    "export_invocation",
+    "export_invocation_by_batch",
+    "get_trace",
+):
+    if _uow_domain_method in _postgres.PostgresUnitOfWork.__dict__:
+        delattr(_postgres.PostgresUnitOfWork, _uow_domain_method)
+del _uow_domain_method
 
 # ARC-17 correction is now baked into CorpusService.bounded_ingest_batch and
 # ExtractionService.complete_attempt idempotency guard. No monkeypatching is
