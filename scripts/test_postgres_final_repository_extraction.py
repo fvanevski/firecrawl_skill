@@ -165,7 +165,7 @@ def _insert_cache_entry(uow, suffix):
             "input_hash": "a" * 64,
             "prompt_hash": "b" * 64,
             "prompt_version": "test-v1",
-            "schema_version": "test-v1",
+            "schema_version": 1,
             "policy_version": None,
             "configuration_hash": None,
             "artifact": {"suffix": suffix},
