@@ -55,7 +55,7 @@ class PostgresRepositoryView:
     until issues #256-#259 move the corresponding SQL into cohesive repositories.
     """
 
-    __slots__ = ("name", "_connection", "_implementation")
+    __slots__ = ("_connection", "_implementation", "name")
 
     def __init__(self, name: str, connection: Any, implementation: Any) -> None:
         self.name = name

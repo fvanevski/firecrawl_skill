@@ -138,18 +138,18 @@ def test_cross_repository_writes_share_one_outer_rollback(tmp_path):
     run_id = None
     response_id = None
 
-    with pytest.raises(RuntimeError, match="force outer rollback"):
-        with PostgresUnitOfWork(TEST_DSN, "test-index") as uow:
-            assert uow.runs is not uow.search_responses
-            assert uow.runs._connection is uow.search_responses._connection
-            assert uow.runs._connection is uow.connection
+    with (
+        pytest.raises(RuntimeError, match="force outer rollback"),
+        PostgresUnitOfWork(TEST_DSN, "test-index") as uow,
+    ):
+        assert uow.runs is not uow.search_responses
+        assert uow.runs._connection is uow.search_responses._connection
+        assert uow.runs._connection is uow.connection
 
-            run_id = _start_run(uow, "outer-rollback")
-            response = _record_response(
-                uow, run_id, blob_store, "outer-rollback"
-            )
-            response_id = response["id"]
-            raise RuntimeError("force outer rollback")
+        run_id = _start_run(uow, "outer-rollback")
+        response = _record_response(uow, run_id, blob_store, "outer-rollback")
+        response_id = response["id"]
+        raise RuntimeError("force outer rollback")
 
     assert run_id is not None
     assert response_id is not None
