@@ -75,9 +75,7 @@ class TestPostgresRepositoryCore:
         assert fake_connection.commits == 1
         assert fake_connection.closes == 1
 
-    def test_repository_views_expose_domain_operations_not_uow_infrastructure(
-        self, monkeypatch
-    ):
+    def test_repository_views_expose_only_scoped_uow_infrastructure(self, monkeypatch):
         fake_connection = _FakeConnection()
         monkeypatch.setattr(
             "research_store.postgres.connect", lambda _database_url: fake_connection
@@ -95,18 +93,21 @@ class TestPostgresRepositoryCore:
                 "fetchone",
                 "__enter__",
                 "__exit__",
-                "_lock_workflow_run",
                 "_cursor",
                 "_implementation",
                 "_connection",
+                "_ensure_index_definition",
             )
             for name in blocked:
                 assert not hasattr(repository, name), name
                 assert name not in dir(repository), name
 
-            # A normal public domain operation remains delegated through the
-            # compatibility seam; only UoW/infrastructure capability is filtered.
+            # Normal public domain operations remain delegated. The single
+            # private compatibility helper is explicit because asset promotion
+            # already depends on it for the authoritative run row lock.
             assert callable(repository.start_run)
+            assert callable(repository._lock_workflow_run)
+            assert "_lock_workflow_run" in dir(repository)
 
             assert callable(uow.commit)
             assert callable(uow.rollback)
