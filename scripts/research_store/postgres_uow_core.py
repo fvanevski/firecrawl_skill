@@ -2,17 +2,27 @@
 
 Issue #255 establishes explicit repository objects without moving domain SQL out of
 ``PostgresUnitOfWork``. Later Phase-3 issues replace these compatibility views
-with cohesive repository implementations. Until then each view delegates domain
-operations to the existing implementation while carrying only opaque identity for
-the exact connection owned by the containing UoW.
+with cohesive repository implementations. Until then each view delegates existing
+public domain operations to the UoW implementation while carrying only opaque
+identity for the exact connection owned by the containing UoW.
 
 The compatibility seam is intentionally capability-filtered: repository views do not
 expose connection lifecycle, transaction control, the generic SQL executor/cursor
-chain, or unrelated private UoW helpers. The one temporary private exception,
-``_lock_workflow_run``, preserves an existing cross-service row-lock contract used by
-asset promotion; it operates on the caller-supplied cursor and does not own a
-transaction boundary. Issues #256-#259 can retire that compatibility exception when
-the corresponding SQL is moved into cohesive repositories.
+chain, or arbitrary private UoW helpers. Two existing run-repository operations are
+explicitly retained only on the ``runs`` view:
+
+* ``_bump_lifecycle_revision`` is already part of the typed
+  ``ResearchRunRepository`` contract and performs a CAS-style run mutation inside
+  the containing UoW transaction.
+* ``_lock_workflow_run`` is a temporary compatibility operation used by established
+  workflow/checkpoint code; it operates on a caller-supplied cursor and acquires a
+  row lock without opening, committing, rolling back, or nesting a transaction.
+
+Public domain delegation remains compatibility-complete in #255 because moving and
+fully partitioning the domain SQL belongs to issues #256-#259. The authority boundary
+established here is stricter: no repository role can obtain the raw connection or
+invoke UoW transaction/executor infrastructure, and private compatibility operations
+are role-scoped rather than globally delegated.
 """
 
 from __future__ import annotations
@@ -58,30 +68,30 @@ _NON_REPOSITORY_CAPABILITIES = frozenset(
     }
 )
 
-# Existing asset-promotion code calls this lock helper through ``uow.runs`` while
-# holding a cursor from the containing UoW connection. It is a row-lock operation,
-# not an independent transaction capability, and remains explicit/temporary until
-# the workflow repository extraction owns the operation directly.
-_COMPATIBILITY_HELPERS = frozenset({"_lock_workflow_run"})
+# Private operations are never delegated generically. These two are established
+# run-repository contracts/call paths and are scoped to the runs view only.
+_ROLE_PRIVATE_OPERATIONS: dict[str, frozenset[str]] = {
+    "runs": frozenset({"_bump_lifecycle_revision", "_lock_workflow_run"}),
+}
 _INSTALL_MARKER = "_shared_repository_context_installed"
 
 
-def _is_delegated_operation(name: str) -> bool:
-    """Return whether *name* is part of the temporary repository surface."""
-    if name in _COMPATIBILITY_HELPERS:
-        return True
-    return not name.startswith("_") and name not in _NON_REPOSITORY_CAPABILITIES
+def _is_delegated_operation(role: str, name: str) -> bool:
+    """Return whether *name* belongs to the temporary surface for *role*."""
+    if name.startswith("_"):
+        return name in _ROLE_PRIVATE_OPERATIONS.get(role, frozenset())
+    return name not in _NON_REPOSITORY_CAPABILITIES
 
 
 class PostgresRepositoryView:
     """Temporary connection-bound repository view for incremental SQL extraction.
 
-    Repository consumers receive domain operations plus explicitly enumerated
-    compatibility helpers. The raw connection, UoW implementation object,
-    connection lifecycle, transaction controls, generic SQL executor/cursor chain,
-    and every other private helper are outside the repository surface. Delegation
-    preserves current domain behavior until issues #256-#259 move the corresponding
-    SQL into cohesive repositories.
+    Repository consumers receive existing public domain operations plus only the
+    explicitly enumerated private operations for their role. The raw connection,
+    UoW implementation object, connection lifecycle, transaction controls, generic
+    SQL executor/cursor chain, and every other private helper are outside the
+    repository surface. Later Phase-3 issues replace public delegation with cohesive
+    repository implementations without changing this one-connection UoW boundary.
     """
 
     __slots__ = ("__connection_identity", "__implementation", "name")
@@ -97,7 +107,7 @@ class PostgresRepositoryView:
         return self.__connection_identity
 
     def __getattr__(self, name: str) -> Any:
-        if not _is_delegated_operation(name):
+        if not _is_delegated_operation(self.name, name):
             raise AttributeError(
                 f"repository {self.name!r} does not expose UoW capability {name!r}"
             )
@@ -106,7 +116,9 @@ class PostgresRepositoryView:
     def __dir__(self) -> list[str]:
         public_local = {name for name in super().__dir__() if not name.startswith("_")}
         delegated = {
-            name for name in dir(self.__implementation) if _is_delegated_operation(name)
+            name
+            for name in dir(self.__implementation)
+            if _is_delegated_operation(self.name, name)
         }
         return sorted(public_local | delegated)
 

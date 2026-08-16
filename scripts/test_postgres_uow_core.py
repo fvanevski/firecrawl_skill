@@ -102,12 +102,19 @@ class TestPostgresRepositoryCore:
                 assert not hasattr(repository, name), name
                 assert name not in dir(repository), name
 
-            # Normal public domain operations remain delegated. The single
-            # private compatibility helper is explicit because asset promotion
-            # already depends on it for the authoritative run row lock.
+            # Normal public domain operations remain delegated during #255.
             assert callable(repository.start_run)
+
+            # These two private operations are established run-repository paths.
+            # They are available only through the runs view, never other roles.
+            assert callable(repository._bump_lifecycle_revision)
             assert callable(repository._lock_workflow_run)
+            assert "_bump_lifecycle_revision" in dir(repository)
             assert "_lock_workflow_run" in dir(repository)
+            for other_role in ("sources", "search_responses", "candidates"):
+                other_repository = getattr(uow, other_role)
+                assert not hasattr(other_repository, "_bump_lifecycle_revision")
+                assert not hasattr(other_repository, "_lock_workflow_run")
 
             assert callable(uow.commit)
             assert callable(uow.rollback)
@@ -128,14 +135,15 @@ class TestPostgresRepositoryCore:
         )
 
         with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
-            repository = uow.runs
-            for sql in ("COMMIT", "ROLLBACK", "SAVEPOINT repository_owned"):
-                with pytest.raises(
-                    AttributeError, match="does not expose UoW capability"
-                ):
-                    repository.execute(sql)
+            for role in REPOSITORY_ROLES:
+                repository = getattr(uow, role)
+                for sql in ("COMMIT", "ROLLBACK", "SAVEPOINT repository_owned"):
+                    with pytest.raises(
+                        AttributeError, match="does not expose UoW capability"
+                    ):
+                        repository.execute(sql)
 
-            # The failed capability lookups cannot have reached the connection.
+            # Failed capability lookups cannot have reached the connection.
             assert fake_connection.commits == 0
             assert fake_connection.rollbacks == 0
             assert fake_connection.transactions == 0
