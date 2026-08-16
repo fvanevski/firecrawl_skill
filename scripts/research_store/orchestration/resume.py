@@ -5,8 +5,7 @@ resume control flow.  ``ResumableResearchOrchestrator.run`` delegates to
 ``run_resume`` to avoid duplicating the logic.
 
 State queries are routed through ``ResumeStatePort`` so that no raw SQL
-lives in this package.  The default port adapter wraps the existing
-authoritative helpers in ``smart_orchestrator``.
+lives in this package.
 """
 
 from __future__ import annotations
@@ -22,46 +21,13 @@ from ..smart_orchestrator import (
     PLANNING_STATES,
     TERMINAL_STATES,
     SmartResumeError,
-    _assets,
-    _authorized_queries,
-    _counts,
     _coverage_context,
-    _packet_revision,
     _replay_extraction_inputs,
 )
 from ..stages import ContextKeys
 from .ports import ResumeStatePort
 
 logger = logging.getLogger(__name__)
-
-
-class _DefaultResumeStatePort:
-    """Adapts the existing smart_orchestrator helpers to ResumeStatePort."""
-
-    def __init__(self, orchestrator: ResearchOrchestrator) -> None:
-        self._orchestrator = orchestrator
-
-    def counts(self, run_id: UUID) -> dict[str, int]:
-        return _counts(self._orchestrator, run_id)
-
-    def authorized_queries(self, run_id: UUID) -> list[dict[str, Any]]:
-        return _authorized_queries(self._orchestrator, run_id)
-
-    def completed_candidates(self, run_id: UUID) -> set[str]:
-        from ..smart_orchestrator import _completed_candidates
-
-        return _completed_candidates(self._orchestrator, run_id)
-
-    def extraction_inputs(
-        self, run_id: UUID, context: dict[str, Any]
-    ) -> list[dict[str, Any]]:
-        return _replay_extraction_inputs(self._orchestrator, run_id, context)
-
-    def assets(self, run_id: UUID) -> list[dict[str, Any]]:
-        return _assets(self._orchestrator, run_id)
-
-    def packet_revision(self, run_id: UUID) -> int:
-        return _packet_revision(self._orchestrator, run_id)
 
 
 def run_resume(
@@ -72,7 +38,7 @@ def run_resume(
     *,
     max_adaptive_cycles: int | None = None,
     context: dict[str, Any] | None = None,
-    state_port: ResumeStatePort | None = None,
+    state_port: ResumeStatePort,
 ) -> OrchestratorResult:
     """Execute the resume orchestration pipeline.
 
@@ -86,14 +52,11 @@ def run_resume(
         search_plan: The validated SearchPlan as a dict.
         max_adaptive_cycles: Override the default max cycles.
         context: Additional context to pass to stages.
-        state_port: Port for state queries.  Defaults to the built-in adapter.
+        state_port: Read-only port for state queries.
 
     Returns:
         An ``OrchestratorResult`` describing the final outcome.
     """
-    if state_port is None:
-        state_port = _DefaultResumeStatePort(orchestrator)
-
     max_cycles = (
         max_adaptive_cycles or orchestrator.orchestrator_config.max_adaptive_cycles
     )
@@ -109,9 +72,9 @@ def run_resume(
     ctx.setdefault(ContextKeys.WALL_CLOCK_START, time.monotonic())
     state, revision = orchestrator._refresh(run_id)
     counts = state_port.counts(run_id)
-    ctx.setdefault(ContextKeys.WAVE_COUNT, counts["waves"])
-    ctx.setdefault(ContextKeys.EXTRACTION_ATTEMPTS, counts["attempts"])
-    ctx.setdefault(ContextKeys.SUCCESSFUL_URLS, counts["assets"])
+    ctx.setdefault(ContextKeys.WAVE_COUNT, counts.waves)
+    ctx.setdefault(ContextKeys.EXTRACTION_ATTEMPTS, counts.attempts)
+    ctx.setdefault(ContextKeys.SUCCESSFUL_URLS, counts.assets)
     if state not in PLANNING_STATES and state not in TERMINAL_STATES:
         ctx.update(_coverage_context(orchestrator, run_id))
     ctx.setdefault(
@@ -125,8 +88,8 @@ def run_resume(
             final_state=state,
             outcome="resumed",
             coverage_revision=coverage_revision,
-            wave_count=counts["waves"],
-            successful_urls=counts["assets"],
+            wave_count=counts.waves,
+            successful_urls=counts.assets,
         )
 
     try:
@@ -208,7 +171,7 @@ def run_resume(
             if state == "extracting":
                 inputs = list(ctx.get("raw_ingest_requests") or [])
                 if not inputs:
-                    inputs = state_port.extraction_inputs(run_id, ctx)
+                    inputs = _replay_extraction_inputs(orchestrator, run_id, ctx)
                 if inputs:
                     result = orchestrator._execute_stage(
                         "extraction",
@@ -353,8 +316,8 @@ def run_resume(
             final_state=state,
             outcome=state,
             coverage_revision=coverage_revision,
-            wave_count=counts["waves"],
-            successful_urls=counts["assets"],
+            wave_count=counts.waves,
+            successful_urls=counts.assets,
         )
     except (RunStateError, StaleRunRevisionError, SmartResumeError) as exc:
         logger.error("smart-run resume failed: %s", exc)

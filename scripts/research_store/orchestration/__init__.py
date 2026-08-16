@@ -13,16 +13,14 @@ from ..orchestration.commands import RunResearchCommand
 from ..orchestration.composition import build_production_orchestrator
 from ..orchestration.lifecycle import run_research
 from ..orchestration.ports import (
-    ExtractionInput,
+    ResumeCounts,
     ResumeStatePort,
-    RunCounts,
 )
 from ..orchestration.resume import run_resume
 
 __all__ = [
-    "ExtractionInput",
+    "ResumeCounts",
     "ResumeStatePort",
-    "RunCounts",
     "RunResearchCommand",
     "build_production_orchestrator",
     "checkpoint_execute_stage",

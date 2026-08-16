@@ -9,28 +9,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
+from uuid import UUID
 
 
 @dataclass(frozen=True)
-class RunCounts:
-    """Aggregate counts for a run's persisted state."""
+class ResumeCounts:
+    """Aggregate counts for a run's persisted resume state."""
 
-    sources: int
-    documents: int
-    chunks: int
-    invocations: int
-    transitions: int
-
-
-@dataclass(frozen=True)
-class ExtractionInput:
-    """A single extraction input row replayed from the database."""
-
-    source_id: str
-    url: str
-    content: str
-    title: str | None = None
-    metadata: dict[str, Any] | None = None
+    waves: int
+    attempts: int
+    assets: int
 
 
 class ResumeStatePort(Protocol):
@@ -40,28 +28,22 @@ class ResumeStatePort(Protocol):
     uses them to reconstruct execution context without direct SQL.
     """
 
-    def counts(self, run_id: str) -> RunCounts:
-        """Return aggregate document/source/chunk/invocation counts."""
+    def counts(self, run_id: UUID) -> ResumeCounts:
+        """Return wave/attempt/asset counts for the run."""
         ...
 
-    def authorized_queries(self, run_id: str) -> list[dict[str, Any]]:
+    def authorized_queries(self, run_id: UUID) -> list[dict[str, Any]]:
         """Return the list of authorized search queries for this run."""
         ...
 
-    def completed_candidates(self, run_id: str) -> list[dict[str, Any]]:
-        """Return source IDs that already have completed acquisition."""
+    def completed_candidates(self, run_id: UUID) -> set[str]:
+        """Return candidate IDs that already have completed extraction."""
         ...
 
-    def extraction_inputs(
-        self, run_id: str, context: dict[str, Any]
-    ) -> list[ExtractionInput]:
-        """Return extraction inputs to replay for this run."""
-        ...
-
-    def assets(self, run_id: str) -> list[dict[str, Any]]:
+    def assets(self, run_id: UUID) -> list[dict[str, Any]]:
         """Return persisted asset references for this run."""
         ...
 
-    def packet_revision(self, run_id: str) -> int:
-        """Return the current strategy packet revision number."""
+    def packet_revision(self, run_id: UUID) -> int:
+        """Return the latest evidence packet revision number."""
         ...

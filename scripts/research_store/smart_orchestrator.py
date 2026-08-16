@@ -18,6 +18,7 @@ from research_domain.models import ResearchSpec, SearchPlan
 
 from .domain import IngestRequest
 from .orchestrator import OrchestratorResult, ResearchOrchestrator
+from .resume_state_repository import PostgresResumeStateReader
 from .stages import ContextKeys
 
 logger = logging.getLogger(__name__)
@@ -58,27 +59,17 @@ def _mapping(value: Any, label: str) -> dict[str, Any]:
 
 
 def _latest_budget(uow: Any, run_id: UUID) -> dict[str, Any] | None:
-    with uow.connection.cursor() as cursor:
-        cursor.execute(
-            """SELECT id,research_spec_id,spec_revision,run_revision,
-                      policy_version,policy_config_sha256,snapshot
-               FROM research_budget_snapshots
-               WHERE run_id=%s
-               ORDER BY run_revision DESC,created_at DESC,id DESC
-               LIMIT 1""",
-            (run_id,),
-        )
-        row = cursor.fetchone()
+    row = uow.runs.get_latest_budget_snapshot(run_id)
     if row is None:
         return None
     return {
-        "id": row[0],
-        "research_spec_id": row[1],
-        "spec_revision": int(row[2]),
-        "run_revision": int(row[3]),
-        "policy_version": str(row[4]),
-        "policy_config_sha256": str(row[5]),
-        "snapshot": _mapping(row[6], "budget snapshot"),
+        "id": row["id"],
+        "research_spec_id": row["research_spec_id"],
+        "spec_revision": row["spec_revision"],
+        "run_revision": row["run_revision"],
+        "policy_version": row["policy_version"],
+        "policy_config_sha256": row["policy_config_sha256"],
+        "snapshot": _mapping(row["snapshot"], "budget snapshot"),
     }
 
 
@@ -217,75 +208,23 @@ def _coverage_context(
     return context
 
 
+def _reader_for(orchestrator: ResearchOrchestrator) -> PostgresResumeStateReader:
+    return PostgresResumeStateReader(orchestrator.run_service.uow_factory)
+
+
 def _counts(orchestrator: ResearchOrchestrator, run_id: UUID) -> dict[str, int]:
-    with (
-        orchestrator.run_service.uow_factory() as uow,
-        uow.connection.cursor() as cursor,
-    ):
-        cursor.execute(
-            """SELECT
-                 (SELECT count(*) FROM research_run_transitions
-                   WHERE run_id=%s AND prior_state='acquiring'
-                     AND next_state IN ('extracting','coverage_review')),
-                 (SELECT count(*) FROM extraction_attempts WHERE run_id=%s),
-                 (SELECT count(*) FROM asset_snapshots s
-                    JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
-                   WHERE ea.run_id=%s)""",
-            (run_id, run_id, run_id),
-        )
-        row = cursor.fetchone()
-    return {
-        "waves": int(row[0] or 0),
-        "attempts": int(row[1] or 0),
-        "assets": int(row[2] or 0),
-    }
+    counts = _reader_for(orchestrator).counts(run_id)
+    return {"waves": counts.waves, "attempts": counts.attempts, "assets": counts.assets}
 
 
 def _authorized_queries(
     orchestrator: ResearchOrchestrator, run_id: UUID
 ) -> list[dict[str, Any]]:
-    with (
-        orchestrator.run_service.uow_factory() as uow,
-        uow.connection.cursor() as cursor,
-    ):
-        cursor.execute(
-            """SELECT p.proposal_id,p.proposed_queries
-               FROM strategy_revisions p
-               WHERE p.run_id=%s AND p.row_type='proposal'
-                 AND p.decision_type='search'
-                 AND EXISTS (
-                   SELECT 1 FROM strategy_revisions d
-                    WHERE d.run_id=p.run_id AND d.row_type='decision'
-                      AND d.proposal_id=p.proposal_id AND d.outcome='accepted'
-                 )
-               ORDER BY p.revision_order""",
-            (run_id,),
-        )
-        rows = cursor.fetchall()
-    return [
-        {
-            "proposal_id": str(proposal_id),
-            "decision_type": "search",
-            "proposed_queries": list(queries or []),
-        }
-        for proposal_id, queries in rows
-        if queries
-    ]
+    return _reader_for(orchestrator).authorized_queries(run_id)
 
 
 def _completed_candidates(orchestrator: ResearchOrchestrator, run_id: UUID) -> set[str]:
-    with (
-        orchestrator.run_service.uow_factory() as uow,
-        uow.connection.cursor() as cursor,
-    ):
-        cursor.execute(
-            """SELECT DISTINCT ea.candidate_id
-               FROM extraction_attempts ea
-               JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
-               WHERE ea.run_id=%s""",
-            (run_id,),
-        )
-        return {str(row[0]) for row in cursor.fetchall()}
+    return _reader_for(orchestrator).completed_candidates(run_id)
 
 
 def _replay_extraction_inputs(
@@ -362,52 +301,11 @@ def _replay_extraction_inputs(
 
 
 def _assets(orchestrator: ResearchOrchestrator, run_id: UUID) -> list[dict[str, Any]]:
-    with (
-        orchestrator.run_service.uow_factory() as uow,
-        uow.connection.cursor() as cursor,
-    ):
-        cursor.execute(
-            """SELECT ea.id,ea.candidate_id,s.id,s.requested_url,
-                      array_agg(ch.id ORDER BY ch.ordinal)
-               FROM extraction_attempts ea
-               JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
-               JOIN documents d ON d.snapshot_id=s.id
-               JOIN chunks ch ON ch.document_id=d.id
-               WHERE ea.run_id=%s
-               GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
-               ORDER BY s.id""",
-            (run_id,),
-        )
-        rows = cursor.fetchall()
-    return [
-        {
-            "status": "complete",
-            "ordinal": index,
-            "requested_url": row[3],
-            "snapshot_id": str(row[2]),
-            "chunk_ids": [str(chunk_id) for chunk_id in row[4]],
-            "candidate_id": str(row[1]),
-            "extraction_attempt_id": str(row[0]),
-            "resume_replay": True,
-        }
-        for index, row in enumerate(rows)
-    ]
+    return _reader_for(orchestrator).assets(run_id)
 
 
 def _packet_revision(orchestrator: ResearchOrchestrator, run_id: UUID) -> int:
-    with (
-        orchestrator.run_service.uow_factory() as uow,
-        uow.connection.cursor() as cursor,
-    ):
-        cursor.execute(
-            """SELECT packet_revision FROM evidence_packets
-               WHERE run_id=%s ORDER BY packet_revision DESC LIMIT 1""",
-            (run_id,),
-        )
-        row = cursor.fetchone()
-    if row is None:
-        raise SmartResumeError("synthesizing run has no EvidencePacket")
-    return int(row[0])
+    return _reader_for(orchestrator).packet_revision(run_id)
 
 
 class ResumableResearchOrchestrator(ResearchOrchestrator):
@@ -454,6 +352,7 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
             search_plan,
             max_adaptive_cycles=max_adaptive_cycles,
             context=context,
+            state_port=_reader_for(self),
         )
 
 

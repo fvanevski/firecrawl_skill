@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import UUID
 
 
 @dataclass(frozen=True)
 class RunResearchCommand:
-    """Immutable command for starting a research run.
+    """Immutable command for executing a research run.
 
     Matches the existing public contract of ``ResearchOrchestrator.run``.
     """
 
-    query: str
-    external_run_id: str | None = None
+    run_id: UUID
+    spec: dict[str, Any]
+    search_plan: dict[str, Any]
+    max_adaptive_cycles: int | None = None
     context: dict[str, Any] = field(default_factory=dict, compare=False)

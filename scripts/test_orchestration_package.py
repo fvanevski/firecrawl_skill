@@ -14,6 +14,7 @@ F. Checkpoint delegation: CheckpointResearchOrchestrator delegates to
 G. Composition root produces bounded stages.
 H. Command dataclass is frozen (immutable).
 I. No raw SQL / cursor usage in the orchestration application package.
+J. No raw SQL / cursor usage in smart_orchestrator.py.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import inspect
 import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -149,28 +151,41 @@ class TestCommandDataclass:
     def test_run_research_command_is_frozen(self):
         from research_store.orchestration.commands import RunResearchCommand
 
-        cmd = RunResearchCommand(query="test query")
+        cmd = RunResearchCommand(
+            run_id=UUID("00000000-0000-0000-0000-000000000001"),
+            spec={"query": "test"},
+            search_plan={"queries": []},
+        )
         with pytest.raises(FrozenInstanceError):
-            cmd.query = "mutated"  # type: ignore[misc]
+            cmd.run_id = UUID("00000000-0000-0000-0000-000000000002")  # type: ignore[misc]
 
     def test_run_research_command_fields(self):
         from research_store.orchestration.commands import RunResearchCommand
 
+        run_id = UUID("00000000-0000-0000-0000-000000000001")
         cmd = RunResearchCommand(
-            query="hello",
-            external_run_id="ext-123",
+            run_id=run_id,
+            spec={"query": "hello"},
+            search_plan={"queries": ["q1"]},
+            max_adaptive_cycles=5,
             context={"key": "value"},
         )
-        assert cmd.query == "hello"
-        assert cmd.external_run_id == "ext-123"
+        assert cmd.run_id == run_id
+        assert cmd.spec == {"query": "hello"}
+        assert cmd.search_plan == {"queries": ["q1"]}
+        assert cmd.max_adaptive_cycles == 5
         assert cmd.context == {"key": "value"}
 
-    def test_run_research_command_default_context(self):
+    def test_run_research_command_defaults(self):
         from research_store.orchestration.commands import RunResearchCommand
 
-        cmd = RunResearchCommand(query="hello")
+        cmd = RunResearchCommand(
+            run_id=UUID("00000000-0000-0000-0000-000000000001"),
+            spec={},
+            search_plan={},
+        )
         assert cmd.context == {}
-        assert cmd.external_run_id is None
+        assert cmd.max_adaptive_cycles is None
 
 
 class TestNoRawSQLInOrchestration:
@@ -223,6 +238,49 @@ class TestNoRawSQLInOrchestration:
                         )
 
 
+class TestNoRawSQLInSmartOrchestrator:
+    """AC-J: No raw SQL / cursor usage in smart_orchestrator.py."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def smart_file(cls) -> Path:
+        return SCRIPTS_DIR / "research_store" / "smart_orchestrator.py"
+
+    def test_no_cursor_calls(self, smart_file: Path):
+        """No .cursor() calls in smart_orchestrator.py."""
+        source = smart_file.read_text()
+        assert ".cursor()" not in source, (
+            "smart_orchestrator.py contains raw .cursor() call"
+        )
+
+    def test_no_direct_pg_connection(self, smart_file: Path):
+        """No direct psycopg/PG connection in smart_orchestrator.py."""
+        source = smart_file.read_text()
+        assert "psycopg.connect" not in source
+
+    def test_no_execute_sql_calls(self, smart_file: Path):
+        """No direct .execute() with SQL strings in smart_orchestrator.py."""
+        source = smart_file.read_text()
+        tree = ast.parse(source)
+        sql_keywords = ("SELECT ", "INSERT ", "UPDATE ", "DELETE ")
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "execute"
+            ):
+                continue
+            for arg in node.args:
+                if (
+                    isinstance(arg, ast.Constant)
+                    and isinstance(arg.value, str)
+                    and any(kw in arg.value.upper() for kw in sql_keywords)
+                ):
+                    pytest.fail(
+                        f"smart_orchestrator.py:{node.lineno} contains raw SQL execute()"
+                    )
+
+
 class TestPublicExports:
     """Verify the orchestration package exposes the expected public API."""
 
@@ -230,9 +288,8 @@ class TestPublicExports:
         import research_store.orchestration as orch
 
         expected = {
-            "ExtractionInput",
+            "ResumeCounts",
             "ResumeStatePort",
-            "RunCounts",
             "RunResearchCommand",
             "build_production_orchestrator",
             "checkpoint_execute_stage",
