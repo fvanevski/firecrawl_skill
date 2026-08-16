@@ -242,7 +242,11 @@ class PostgresDerivationRepository:
                 """,
                 (str(derivation_id),),
             )
-            return DerivationAttempt.from_mapping(dict(zip(keys, cur.fetchone())))
+            item = dict(zip(keys, cur.fetchone()))
+            item["id"] = str(item["id"])
+            item["document_id"] = str(item["document_id"])
+            item["snapshot_id"] = str(item["snapshot_id"])
+            return DerivationAttempt.from_mapping(item)
 
     def count_chunks_for_derivation(self, derivation_id: UUID) -> int | None:
         with self.__connection.cursor() as cur:

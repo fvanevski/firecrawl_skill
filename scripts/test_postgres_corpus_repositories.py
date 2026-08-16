@@ -61,7 +61,9 @@ def test_corpus_and_derivation_methods_bind_to_canonical_repositories(monkeypatc
         assert uow.chunks.connection_identity == id(connection)
         assert uow.derivations.connection_identity == id(connection)
 
-        assert isinstance(uow.sources.upsert_source.__self__, PostgresCorpusRepository)
+        assert isinstance(
+            uow.sources.upsert_source.__self__, PostgresCorpusRepository
+        )
         assert isinstance(
             uow.snapshots.persist_ingest.__self__, PostgresCorpusRepository
         )
@@ -193,20 +195,22 @@ def test_derivation_repository_uses_uow_transaction_and_rolls_back():
         assert persisted is not None
         assert persisted["status"] == "active"
 
-    with pytest.raises(RuntimeError, match="force derivation rollback"):
-        with PostgresUnitOfWork(TEST_DSN, "issue-256-test-index") as uow:
-            pending = uow.derivations.create(
-                document_id=document_id,
-                snapshot_id=snapshot_id,
-                parser_version="markdown-v2",
-                normalization_version="cleanup-v1",
-                chunker_name="structural",
-                chunker_version="structural-v1",
-                tokenizer_name="cl100k_base",
-                configuration_sha256=rolled_back_configuration,
-            )
-            assert pending.status == "pending"
-            raise RuntimeError("force derivation rollback")
+    with (
+        pytest.raises(RuntimeError, match="force derivation rollback"),
+        PostgresUnitOfWork(TEST_DSN, "issue-256-test-index") as uow,
+    ):
+        pending = uow.derivations.create(
+            document_id=document_id,
+            snapshot_id=snapshot_id,
+            parser_version="markdown-v2",
+            normalization_version="cleanup-v1",
+            chunker_name="structural",
+            chunker_version="structural-v1",
+            tokenizer_name="cl100k_base",
+            configuration_sha256=rolled_back_configuration,
+        )
+        assert pending.status == "pending"
+        raise RuntimeError("force derivation rollback")
 
     with PostgresUnitOfWork(TEST_DSN, "issue-256-test-index") as uow:
         assert (
