@@ -7,6 +7,7 @@ from .acquisition_authority import require_authoritative_acquisition
 from .acquisition_service import AcquisitionService
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
+from .corpus_service import CorpusService
 from .extraction_service import ExtractionService
 from .indexing import OpenAICompatibleEmbedder
 from .lifecycle_guard import GuardedResearchRunService as ResearchRunService
@@ -14,7 +15,6 @@ from .postgres import PostgresUnitOfWork
 from .qdrant import QdrantIndex
 from .retrieval import CohereCompatibleReranker
 from .semantic_service import SemanticCallService
-from .service import CorpusService
 from .strategy_service import StrategyRevisionService
 from .valkey_queue import ValkeyQueue
 
