@@ -89,6 +89,46 @@ _orchestrator.ExtractionStage = BoundedExtractionStage
 # extraction so those delegates contain no domain SQL of their own.
 install_shared_repository_context(_postgres)
 
+# Direct-scrape callers still inspect the historical class-level persist_ingest
+# signature to verify that parser_name remains an additive trailing parameter.
+# Keep that campaign-required compatibility surface outside postgres.py. An
+# entered UoW shadows this facade with the canonical PostgresCorpusRepository
+# bound method installed by postgres_uow_core.py, so persistence ownership does
+# not return to the UoW.
+def _persist_ingest_compatibility_facade(
+    self,
+    request,
+    canonical_url,
+    blob,
+    normalized_text,
+    blocks,
+    chunks,
+    parser_version,
+    chunker_version,
+    normalization_version,
+    chunker_name="structural",
+    parser_name="markdown",
+):
+    repository = getattr(self, "snapshots", None)
+    if repository is None:
+        raise RuntimeError("PostgresUnitOfWork must be entered before persist_ingest")
+    return repository.persist_ingest(
+        request,
+        canonical_url,
+        blob,
+        normalized_text,
+        blocks,
+        chunks,
+        parser_version,
+        chunker_version,
+        normalization_version,
+        chunker_name=chunker_name,
+        parser_name=parser_name,
+    )
+
+
+_postgres.PostgresUnitOfWork.persist_ingest = _persist_ingest_compatibility_facade
+
 # Issue #258 keeps candidate ranking policy and persistence routing explicit in
 # CandidatePolicyService.record_rankings(). The service delegates directly to
 # the canonical candidate repository, so no import-time method replacement is

@@ -63,7 +63,6 @@ FINAL_ROLES = {
 }
 
 DOMAIN_METHODS = {
-    "persist_ingest",
     "start_run",
     "record_search_response",
     "assign_duplicate_group",
@@ -134,6 +133,12 @@ def test_uow_source_is_transaction_composition_plus_required_compatibility_facad
         and value.__module__ == "research_store.postgres"
     }
     assert postgres_public == {"commit", "rollback", "savepoint", "execute", "fetchone"}
+
+    # Direct-scrape compatibility requires the historical class-level signature,
+    # but the facade is installed outside postgres.py and contains no SQL. Once
+    # entered, the instance method is repository-bound instead.
+    persist_ingest = PostgresUnitOfWork.__dict__["persist_ingest"]
+    assert persist_ingest.__module__ == "research_store"
 
     # #217 remains an explicit campaign-required compatibility facade. Its
     # implementation lives outside postgres.py, and entered UoWs override these
