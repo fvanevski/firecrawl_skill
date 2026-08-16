@@ -62,9 +62,11 @@ class TestCandidateDuplicateRepository:
             "research_store.postgres.connect", lambda _database_url: fake_connection
         )
 
-        with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
-            with pytest.raises(ValueError, match="candidate_ids must not be empty"):
-                uow.candidates.assign_duplicate_group([])
+        with (
+            PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow,
+            pytest.raises(ValueError, match="candidate_ids must not be empty"),
+        ):
+            uow.candidates.assign_duplicate_group([])
 
     def test_independence_assessment_remains_json_serializable(self):
         assessment = {
