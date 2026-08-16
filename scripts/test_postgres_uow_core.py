@@ -67,7 +67,6 @@ class TestPostgresRepositoryCore:
             )
             assert all(repo is not uow for repo in repositories)
             assert len({id(repo) for repo in repositories}) == len(REPOSITORY_ROLES)
-            assert all(repo._connection is uow.connection for repo in repositories)
             assert {repo.connection_identity for repo in repositories} == {
                 id(fake_connection)
             }
@@ -76,7 +75,9 @@ class TestPostgresRepositoryCore:
         assert fake_connection.commits == 1
         assert fake_connection.closes == 1
 
-    def test_repository_views_do_not_expose_transaction_control(self, monkeypatch):
+    def test_repository_views_expose_domain_operations_not_uow_infrastructure(
+        self, monkeypatch
+    ):
         fake_connection = _FakeConnection()
         monkeypatch.setattr(
             "research_store.postgres.connect", lambda _database_url: fake_connection
@@ -84,24 +85,63 @@ class TestPostgresRepositoryCore:
 
         with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
             repository = uow.runs
-            for name in (
+            blocked = (
                 "connection",
                 "commit",
                 "rollback",
                 "savepoint",
                 "close",
+                "execute",
+                "fetchone",
                 "__enter__",
                 "__exit__",
-            ):
+                "_lock_workflow_run",
+                "_cursor",
+                "_implementation",
+                "_connection",
+            )
+            for name in blocked:
                 assert not hasattr(repository, name), name
+                assert name not in dir(repository), name
+
+            # A normal public domain operation remains delegated through the
+            # compatibility seam; only UoW/infrastructure capability is filtered.
+            assert callable(repository.start_run)
 
             assert callable(uow.commit)
             assert callable(uow.rollback)
+            assert callable(uow.execute)
+            assert callable(uow.fetchone)
             assert callable(uow.savepoint)
             with uow.savepoint():
                 pass
 
         assert fake_connection.transactions == 1
+
+    def test_repository_cannot_reach_transaction_sql_via_generic_executor(
+        self, monkeypatch
+    ):
+        fake_connection = _FakeConnection()
+        monkeypatch.setattr(
+            "research_store.postgres.connect", lambda _database_url: fake_connection
+        )
+
+        with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
+            repository = uow.runs
+            for sql in ("COMMIT", "ROLLBACK", "SAVEPOINT repository_owned"):
+                with pytest.raises(
+                    AttributeError, match="does not expose UoW capability"
+                ):
+                    repository.execute(sql)
+
+            # The failed capability lookups cannot have reached the connection.
+            assert fake_connection.commits == 0
+            assert fake_connection.rollbacks == 0
+            assert fake_connection.transactions == 0
+
+        # Only the containing UoW commits during normal context exit.
+        assert fake_connection.commits == 1
+        assert fake_connection.closes == 1
 
 
 def _start_run(uow: PostgresUnitOfWork, suffix: str) -> UUID:
@@ -143,8 +183,8 @@ def test_cross_repository_writes_share_one_outer_rollback(tmp_path):
         PostgresUnitOfWork(TEST_DSN, "test-index") as uow,
     ):
         assert uow.runs is not uow.search_responses
-        assert uow.runs._connection is uow.search_responses._connection
-        assert uow.runs._connection is uow.connection
+        assert uow.runs.connection_identity == uow.search_responses.connection_identity
+        assert uow.runs.connection_identity == id(uow.connection)
 
         run_id = _start_run(uow, "outer-rollback")
         response = _record_response(uow, run_id, blob_store, "outer-rollback")
@@ -179,7 +219,11 @@ def test_savepoint_rollback_stays_inside_containing_uow(tmp_path):
             assert str(exc) == "rollback constituent work"
 
         assert not hasattr(uow.search_responses, "rollback")
-        assert uow.runs._connection is uow.search_responses._connection
+        assert not hasattr(uow.search_responses, "execute")
+        assert (
+            uow.runs.connection_identity == uow.search_responses.connection_identity
+        )
+        assert uow.runs.connection_identity == id(uow.connection)
 
     assert response_id is not None
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
