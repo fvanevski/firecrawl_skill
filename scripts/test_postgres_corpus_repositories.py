@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
@@ -55,7 +54,9 @@ def test_corpus_and_derivation_methods_bind_to_canonical_repositories(monkeypatc
         assert uow.chunks.connection_identity == id(connection)
         assert uow.derivations.connection_identity == id(connection)
 
-        assert isinstance(uow.snapshots.persist_ingest.__self__, PostgresCorpusRepository)
+        assert isinstance(
+            uow.snapshots.persist_ingest.__self__, PostgresCorpusRepository
+        )
         assert isinstance(uow.persist_ingest.__self__, PostgresCorpusRepository)
         assert isinstance(
             uow.start_ingestion_batch.__self__, PostgresCorpusRepository
