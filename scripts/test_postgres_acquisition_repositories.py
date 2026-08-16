@@ -14,6 +14,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store.blob import ContentAddressedBlobStore
+from research_store.candidate_policy_service import CandidatePolicyService
 from research_store.domain import utcnow
 from research_store.postgres import PostgresUnitOfWork, connect, migrate
 from research_store.postgres_acquisition import (
@@ -55,6 +56,14 @@ class _FakeConnection:
     def transaction(self) -> _FakeTransaction:
         self.transactions += 1
         return _FakeTransaction()
+
+
+def test_candidate_policy_ranking_delegate_is_not_import_time_rebound():
+    """Runtime policy routing must remain identical to the class source."""
+    method = CandidatePolicyService.record_rankings
+    assert method.__module__ == "research_store.candidate_policy_service"
+    assert not hasattr(method, "__wrapped__")
+    assert not hasattr(CandidatePolicyService, "_issue_258_repository_installed")
 
 
 def test_acquisition_roles_bind_canonical_repositories_on_exact_uow_connection(

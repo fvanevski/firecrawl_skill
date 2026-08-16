@@ -2,7 +2,6 @@
 
 from . import acquisition_service as _acquisition_service
 from . import bounded_orchestrator as _bounded_orchestrator
-from . import candidate_policy_service as _candidate_policy_service
 from . import corpus_service as _corpus_service
 from . import orchestrator as _orchestrator
 from . import postgres as _postgres
@@ -46,7 +45,6 @@ from .extraction_service import ExtractionError, ExtractionService
 from .ingestion_batch_semantics import install_issue_217_contract
 from .lifecycle_guard import GuardedResearchRunService
 from .orchestrator import OrchestratorConfig, OrchestratorResult
-from .postgres_acquisition import install_candidate_policy_repository
 from .postgres_uow_core import install_shared_repository_context
 from .provider_preflight import (
     CandidatePreflightChecker,
@@ -88,10 +86,10 @@ _orchestrator.ExtractionStage = BoundedExtractionStage
 # changing the one-connection transaction boundary established here.
 install_shared_repository_context(_postgres)
 
-# Issue #258 routes the established CandidatePolicyService ranking-decision
-# compatibility surface through the canonical candidate repository. The policy
-# service keeps policy evaluation; PostgreSQL writes have one repository owner.
-install_candidate_policy_repository(_candidate_policy_service)
+# Issue #258 keeps candidate ranking policy and persistence routing explicit in
+# CandidatePolicyService.record_rankings(). The service delegates directly to
+# the canonical candidate repository, so no import-time method replacement is
+# required and source-level navigation matches runtime behavior.
 
 # Issue #217 installs the authoritative batch timing/outcome/selection contract
 # on the canonical corpus production extension point. The installer mutates the
