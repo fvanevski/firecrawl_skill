@@ -151,6 +151,7 @@ jobs:
             scripts/test_shadow_comparison.py \
             scripts/test_uow_duplicate_methods.py \
             scripts/test_postgres_uow_core.py \
+            scripts/test_postgres_corpus_repositories.py \
             scripts/test_workflow_benchmark.py \
             scripts/test_handoff.py \
             scripts/test_report_service.py \
