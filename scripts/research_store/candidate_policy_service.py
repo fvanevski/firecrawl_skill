@@ -89,59 +89,15 @@ class CandidatePolicyService:
         invocation_id: UUID,
         rankings: Sequence[Mapping[str, Any]],
     ) -> None:
-        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
-            for row in rankings:
-                payload = {
-                    "run_id": str(run_id),
-                    "search_response_id": str(search_response_id),
-                    "invocation_id": str(invocation_id),
-                    **{key: _jsonable(value) for key, value in row.items()},
-                }
-                digest = _sha256(payload)
-                cursor.execute(
-                    """SELECT content_sha256 FROM candidate_rankings
-                       WHERE invocation_id=%s AND candidate_id=%s""",
-                    (invocation_id, row["candidate_id"]),
+        from .postgres_acquisition import CandidateRankingConflictError
+
+        try:
+            with self.uow_factory() as uow:
+                uow.candidates.record_rankings(
+                    run_id, search_response_id, invocation_id, rankings
                 )
-                existing = cursor.fetchone()
-                if existing is not None:
-                    if str(existing[0]) != digest:
-                        raise CandidatePolicyError("ranking provenance conflict")
-                    continue
-                cursor.execute(
-                    """INSERT INTO candidate_rankings(
-                       run_id,search_response_id,invocation_id,candidate_id,
-                       source_rank,url,url_type,base_score,url_type_penalty,
-                       freshness_status,freshness_penalty,is_duplicate,
-                       duplication_penalty,expected_char_count,size_penalty,
-                       total_score,rationale,decision,selected_ordinal,
-                       decision_reason,content_sha256)
-                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                              %s,%s,%s,%s,%s,%s,%s)""",
-                    (
-                        run_id,
-                        search_response_id,
-                        invocation_id,
-                        row["candidate_id"],
-                        row["source_rank"],
-                        row["url"],
-                        row["url_type"],
-                        row["base_score"],
-                        row["url_type_penalty"],
-                        row["freshness_status"],
-                        row["freshness_penalty"],
-                        row["is_duplicate"],
-                        row["duplication_penalty"],
-                        row.get("expected_char_count"),
-                        row["size_penalty"],
-                        row["total_score"],
-                        row["rationale"],
-                        row["decision"],
-                        row.get("selected_ordinal"),
-                        row["decision_reason"],
-                        digest,
-                    ),
-                )
+        except CandidateRankingConflictError as exc:
+            raise CandidatePolicyError(str(exc)) from exc
 
     def evaluate_pre_extraction(
         self,
