@@ -220,9 +220,7 @@ def test_savepoint_rollback_stays_inside_containing_uow(tmp_path):
 
         assert not hasattr(uow.search_responses, "rollback")
         assert not hasattr(uow.search_responses, "execute")
-        assert (
-            uow.runs.connection_identity == uow.search_responses.connection_identity
-        )
+        assert uow.runs.connection_identity == uow.search_responses.connection_identity
         assert uow.runs.connection_identity == id(uow.connection)
 
     assert response_id is not None
