@@ -63,7 +63,13 @@ class PostgresSearchAcquisitionRepository:
         self.__connection = connection
 
     def record_search_plan(
-        self, run_id, research_spec_id, revision, search_plan, idempotency_key, **metadata
+        self,
+        run_id,
+        research_spec_id,
+        revision,
+        search_plan,
+        idempotency_key,
+        **metadata,
     ):
         if revision <= 0:
             raise ValueError("search plan revision must be positive")
@@ -94,7 +100,9 @@ class PostgresSearchAcquisitionRepository:
             db_spec_id, spec_payload = spec_row
             spec_model = load_model(spec_payload)
             if plan_model.research_spec_id != spec_model.research_spec_id:
-                raise ValueError("search plan research_spec_id does not match research spec")
+                raise ValueError(
+                    "search plan research_spec_id does not match research spec"
+                )
             validate_references(plan_model, ValidationContext(research_spec=spec_model))
             digest = _json_sha256(plan_payload)
             cur.execute(
@@ -117,7 +125,9 @@ class PostgresSearchAcquisitionRepository:
                 (run_id, revision),
             )
             if cur.fetchone() is not None:
-                raise ValueError(f"search plan revision {revision} already exists for run")
+                raise ValueError(
+                    f"search plan revision {revision} already exists for run"
+                )
             cur.execute(
                 "UPDATE search_plans SET status='superseded' WHERE run_id=%s AND status='active'",
                 (run_id,),
@@ -359,7 +369,9 @@ class PostgresSearchAcquisitionRepository:
                     (plan_id, run_id),
                 )
                 if cur.fetchone() is None:
-                    raise ValueError(f"search plan {plan_id} not found for run {run_id}")
+                    raise ValueError(
+                        f"search plan {plan_id} not found for run {run_id}"
+                    )
             if plan_query_id is not None:
                 cur.execute(
                     "SELECT id, plan_id FROM search_plan_queries WHERE id=%s AND run_id=%s",
@@ -641,7 +653,9 @@ class PostgresCandidateRepository:
                 if not raw_url or not isinstance(raw_url, str) or not raw_url.strip():
                     continue
                 try:
-                    canonical_url, redacted_orig_url = canonicalize_candidate_url(raw_url)
+                    canonical_url, redacted_orig_url = canonicalize_candidate_url(
+                        raw_url
+                    )
                 except ValueError:
                     continue
                 canonical_sha = hashlib.sha256(canonical_url.encode()).hexdigest()
@@ -1216,7 +1230,9 @@ class PostgresExtractionAttemptRepository:
                     f"SELECT {self._columns()} FROM extraction_attempts WHERE candidate_id=%s ORDER BY attempt_number ASC LIMIT %s OFFSET %s",
                     (str(candidate_id), limit, offset),
                 )
-            return [self._row_to_extraction_attempt_mapping(row) for row in cur.fetchall()]
+            return [
+                self._row_to_extraction_attempt_mapping(row) for row in cur.fetchall()
+            ]
 
     def list_attempts_for_run(
         self,
@@ -1244,7 +1260,9 @@ class PostgresExtractionAttemptRepository:
                 f"SELECT {self._columns()} FROM extraction_attempts WHERE {' AND '.join(conditions)} ORDER BY attempt_number ASC LIMIT %s OFFSET %s",
                 (*params, limit, offset),
             )
-            return [self._row_to_extraction_attempt_mapping(row) for row in cur.fetchall()]
+            return [
+                self._row_to_extraction_attempt_mapping(row) for row in cur.fetchall()
+            ]
 
     def get_attempt(self, attempt_id, run_id=None):
         with self.__connection.cursor() as cur:

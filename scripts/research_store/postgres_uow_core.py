@@ -358,9 +358,15 @@ class PostgresRepositoryContext:
         # shape for this campaign phase, but the wrapper has no persistence of
         # its own: every call is forwarded to the sole canonical repository.
         for repository, operations in (
-            (self.__search_acquisition_repository, _ACQUISITION_COMPATIBILITY_OPERATIONS),
+            (
+                self.__search_acquisition_repository,
+                _ACQUISITION_COMPATIBILITY_OPERATIONS,
+            ),
             (self.__candidate_repository, _CANDIDATE_COMPATIBILITY_OPERATIONS),
-            (self.__extraction_attempt_repository, _EXTRACTION_COMPATIBILITY_OPERATIONS),
+            (
+                self.__extraction_attempt_repository,
+                _EXTRACTION_COMPATIBILITY_OPERATIONS,
+            ),
         ):
             for name in operations:
                 _bind_uow_compatibility_delegate(uow, repository, name)
