@@ -61,9 +61,7 @@ def test_corpus_and_derivation_methods_bind_to_canonical_repositories(monkeypatc
         assert uow.chunks.connection_identity == id(connection)
         assert uow.derivations.connection_identity == id(connection)
 
-        assert isinstance(
-            uow.sources.upsert_source.__self__, PostgresCorpusRepository
-        )
+        assert isinstance(uow.sources.upsert_source.__self__, PostgresCorpusRepository)
         assert isinstance(
             uow.snapshots.persist_ingest.__self__, PostgresCorpusRepository
         )
