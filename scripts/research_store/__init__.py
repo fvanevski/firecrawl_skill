@@ -45,6 +45,10 @@ from .extraction_service import ExtractionError, ExtractionService
 from .ingestion_batch_semantics import install_issue_217_contract
 from .lifecycle_guard import GuardedResearchRunService
 from .orchestrator import OrchestratorConfig, OrchestratorResult
+from .postgres_batch_schema import (
+    _has_extraction_attempt_id_column,
+    _has_sealed_at_column,
+)
 from .postgres_uow_core import install_shared_repository_context
 from .provider_preflight import (
     CandidatePreflightChecker,
@@ -81,22 +85,69 @@ _orchestrator.AcquisitionStage = BoundedAcquisitionStage
 _orchestrator.ExtractionStage = BoundedExtractionStage
 
 # Issue #255 establishes explicit repository objects on the canonical UoW while
-# retaining the existing PostgreSQL domain methods as temporary delegates. The
-# later Phase-3 repository-extraction issues replace those delegates without
-# changing the one-connection transaction boundary established here.
+# retaining temporary compatibility delegates. Issue #259 completes the
+# extraction so those delegates contain no domain SQL of their own.
 install_shared_repository_context(_postgres)
+
+
+# Direct-scrape callers still inspect the historical class-level persist_ingest
+# signature to verify that parser_name remains an additive trailing parameter.
+# Keep that campaign-required compatibility surface outside postgres.py. An
+# entered UoW shadows this facade with the canonical PostgresCorpusRepository
+# bound method installed by postgres_uow_core.py, so persistence ownership does
+# not return to the UoW.
+def _persist_ingest_compatibility_facade(
+    self,
+    request,
+    canonical_url,
+    blob,
+    normalized_text,
+    blocks,
+    chunks,
+    parser_version,
+    chunker_version,
+    normalization_version,
+    chunker_name="structural",
+    parser_name="markdown",
+):
+    repository = getattr(self, "snapshots", None)
+    if repository is None:
+        raise RuntimeError("PostgresUnitOfWork must be entered before persist_ingest")
+    return repository.persist_ingest(
+        request,
+        canonical_url,
+        blob,
+        normalized_text,
+        blocks,
+        chunks,
+        parser_version,
+        chunker_version,
+        normalization_version,
+        chunker_name=chunker_name,
+        parser_name=parser_name,
+    )
+
+
+_postgres.PostgresUnitOfWork.persist_ingest = _persist_ingest_compatibility_facade
 
 # Issue #258 keeps candidate ranking policy and persistence routing explicit in
 # CandidatePolicyService.record_rankings(). The service delegates directly to
 # the canonical candidate repository, so no import-time method replacement is
 # required and source-level navigation matches runtime behavior.
 
-# Issue #217 installs the authoritative batch timing/outcome/selection contract
-# on the canonical corpus production extension point. The installer mutates the
-# already-imported class in place so existing compatibility references held by
-# builders, tests, and checkpoint wrappers receive the exact same PostgreSQL
-# behavior.
+# Issue #217 remains a campaign-required compatibility facade on the UoW class.
+# Its authoritative SQL implementation is also consumed by
+# PostgresCorpusRepository through a connection-only adapter. Once a UoW is
+# entered, issue #259 installs repository-bound instance delegates that override
+# the class facade without changing #217's timing/outcome/selection contract.
 install_issue_217_contract(_postgres, _corpus_service, _bounded_orchestrator)
+# The #217 class facade has two private schema-probe dependencies that legacy
+# tests invoke without entering a UoW. Keep their SQL outside postgres.py while
+# retaining that temporary compatibility shape.
+_postgres.PostgresUnitOfWork._has_sealed_at_column = staticmethod(_has_sealed_at_column)
+_postgres.PostgresUnitOfWork._has_extraction_attempt_id_column = staticmethod(
+    _has_extraction_attempt_id_column
+)
 
 # ARC-17 correction is now baked into CorpusService.bounded_ingest_batch and
 # ExtractionService.complete_attempt idempotency guard. No monkeypatching is
