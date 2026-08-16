@@ -12,10 +12,10 @@ class PostgresDerivationRepository:
     """Canonical derivation persistence using only the UoW-owned connection."""
 
     def __init__(self, connection: Any) -> None:
-        self.connection = connection
+        self.__connection = connection
 
     def list_all_targets(self) -> list[dict]:
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """
                 SELECT d.id AS document_id,
@@ -47,7 +47,7 @@ class PostgresDerivationRepository:
             return result
 
     def get_document_for_snapshot(self, snapshot_id: UUID) -> list[dict]:
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """
                 SELECT d.id AS document_id,
@@ -78,7 +78,7 @@ class PostgresDerivationRepository:
             return result
 
     def get_snapshots_for_document(self, document_id: UUID) -> list[dict]:
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """
                 SELECT a.id AS snapshot_id,
@@ -109,7 +109,7 @@ class PostgresDerivationRepository:
             return result
 
     def get_snapshot_info(self, snapshot_id: UUID) -> dict | None:
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """
                 SELECT a.content_sha256,
@@ -149,7 +149,7 @@ class PostgresDerivationRepository:
     def find_by_configuration(
         self, document_id: UUID, configuration_sha256: str
     ) -> dict | None:
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """
                 SELECT id, status, parser_version, normalization_version,
@@ -178,7 +178,7 @@ class PostgresDerivationRepository:
             return dict(zip(keys, row))
 
     def activate(self, derivation_id: UUID) -> DerivationAttempt:
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """
                 SELECT id, document_id, snapshot_id, status,
@@ -245,7 +245,7 @@ class PostgresDerivationRepository:
             return DerivationAttempt.from_mapping(dict(zip(keys, cur.fetchone())))
 
     def count_chunks_for_derivation(self, derivation_id: UUID) -> int | None:
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """
                 SELECT chunk_count, snapshot_id
@@ -270,7 +270,7 @@ class PostgresDerivationRepository:
             return cur.fetchone()[0]
 
     def count_blocks_for_derivation(self, derivation_id: UUID) -> int | None:
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """
                 SELECT block_count, snapshot_id
@@ -322,7 +322,7 @@ class PostgresDerivationRepository:
             {where}
             ORDER BY created_at DESC
         """
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(query, params)
             keys = [
                 "id",
@@ -343,7 +343,7 @@ class PostgresDerivationRepository:
             return [dict(zip(keys, row)) for row in cur.fetchall()]
 
     def get(self, derivation_id: UUID) -> dict | None:
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """
                 SELECT id, document_id, snapshot_id, status,
@@ -392,7 +392,7 @@ class PostgresDerivationRepository:
         status: str = "pending",
         error_message: str | None = None,
     ) -> DerivationAttempt:
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO document_derivations (

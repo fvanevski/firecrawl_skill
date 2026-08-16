@@ -23,6 +23,35 @@ from .ingestion_batch_semantics import (
 )
 
 
+class _BatchPersistenceAdapter:
+    """Private compatibility target for the authoritative issue #217 functions."""
+
+    def __init__(self, connection: Any) -> None:
+        self.connection = connection
+
+    @staticmethod
+    def _has_sealed_at_column(connection):
+        with connection.cursor() as cur:
+            cur.execute(
+                """SELECT 1 FROM information_schema.columns
+                WHERE table_name='ingestion_batches'
+                  AND column_name='sealed_at'
+                LIMIT 1"""
+            )
+            return cur.fetchone() is not None
+
+    @staticmethod
+    def _has_extraction_attempt_id_column(connection):
+        with connection.cursor() as cur:
+            cur.execute(
+                """SELECT 1 FROM information_schema.columns
+                WHERE table_name='ingestion_batch_assets'
+                  AND column_name='extraction_attempt_id'
+                LIMIT 1"""
+            )
+            return cur.fetchone() is not None
+
+
 class PostgresCorpusRepository:
     """Canonical corpus/asset persistence bound to one UoW-owned connection."""
 
@@ -35,7 +64,8 @@ class PostgresCorpusRepository:
         embedding_dimension: int,
         indexing_persistence_error: type[Exception],
     ) -> None:
-        self.connection = connection
+        self.__connection = connection
+        self.__batch_adapter = _BatchPersistenceAdapter(connection)
         self.embedding_model = embedding_model
         self.embedding_revision = embedding_revision
         self.embedding_dimension = embedding_dimension
@@ -44,7 +74,7 @@ class PostgresCorpusRepository:
     def upsert_source(self, canonical_url: str, metadata: dict[str, Any]):
         """Upsert one canonical source using the same row-locking conflict path."""
         domain = urlsplit(canonical_url).hostname
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """INSERT INTO sources(canonical_url, registered_domain, metadata)
                 VALUES (%s,%s,%s) ON CONFLICT(canonical_url) DO UPDATE
@@ -70,7 +100,7 @@ class PostgresCorpusRepository:
     ) -> IngestResult:
         domain = urlsplit(canonical_url).hostname
         document_hash = hashlib.sha256(normalized_text.encode()).hexdigest()
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             # The conflict update takes a row lock. All snapshot decisions for
             # one canonical source are serialized before the unique
             # (source_id, content_sha256) key is consulted.
@@ -325,13 +355,13 @@ class PostgresCorpusRepository:
         return dict(zip(keys, cur.fetchone()))
 
     def ensure_index_definition(self):
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             return self._ensure_index_definition(cur)
 
     def link_run_asset(
         self, external_run_id, snapshot_id, role="acquired", metadata=None
     ):
-        with self.connection.cursor() as cur:
+        with self.__connection.cursor() as cur:
             cur.execute(
                 """INSERT INTO research_run_assets(run_id,snapshot_id,role,metadata)
                 SELECT id,%s,%s,%s FROM research_runs
@@ -343,33 +373,21 @@ class PostgresCorpusRepository:
             if cur.rowcount != 1:
                 raise KeyError(external_run_id)
 
-    @staticmethod
-    def _has_sealed_at_column(connection):
-        with connection.cursor() as cur:
-            cur.execute(
-                """SELECT 1 FROM information_schema.columns
-                WHERE table_name='ingestion_batches'
-                  AND column_name='sealed_at'
-                LIMIT 1"""
-            )
-            return cur.fetchone() is not None
+    # Issue #217 remains the active batch-semantics authority. These thin
+    # wrappers execute its exact functions against a private adapter carrying
+    # the UoW-owned connection. The public repository object therefore does
+    # not expose the raw connection or transaction controls.
+    def start_ingestion_batch(self, *args, **kwargs):
+        return _start_ingestion_batch(self.__batch_adapter, *args, **kwargs)
 
-    @staticmethod
-    def _has_extraction_attempt_id_column(connection):
-        with connection.cursor() as cur:
-            cur.execute(
-                """SELECT 1 FROM information_schema.columns
-                WHERE table_name='ingestion_batch_assets'
-                  AND column_name='extraction_attempt_id'
-                LIMIT 1"""
-            )
-            return cur.fetchone() is not None
+    def record_batch_asset(self, *args, **kwargs):
+        return _record_batch_asset(self.__batch_adapter, *args, **kwargs)
 
-    # Issue #217 is the active batch-semantics authority. Binding those
-    # functions here moves execution to this connection-bound repository
-    # without duplicating or weakening its v42/v43 compatibility logic.
-    start_ingestion_batch = _start_ingestion_batch
-    record_batch_asset = _record_batch_asset
-    finish_ingestion_batch = _finish_ingestion_batch
-    export_invocation = _export_invocation
-    export_invocation_by_batch = _export_invocation_by_batch
+    def finish_ingestion_batch(self, *args, **kwargs):
+        return _finish_ingestion_batch(self.__batch_adapter, *args, **kwargs)
+
+    def export_invocation(self, *args, **kwargs):
+        return _export_invocation(self.__batch_adapter, *args, **kwargs)
+
+    def export_invocation_by_batch(self, *args, **kwargs):
+        return _export_invocation_by_batch(self.__batch_adapter, *args, **kwargs)

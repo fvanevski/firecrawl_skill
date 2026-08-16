@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-import pytest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
@@ -14,11 +12,6 @@ sys.path.insert(0, str(SCRIPTS))
 from research_store.postgres import PostgresUnitOfWork
 from research_store.postgres_corpus import PostgresCorpusRepository
 from research_store.postgres_derivations import PostgresDerivationRepository
-
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
-INTEGRATION = pytest.mark.skipif(
-    not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
-)
 
 
 class _FakeTransaction:
@@ -69,6 +62,17 @@ def test_corpus_and_derivation_methods_bind_to_canonical_repositories(monkeypatc
         )
         assert isinstance(uow.derivations.create.__self__, PostgresDerivationRepository)
         assert isinstance(uow.create.__self__, PostgresDerivationRepository)
+
+        canonical_repositories = (
+            uow.persist_ingest.__self__,
+            uow.start_ingestion_batch.__self__,
+            uow.derivations.create.__self__,
+        )
+        for repository in canonical_repositories:
+            assert not hasattr(repository, "connection")
+            assert not hasattr(repository, "commit")
+            assert not hasattr(repository, "rollback")
+            assert not hasattr(repository, "savepoint")
 
         for repository in (
             uow.sources,
