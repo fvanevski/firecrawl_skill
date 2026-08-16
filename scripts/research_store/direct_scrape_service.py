@@ -1532,9 +1532,9 @@ def build_direct_scrape_service(
     from functools import partial
 
     from .blob import ContentAddressedBlobStore
+    from .corpus_service import CorpusService
     from .parsing import get_registry
     from .postgres import PostgresUnitOfWork
-    from .service import CorpusService
 
     resolved = config or StoreConfig.from_env()
     resolved.require_database()

@@ -128,6 +128,8 @@ jobs:
             scripts/test_research_domain.py \
             scripts/test_research_domain_registry_refactor.py \
             scripts/test_research_store.py \
+            scripts/test_corpus_service_refactor.py \
+            scripts/test_issue_217_ingestion_batch_semantics.py \
             scripts/test_acquisition_service.py \
             scripts/test_orchestrator.py \
             scripts/test_classifier.py \

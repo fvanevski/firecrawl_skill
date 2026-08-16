@@ -2,10 +2,10 @@
 
 from . import acquisition_service as _acquisition_service
 from . import bounded_orchestrator as _bounded_orchestrator
+from . import corpus_service as _corpus_service
 from . import orchestrator as _orchestrator
 from . import postgres as _postgres
 from . import run_service as _run_service
-from . import service as _service
 from . import workflow_service as _workflow_service
 from .acquisition_authority import (
     AcquisitionPreflightError,
@@ -18,6 +18,7 @@ from .bounded_acquisition import BoundedFirecrawlSearchAdapter
 from .bounded_orchestrator import BoundedAcquisitionStage, BoundedExtractionStage
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
 from .config import StoreConfig
+from .corpus_service import CorpusService
 from .direct_scrape_service import (
     DirectScrapeBatchResult,
     DirectScrapeError,
@@ -53,7 +54,6 @@ from .quality_config import QualityConfig
 from .quality_evaluator import evaluate_quality
 from .quality_service import QualityEvaluationError, QualityService
 from .semantic_service import SemanticCallService
-from .service import CorpusService
 from .stages import ContextKeys, StageHandler, StageOutcome, StageResult
 
 # Preserve the public import path while ensuring every newly constructed run
@@ -80,10 +80,11 @@ _orchestrator.AcquisitionStage = BoundedAcquisitionStage
 _orchestrator.ExtractionStage = BoundedExtractionStage
 
 # Issue #217 installs the authoritative batch timing/outcome/selection contract
-# on the same canonical production extension points. The installer mutates the
-# already-imported classes in place so existing references held by builders,
-# tests, and checkpoint wrappers receive the exact same PostgreSQL behavior.
-install_issue_217_contract(_postgres, _service, _bounded_orchestrator)
+# on the canonical corpus production extension point. The installer mutates the
+# already-imported class in place so existing compatibility references held by
+# builders, tests, and checkpoint wrappers receive the exact same PostgreSQL
+# behavior.
+install_issue_217_contract(_postgres, _corpus_service, _bounded_orchestrator)
 
 # ARC-17 correction is now baked into CorpusService.bounded_ingest_batch and
 # ExtractionService.complete_attempt idempotency guard. No monkeypatching is
