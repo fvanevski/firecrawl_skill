@@ -89,6 +89,7 @@ _orchestrator.ExtractionStage = BoundedExtractionStage
 # extraction so those delegates contain no domain SQL of their own.
 install_shared_repository_context(_postgres)
 
+
 # Direct-scrape callers still inspect the historical class-level persist_ingest
 # signature to verify that parser_name remains an additive trailing parameter.
 # Keep that campaign-required compatibility surface outside postgres.py. An
