@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -177,77 +176,22 @@ class GuardedResearchRunService(ResearchRunService):
                                 f"failed revalidation: {exc}"
                             ) from exc
 
-                expected = (
-                    decision_id,
-                    run_revision,
-                    coverage_revision,
-                    outcome,
-                    list(no_progress_signals),
-                    unresolved_gap,
-                    policy_version,
-                    resolved_reason_code,
-                    census,
+                terminal_repository = getattr(uow, "terminal_decisions", uow)
+                terminal_result = terminal_repository.record_terminal_decision(
+                    run_id=run_id,
+                    decision_id=decision_id,
+                    run_revision=run_revision,
+                    coverage_revision=coverage_revision,
+                    outcome=outcome,
+                    no_progress_signals=no_progress_signals,
+                    unresolved_gap=unresolved_gap,
+                    policy_version=policy_version,
+                    idempotency_key=idempotency_key,
+                    created_at=created,
+                    reason_code=resolved_reason_code,
+                    state_census=census,
                 )
-                with uow.connection.cursor() as cursor:
-                    cursor.execute(
-                        """INSERT INTO terminal_decisions(
-                               run_id,decision_id,run_revision,coverage_revision,
-                               outcome,no_progress_signals,unresolved_gap,
-                               policy_version,idempotency_key,created_at,
-                               reason_code,state_census)
-                             VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                             ON CONFLICT(run_id,idempotency_key) DO NOTHING
-                             RETURNING id""",
-                        (
-                            run_id,
-                            decision_id,
-                            run_revision,
-                            coverage_revision,
-                            outcome,
-                            list(no_progress_signals),
-                            unresolved_gap,
-                            policy_version,
-                            idempotency_key,
-                            created,
-                            resolved_reason_code,
-                            json.dumps(census, sort_keys=True),
-                        ),
-                    )
-                    inserted = cursor.fetchone()
-                    if inserted is not None:
-                        decision_row_id = inserted[0]
-                    else:
-                        cursor.execute(
-                            """SELECT id,decision_id,run_revision,
-                                      coverage_revision,outcome,
-                                      no_progress_signals,unresolved_gap,
-                                      policy_version,reason_code,state_census
-                                 FROM terminal_decisions
-                                WHERE run_id=%s AND idempotency_key=%s""",
-                            (run_id, idempotency_key),
-                        )
-                        existing = cursor.fetchone()
-                        if existing is None:
-                            raise RuntimeError(
-                                "terminal decision idempotency conflict was not "
-                                "readable"
-                            )
-                        normalized_existing = (
-                            existing[1],
-                            int(existing[2]),
-                            int(existing[3]),
-                            str(existing[4]),
-                            list(existing[5] or ()),
-                            existing[6],
-                            existing[7],
-                            existing[8],
-                            existing[9],
-                        )
-                        if normalized_existing != expected:
-                            raise ValueError(
-                                "idempotency key was used for another terminal decision"
-                            )
-                        decision_row_id = existing[0]
+                decision_row_id = terminal_result["id"]
 
                 result = uow.runs.apply_run_transition(
                     run_id,

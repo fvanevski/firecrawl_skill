@@ -18,8 +18,7 @@ from research_store.postgres_coverage import PostgresCoverageRepository
 from research_store.postgres_research import PostgresResearchRepository
 from research_store.postgres_strategy import PostgresStrategyRevisionRepository
 from research_store.postgres_terminal import PostgresTerminalDecisionRepository
-from research_store.run_service import ResearchRunService
-from research_store.terminal_decision_service import TerminalDecisionError
+from research_store.run_service import ResearchRunService, RunStateError
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
@@ -74,9 +73,7 @@ def test_research_workflow_roles_bind_to_canonical_repositories(monkeypatch):
 
         assert isinstance(uow.runs.start_run.__self__, PostgresResearchRepository)
         assert isinstance(uow.start_run.__self__, PostgresResearchRepository)
-        assert isinstance(
-            uow.coverage.apply_event.__self__, PostgresCoverageRepository
-        )
+        assert isinstance(uow.coverage.apply_event.__self__, PostgresCoverageRepository)
         assert isinstance(uow.apply_event.__self__, PostgresCoverageRepository)
         assert isinstance(
             uow.strategy_revisions.record_proposal.__self__,
@@ -109,7 +106,7 @@ def test_research_workflow_roles_bind_to_canonical_repositories(monkeypatch):
         assert callable(uow.runs._lock_workflow_run)
         assert callable(uow.runs._bump_lifecycle_revision)
 
-        # Successor scope is intentionally not absorbed by #257.  Acquisition
+        # Successor scope is intentionally not absorbed by #257. Acquisition
         # (#258) and evidence/semantic state (#259) continue through the
         # temporary legacy fallback until their own extraction issues land.
         assert uow.runs.record_search_plan.__self__ is uow
@@ -172,7 +169,7 @@ def test_research_repositories_share_outer_uow_rollback():
             proposal_id,
             0,
             1,
-            "new_search",
+            "search",
             [str(item_ids[0])],
             ["postgres transaction evidence"],
             [],
@@ -232,7 +229,7 @@ def test_research_repositories_obey_uow_savepoint_rollback():
                     proposal_id,
                     0,
                     1,
-                    "new_search",
+                    "search",
                     [str(item_ids[0])],
                     ["savepoint evidence"],
                     [],
@@ -308,21 +305,21 @@ def test_terminal_decision_and_run_transition_are_one_transaction():
     rolled_back_key = f"terminal-invalid:{suffix}"
     rolled_back_decision = uuid4()
 
-    # planning -> completed is invalid.  The terminal insert occurs first, so
-    # absence of the row afterward proves the shared outer UoW rolled it back.
-    with pytest.raises(TerminalDecisionError):
+    # planning -> partial is invalid. The terminal repository insert occurs
+    # first, so absence afterward proves the shared outer UoW rolled it back.
+    with pytest.raises(RunStateError):
         service.commit_terminal_decision(
             run_id,
             decision_id=rolled_back_decision,
             run_revision=1,
             coverage_revision=1,
-            outcome="failed",
+            outcome="partial",
             no_progress_signals=("no_new_sources",),
             unresolved_gap="invalid transition regression",
             policy_version="terminal-decision-v1",
             idempotency_key=rolled_back_key,
             created_at=datetime.now(timezone.utc),
-            next_state="completed",
+            next_state="partial",
             expected_revision=1,
             actor_type="test",
             reason="must roll back provenance when transition is rejected",
