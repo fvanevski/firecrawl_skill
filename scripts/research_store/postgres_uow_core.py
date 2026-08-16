@@ -1,10 +1,10 @@
 """Shared-connection PostgreSQL repository/UoW seam.
 
-Issue #255 established explicit repository views and the one-connection
-transaction boundary. Issues #256-#258 replace corpus/derivation, research
-workflow, and acquisition persistence with canonical connection-bound
-repositories while retaining temporary compatibility delegation for later
-Phase-3 domains.
+Issues #255-#258 established the one-connection transaction boundary and moved
+the first persistence families into canonical repositories. Issue #259
+completes that extraction: every repository role now has an explicit
+connection-bound implementation, and the UoW is only transaction/composition
+infrastructure plus temporary compatibility delegates.
 
 The UoW remains the sole owner of connection lifecycle, commit, rollback, and
 savepoints. Repository views do not expose transaction control, raw connection
@@ -22,10 +22,23 @@ from .postgres_acquisition import (
     PostgresExtractionAttemptRepository,
     PostgresSearchAcquisitionRepository,
 )
+from .postgres_audit import PostgresAuditRepository
 from .postgres_corpus import PostgresCorpusRepository
+from .postgres_corpus_queries import PostgresCorpusQueryRepository
 from .postgres_coverage import PostgresCoverageRepository
 from .postgres_derivations import PostgresDerivationRepository
+from .postgres_evidence import (
+    PostgresClaimEvidenceRepository,
+    PostgresEvidencePacketRepository,
+)
 from .postgres_research import PostgresResearchRepository
+from .postgres_retrieval import PostgresIndexJobRepository, PostgresRetrievalRepository
+from .postgres_semantic_state import (
+    PostgresModelEndpointRepository,
+    PostgresSemanticCacheRepository,
+    PostgresSemanticCallRepository,
+    PostgresSynthesisStageRepository,
+)
 from .postgres_strategy import PostgresStrategyRevisionRepository
 from .postgres_terminal import PostgresTerminalDecisionRepository
 
@@ -44,6 +57,10 @@ REPOSITORY_ROLES: tuple[str, ...] = (
     "terminal_decisions",
     "extraction_attempts",
     "derivations",
+    "claims",
+    "evidence_packets",
+    "audits",
+    "semantic_calls",
     "semantic_cache",
     "model_endpoints",
     "synthesis_stages",
@@ -77,6 +94,15 @@ _CORPUS_COMPATIBILITY_OPERATIONS = (
     "finish_ingestion_batch",
     "export_invocation",
     "export_invocation_by_batch",
+)
+_CORPUS_QUERY_COMPATIBILITY_OPERATIONS = (
+    "corpus_overview",
+    "search_lexical",
+    "inspect_asset",
+    "fetch_passages",
+    "fetch_run_passages",
+    "expand_relationships",
+    "chunks_for_index",
 )
 _RESEARCH_COMPATIBILITY_OPERATIONS = (
     "start_run",
@@ -169,6 +195,80 @@ _DERIVATION_COMPATIBILITY_OPERATIONS = (
     "get",
     "create",
 )
+_RETRIEVAL_COMPATIBILITY_OPERATIONS = (
+    "log_retrieval",
+    "log_retrieval_batch",
+    "get_trace",
+    "record_retrieval_execution",
+)
+_INDEX_JOB_COMPATIBILITY_OPERATIONS = (
+    "claim_jobs",
+    "renew_job",
+    "count_complete_manifests",
+    "finish_job",
+    "heartbeat_worker",
+    "worker_status",
+    "census_index_jobs",
+)
+_CLAIM_COMPATIBILITY_OPERATIONS = (
+    "upsert_claim",
+    "list_claims",
+    "delete_claims",
+    "validate_passage_id",
+    "validate_snapshot_id",
+    "validate_claim_id",
+    "insert_evidence_link",
+    "list_evidence_links",
+    "delete_evidence_links",
+    "export_claim_manifest",
+)
+_EVIDENCE_PACKET_COMPATIBILITY_OPERATIONS = (
+    "persist_evidence_packet",
+    "get_evidence_packet",
+)
+_AUDIT_COMPATIBILITY_OPERATIONS = (
+    "create_audit_assessment",
+    "get_audit_assessment",
+    "list_audit_assessments",
+    "detect_stale_assessments",
+    "export_audit_assessment",
+    "insert_audit_stage_output",
+    "list_audit_stage_outputs",
+    "validate_assessment_exists",
+    "run_exists",
+    "invocation_exists",
+    "validate_evidence_references",
+    "validate_audit_target",
+    "lookup_equivalent_assessment",
+    "insert_audit_assessment_if_absent",
+)
+_SEMANTIC_CALL_COMPATIBILITY_OPERATIONS = (
+    "record_semantic_call",
+    "finalize_semantic_call",
+    "annotate_semantic_call",
+    "get_semantic_call",
+    "record_semantic_artifact",
+)
+_SEMANTIC_CACHE_COMPATIBILITY_OPERATIONS = (
+    "get_cache_entry_by_key",
+    "insert_cache_entry",
+    "prune_cache_entries",
+    "invalidate_cache_entry",
+    "invalidate_cache_entry_by_id",
+    "update_cache_entry",
+)
+_MODEL_ENDPOINT_COMPATIBILITY_OPERATIONS = (
+    "upsert_health",
+    "get_health",
+    "list_endpoints",
+    "clear_endpoint_health",
+)
+_SYNTHESIS_COMPATIBILITY_OPERATIONS = (
+    "get_synthesis_stages",
+    "get_synthesis_stage",
+    "insert_synthesis_stage",
+    "update_synthesis_stage",
+)
 _INSTALL_MARKER = "_shared_repository_context_installed"
 
 
@@ -178,26 +278,42 @@ def _is_delegated_operation(role: str, name: str) -> bool:
     return name not in _NON_REPOSITORY_CAPABILITIES
 
 
-class PostgresRepositoryView:
-    """Capability-filtered repository view with optional canonical implementation."""
+class _CompositeRepository:
+    """Resolve one role across canonical repositories without a UoW fallback."""
 
-    __slots__ = (
-        "__canonical_implementation",
-        "__connection_identity",
-        "__fallback_implementation",
-        "name",
-    )
+    __slots__ = ("__implementations",)
+
+    def __init__(self, *implementations: Any) -> None:
+        self.__implementations = implementations
+
+    def __getattr__(self, name: str) -> Any:
+        for implementation in self.__implementations:
+            try:
+                return getattr(implementation, name)
+            except AttributeError:
+                continue
+        raise AttributeError(name)
+
+    def __dir__(self) -> list[str]:
+        names = set(super().__dir__())
+        for implementation in self.__implementations:
+            names.update(dir(implementation))
+        return sorted(names)
+
+
+class PostgresRepositoryView:
+    """Capability-filtered view over one explicit canonical implementation."""
+
+    __slots__ = ("__canonical_implementation", "__connection_identity", "name")
 
     def __init__(
         self,
         name: str,
         connection: Any,
-        fallback_implementation: Any,
-        canonical_implementation: Any | None = None,
+        canonical_implementation: Any,
     ) -> None:
         self.name = name
         self.__connection_identity = id(connection)
-        self.__fallback_implementation = fallback_implementation
         self.__canonical_implementation = canonical_implementation
 
     @property
@@ -209,39 +325,25 @@ class PostgresRepositoryView:
             raise AttributeError(
                 f"repository {self.name!r} does not expose UoW capability {name!r}"
             )
-        canonical = self.__canonical_implementation
-        if canonical is not None:
-            try:
-                return getattr(canonical, name)
-            except AttributeError:
-                pass
-        return getattr(self.__fallback_implementation, name)
+        try:
+            return getattr(self.__canonical_implementation, name)
+        except AttributeError as exc:
+            raise AttributeError(
+                f"repository {self.name!r} has no operation {name!r}"
+            ) from exc
 
     def __dir__(self) -> list[str]:
         public_local = {name for name in super().__dir__() if not name.startswith("_")}
         delegated = {
             name
-            for name in dir(self.__fallback_implementation)
+            for name in dir(self.__canonical_implementation)
             if _is_delegated_operation(self.name, name)
         }
-        canonical = self.__canonical_implementation
-        if canonical is not None:
-            delegated.update(
-                name
-                for name in dir(canonical)
-                if _is_delegated_operation(self.name, name)
-            )
         return sorted(public_local | delegated)
 
 
 def _bind_uow_compatibility_delegate(uow: Any, repository: Any, name: str) -> None:
-    """Keep the legacy UoW method shape while delegating to one canonical method.
-
-    Acquisition methods historically flowed through ``uow.runs`` and directly
-    through ``uow``. Binding this narrow wrapper to the UoW preserves that
-    compatibility surface while ``__wrapped__`` identifies the sole canonical
-    connection-bound implementation.
-    """
+    """Bind a no-SQL compatibility method to one canonical repository method."""
 
     canonical_method = getattr(repository, name)
 
@@ -253,19 +355,29 @@ def _bind_uow_compatibility_delegate(uow: Any, repository: Any, name: str) -> No
 
 
 class PostgresRepositoryContext:
-    """Bind all repository roles to one exact UoW-owned connection."""
+    """Bind every repository role to one exact UoW-owned connection."""
 
     __slots__ = (
+        "__audit_repository",
         "__candidate_repository",
+        "__claim_repository",
         "__connection_identity",
+        "__corpus_query_repository",
         "__corpus_repository",
         "__coverage_repository",
         "__derivation_repository",
+        "__evidence_packet_repository",
         "__extraction_attempt_repository",
+        "__index_job_repository",
+        "__model_endpoint_repository",
         "__repositories",
         "__research_repository",
+        "__retrieval_repository",
         "__search_acquisition_repository",
+        "__semantic_cache_repository",
+        "__semantic_call_repository",
         "__strategy_repository",
+        "__synthesis_repository",
         "__terminal_repository",
     )
 
@@ -283,6 +395,12 @@ class PostgresRepositoryContext:
             embedding_dimension=implementation.embedding_dimension,
             indexing_persistence_error=indexing_persistence_error,
         )
+        self.__corpus_query_repository = PostgresCorpusQueryRepository(
+            connection,
+            parser_version=implementation.parser_version,
+            normalization_version=implementation.normalization_version,
+            chunker_version=implementation.chunker_version,
+        )
         self.__research_repository = PostgresResearchRepository(connection)
         self.__search_acquisition_repository = PostgresSearchAcquisitionRepository(
             connection
@@ -297,33 +415,55 @@ class PostgresRepositoryContext:
         self.__strategy_repository = PostgresStrategyRevisionRepository(connection)
         self.__terminal_repository = PostgresTerminalDecisionRepository(connection)
         self.__derivation_repository = PostgresDerivationRepository(connection)
-        self.__repositories = {}
-        for role in REPOSITORY_ROLES:
-            canonical = None
-            if role in _CORPUS_ROLES:
-                canonical = self.__corpus_repository
-            elif role == "runs":
-                canonical = self.__research_repository
-            elif role == "search_responses":
-                canonical = self.__search_acquisition_repository
-            elif role == "candidates":
-                canonical = self.__candidate_repository
-            elif role == "extraction_attempts":
-                canonical = self.__extraction_attempt_repository
-            elif role == "coverage":
-                canonical = self.__coverage_repository
-            elif role == "strategy_revisions":
-                canonical = self.__strategy_repository
-            elif role == "terminal_decisions":
-                canonical = self.__terminal_repository
-            elif role == "derivations":
-                canonical = self.__derivation_repository
-            self.__repositories[role] = PostgresRepositoryView(
-                role,
-                connection,
-                implementation,
-                canonical,
-            )
+        self.__retrieval_repository = PostgresRetrievalRepository(connection)
+        self.__index_job_repository = PostgresIndexJobRepository(connection)
+        self.__claim_repository = PostgresClaimEvidenceRepository(connection)
+        self.__evidence_packet_repository = PostgresEvidencePacketRepository(connection)
+        self.__audit_repository = PostgresAuditRepository(connection)
+        self.__semantic_call_repository = PostgresSemanticCallRepository(
+            connection, getattr(implementation, "_telemetry_service", None)
+        )
+        self.__semantic_cache_repository = PostgresSemanticCacheRepository(connection)
+        self.__model_endpoint_repository = PostgresModelEndpointRepository(connection)
+        self.__synthesis_repository = PostgresSynthesisStageRepository(connection)
+
+        corpus = _CompositeRepository(
+            self.__corpus_repository, self.__corpus_query_repository
+        )
+        runs = _CompositeRepository(
+            self.__research_repository,
+            self.__semantic_call_repository,
+            self.__search_acquisition_repository,
+            self.__candidate_repository,
+            self.__extraction_attempt_repository,
+        )
+        canonical_by_role = {
+            "sources": corpus,
+            "snapshots": corpus,
+            "documents": corpus,
+            "chunks": corpus,
+            "runs": runs,
+            "retrieval_events": self.__retrieval_repository,
+            "index_jobs": self.__index_job_repository,
+            "search_responses": self.__search_acquisition_repository,
+            "candidates": self.__candidate_repository,
+            "strategy_revisions": self.__strategy_repository,
+            "coverage": self.__coverage_repository,
+            "terminal_decisions": self.__terminal_repository,
+            "extraction_attempts": self.__extraction_attempt_repository,
+            "derivations": self.__derivation_repository,
+            "claims": self.__claim_repository,
+            "evidence_packets": self.__evidence_packet_repository,
+            "audits": self.__audit_repository,
+            "semantic_calls": self.__semantic_call_repository,
+            "semantic_cache": self.__semantic_cache_repository,
+            "model_endpoints": self.__model_endpoint_repository,
+            "synthesis_stages": self.__synthesis_repository,
+        }
+        self.__repositories = {
+            role: PostgresRepositoryView(role, connection, canonical_by_role[role])
+            for role in REPOSITORY_ROLES
+        }
 
     @property
     def connection_identity(self) -> int:
@@ -339,35 +479,34 @@ class PostgresRepositoryContext:
         for role, repository in self.__repositories.items():
             setattr(uow, role, repository)
 
-        # Temporary direct-UoW compatibility facade. Instance-bound delegates
-        # deliberately override legacy class methods so execution is owned by
-        # connection-bound repositories while callers migrate incrementally.
         compatibility_sets = (
             (self.__corpus_repository, _CORPUS_COMPATIBILITY_OPERATIONS),
+            (self.__corpus_query_repository, _CORPUS_QUERY_COMPATIBILITY_OPERATIONS),
             (self.__research_repository, _RESEARCH_COMPATIBILITY_OPERATIONS),
-            (self.__coverage_repository, _COVERAGE_COMPATIBILITY_OPERATIONS),
-            (self.__strategy_repository, _STRATEGY_COMPATIBILITY_OPERATIONS),
-            (self.__terminal_repository, _TERMINAL_COMPATIBILITY_OPERATIONS),
-            (self.__derivation_repository, _DERIVATION_COMPATIBILITY_OPERATIONS),
-        )
-        for repository, operations in compatibility_sets:
-            for name in operations:
-                setattr(uow, name, getattr(repository, name))
-
-        # Acquisition keeps the legacy ``uow``/``uow.runs`` method binding
-        # shape for this campaign phase, but the wrapper has no persistence of
-        # its own: every call is forwarded to the sole canonical repository.
-        for repository, operations in (
-            (
-                self.__search_acquisition_repository,
-                _ACQUISITION_COMPATIBILITY_OPERATIONS,
-            ),
+            (self.__search_acquisition_repository, _ACQUISITION_COMPATIBILITY_OPERATIONS),
             (self.__candidate_repository, _CANDIDATE_COMPATIBILITY_OPERATIONS),
             (
                 self.__extraction_attempt_repository,
                 _EXTRACTION_COMPATIBILITY_OPERATIONS,
             ),
-        ):
+            (self.__coverage_repository, _COVERAGE_COMPATIBILITY_OPERATIONS),
+            (self.__strategy_repository, _STRATEGY_COMPATIBILITY_OPERATIONS),
+            (self.__terminal_repository, _TERMINAL_COMPATIBILITY_OPERATIONS),
+            (self.__derivation_repository, _DERIVATION_COMPATIBILITY_OPERATIONS),
+            (self.__retrieval_repository, _RETRIEVAL_COMPATIBILITY_OPERATIONS),
+            (self.__index_job_repository, _INDEX_JOB_COMPATIBILITY_OPERATIONS),
+            (self.__claim_repository, _CLAIM_COMPATIBILITY_OPERATIONS),
+            (
+                self.__evidence_packet_repository,
+                _EVIDENCE_PACKET_COMPATIBILITY_OPERATIONS,
+            ),
+            (self.__audit_repository, _AUDIT_COMPATIBILITY_OPERATIONS),
+            (self.__semantic_call_repository, _SEMANTIC_CALL_COMPATIBILITY_OPERATIONS),
+            (self.__semantic_cache_repository, _SEMANTIC_CACHE_COMPATIBILITY_OPERATIONS),
+            (self.__model_endpoint_repository, _MODEL_ENDPOINT_COMPATIBILITY_OPERATIONS),
+            (self.__synthesis_repository, _SYNTHESIS_COMPATIBILITY_OPERATIONS),
+        )
+        for repository, operations in compatibility_sets:
             for name in operations:
                 _bind_uow_compatibility_delegate(uow, repository, name)
 
