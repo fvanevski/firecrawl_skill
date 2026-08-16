@@ -580,24 +580,26 @@ def test_concurrent_strategy_writers_serialize_shared_revision_order():
     assert replayed_decision["id"] == decision["id"]
     assert replayed_decision["revision_order"] == decision["revision_order"]
 
-    with PostgresUnitOfWork(TEST_DSN, "issue-257-test-index") as uow:
-        with uow.connection.cursor() as cur:
-            cur.execute(
-                """SELECT row_type, revision_order, idempotency_key
-                FROM strategy_revisions
-                WHERE run_id=%s
-                  AND idempotency_key=ANY(%s)
-                ORDER BY revision_order""",
-                (
-                    run_id,
-                    [
-                        f"strategy-concurrency:seed:{suffix}",
-                        proposal_key,
-                        decision_key,
-                    ],
-                ),
-            )
-            rows = cur.fetchall()
+    with (
+        PostgresUnitOfWork(TEST_DSN, "issue-257-test-index") as uow,
+        uow.connection.cursor() as cur,
+    ):
+        cur.execute(
+            """SELECT row_type, revision_order, idempotency_key
+            FROM strategy_revisions
+            WHERE run_id=%s
+              AND idempotency_key=ANY(%s)
+            ORDER BY revision_order""",
+            (
+                run_id,
+                [
+                    f"strategy-concurrency:seed:{suffix}",
+                    proposal_key,
+                    decision_key,
+                ],
+            ),
+        )
+        rows = cur.fetchall()
 
     assert [row[1] for row in rows] == [1, 2, 3]
     assert {row[0] for row in rows[1:]} == {"proposal", "decision"}
