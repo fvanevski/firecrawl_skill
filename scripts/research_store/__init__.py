@@ -90,24 +90,12 @@ install_shared_repository_context(_postgres)
 # the canonical candidate repository, so no import-time method replacement is
 # required and source-level navigation matches runtime behavior.
 
-# Issue #217 installs the authoritative batch timing/outcome/selection contract.
-# PostgresCorpusRepository already calls these exact functions through its
-# private connection adapter. Retain the service/orchestrator patches, then
-# remove the duplicate UoW class methods so PostgresUnitOfWork remains only the
-# transaction/composition boundary established by Phase 3.
+# Issue #217 remains a campaign-required compatibility facade on the UoW class.
+# Its authoritative SQL implementation is also consumed by
+# PostgresCorpusRepository through a connection-only adapter. Once a UoW is
+# entered, issue #259 installs repository-bound instance delegates that override
+# the class facade without changing #217's timing/outcome/selection contract.
 install_issue_217_contract(_postgres, _corpus_service, _bounded_orchestrator)
-for _uow_domain_method in (
-    "_has_constituent_timing_columns",
-    "start_ingestion_batch",
-    "record_batch_asset",
-    "finish_ingestion_batch",
-    "export_invocation",
-    "export_invocation_by_batch",
-    "get_trace",
-):
-    if _uow_domain_method in _postgres.PostgresUnitOfWork.__dict__:
-        delattr(_postgres.PostgresUnitOfWork, _uow_domain_method)
-del _uow_domain_method
 
 # ARC-17 correction is now baked into CorpusService.bounded_ingest_batch and
 # ExtractionService.complete_attempt idempotency guard. No monkeypatching is

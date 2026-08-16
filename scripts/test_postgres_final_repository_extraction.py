@@ -14,6 +14,21 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store.postgres import PostgresUnitOfWork, connect, migrate
+from research_store.postgres_audit import PostgresAuditRepository
+from research_store.postgres_evidence import (
+    PostgresClaimEvidenceRepository,
+    PostgresEvidencePacketRepository,
+)
+from research_store.postgres_retrieval import (
+    PostgresIndexJobRepository,
+    PostgresRetrievalRepository,
+)
+from research_store.postgres_semantic_state import (
+    PostgresModelEndpointRepository,
+    PostgresSemanticCacheRepository,
+    PostgresSemanticCallRepository,
+    PostgresSynthesisStageRepository,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 INTEGRATION = pytest.mark.skipif(
@@ -36,15 +51,15 @@ class _FakeConnection:
 
 
 FINAL_ROLES = {
-    "retrieval_events": "log_retrieval",
-    "index_jobs": "claim_jobs",
-    "claims": "upsert_claim",
-    "evidence_packets": "persist_evidence_packet",
-    "audits": "create_audit_assessment",
-    "semantic_calls": "record_semantic_call",
-    "semantic_cache": "get_cache_entry_by_key",
-    "model_endpoints": "upsert_health",
-    "synthesis_stages": "get_synthesis_stage",
+    "retrieval_events": ("log_retrieval", PostgresRetrievalRepository),
+    "index_jobs": ("claim_jobs", PostgresIndexJobRepository),
+    "claims": ("upsert_claim", PostgresClaimEvidenceRepository),
+    "evidence_packets": ("persist_evidence_packet", PostgresEvidencePacketRepository),
+    "audits": ("create_audit_assessment", PostgresAuditRepository),
+    "semantic_calls": ("record_semantic_call", PostgresSemanticCallRepository),
+    "semantic_cache": ("get_cache_entry_by_key", PostgresSemanticCacheRepository),
+    "model_endpoints": ("upsert_health", PostgresModelEndpointRepository),
+    "synthesis_stages": ("get_synthesis_stage", PostgresSynthesisStageRepository),
 }
 
 DOMAIN_METHODS = {
@@ -60,10 +75,14 @@ DOMAIN_METHODS = {
     "create_audit_assessment",
     "get_cache_entry_by_key",
     "get_synthesis_stage",
+}
+
+ISSUE_217_COMPATIBILITY_METHODS = {
     "start_ingestion_batch",
     "record_batch_asset",
     "finish_ingestion_batch",
     "export_invocation",
+    "export_invocation_by_batch",
     "get_trace",
 }
 
@@ -75,9 +94,11 @@ def test_final_roles_have_canonical_connection_bound_owners(monkeypatch):
     )
 
     with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
-        for role, operation in FINAL_ROLES.items():
+        for role, (operation, repository_type) in FINAL_ROLES.items():
             repository = getattr(uow, role)
-            assert callable(getattr(repository, operation))
+            bound_operation = getattr(repository, operation)
+            assert callable(bound_operation)
+            assert isinstance(bound_operation.__self__, repository_type)
             assert repository.connection_identity == id(fake_connection)
             for lifecycle in (
                 "connection",
@@ -90,15 +111,36 @@ def test_final_roles_have_canonical_connection_bound_owners(monkeypatch):
             ):
                 assert not hasattr(repository, lifecycle)
 
+        assert isinstance(
+            uow.record_semantic_call.__self__, PostgresSemanticCallRepository
+        )
+        assert isinstance(uow.upsert_claim.__self__, PostgresClaimEvidenceRepository)
+        legacy_semantic = uow.runs.record_semantic_call
+        assert legacy_semantic.__self__ is uow
+        assert isinstance(
+            legacy_semantic.__wrapped__.__self__, PostgresSemanticCallRepository
+        )
 
-def test_uow_class_is_transaction_and_composition_only():
+
+def test_uow_source_is_transaction_composition_plus_required_compatibility_facade():
     assert DOMAIN_METHODS.isdisjoint(PostgresUnitOfWork.__dict__)
-    actual_public = {
+
+    # Only infrastructure methods are physically declared by postgres.py.
+    postgres_public = {
         name
         for name, value in PostgresUnitOfWork.__dict__.items()
-        if callable(value) and not name.startswith("_")
+        if callable(value)
+        and not name.startswith("_")
+        and value.__module__ == "research_store.postgres"
     }
-    assert actual_public == {"commit", "rollback", "savepoint", "execute", "fetchone"}
+    assert postgres_public == {"commit", "rollback", "savepoint", "execute", "fetchone"}
+
+    # #217 remains an explicit campaign-required compatibility facade. Its
+    # implementation lives outside postgres.py, and entered UoWs override these
+    # class methods with repository-bound instance delegates.
+    for name in ISSUE_217_COMPATIBILITY_METHODS:
+        operation = PostgresUnitOfWork.__dict__[name]
+        assert operation.__module__ == "research_store.ingestion_batch_semantics"
 
 
 def _start_run(uow, suffix):

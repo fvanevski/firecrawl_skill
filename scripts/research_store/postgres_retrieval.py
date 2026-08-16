@@ -42,8 +42,8 @@ class PostgresRetrievalRepository:
         ]
         with self.__connection.cursor() as cur:
             cur.execute(
-                f"""INSERT INTO retrieval_events(run_id,{','.join(fields)})
-                SELECT id,{','.join(['%s'] * len(fields))}
+                f"""INSERT INTO retrieval_events(run_id,{",".join(fields)})
+                SELECT id,{",".join(["%s"] * len(fields))}
                 FROM research_runs WHERE id=%s
                 AND state NOT IN ('completed','partial','failed','cancelled')""",
                 [*values, run_id],
@@ -121,7 +121,7 @@ class PostgresRetrievalRepository:
         )
         with self.__connection.cursor() as cur:
             cur.execute(
-                f"""SELECT {','.join(fields)} FROM retrieval_events
+                f"""SELECT {",".join(fields)} FROM retrieval_events
                 WHERE retrieval_execution_id=%s
                 ORDER BY created_at,
                     CASE stage
@@ -256,7 +256,9 @@ class PostgresIndexJobRepository:
                 "normalization",
                 "instruction_template_hash",
             )
-            return [{**dict(zip(keys, row)), "chunk_id": row[3]} for row in cur.fetchall()]
+            return [
+                {**dict(zip(keys, row)), "chunk_id": row[3]} for row in cur.fetchall()
+            ]
 
     def renew_job(self, job_id, lease_token, lease_seconds=300):
         if lease_seconds <= 0:

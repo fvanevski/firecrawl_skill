@@ -84,7 +84,6 @@ _ROLE_PRIVATE_OPERATIONS: dict[str, frozenset[str]] = {
     "runs": frozenset({"_bump_lifecycle_revision", "_lock_workflow_run"}),
 }
 
-_CORPUS_ROLES = frozenset({"sources", "snapshots", "documents", "chunks"})
 _CORPUS_COMPATIBILITY_OPERATIONS = (
     "persist_ingest",
     "ensure_index_definition",
@@ -301,6 +300,46 @@ class _CompositeRepository:
         return sorted(names)
 
 
+class _RunsRepository:
+    """Canonical run repository plus explicit cross-domain compatibility facades.
+
+    Acquisition and semantic methods historically exposed through ``uow.runs``
+    remain UoW-bound wrappers for compatibility. Each wrapper's ``__wrapped__``
+    identifies its connection-bound repository; no generic UoW persistence
+    fallback is retained.
+    """
+
+    __slots__ = ("__legacy_repositories", "__research", "__uow")
+
+    def __init__(
+        self,
+        uow: Any,
+        research: Any,
+        legacy_repositories: dict[str, Any],
+    ) -> None:
+        self.__uow = uow
+        self.__research = research
+        self.__legacy_repositories = legacy_repositories
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return getattr(self.__research, name)
+        except AttributeError:
+            pass
+        try:
+            repository = self.__legacy_repositories[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+        return _make_uow_compatibility_delegate(self.__uow, repository, name)
+
+    def __dir__(self) -> list[str]:
+        return sorted(
+            set(super().__dir__())
+            | set(dir(self.__research))
+            | set(self.__legacy_repositories)
+        )
+
+
 class PostgresRepositoryView:
     """Capability-filtered view over one explicit canonical implementation."""
 
@@ -342,8 +381,8 @@ class PostgresRepositoryView:
         return sorted(public_local | delegated)
 
 
-def _bind_uow_compatibility_delegate(uow: Any, repository: Any, name: str) -> None:
-    """Bind a no-SQL compatibility method to one canonical repository method."""
+def _make_uow_compatibility_delegate(uow: Any, repository: Any, name: str) -> Any:
+    """Create a no-SQL UoW-bound facade for one canonical repository method."""
 
     canonical_method = getattr(repository, name)
 
@@ -351,7 +390,13 @@ def _bind_uow_compatibility_delegate(uow: Any, repository: Any, name: str) -> No
     def compatibility_method(_uow: Any, *args: Any, **kwargs: Any) -> Any:
         return canonical_method(*args, **kwargs)
 
-    setattr(uow, name, MethodType(compatibility_method, uow))
+    return MethodType(compatibility_method, uow)
+
+
+def _bind_uow_compatibility_delegate(uow: Any, repository: Any, name: str) -> None:
+    """Bind a campaign-required UoW facade to one canonical repository method."""
+
+    setattr(uow, name, _make_uow_compatibility_delegate(uow, repository, name))
 
 
 class PostgresRepositoryContext:
@@ -430,18 +475,40 @@ class PostgresRepositoryContext:
         corpus = _CompositeRepository(
             self.__corpus_repository, self.__corpus_query_repository
         )
-        runs = _CompositeRepository(
+        chunks = _CompositeRepository(
+            self.__corpus_repository,
+            self.__corpus_query_repository,
+            self.__derivation_repository,
+        )
+        runs_legacy_repositories = {
+            name: repository
+            for repository, operations in (
+                (
+                    self.__search_acquisition_repository,
+                    _ACQUISITION_COMPATIBILITY_OPERATIONS,
+                ),
+                (self.__candidate_repository, _CANDIDATE_COMPATIBILITY_OPERATIONS),
+                (
+                    self.__extraction_attempt_repository,
+                    _EXTRACTION_COMPATIBILITY_OPERATIONS,
+                ),
+                (
+                    self.__semantic_call_repository,
+                    _SEMANTIC_CALL_COMPATIBILITY_OPERATIONS,
+                ),
+            )
+            for name in operations
+        }
+        runs = _RunsRepository(
+            implementation,
             self.__research_repository,
-            self.__semantic_call_repository,
-            self.__search_acquisition_repository,
-            self.__candidate_repository,
-            self.__extraction_attempt_repository,
+            runs_legacy_repositories,
         )
         canonical_by_role = {
             "sources": corpus,
             "snapshots": corpus,
             "documents": corpus,
-            "chunks": corpus,
+            "chunks": chunks,
             "runs": runs,
             "retrieval_events": self.__retrieval_repository,
             "index_jobs": self.__index_job_repository,
@@ -479,16 +546,10 @@ class PostgresRepositoryContext:
         for role, repository in self.__repositories.items():
             setattr(uow, role, repository)
 
-        compatibility_sets = (
+        direct_compatibility_sets = (
             (self.__corpus_repository, _CORPUS_COMPATIBILITY_OPERATIONS),
             (self.__corpus_query_repository, _CORPUS_QUERY_COMPATIBILITY_OPERATIONS),
             (self.__research_repository, _RESEARCH_COMPATIBILITY_OPERATIONS),
-            (self.__search_acquisition_repository, _ACQUISITION_COMPATIBILITY_OPERATIONS),
-            (self.__candidate_repository, _CANDIDATE_COMPATIBILITY_OPERATIONS),
-            (
-                self.__extraction_attempt_repository,
-                _EXTRACTION_COMPATIBILITY_OPERATIONS,
-            ),
             (self.__coverage_repository, _COVERAGE_COMPATIBILITY_OPERATIONS),
             (self.__strategy_repository, _STRATEGY_COMPATIBILITY_OPERATIONS),
             (self.__terminal_repository, _TERMINAL_COMPATIBILITY_OPERATIONS),
@@ -502,11 +563,34 @@ class PostgresRepositoryContext:
             ),
             (self.__audit_repository, _AUDIT_COMPATIBILITY_OPERATIONS),
             (self.__semantic_call_repository, _SEMANTIC_CALL_COMPATIBILITY_OPERATIONS),
-            (self.__semantic_cache_repository, _SEMANTIC_CACHE_COMPATIBILITY_OPERATIONS),
-            (self.__model_endpoint_repository, _MODEL_ENDPOINT_COMPATIBILITY_OPERATIONS),
+            (
+                self.__semantic_cache_repository,
+                _SEMANTIC_CACHE_COMPATIBILITY_OPERATIONS,
+            ),
+            (
+                self.__model_endpoint_repository,
+                _MODEL_ENDPOINT_COMPATIBILITY_OPERATIONS,
+            ),
             (self.__synthesis_repository, _SYNTHESIS_COMPATIBILITY_OPERATIONS),
         )
-        for repository, operations in compatibility_sets:
+        for repository, operations in direct_compatibility_sets:
+            for name in operations:
+                setattr(uow, name, getattr(repository, name))
+
+        # Preserve only the acquisition-era UoW-bound wrapper shape required by
+        # the current campaign. The wrappers contain no SQL and identify their
+        # canonical repository via ``__wrapped__``.
+        for repository, operations in (
+            (
+                self.__search_acquisition_repository,
+                _ACQUISITION_COMPATIBILITY_OPERATIONS,
+            ),
+            (self.__candidate_repository, _CANDIDATE_COMPATIBILITY_OPERATIONS),
+            (
+                self.__extraction_attempt_repository,
+                _EXTRACTION_COMPATIBILITY_OPERATIONS,
+            ),
+        ):
             for name in operations:
                 _bind_uow_compatibility_delegate(uow, repository, name)
 
