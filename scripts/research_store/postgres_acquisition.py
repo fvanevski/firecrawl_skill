@@ -12,7 +12,6 @@ import datetime
 import hashlib
 import io
 import json
-from functools import wraps
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -1340,33 +1339,9 @@ class PostgresExtractionAttemptRepository:
         return result
 
 
-def install_candidate_policy_repository(candidate_policy_module: Any) -> None:
-    """Route legacy policy-service ranking writes through the candidate repository."""
-
-    service_type = candidate_policy_module.CandidatePolicyService
-    if getattr(service_type, "_issue_258_repository_installed", False):
-        return
-
-    original_record_rankings = service_type.record_rankings
-
-    @wraps(original_record_rankings)
-    def record_rankings(self, run_id, search_response_id, invocation_id, rankings):
-        try:
-            with self.uow_factory() as uow:
-                uow.candidates.record_rankings(
-                    run_id, search_response_id, invocation_id, rankings
-                )
-        except CandidateRankingConflictError as exc:
-            raise candidate_policy_module.CandidatePolicyError(str(exc)) from exc
-
-    service_type.record_rankings = record_rankings
-    service_type._issue_258_repository_installed = True
-
-
 __all__ = [
     "CandidateRankingConflictError",
     "PostgresCandidateRepository",
     "PostgresExtractionAttemptRepository",
     "PostgresSearchAcquisitionRepository",
-    "install_candidate_policy_repository",
 ]
