@@ -45,6 +45,10 @@ from .extraction_service import ExtractionError, ExtractionService
 from .ingestion_batch_semantics import install_issue_217_contract
 from .lifecycle_guard import GuardedResearchRunService
 from .orchestrator import OrchestratorConfig, OrchestratorResult
+from .postgres_batch_schema import (
+    _has_extraction_attempt_id_column,
+    _has_sealed_at_column,
+)
 from .postgres_uow_core import install_shared_repository_context
 from .provider_preflight import (
     CandidatePreflightChecker,
@@ -96,6 +100,15 @@ install_shared_repository_context(_postgres)
 # entered, issue #259 installs repository-bound instance delegates that override
 # the class facade without changing #217's timing/outcome/selection contract.
 install_issue_217_contract(_postgres, _corpus_service, _bounded_orchestrator)
+# The #217 class facade has two private schema-probe dependencies that legacy
+# tests invoke without entering a UoW. Keep their SQL outside postgres.py while
+# retaining that temporary compatibility shape.
+_postgres.PostgresUnitOfWork._has_sealed_at_column = staticmethod(
+    _has_sealed_at_column
+)
+_postgres.PostgresUnitOfWork._has_extraction_attempt_id_column = staticmethod(
+    _has_extraction_attempt_id_column
+)
 
 # ARC-17 correction is now baked into CorpusService.bounded_ingest_batch and
 # ExtractionService.complete_attempt idempotency guard. No monkeypatching is
