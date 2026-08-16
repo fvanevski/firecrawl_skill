@@ -45,6 +45,7 @@ from .extraction_service import ExtractionError, ExtractionService
 from .ingestion_batch_semantics import install_issue_217_contract
 from .lifecycle_guard import GuardedResearchRunService
 from .orchestrator import OrchestratorConfig, OrchestratorResult
+from .postgres_uow_core import install_shared_repository_context
 from .provider_preflight import (
     CandidatePreflightChecker,
     CandidatePreflightResult,
@@ -78,6 +79,12 @@ _acquisition_service.FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
 FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
 _orchestrator.AcquisitionStage = BoundedAcquisitionStage
 _orchestrator.ExtractionStage = BoundedExtractionStage
+
+# Issue #255 establishes explicit repository objects on the canonical UoW while
+# retaining the existing PostgreSQL domain methods as temporary delegates.  The
+# later Phase-3 repository-extraction issues replace those delegates without
+# changing the one-connection transaction boundary established here.
+install_shared_repository_context(_postgres)
 
 # Issue #217 installs the authoritative batch timing/outcome/selection contract
 # on the canonical corpus production extension point. The installer mutates the
