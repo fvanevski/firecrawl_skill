@@ -107,17 +107,22 @@ def test_wrapper_direct_start_does_not_mutate_or_finalize_checkpoint():
     )
 
 
-def test_guarded_terminal_writer_uses_conflict_safe_idempotent_insert():
-    source = _source(STORE / "lifecycle_guard.py")
-    tree = ast.parse(source)
+def test_terminal_repository_uses_conflict_safe_idempotent_insert():
+    repository_source = _source(STORE / "postgres_terminal.py")
+    repository_tree = ast.parse(repository_source)
     string_constants = {
         node.value
-        for node in ast.walk(tree)
+        for node in ast.walk(repository_tree)
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
     }
-    assert "ON CONFLICT(run_id,idempotency_key) DO NOTHING" in source
-    assert "WHERE run_id=%s AND idempotency_key=%s" in source
+    assert "ON CONFLICT(run_id,idempotency_key) DO NOTHING" in repository_source
+    assert "WHERE run_id=%s AND idempotency_key=%s" in repository_source
     assert "terminal decision idempotency conflict was not readable" in string_constants
+
+    guard_source = _source(STORE / "lifecycle_guard.py")
+    assert 'getattr(uow, "terminal_decisions", uow)' in guard_source
+    assert "terminal_repository.record_terminal_decision(" in guard_source
+    assert "INSERT INTO terminal_decisions" not in guard_source
 
 
 def test_standalone_terminal_decision_writer_is_fail_closed():

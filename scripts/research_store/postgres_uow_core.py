@@ -1,9 +1,9 @@
 """Shared-connection PostgreSQL repository/UoW seam.
 
 Issue #255 established explicit repository views and the one-connection
-transaction boundary. Issue #256 replaces corpus/asset/derivation persistence
-with canonical connection-bound repositories while retaining temporary
-compatibility delegation for other Phase-3 domains.
+transaction boundary. Issues #256-#257 replace corpus/derivation and research
+workflow persistence with canonical connection-bound repositories while
+retaining temporary compatibility delegation for later Phase-3 domains.
 
 The UoW remains the sole owner of connection lifecycle, commit, rollback, and
 savepoints. Repository views do not expose transaction control, raw connection
@@ -16,7 +16,11 @@ from functools import wraps
 from typing import Any
 
 from .postgres_corpus import PostgresCorpusRepository
+from .postgres_coverage import PostgresCoverageRepository
 from .postgres_derivations import PostgresDerivationRepository
+from .postgres_research import PostgresResearchRepository
+from .postgres_strategy import PostgresStrategyRevisionRepository
+from .postgres_terminal import PostgresTerminalDecisionRepository
 
 REPOSITORY_ROLES: tuple[str, ...] = (
     "sources",
@@ -67,6 +71,51 @@ _CORPUS_COMPATIBILITY_OPERATIONS = (
     "export_invocation",
     "export_invocation_by_batch",
 )
+_RESEARCH_COMPATIBILITY_OPERATIONS = (
+    "start_run",
+    "get_run_status",
+    "append_run_transition",
+    "apply_run_transition",
+    "revise_execution_mode",
+    "record_invocation",
+    "get_invocation_status",
+    "list_invocations",
+    "append_event",
+    "get_event_by_id",
+    "list_events",
+    "next_event_sequence",
+    "record_research_spec",
+    "record_budget_snapshot",
+    "get_research_spec",
+)
+_COVERAGE_COMPATIBILITY_OPERATIONS = (
+    "create_items",
+    "apply_event",
+    "rebuild_projection",
+    "create_snapshot",
+    "get_snapshot",
+    "get_latest_snapshot",
+    "list_coverage_events",
+    "get_event",
+    "get_current_revision",
+    "count_events",
+    "count_coverage_items",
+    "get_coverage_summary",
+)
+_STRATEGY_COMPATIBILITY_OPERATIONS = (
+    "record_proposal",
+    "get_proposal",
+    "list_proposals",
+    "record_decision",
+    "get_decision",
+    "list_decisions",
+    "proposal_exists",
+    "get_proposal_by_idempotency",
+    "decision_exists",
+    "list_proposal_ids_for_run",
+    "list_decision_ids_for_proposal",
+)
+_TERMINAL_COMPATIBILITY_OPERATIONS = ("record_terminal_decision",)
 _DERIVATION_COMPATIBILITY_OPERATIONS = (
     "list_all_targets",
     "get_document_for_snapshot",
@@ -151,8 +200,12 @@ class PostgresRepositoryContext:
     __slots__ = (
         "__connection_identity",
         "__corpus_repository",
+        "__coverage_repository",
         "__derivation_repository",
         "__repositories",
+        "__research_repository",
+        "__strategy_repository",
+        "__terminal_repository",
     )
 
     def __init__(
@@ -169,12 +222,24 @@ class PostgresRepositoryContext:
             embedding_dimension=implementation.embedding_dimension,
             indexing_persistence_error=indexing_persistence_error,
         )
+        self.__research_repository = PostgresResearchRepository(connection)
+        self.__coverage_repository = PostgresCoverageRepository(connection)
+        self.__strategy_repository = PostgresStrategyRevisionRepository(connection)
+        self.__terminal_repository = PostgresTerminalDecisionRepository(connection)
         self.__derivation_repository = PostgresDerivationRepository(connection)
         self.__repositories = {}
         for role in REPOSITORY_ROLES:
             canonical = None
             if role in _CORPUS_ROLES:
                 canonical = self.__corpus_repository
+            elif role == "runs":
+                canonical = self.__research_repository
+            elif role == "coverage":
+                canonical = self.__coverage_repository
+            elif role == "strategy_revisions":
+                canonical = self.__strategy_repository
+            elif role == "terminal_decisions":
+                canonical = self.__terminal_repository
             elif role == "derivations":
                 canonical = self.__derivation_repository
             self.__repositories[role] = PostgresRepositoryView(
@@ -199,13 +264,19 @@ class PostgresRepositoryContext:
             setattr(uow, role, repository)
 
         # Temporary direct-UoW compatibility facade. Instance-bound delegates
-        # deliberately override legacy class methods (including issue #217's
-        # batch compatibility installer), so execution is owned by the
-        # connection-bound repositories while callers migrate incrementally.
-        for name in _CORPUS_COMPATIBILITY_OPERATIONS:
-            setattr(uow, name, getattr(self.__corpus_repository, name))
-        for name in _DERIVATION_COMPATIBILITY_OPERATIONS:
-            setattr(uow, name, getattr(self.__derivation_repository, name))
+        # deliberately override legacy class methods so execution is owned by
+        # the connection-bound repositories while callers migrate incrementally.
+        compatibility_sets = (
+            (self.__corpus_repository, _CORPUS_COMPATIBILITY_OPERATIONS),
+            (self.__research_repository, _RESEARCH_COMPATIBILITY_OPERATIONS),
+            (self.__coverage_repository, _COVERAGE_COMPATIBILITY_OPERATIONS),
+            (self.__strategy_repository, _STRATEGY_COMPATIBILITY_OPERATIONS),
+            (self.__terminal_repository, _TERMINAL_COMPATIBILITY_OPERATIONS),
+            (self.__derivation_repository, _DERIVATION_COMPATIBILITY_OPERATIONS),
+        )
+        for repository, operations in compatibility_sets:
+            for name in operations:
+                setattr(uow, name, getattr(repository, name))
 
 
 def install_shared_repository_context(postgres_module: Any) -> None:
