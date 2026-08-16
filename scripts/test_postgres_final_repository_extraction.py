@@ -160,7 +160,7 @@ def _insert_cache_entry(uow, suffix):
         {
             "id": uuid4(),
             "key_hash": key_hash,
-            "stage": "issue-259",
+            "stage": "outline",
             "model_fingerprint": "test-model",
             "input_hash": "a" * 64,
             "prompt_hash": "b" * 64,
