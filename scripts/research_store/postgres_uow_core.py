@@ -1,9 +1,10 @@
 """Shared-connection PostgreSQL repository/UoW seam.
 
 Issue #255 established explicit repository views and the one-connection
-transaction boundary. Issues #256-#257 replace corpus/derivation and research
-workflow persistence with canonical connection-bound repositories while
-retaining temporary compatibility delegation for later Phase-3 domains.
+transaction boundary. Issues #256-#258 replace corpus/derivation, research
+workflow, and acquisition persistence with canonical connection-bound
+repositories while retaining temporary compatibility delegation for later
+Phase-3 domains.
 
 The UoW remains the sole owner of connection lifecycle, commit, rollback, and
 savepoints. Repository views do not expose transaction control, raw connection
@@ -13,8 +14,14 @@ access, or the generic SQL executor.
 from __future__ import annotations
 
 from functools import wraps
+from types import MethodType
 from typing import Any
 
+from .postgres_acquisition import (
+    PostgresCandidateRepository,
+    PostgresExtractionAttemptRepository,
+    PostgresSearchAcquisitionRepository,
+)
 from .postgres_corpus import PostgresCorpusRepository
 from .postgres_coverage import PostgresCoverageRepository
 from .postgres_derivations import PostgresDerivationRepository
@@ -87,6 +94,39 @@ _RESEARCH_COMPATIBILITY_OPERATIONS = (
     "record_research_spec",
     "record_budget_snapshot",
     "get_research_spec",
+)
+_ACQUISITION_COMPATIBILITY_OPERATIONS = (
+    "record_search_plan",
+    "get_search_plan",
+    "list_search_plans",
+    "get_plan_query",
+    "list_plan_queries",
+    "record_search_response",
+    "get_search_response",
+    "list_search_responses",
+    "open_raw_search_response_blob",
+)
+_CANDIDATE_COMPATIBILITY_OPERATIONS = (
+    "record_response_candidates",
+    "get_candidate",
+    "list_candidates",
+    "list_candidates_paginated",
+    "list_candidate_occurrences",
+    "assign_duplicate_group",
+    "persist_duplicate_group",
+    "update_candidate_independence",
+    "record_rankings",
+)
+_EXTRACTION_COMPATIBILITY_OPERATIONS = (
+    "create_attempt",
+    "complete_attempt",
+    "update_disposition",
+    "record_quality_metrics",
+    "select_final_attempt",
+    "get_selected_attempt",
+    "list_attempts_for_candidate",
+    "list_attempts_for_run",
+    "get_attempt",
 )
 _COVERAGE_COMPATIBILITY_OPERATIONS = (
     "create_items",
@@ -194,16 +234,37 @@ class PostgresRepositoryView:
         return sorted(public_local | delegated)
 
 
+def _bind_uow_compatibility_delegate(uow: Any, repository: Any, name: str) -> None:
+    """Keep the legacy UoW method shape while delegating to one canonical method.
+
+    Acquisition methods historically flowed through ``uow.runs`` and directly
+    through ``uow``. Binding this narrow wrapper to the UoW preserves that
+    compatibility surface while ``__wrapped__`` identifies the sole canonical
+    connection-bound implementation.
+    """
+
+    canonical_method = getattr(repository, name)
+
+    @wraps(canonical_method)
+    def compatibility_method(_uow: Any, *args: Any, **kwargs: Any) -> Any:
+        return canonical_method(*args, **kwargs)
+
+    setattr(uow, name, MethodType(compatibility_method, uow))
+
+
 class PostgresRepositoryContext:
     """Bind all repository roles to one exact UoW-owned connection."""
 
     __slots__ = (
+        "__candidate_repository",
         "__connection_identity",
         "__corpus_repository",
         "__coverage_repository",
         "__derivation_repository",
+        "__extraction_attempt_repository",
         "__repositories",
         "__research_repository",
+        "__search_acquisition_repository",
         "__strategy_repository",
         "__terminal_repository",
     )
@@ -223,6 +284,15 @@ class PostgresRepositoryContext:
             indexing_persistence_error=indexing_persistence_error,
         )
         self.__research_repository = PostgresResearchRepository(connection)
+        self.__search_acquisition_repository = PostgresSearchAcquisitionRepository(
+            connection
+        )
+        self.__candidate_repository = PostgresCandidateRepository(
+            connection, self.__search_acquisition_repository
+        )
+        self.__extraction_attempt_repository = PostgresExtractionAttemptRepository(
+            connection
+        )
         self.__coverage_repository = PostgresCoverageRepository(connection)
         self.__strategy_repository = PostgresStrategyRevisionRepository(connection)
         self.__terminal_repository = PostgresTerminalDecisionRepository(connection)
@@ -234,6 +304,12 @@ class PostgresRepositoryContext:
                 canonical = self.__corpus_repository
             elif role == "runs":
                 canonical = self.__research_repository
+            elif role == "search_responses":
+                canonical = self.__search_acquisition_repository
+            elif role == "candidates":
+                canonical = self.__candidate_repository
+            elif role == "extraction_attempts":
+                canonical = self.__extraction_attempt_repository
             elif role == "coverage":
                 canonical = self.__coverage_repository
             elif role == "strategy_revisions":
@@ -265,7 +341,7 @@ class PostgresRepositoryContext:
 
         # Temporary direct-UoW compatibility facade. Instance-bound delegates
         # deliberately override legacy class methods so execution is owned by
-        # the connection-bound repositories while callers migrate incrementally.
+        # connection-bound repositories while callers migrate incrementally.
         compatibility_sets = (
             (self.__corpus_repository, _CORPUS_COMPATIBILITY_OPERATIONS),
             (self.__research_repository, _RESEARCH_COMPATIBILITY_OPERATIONS),
@@ -277,6 +353,23 @@ class PostgresRepositoryContext:
         for repository, operations in compatibility_sets:
             for name in operations:
                 setattr(uow, name, getattr(repository, name))
+
+        # Acquisition keeps the legacy ``uow``/``uow.runs`` method binding
+        # shape for this campaign phase, but the wrapper has no persistence of
+        # its own: every call is forwarded to the sole canonical repository.
+        for repository, operations in (
+            (
+                self.__search_acquisition_repository,
+                _ACQUISITION_COMPATIBILITY_OPERATIONS,
+            ),
+            (self.__candidate_repository, _CANDIDATE_COMPATIBILITY_OPERATIONS),
+            (
+                self.__extraction_attempt_repository,
+                _EXTRACTION_COMPATIBILITY_OPERATIONS,
+            ),
+        ):
+            for name in operations:
+                _bind_uow_compatibility_delegate(uow, repository, name)
 
 
 def install_shared_repository_context(postgres_module: Any) -> None:

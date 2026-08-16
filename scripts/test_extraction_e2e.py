@@ -36,15 +36,15 @@ And injects failures around:
 
 ## Test structure
 
-* **Unit tests** (40 tests): run without a database. Cover quality evaluation
-  across all content types, fixture corpus validation, chunking provenance,
-  normalization provenance, blob immutability, and the critical invariant
-  that length alone does not determine disposition.
-* **Integration tests** (23 tests): require ``RESEARCH_STORE_TEST_DATABASE_URL``.
-  Cover the full e2e pipeline (extraction → parsing → normalization →
-  chunking → ingestion), fault injection, fallback chains, provenance
-  verification, quality metrics separation, and rederive/reindex flows.
-  Skipped automatically when no database is available.
+* **Unit tests** run without a database and cover quality evaluation across all
+  content types, fixture corpus validation, chunking provenance, normalization
+  provenance, blob immutability, and the critical invariant that length alone
+  does not determine disposition.
+* **Integration tests** require ``RESEARCH_STORE_TEST_DATABASE_URL`` and cover
+  the full e2e pipeline (extraction → parsing → normalization → chunking →
+  ingestion), fault injection, fallback chains, provenance verification,
+  quality metrics separation, and rederive/reindex flows. They are skipped
+  automatically when no database is available.
 """
 
 from __future__ import annotations
@@ -1955,70 +1955,8 @@ class TestQualityMetricsSeparation:
 
 
 @pytest.fixture
-def sample_candidate():
-    """Create a research run and search candidate in the test database."""
-    import hashlib
-
-    run_id = uuid4()
-    candidate_id = uuid4()
-    canonical_url = "https://example.com/test-article"
-    canonical_sha = hashlib.sha256(canonical_url.encode()).hexdigest()
-
-    from research_store.postgres import connect
-
-    with connect(TEST_DSN) as conn, conn.cursor() as cur:
-        cur.execute(
-            """INSERT INTO research_runs(
-                id, objective, query_plan, skill_version,
-                retrieval_policy_version, external_run_id,
-                state, lifecycle_revision, execution_mode,
-                current_coverage_revision, metadata
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                str(run_id),
-                "test extraction run",
-                "{}",
-                "v5",
-                "v5",
-                f"fr_test_{run_id.hex}",
-                "created",
-                0,
-                "deterministic_debug",
-                0,
-                "{}",
-            ),
-        )
-        cur.execute(
-            """INSERT INTO search_candidates(
-                id, run_id, canonical_url, canonical_url_sha256, original_url,
-                title, snippet, domain, backend, date_signals, backend_metadata,
-                recurrence_count, first_seen_at, last_seen_at, created_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                str(candidate_id),
-                str(run_id),
-                canonical_url,
-                canonical_sha,
-                "https://example.com/test-article",
-                "Test Article",
-                "A test article for extraction",
-                "example.com",
-                "firecrawl",
-                "{}",
-                "{}",
-                1,
-                "now()",
-                "now()",
-                "now()",
-            ),
-        )
-
-    return candidate_id
-
-
-@pytest.fixture
 def sample_run():
-    """Create a research run in the test database."""
+    """Create the authoritative research run used by extraction fixtures."""
     from research_store.postgres import connect
 
     run_id = uuid4()
@@ -2047,3 +1985,50 @@ def sample_run():
         db_run_id = cur.fetchone()[0]
 
     return db_run_id
+
+
+@pytest.fixture
+def sample_candidate(sample_run):
+    """Create a search candidate that belongs to the authoritative sample run."""
+    import hashlib
+
+    run_id = UUID(str(sample_run))
+    candidate_id = uuid4()
+    canonical_url = "https://example.com/test-article"
+    canonical_sha = hashlib.sha256(canonical_url.encode()).hexdigest()
+
+    from research_store.postgres import connect
+
+    with connect(TEST_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO search_candidates(
+                id, run_id, canonical_url, canonical_url_sha256, original_url,
+                title, snippet, domain, backend, date_signals, backend_metadata,
+                recurrence_count, first_seen_at, last_seen_at, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                str(candidate_id),
+                str(run_id),
+                canonical_url,
+                canonical_sha,
+                "https://example.com/test-article",
+                "Test Article",
+                "A test article for extraction",
+                "example.com",
+                "firecrawl",
+                "{}",
+                "{}",
+                1,
+                "now()",
+                "now()",
+                "now()",
+            ),
+        )
+        cur.execute(
+            "SELECT run_id FROM search_candidates WHERE id=%s",
+            (str(candidate_id),),
+        )
+        persisted_run_id = cur.fetchone()[0]
+        assert UUID(str(persisted_run_id)) == run_id
+
+    return candidate_id

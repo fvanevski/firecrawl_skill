@@ -81,10 +81,15 @@ _orchestrator.AcquisitionStage = BoundedAcquisitionStage
 _orchestrator.ExtractionStage = BoundedExtractionStage
 
 # Issue #255 establishes explicit repository objects on the canonical UoW while
-# retaining the existing PostgreSQL domain methods as temporary delegates.  The
+# retaining the existing PostgreSQL domain methods as temporary delegates. The
 # later Phase-3 repository-extraction issues replace those delegates without
 # changing the one-connection transaction boundary established here.
 install_shared_repository_context(_postgres)
+
+# Issue #258 keeps candidate ranking policy and persistence routing explicit in
+# CandidatePolicyService.record_rankings(). The service delegates directly to
+# the canonical candidate repository, so no import-time method replacement is
+# required and source-level navigation matches runtime behavior.
 
 # Issue #217 installs the authoritative batch timing/outcome/selection contract
 # on the canonical corpus production extension point. The installer mutates the

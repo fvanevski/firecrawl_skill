@@ -153,6 +153,8 @@ jobs:
             scripts/test_postgres_uow_core.py \
             scripts/test_postgres_corpus_repositories.py \
             scripts/test_postgres_research_repositories.py \
+            scripts/test_postgres_acquisition_repositories.py \
+            scripts/test_extraction_e2e.py \
             scripts/test_workflow_benchmark.py \
             scripts/test_handoff.py \
             scripts/test_report_service.py \
