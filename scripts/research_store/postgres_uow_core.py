@@ -1,34 +1,22 @@
 """Shared-connection PostgreSQL repository/UoW seam.
 
-Issue #255 establishes explicit repository objects without moving domain SQL out of
-``PostgresUnitOfWork``. Later Phase-3 issues replace these compatibility views
-with cohesive repository implementations. Until then each view delegates existing
-public domain operations to the UoW implementation while carrying only opaque
-identity for the exact connection owned by the containing UoW.
+Issue #255 established explicit repository views and the one-connection
+transaction boundary. Issue #256 replaces corpus/asset/derivation persistence
+with canonical connection-bound repositories while retaining temporary
+compatibility delegation for other Phase-3 domains.
 
-The compatibility seam is intentionally capability-filtered: repository views do not
-expose connection lifecycle, transaction control, the generic SQL executor/cursor
-chain, or arbitrary private UoW helpers. Two existing run-repository operations are
-explicitly retained only on the ``runs`` view:
-
-* ``_bump_lifecycle_revision`` is already part of the typed
-  ``ResearchRunRepository`` contract and performs a CAS-style run mutation inside
-  the containing UoW transaction.
-* ``_lock_workflow_run`` is a temporary compatibility operation used by established
-  workflow/checkpoint code; it operates on a caller-supplied cursor and acquires a
-  row lock without opening, committing, rolling back, or nesting a transaction.
-
-Public domain delegation remains compatibility-complete in #255 because moving and
-fully partitioning the domain SQL belongs to issues #256-#259. The authority boundary
-established here is stricter: no repository role can obtain the raw connection or
-invoke UoW transaction/executor infrastructure, and private compatibility operations
-are role-scoped rather than globally delegated.
+The UoW remains the sole owner of connection lifecycle, commit, rollback, and
+savepoints. Repository views do not expose transaction control, raw connection
+access, or the generic SQL executor.
 """
 
 from __future__ import annotations
 
 from functools import wraps
 from typing import Any
+
+from .postgres_corpus import PostgresCorpusRepository
+from .postgres_derivations import PostgresDerivationRepository
 
 REPOSITORY_ROLES: tuple[str, ...] = (
     "sources",
@@ -50,10 +38,6 @@ REPOSITORY_ROLES: tuple[str, ...] = (
     "synthesis_stages",
 )
 
-# These are UoW/infrastructure capabilities, not repository operations. In
-# particular, execute()/fetchone() must not leak through a repository view:
-# execute("COMMIT"), execute("ROLLBACK"), or savepoint SQL would otherwise bypass
-# the named transaction-method denylist and violate the UoW authority boundary.
 _NON_REPOSITORY_CAPABILITIES = frozenset(
     {
         "connection",
@@ -68,42 +52,67 @@ _NON_REPOSITORY_CAPABILITIES = frozenset(
     }
 )
 
-# Private operations are never delegated generically. These two are established
-# run-repository contracts/call paths and are scoped to the runs view only.
 _ROLE_PRIVATE_OPERATIONS: dict[str, frozenset[str]] = {
     "runs": frozenset({"_bump_lifecycle_revision", "_lock_workflow_run"}),
 }
+
+_CORPUS_ROLES = frozenset({"sources", "snapshots", "documents", "chunks"})
+_CORPUS_COMPATIBILITY_OPERATIONS = (
+    "persist_ingest",
+    "ensure_index_definition",
+    "link_run_asset",
+    "start_ingestion_batch",
+    "record_batch_asset",
+    "finish_ingestion_batch",
+    "export_invocation",
+    "export_invocation_by_batch",
+)
+_DERIVATION_COMPATIBILITY_OPERATIONS = (
+    "list_all_targets",
+    "get_document_for_snapshot",
+    "get_snapshots_for_document",
+    "get_snapshot_info",
+    "find_by_configuration",
+    "activate",
+    "count_chunks_for_derivation",
+    "count_blocks_for_derivation",
+    "list",
+    "get",
+    "create",
+)
 _INSTALL_MARKER = "_shared_repository_context_installed"
 
 
 def _is_delegated_operation(role: str, name: str) -> bool:
-    """Return whether *name* belongs to the temporary surface for *role*."""
     if name.startswith("_"):
         return name in _ROLE_PRIVATE_OPERATIONS.get(role, frozenset())
     return name not in _NON_REPOSITORY_CAPABILITIES
 
 
 class PostgresRepositoryView:
-    """Temporary connection-bound repository view for incremental SQL extraction.
+    """Capability-filtered repository view with optional canonical implementation."""
 
-    Repository consumers receive existing public domain operations plus only the
-    explicitly enumerated private operations for their role. The raw connection,
-    UoW implementation object, connection lifecycle, transaction controls, generic
-    SQL executor/cursor chain, and every other private helper are outside the
-    repository surface. Later Phase-3 issues replace public delegation with cohesive
-    repository implementations without changing this one-connection UoW boundary.
-    """
+    __slots__ = (
+        "__canonical_implementation",
+        "__connection_identity",
+        "__fallback_implementation",
+        "name",
+    )
 
-    __slots__ = ("__connection_identity", "__implementation", "name")
-
-    def __init__(self, name: str, connection: Any, implementation: Any) -> None:
+    def __init__(
+        self,
+        name: str,
+        connection: Any,
+        fallback_implementation: Any,
+        canonical_implementation: Any | None = None,
+    ) -> None:
         self.name = name
         self.__connection_identity = id(connection)
-        self.__implementation = implementation
+        self.__fallback_implementation = fallback_implementation
+        self.__canonical_implementation = canonical_implementation
 
     @property
     def connection_identity(self) -> int:
-        """Opaque identity token for exact-connection diagnostics and regressions."""
         return self.__connection_identity
 
     def __getattr__(self, name: str) -> Any:
@@ -111,57 +120,98 @@ class PostgresRepositoryView:
             raise AttributeError(
                 f"repository {self.name!r} does not expose UoW capability {name!r}"
             )
-        return getattr(self.__implementation, name)
+        canonical = self.__canonical_implementation
+        if canonical is not None:
+            try:
+                return getattr(canonical, name)
+            except AttributeError:
+                pass
+        return getattr(self.__fallback_implementation, name)
 
     def __dir__(self) -> list[str]:
-        public_local = {name for name in super().__dir__() if not name.startswith("_")}
+        public_local = {
+            name for name in super().__dir__() if not name.startswith("_")
+        }
         delegated = {
             name
-            for name in dir(self.__implementation)
+            for name in dir(self.__fallback_implementation)
             if _is_delegated_operation(self.name, name)
         }
+        canonical = self.__canonical_implementation
+        if canonical is not None:
+            delegated.update(
+                name
+                for name in dir(canonical)
+                if _is_delegated_operation(self.name, name)
+            )
         return sorted(public_local | delegated)
 
 
 class PostgresRepositoryContext:
-    """Factory/context binding all repository roles to one UoW connection."""
+    """Bind all repository roles to one exact UoW-owned connection."""
 
-    __slots__ = ("__connection_identity", "__repositories")
+    __slots__ = (
+        "__connection_identity",
+        "__corpus_repository",
+        "__derivation_repository",
+        "__repositories",
+    )
 
-    def __init__(self, connection: Any, implementation: Any) -> None:
+    def __init__(
+        self,
+        connection: Any,
+        implementation: Any,
+        indexing_persistence_error: type[Exception],
+    ) -> None:
         self.__connection_identity = id(connection)
-        self.__repositories = {
-            role: PostgresRepositoryView(role, connection, implementation)
-            for role in REPOSITORY_ROLES
-        }
+        self.__corpus_repository = PostgresCorpusRepository(
+            connection,
+            embedding_model=implementation.embedding_model,
+            embedding_revision=implementation.embedding_revision,
+            embedding_dimension=implementation.embedding_dimension,
+            indexing_persistence_error=indexing_persistence_error,
+        )
+        self.__derivation_repository = PostgresDerivationRepository(connection)
+        self.__repositories = {}
+        for role in REPOSITORY_ROLES:
+            canonical = None
+            if role in _CORPUS_ROLES:
+                canonical = self.__corpus_repository
+            elif role == "derivations":
+                canonical = self.__derivation_repository
+            self.__repositories[role] = PostgresRepositoryView(
+                role,
+                connection,
+                implementation,
+                canonical,
+            )
 
     @property
     def connection_identity(self) -> int:
-        """Opaque identity token for the single connection shared by this context."""
         return self.__connection_identity
 
     def repository(self, role: str) -> PostgresRepositoryView:
-        """Return the stable repository view for one declared role."""
         try:
             return self.__repositories[role]
         except KeyError as exc:
             raise KeyError(f"unknown PostgreSQL repository role: {role}") from exc
 
     def bind(self, uow: Any) -> None:
-        """Install each declared repository view on the containing UoW."""
         for role, repository in self.__repositories.items():
             setattr(uow, role, repository)
 
+        # Temporary direct-UoW compatibility facade. Instance-bound delegates
+        # deliberately override legacy class methods (including issue #217's
+        # batch compatibility installer), so execution is owned by the
+        # connection-bound repositories while callers migrate incrementally.
+        for name in _CORPUS_COMPATIBILITY_OPERATIONS:
+            setattr(uow, name, getattr(self.__corpus_repository, name))
+        for name in _DERIVATION_COMPATIBILITY_OPERATIONS:
+            setattr(uow, name, getattr(self.__derivation_repository, name))
+
 
 def install_shared_repository_context(postgres_module: Any) -> None:
-    """Install the Phase-3 repository seam on the canonical UoW class in place.
-
-    In-place installation preserves the established ``research_store.postgres``
-    import/class identity while later issues incrementally extract SQL. The
-    original ``__enter__`` remains responsible for opening the connection; this
-    wrapper only replaces its historical ``role = self`` aliases after the
-    connection exists.
-    """
+    """Install canonical Phase-3 repositories without changing UoW ownership."""
 
     uow_type = postgres_module.PostgresUnitOfWork
     if getattr(uow_type, _INSTALL_MARKER, False):
@@ -175,7 +225,11 @@ def install_shared_repository_context(postgres_module: Any) -> None:
         connection = self.connection
         if connection is None:
             raise RuntimeError("PostgresUnitOfWork entered without a connection")
-        repository_context = PostgresRepositoryContext(connection, self)
+        repository_context = PostgresRepositoryContext(
+            connection,
+            self,
+            postgres_module.IndexingPersistenceError,
+        )
         repository_context.bind(self)
         self._repository_context = repository_context
         return entered
