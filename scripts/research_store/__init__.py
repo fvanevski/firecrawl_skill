@@ -103,9 +103,7 @@ install_issue_217_contract(_postgres, _corpus_service, _bounded_orchestrator)
 # The #217 class facade has two private schema-probe dependencies that legacy
 # tests invoke without entering a UoW. Keep their SQL outside postgres.py while
 # retaining that temporary compatibility shape.
-_postgres.PostgresUnitOfWork._has_sealed_at_column = staticmethod(
-    _has_sealed_at_column
-)
+_postgres.PostgresUnitOfWork._has_sealed_at_column = staticmethod(_has_sealed_at_column)
 _postgres.PostgresUnitOfWork._has_extraction_attempt_id_column = staticmethod(
     _has_extraction_attempt_id_column
 )
