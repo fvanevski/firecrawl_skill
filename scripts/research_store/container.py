@@ -180,13 +180,13 @@ def build_orchestrator(
 ):
     """Build a fully wired ResearchOrchestrator.
 
-    This is a convenience wrapper around ``ResearchOrchestrator.build``
-    that uses the same configuration pattern as the other ``build_*``
-    functions. When no explicit ``orchestrator_config`` is supplied, a
+    This is a convenience wrapper that uses the production composition
+    root. When no explicit ``orchestrator_config`` is supplied, a
     ResourceGovernor is built and attached so that synthesis LLM calls are
     bounded through the governor.
     """
-    from .orchestrator import OrchestratorConfig, ResearchOrchestrator
+    from .orchestration.composition import build_production_orchestrator
+    from .orchestrator import OrchestratorConfig
 
     config = config or StoreConfig.from_env()
     if orchestrator_config is None:
@@ -211,7 +211,9 @@ def build_orchestrator(
             ),
         )
 
-    return ResearchOrchestrator.build(config, orchestrator_config=orchestrator_config)
+    return build_production_orchestrator(
+        config, orchestrator_config=orchestrator_config
+    )
 
 
 def build_claim_service(config: StoreConfig | None = None):

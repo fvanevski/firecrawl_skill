@@ -3,7 +3,6 @@
 from . import acquisition_service as _acquisition_service
 from . import bounded_orchestrator as _bounded_orchestrator
 from . import corpus_service as _corpus_service
-from . import orchestrator as _orchestrator
 from . import postgres as _postgres
 from . import run_service as _run_service
 from . import workflow_service as _workflow_service
@@ -15,7 +14,6 @@ from .acquisition_authority import (
 from .acquisition_service import AcquisitionService
 from .blob import ContentAddressedBlobStore
 from .bounded_acquisition import BoundedFirecrawlSearchAdapter
-from .bounded_orchestrator import BoundedAcquisitionStage, BoundedExtractionStage
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
 from .config import StoreConfig
 from .corpus_service import CorpusService
@@ -68,21 +66,15 @@ from .stages import ContextKeys, StageHandler, StageOutcome, StageResult
 # Wrapper checkpoint wiring remains explicit in container.py.
 _run_service.ResearchRunService = GuardedResearchRunService
 ResearchRunService = GuardedResearchRunService
-_orchestrator.ResearchRunService = GuardedResearchRunService
 _workflow_service.ResearchRunService = GuardedResearchRunService
-_orchestrator.ResearchOrchestrator = CheckpointResearchOrchestrator
 ResearchOrchestrator = CheckpointResearchOrchestrator
 
 # Issue #216 canonical provider/stage routing. ``AcquisitionService`` resolves
-# its default adapter from the module global at construction time, and
-# ``ResearchOrchestrator.__init__`` resolves its stage classes the same way.
-# Rebinding those established extension points keeps every public builder,
-# checkpoint orchestrator, and smart-resume subclass on the bounded production
-# seam without duplicating lifecycle or transaction machinery.
+# its default adapter from the module global at construction time.
+# Stage class injection is handled explicitly by the composition root
+# (``orchestration.composition.build_production_orchestrator``).
 _acquisition_service.FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
 FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
-_orchestrator.AcquisitionStage = BoundedAcquisitionStage
-_orchestrator.ExtractionStage = BoundedExtractionStage
 
 # Issue #255 establishes explicit repository objects on the canonical UoW while
 # retaining temporary compatibility delegates. Issue #259 completes the

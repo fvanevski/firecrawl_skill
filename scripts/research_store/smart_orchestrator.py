@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -19,7 +18,6 @@ from research_domain.models import ResearchSpec, SearchPlan
 
 from .domain import IngestRequest
 from .orchestrator import OrchestratorResult, ResearchOrchestrator
-from .run_service import RunStateError, StaleRunRevisionError
 from .stages import ContextKeys
 
 logger = logging.getLogger(__name__)
@@ -443,269 +441,20 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
         max_adaptive_cycles: int | None = None,
         context: dict[str, Any] | None = None,
     ) -> OrchestratorResult:
-        max_cycles = max_adaptive_cycles or self.orchestrator_config.max_adaptive_cycles
-        ctx = dict(context or {})
-        ctx.update(
-            {
-                "spec": spec,
-                "search_plan": search_plan,
-                "execution_mode": self.orchestrator_config.execution_mode,
-                "_max_adaptive_cycles": max_cycles,
-            }
+        """Resume orchestration from persisted state.
+
+        Thin facade delegating to ``orchestration.resume.run_resume``.
+        """
+        from .orchestration.resume import run_resume
+
+        return run_resume(
+            self,
+            run_id,
+            spec,
+            search_plan,
+            max_adaptive_cycles=max_adaptive_cycles,
+            context=context,
         )
-        ctx.setdefault(ContextKeys.WALL_CLOCK_START, time.monotonic())
-        state, revision = self._refresh(run_id)
-        counts = _counts(self, run_id)
-        ctx.setdefault(ContextKeys.WAVE_COUNT, counts["waves"])
-        ctx.setdefault(ContextKeys.EXTRACTION_ATTEMPTS, counts["attempts"])
-        ctx.setdefault(ContextKeys.SUCCESSFUL_URLS, counts["assets"])
-        if state not in PLANNING_STATES and state not in TERMINAL_STATES:
-            ctx.update(_coverage_context(self, run_id))
-        ctx.setdefault(
-            ContextKeys.AUTHORIZED_QUERIES, _authorized_queries(self, run_id)
-        )
-        coverage_revision = int(ctx.get("coverage_revision") or 0) or None
-
-        if state in TERMINAL_STATES:
-            return OrchestratorResult(
-                run_id=run_id,
-                final_state=state,
-                outcome="resumed",
-                coverage_revision=coverage_revision,
-                wave_count=counts["waves"],
-                successful_urls=counts["assets"],
-            )
-
-        try:
-            if state == "created":
-                result = self._execute_stage(
-                    "planning", run_id, revision, coverage_revision, state, ctx
-                )
-                if result.error:
-                    return self._failed_result(run_id, result.error)
-                state, revision = self._refresh(run_id)
-                checkpoint = self._checkpoint(run_id, ctx, state)
-                if checkpoint:
-                    return checkpoint
-            elif state == "planning":
-                self.run_service.transition(
-                    run_id,
-                    "corpus_review",
-                    expected_revision=revision,
-                    idempotency_key=f"resume:planning-complete:{run_id}",
-                    actor_type="orchestrator",
-                    actor_identifier="ResumableResearchOrchestrator",
-                    triggering_event="run.corpus_review",
-                    reason="resume from persisted planning tuple",
-                )
-                state, revision = self._refresh(run_id)
-
-            if state == "corpus_review":
-                result = self._execute_stage(
-                    "corpus_review", run_id, revision, coverage_revision, state, ctx
-                )
-                if result.error:
-                    return self._failed_result(run_id, result.error)
-                state, revision = self._refresh(run_id)
-                ctx.update(_coverage_context(self, run_id))
-                coverage_revision = int(ctx.get("coverage_revision") or 1)
-                checkpoint = self._checkpoint(run_id, ctx, state)
-                if checkpoint:
-                    return checkpoint
-
-            iterations = 0
-            while state not in TERMINAL_STATES:
-                iterations += 1
-                if iterations > max(12, max_cycles * 6):
-                    raise SmartResumeError("resume loop exceeded its safety bound")
-
-                if state == "acquiring":
-                    if int(ctx.get(ContextKeys.WAVE_COUNT, 0)) >= max_cycles:
-                        ctx["_budget_exhausted"] = True
-                        self.run_service.transition(
-                            run_id,
-                            "coverage_review",
-                            expected_revision=revision,
-                            idempotency_key=f"resume:budget-review:{run_id}:{revision}",
-                            actor_type="orchestrator",
-                            actor_identifier="ResumableResearchOrchestrator",
-                            triggering_event="run.coverage_review",
-                            reason="adaptive-cycle budget exhausted",
-                        )
-                    else:
-                        result = self._execute_stage(
-                            "acquisition",
-                            run_id,
-                            revision,
-                            coverage_revision,
-                            state,
-                            ctx,
-                        )
-                        if result.error:
-                            return self._failed_result(run_id, result.error)
-                        ctx[ContextKeys.WAVE_COUNT] = (
-                            int(ctx.get(ContextKeys.WAVE_COUNT, 0)) + 1
-                        )
-                    state, revision = self._refresh(run_id)
-                    checkpoint = self._checkpoint(run_id, ctx, state)
-                    if checkpoint:
-                        return checkpoint
-                    continue
-
-                if state == "extracting":
-                    inputs = list(ctx.get("raw_ingest_requests") or [])
-                    if not inputs:
-                        inputs = _replay_extraction_inputs(self, run_id, ctx)
-                    if inputs:
-                        result = self._execute_stage(
-                            "extraction",
-                            run_id,
-                            revision,
-                            coverage_revision,
-                            state,
-                            ctx,
-                        )
-                        if result.error:
-                            return self._failed_result(run_id, result.error)
-                    else:
-                        restored = _assets(self, run_id)
-                        next_state = "indexing" if restored else "coverage_review"
-                        ctx["extracted_assets"] = restored
-                        self.run_service.transition(
-                            run_id,
-                            next_state,
-                            expected_revision=revision,
-                            idempotency_key=f"resume:extraction:{run_id}:{next_state}",
-                            actor_type="orchestrator",
-                            actor_identifier="ResumableResearchOrchestrator",
-                            triggering_event=f"run.{next_state}",
-                            reason="resume found no unprocessed candidates",
-                        )
-                    state, revision = self._refresh(run_id)
-                    checkpoint = self._checkpoint(run_id, ctx, state)
-                    if checkpoint:
-                        return checkpoint
-                    continue
-
-                if state == "indexing":
-                    ctx["extracted_assets"] = _assets(self, run_id)
-                    if not ctx["extracted_assets"]:
-                        raise SmartResumeError("indexing state has no persisted chunks")
-                    result = self._execute_stage(
-                        "indexing",
-                        run_id,
-                        revision,
-                        coverage_revision,
-                        state,
-                        ctx,
-                    )
-                    if result.error:
-                        return self._failed_result(run_id, result.error)
-                    state, revision = self._refresh(run_id)
-                    result = self._execute_stage(
-                        "evidence_preparation",
-                        run_id,
-                        revision,
-                        coverage_revision,
-                        state,
-                        ctx,
-                    )
-                    if result.error:
-                        return self._failed_result(run_id, result.error)
-                    state, revision = self._refresh(run_id)
-                    checkpoint = self._checkpoint(run_id, ctx, state)
-                    if checkpoint:
-                        return checkpoint
-                    continue
-
-                if state == "retrieving":
-                    self.run_service.transition(
-                        run_id,
-                        "coverage_review",
-                        expected_revision=revision,
-                        idempotency_key=f"resume:retrieval:{run_id}:{revision}",
-                        actor_type="orchestrator",
-                        actor_identifier="ResumableResearchOrchestrator",
-                        triggering_event="run.coverage_review",
-                        reason="resume retrieval from authoritative corpus",
-                    )
-                    state, revision = self._refresh(run_id)
-                    continue
-
-                if state == "coverage_review":
-                    ctx.update(_coverage_context(self, run_id))
-                    coverage_revision = int(ctx.get("coverage_revision") or 1)
-                    if int(ctx.get(ContextKeys.WAVE_COUNT, 0)) >= max_cycles:
-                        ctx["_budget_exhausted"] = True
-                    result = self._execute_stage(
-                        "coverage_review",
-                        run_id,
-                        revision,
-                        coverage_revision,
-                        state,
-                        ctx,
-                    )
-                    if result.error:
-                        return self._failed_result(run_id, result.error)
-                    state, revision = self._refresh(run_id)
-                    checkpoint = self._checkpoint(run_id, ctx, state)
-                    if checkpoint:
-                        return checkpoint
-                    continue
-
-                if state == "synthesizing":
-                    ctx["evidence_packet_revision"] = _packet_revision(self, run_id)
-                    result = self._execute_stage(
-                        "synthesis",
-                        run_id,
-                        revision,
-                        coverage_revision,
-                        state,
-                        ctx,
-                    )
-                    if result.error:
-                        return self._failed_result(run_id, result.error)
-                    state, revision = self._refresh(run_id)
-                    checkpoint = self._checkpoint(run_id, ctx, state)
-                    if checkpoint:
-                        return checkpoint
-                    continue
-
-                if state == "validating":
-                    ctx.update(_coverage_context(self, run_id))
-                    ctx["_terminal_outcome"] = (
-                        "completed"
-                        if ctx.get(ContextKeys.OVERALL_STATUS) == "sufficient"
-                        else "partial"
-                    )
-                    ctx["_terminal_reason"] = "resumed validation checkpoint"
-                    result = self._execute_stage(
-                        "terminal",
-                        run_id,
-                        revision,
-                        coverage_revision,
-                        state,
-                        ctx,
-                    )
-                    if result.error:
-                        return self._failed_result(run_id, result.error)
-                    state, revision = self._refresh(run_id)
-                    continue
-
-                raise SmartResumeError(f"unsupported persisted state: {state}")
-
-            counts = _counts(self, run_id)
-            return OrchestratorResult(
-                run_id=run_id,
-                final_state=state,
-                outcome=state,
-                coverage_revision=coverage_revision,
-                wave_count=counts["waves"],
-                successful_urls=counts["assets"],
-            )
-        except (RunStateError, StaleRunRevisionError, SmartResumeError) as exc:
-            logger.error("smart-run resume failed: %s", exc)
-            return self._failed_result(run_id, str(exc))
 
 
 __all__ = [

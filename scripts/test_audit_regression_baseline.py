@@ -653,8 +653,10 @@ def test_rc_08_provider_declared_no_results_are_empty(
 
 
 def test_rc_09_stage_execution_does_not_write_provider_response() -> None:
+    from research_store.checkpoint_orchestrator import CheckpointResearchOrchestrator
+
     run_service = _ProviderResponseRecordingRunService()
-    orchestrator = object.__new__(ResearchOrchestrator)
+    orchestrator = object.__new__(CheckpointResearchOrchestrator)
     orchestrator.run_service = run_service
     orchestrator._stages = {"planning": _SuccessfulStage()}
 
