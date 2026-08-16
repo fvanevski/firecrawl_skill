@@ -373,3 +373,231 @@ def test_terminal_decision_and_run_transition_are_one_transaction():
         assert row is not None
         assert str(row[0]) == str(committed_decision)
         assert row[1:] == (1, 1, "failed")
+
+
+@pytest.mark.skipif(
+    not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
+)
+def test_concurrent_coverage_events_serialize_revision_allocation():
+    """Two PostgreSQL writers allocate one monotonic coverage revision each."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    migrate(TEST_DSN)
+    suffix = uuid4().hex
+
+    with PostgresUnitOfWork(TEST_DSN, "issue-257-test-index") as uow:
+        run_id = uow.runs.start_run(
+            "issue 257 concurrent coverage revisions",
+            {
+                "external_run_id": f"issue-257-coverage-concurrency-{suffix}",
+                "execution_mode": "agent_led",
+                "metadata": {"issue": 257},
+            },
+        )
+        item_id = uow.coverage.create_items(
+            run_id,
+            [
+                {
+                    "item_type": "question",
+                    "subject_id": f"coverage-concurrency-{suffix}",
+                    "text": "serialize coverage revision allocation",
+                }
+            ],
+            f"coverage-concurrency:create:{suffix}",
+        )[0]
+        assert uow.coverage.get_current_revision(run_id) == 1
+
+    commands = tuple(
+        (
+            f"coverage-concurrency:event:{suffix}:{attempt}",
+            str(uuid4()),
+        )
+        for attempt in range(2)
+    )
+
+    def apply_once(command):
+        idempotency_key, candidate_id = command
+        with PostgresUnitOfWork(TEST_DSN, "issue-257-test-index") as uow:
+            return uow.coverage.apply_event(
+                run_id,
+                "candidate_identified",
+                item_id=item_id,
+                payload={"candidate_id": candidate_id},
+                idempotency_key=idempotency_key,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(apply_once, commands))
+
+    assert sorted(result["coverage_revision"] for result in results) == [2, 3]
+    assert sorted(result["prior_coverage_revision"] for result in results) == [1, 2]
+    assert len({result["id"] for result in results}) == 2
+
+    first = results[0]
+    first_key, first_candidate_id = commands[0]
+    with PostgresUnitOfWork(TEST_DSN, "issue-257-test-index") as uow:
+        replay = uow.coverage.apply_event(
+            run_id,
+            "candidate_identified",
+            item_id=item_id,
+            payload={"candidate_id": first_candidate_id},
+            idempotency_key=first_key,
+        )
+        assert replay["id"] == first["id"]
+        assert replay["coverage_revision"] == first["coverage_revision"]
+        assert uow.coverage.get_current_revision(run_id) == 3
+
+        with uow.connection.cursor() as cur:
+            cur.execute(
+                """SELECT coverage_revision, prior_coverage_revision
+                FROM coverage_events
+                WHERE run_id=%s AND idempotency_key=ANY(%s)
+                ORDER BY coverage_revision""",
+                (run_id, [command[0] for command in commands]),
+            )
+            assert cur.fetchall() == [(2, 1), (3, 2)]
+
+
+@pytest.mark.skipif(
+    not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
+)
+def test_concurrent_strategy_writers_serialize_shared_revision_order():
+    """Proposal and decision writers share one serialized PostgreSQL order."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    migrate(TEST_DSN)
+    suffix = uuid4().hex
+
+    with PostgresUnitOfWork(TEST_DSN, "issue-257-test-index") as uow:
+        run_id = uow.runs.start_run(
+            "issue 257 concurrent strategy revisions",
+            {
+                "external_run_id": f"issue-257-strategy-concurrency-{suffix}",
+                "execution_mode": "agent_led",
+                "metadata": {"issue": 257},
+            },
+        )
+        transition = uow.runs.apply_run_transition(
+            run_id,
+            "planning",
+            0,
+            f"strategy-concurrency:planning:{suffix}",
+            "test",
+            "run-state-v1",
+            permitted_prior_states=frozenset({"created"}),
+            event_type="run.transitioned.planning",
+        )
+        assert transition["lifecycle_revision"] == 1
+        item_id = uow.coverage.create_items(
+            run_id,
+            [
+                {
+                    "item_type": "question",
+                    "subject_id": f"strategy-concurrency-{suffix}",
+                    "text": "serialize strategy revision order",
+                }
+            ],
+            f"strategy-concurrency:coverage:{suffix}",
+        )[0]
+        seed_proposal_id = uuid4()
+        seed = uow.strategy_revisions.record_proposal(
+            run_id,
+            seed_proposal_id,
+            1,
+            1,
+            "search",
+            [str(item_id)],
+            ["seed strategy concurrency"],
+            [],
+            [],
+            "seed the shared strategy order",
+            {"queries": 1},
+            "issue 257 strategy concurrency seed",
+            0.9,
+            f"strategy-concurrency:seed:{suffix}",
+            actor_type="test",
+        )
+        assert seed["revision_order"] == 1
+
+    concurrent_proposal_id = uuid4()
+    concurrent_decision_id = uuid4()
+    proposal_key = f"strategy-concurrency:proposal:{suffix}"
+    decision_key = f"strategy-concurrency:decision:{suffix}"
+
+    def record_proposal():
+        with PostgresUnitOfWork(TEST_DSN, "issue-257-test-index") as uow:
+            return uow.strategy_revisions.record_proposal(
+                run_id,
+                concurrent_proposal_id,
+                1,
+                1,
+                "search",
+                [str(item_id)],
+                ["concurrent proposal"],
+                [],
+                [],
+                "exercise concurrent proposal ordering",
+                {"queries": 1},
+                "issue 257 concurrent proposal",
+                0.8,
+                proposal_key,
+                actor_type="test",
+            )
+
+    def record_decision():
+        with PostgresUnitOfWork(TEST_DSN, "issue-257-test-index") as uow:
+            return uow.strategy_revisions.record_decision(
+                run_id,
+                concurrent_decision_id,
+                seed_proposal_id,
+                1,
+                1,
+                "accepted",
+                [],
+                "strategy-policy-v1",
+                None,
+                None,
+                None,
+                "deterministic-policy",
+                decision_key,
+                actor_type="test",
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        proposal_future = executor.submit(record_proposal)
+        decision_future = executor.submit(record_decision)
+        proposal = proposal_future.result()
+        decision = decision_future.result()
+
+    assert sorted((proposal["revision_order"], decision["revision_order"])) == [2, 3]
+    assert proposal["proposal_id"] == str(concurrent_proposal_id)
+    assert decision["decision_id"] == str(concurrent_decision_id)
+
+    replayed_proposal = record_proposal()
+    replayed_decision = record_decision()
+    assert replayed_proposal["id"] == proposal["id"]
+    assert replayed_proposal["revision_order"] == proposal["revision_order"]
+    assert replayed_decision["id"] == decision["id"]
+    assert replayed_decision["revision_order"] == decision["revision_order"]
+
+    with PostgresUnitOfWork(TEST_DSN, "issue-257-test-index") as uow:
+        with uow.connection.cursor() as cur:
+            cur.execute(
+                """SELECT row_type, revision_order, idempotency_key
+                FROM strategy_revisions
+                WHERE run_id=%s
+                  AND idempotency_key=ANY(%s)
+                ORDER BY revision_order""",
+                (
+                    run_id,
+                    [
+                        f"strategy-concurrency:seed:{suffix}",
+                        proposal_key,
+                        decision_key,
+                    ],
+                ),
+            )
+            rows = cur.fetchall()
+
+    assert [row[1] for row in rows] == [1, 2, 3]
+    assert {row[0] for row in rows[1:]} == {"proposal", "decision"}
