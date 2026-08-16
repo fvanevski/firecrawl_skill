@@ -38,30 +38,6 @@ _TERMINAL_EXTRACTION_STATES = frozenset({"succeeded", "partial", "failed", "canc
 _ORIGINAL_PROMOTION_LIST_ASSETS = None
 
 
-def _has_sealed_at_column(connection) -> bool:
-    """Return whether the v43 ingestion-batch sealing column is present."""
-    with connection.cursor() as cur:
-        cur.execute(
-            """SELECT 1 FROM information_schema.columns
-            WHERE table_name='ingestion_batches'
-              AND column_name='sealed_at'
-            LIMIT 1"""
-        )
-        return cur.fetchone() is not None
-
-
-def _has_extraction_attempt_id_column(connection) -> bool:
-    """Return whether batch members can reference extraction attempts."""
-    with connection.cursor() as cur:
-        cur.execute(
-            """SELECT 1 FROM information_schema.columns
-            WHERE table_name='ingestion_batch_assets'
-              AND column_name='extraction_attempt_id'
-            LIMIT 1"""
-        )
-        return cur.fetchone() is not None
-
-
 def _has_constituent_timing_columns(connection) -> bool:
     """Return whether the complete v43 per-member timing contract is present."""
     with connection.cursor() as cur:
@@ -898,6 +874,7 @@ def _bounded_extraction_execute(
         return StageResult.failed(
             "extraction", "candidates contain no authoritative acquisition records"
         )
+
     scrape_adapter = context.get("_candidate_scrape_adapter") or self.scrape_adapter
     attempt_by_manifest_ordinal: dict[int, dict[str, Any]] = {}
     batch_requests: list[dict[str, Any]] = []
@@ -905,7 +882,10 @@ def _bounded_extraction_execute(
     cancelled_count = 0
     wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
     targets = context.get("candidate_coverage_items", {})
+
     for raw_ordinal, original_item in enumerate(raw_requests):
+        # Work on a shallow copy so the durable batch representation can carry
+        # exact attempt identity without mutating acquisition history in-place.
         item = dict(original_item)
         metadata = dict(item.get("metadata", {}))
         candidate_raw = metadata.get("candidate_id")
@@ -919,7 +899,7 @@ def _bounded_extraction_execute(
         if request is not None:
             requested_url = request.requested_url
         outcome = bounded._metadata_preflight(metadata)
-        provider_result = None
+        provider_result: SearchAdapterResult | None = None
         attempt_started_at = utcnow()
         attempt_id = self.extraction_service.create_attempt(
             candidate_id=candidate_id,
@@ -932,6 +912,7 @@ def _bounded_extraction_execute(
         manifest_ordinal = _manifest_ordinal(raw_ordinal, metadata)
         item["extraction_attempt_id"] = attempt_id
         item["requested_url"] = str(requested_url)
+
         if request is None and (outcome is None or not outcome.terminal):
             provider_result = scrape_adapter.scrape_url(str(requested_url))
             raw_preflight = provider_result.transport_metadata.get("preflight")
@@ -941,6 +922,7 @@ def _bounded_extraction_execute(
                 outcome = self.preflight_checker.check(provider_result)
             bounded._apply_preflight_metadata(metadata, outcome)
             item["metadata"] = metadata
+
             if not outcome.terminal:
                 provider_data = provider_result.raw_payload
                 markdown = extract_markdown(json.loads(provider_data))
@@ -959,7 +941,9 @@ def _bounded_extraction_execute(
                     )
                     bounded._apply_preflight_metadata(metadata, outcome)
                 else:
-                    provider_metadata = extract_response_metadata(json.loads(provider_data))
+                    provider_metadata = extract_response_metadata(
+                        json.loads(provider_data)
+                    )
                     request = IngestRequest(
                         requested_url=str(requested_url),
                         final_url=provider_metadata.get("url")
@@ -978,11 +962,14 @@ def _bounded_extraction_execute(
                         metadata=metadata,
                     )
                     item["request"] = request
+
         if outcome is None and request is not None:
             synthetic = SearchAdapterResult(
                 raw_payload=(
                     b'{"markdown": '
-                    + json.dumps(request.content.decode("utf-8", errors="replace")).encode()
+                    + json.dumps(
+                        request.content.decode("utf-8", errors="replace")
+                    ).encode()
                     + b"}"
                 ),
                 http_status=request.http_status,
@@ -990,6 +977,7 @@ def _bounded_extraction_execute(
             outcome = self.preflight_checker.check(synthetic)
             bounded._apply_preflight_metadata(metadata, outcome)
             item["metadata"] = metadata
+
         terminalized = False
         raw_blob = normalized_blob = None
         if outcome is not None and outcome.terminal:
@@ -999,16 +987,28 @@ def _bounded_extraction_execute(
                 exit_status="cancelled" if outcome.cancelled else "failed",
                 failure_class=failure_class,
                 http_status=outcome.http_status,
-                backend_status=f"preflight:{outcome.failure_stage}:{outcome.reason_code}"[:500],
+                backend_status=(
+                    f"preflight:{outcome.failure_stage}:{outcome.reason_code}"
+                )[:500],
                 error_message=bounded._audit_message(outcome),
-                end_time=provider_result.responded_at if provider_result is not None else None,
+                end_time=(
+                    provider_result.responded_at
+                    if provider_result is not None
+                    else None
+                ),
             )
             terminalized = True
             terminal_count += 1
             cancelled_count += int(outcome.cancelled)
             item.pop("request", None)
             item["error"] = bounded._audit_message(outcome)
-            self._record_coverage_failure(run_id, candidate_id, str(requested_url), targets, wave_count)
+            self._record_coverage_failure(
+                run_id,
+                candidate_id,
+                str(requested_url),
+                targets,
+                wave_count,
+            )
         elif request is None:
             fallback = CandidatePreflightResult(
                 classification="malformed",
@@ -1029,12 +1029,19 @@ def _bounded_extraction_execute(
             terminal_count += 1
             item.pop("request", None)
             item["error"] = bounded._audit_message(fallback)
-            self._record_coverage_failure(run_id, candidate_id, str(requested_url), targets, wave_count)
+            self._record_coverage_failure(
+                run_id,
+                candidate_id,
+                str(requested_url),
+                targets,
+                wave_count,
+            )
         else:
             raw_blob = self.extraction_service.store_raw_blob(request.content)
             normalized = request.normalized_content or request.content
             normalized_blob = self.extraction_service.store_normalized_blob(normalized)
             item["request"] = replace(request, extraction_attempt_id=attempt_id)
+
         attempt_by_manifest_ordinal[manifest_ordinal] = {
             "attempt_id": attempt_id,
             "candidate_id": candidate_id,
@@ -1044,12 +1051,14 @@ def _bounded_extraction_execute(
             "terminalized": terminalized,
         }
         batch_requests.append(item)
+
     invocation_id = f"extract:{run_id}:w{wave_count}"
     run_status = self.run_service.status(run_id=run_id)
     if not run_status.external_id:
         return StageResult.failed(
             "extraction", "research run has no external ID for asset linkage"
         )
+
     try:
         manifest = self.corpus_service.bounded_ingest_batch(
             invocation_id=invocation_id,
@@ -1079,20 +1088,24 @@ def _bounded_extraction_execute(
         return StageResult.failed(
             "extraction", f"authoritative corpus ingestion failed: {safe_error}"
         )
-    completed_assets = []
+
+    completed_assets: list[dict[str, Any]] = []
     for asset in manifest.get("assets", []):
         ordinal = int(asset["ordinal"])
         attempt = attempt_by_manifest_ordinal.get(ordinal)
         if attempt is None:
             return StageResult.failed(
-                "extraction", f"corpus manifest ordinal {ordinal} has no extraction attempt"
+                "extraction",
+                f"corpus manifest ordinal {ordinal} has no extraction attempt",
             )
         if attempt["terminalized"]:
             if asset.get("status") != "failed":
                 return StageResult.failed(
-                    "extraction", f"terminal preflight member {ordinal} was not persisted as failed"
+                    "extraction",
+                    f"terminal preflight member {ordinal} was not persisted as failed",
                 )
             continue
+
         succeeded = asset.get("status") == "complete"
         self.extraction_service.complete_attempt(
             attempt_id=attempt["attempt_id"],
@@ -1100,10 +1113,16 @@ def _bounded_extraction_execute(
             raw_blob=attempt["raw_blob"],
             normalized_blob=attempt["normalized_blob"],
             parser_used=self.config.parser_version if succeeded else None,
-            failure_class="none" if succeeded else bounded._extraction_failure_class(asset.get("error")),
+            failure_class=(
+                "none"
+                if succeeded
+                else bounded._extraction_failure_class(asset.get("error"))
+            ),
             http_status=attempt["metadata"].get("firecrawl", {}).get("status_code"),
             backend_status=asset.get("status"),
-            error_message=redact_error_text(asset.get("error")) if asset.get("error") else None,
+            error_message=(
+                redact_error_text(asset.get("error")) if asset.get("error") else None
+            ),
         )
         candidate_id = attempt["candidate_id"]
         source_url = asset.get("requested_url")
@@ -1113,7 +1132,9 @@ def _bounded_extraction_execute(
                 UUID(item_id),
                 source_url=source_url,
                 extraction_status="success" if succeeded else "failed",
-                idempotency_key=f"extract:{run_id}:w{wave_count}:{candidate_id}:{item_id}",
+                idempotency_key=(
+                    f"extract:{run_id}:w{wave_count}:{candidate_id}:{item_id}"
+                ),
             )
         if not succeeded:
             continue
@@ -1137,24 +1158,41 @@ def _bounded_extraction_execute(
                 run_id,
                 UUID(item_id),
                 source_url=source_url,
-                idempotency_key=f"acquired:{run_id}:w{wave_count}:{candidate_id}:{item_id}",
+                idempotency_key=(
+                    f"acquired:{run_id}:w{wave_count}:{candidate_id}:{item_id}"
+                ),
             )
-    success_count = sum(1 for asset in manifest.get("assets", []) if asset.get("status") == "complete")
+
+    success_count = sum(
+        1 for asset in manifest.get("assets", []) if asset.get("status") == "complete"
+    )
     failure_count = len(manifest.get("assets", [])) - success_count
-    batch_status = "complete" if failure_count == 0 else "failed" if success_count == 0 else "partial"
+    batch_status = (
+        "complete"
+        if failure_count == 0
+        else "failed"
+        if success_count == 0
+        else "partial"
+    )
     try:
-        manifest = self.corpus_service.finalize_ingestion_batch(manifest["batch_id"], batch_status)
+        manifest = self.corpus_service.finalize_ingestion_batch(
+            manifest["batch_id"], batch_status
+        )
     except Exception as exc:  # noqa: BLE001
         return StageResult.failed(
             "extraction", f"authoritative batch finalization failed: {exc}"
         )
+
     extraction_success_count = len(completed_assets)
     context.setdefault("extracted_assets", []).extend(completed_assets)
     context[ContextKeys.EXTRACTION_SUCCESS_COUNT] = extraction_success_count
     context[ContextKeys.EXTRACTION_ATTEMPTS] = len(raw_requests)
     context["cancelled_extraction_count"] = cancelled_count
     context["preflight_terminal_count"] = terminal_count
-    context["successful_extraction_count"] = int(context.get("successful_extraction_count", 0)) + extraction_success_count
+    context["successful_extraction_count"] = (
+        int(context.get("successful_extraction_count", 0)) + extraction_success_count
+    )
+
     if extraction_success_count > 0:
         try:
             self.run_service.transition(
@@ -1183,6 +1221,7 @@ def _bounded_extraction_execute(
             )
         except (RunStateError, StaleRunRevisionError) as exc:
             return StageResult.failed("extraction", str(exc))
+
     return StageResult.ok(
         "extraction",
         f"{extraction_success_count} successful extractions",
@@ -1208,9 +1247,12 @@ def _promotion_list_assets(self, run_id: UUID) -> list[dict[str, Any]]:
         to_stage = event.get("to_stage")
         if subject_id is not None and to_stage:
             reached[str(subject_id)].add(str(to_stage))
+
     for item in items:
         item["selection_semantics_version"] = "asset-promotion-stage-flags-v1"
         if item.get("id") is None or item.get("current_stage") == "unknown":
+            # Unknown remains unknown. False would incorrectly assert that the
+            # historical asset never passed the stage.
             for field in (
                 "selected_for_extraction",
                 "extraction_succeeded",
@@ -1220,6 +1262,7 @@ def _promotion_list_assets(self, run_id: UUID) -> list[dict[str, Any]]:
             ):
                 item[field] = None
             continue
+
         subject_key = str(item["id"])
         stages = set(reached.get(subject_key, set()))
         current_stage = str(item.get("current_stage") or "")
@@ -1238,10 +1281,6 @@ def install_issue_217_contract(postgres_module, service_module, bounded_module) 
     global _ORIGINAL_PROMOTION_LIST_ASSETS
 
     uow = postgres_module.PostgresUnitOfWork
-    uow._has_sealed_at_column = staticmethod(_has_sealed_at_column)
-    uow._has_extraction_attempt_id_column = staticmethod(
-        _has_extraction_attempt_id_column
-    )
     uow._has_constituent_timing_columns = staticmethod(_has_constituent_timing_columns)
     uow.start_ingestion_batch = _start_ingestion_batch
     uow.record_batch_asset = _record_batch_asset

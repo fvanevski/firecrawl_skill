@@ -18,8 +18,6 @@ from .ingestion_batch_semantics import (
     _export_invocation,
     _export_invocation_by_batch,
     _finish_ingestion_batch,
-    _has_extraction_attempt_id_column,
-    _has_sealed_at_column,
     _record_batch_asset,
     _start_ingestion_batch,
 )
@@ -31,8 +29,27 @@ class _BatchPersistenceAdapter:
     def __init__(self, connection: Any) -> None:
         self.connection = connection
 
-    _has_sealed_at_column = staticmethod(_has_sealed_at_column)
-    _has_extraction_attempt_id_column = staticmethod(_has_extraction_attempt_id_column)
+    @staticmethod
+    def _has_sealed_at_column(connection):
+        with connection.cursor() as cur:
+            cur.execute(
+                """SELECT 1 FROM information_schema.columns
+                WHERE table_name='ingestion_batches'
+                  AND column_name='sealed_at'
+                LIMIT 1"""
+            )
+            return cur.fetchone() is not None
+
+    @staticmethod
+    def _has_extraction_attempt_id_column(connection):
+        with connection.cursor() as cur:
+            cur.execute(
+                """SELECT 1 FROM information_schema.columns
+                WHERE table_name='ingestion_batch_assets'
+                  AND column_name='extraction_attempt_id'
+                LIMIT 1"""
+            )
+            return cur.fetchone() is not None
 
 
 class PostgresCorpusRepository:
