@@ -1,9 +1,4 @@
-"""Tests for PostgresUnitOfWork duplicate-group methods.
-
-Unit tests verify method signatures and validation.
-Integration tests (marked with @INTEGRATION_MARK) verify actual DB behavior
-when a disposable PostgreSQL is available.
-"""
+"""Positive repository regressions for candidate duplicate-group persistence."""
 
 from __future__ import annotations
 
@@ -27,272 +22,192 @@ INTEGRATION_MARK = pytest.mark.skipif(
 )
 
 
-class TestPostgresUnitOfWorkDuplicateMethods:
-    """Unit tests for duplicate-group UoW methods."""
+class _FakeConnection:
+    def commit(self):
+        pass
 
-    def test_assign_duplicate_group_rejects_empty(self):
-        """assign_duplicate_group raises ValueError for empty candidate_ids."""
-        uow = PostgresUnitOfWork.__new__(PostgresUnitOfWork)
-        uow.connection = None
-        with pytest.raises(ValueError, match="candidate_ids must not be empty"):
-            uow.assign_duplicate_group([])
+    def rollback(self):
+        pass
 
-    def test_persist_duplicate_group_signature(self):
-        """persist_duplicate_group accepts group_id, run_id, and rationale."""
-        uow = PostgresUnitOfWork.__new__(PostgresUnitOfWork)
-        uow.connection = None
-        # Should fail because connection is not set, but the method exists
-        with pytest.raises(AttributeError):
-            uow.persist_duplicate_group(uuid.uuid4(), uuid.uuid4(), "test")
+    def close(self):
+        pass
 
-    def test_update_candidate_independence_signature(self):
-        """update_candidate_independence accepts candidate_id and assessment dict."""
-        uow = PostgresUnitOfWork.__new__(PostgresUnitOfWork)
-        uow.connection = None
-        # Should fail because connection is not set, but the method exists
-        with pytest.raises(AttributeError):
-            uow.update_candidate_independence(uuid.uuid4(), {"status": "independent"})
+    def transaction(self):
+        raise AssertionError("candidate validation must not create a savepoint")
 
-    def test_update_candidate_independence_serializes_json(self):
-        """update_candidate_independence serializes the assessment dict to JSON."""
+
+class TestCandidateDuplicateRepository:
+    def test_duplicate_operations_have_one_repository_owner(self, monkeypatch):
+        fake_connection = _FakeConnection()
+        monkeypatch.setattr(
+            "research_store.postgres.connect", lambda _database_url: fake_connection
+        )
+
+        for name in (
+            "assign_duplicate_group",
+            "persist_duplicate_group",
+            "update_candidate_independence",
+        ):
+            assert name not in PostgresUnitOfWork.__dict__
+
+        with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
+            assert callable(uow.candidates.assign_duplicate_group)
+            assert callable(uow.candidates.persist_duplicate_group)
+            assert callable(uow.candidates.update_candidate_independence)
+            assert uow.candidates.connection_identity == id(fake_connection)
+
+    def test_assign_duplicate_group_rejects_empty_through_repository(self, monkeypatch):
+        fake_connection = _FakeConnection()
+        monkeypatch.setattr(
+            "research_store.postgres.connect", lambda _database_url: fake_connection
+        )
+
+        with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
+            with pytest.raises(ValueError, match="candidate_ids must not be empty"):
+                uow.candidates.assign_duplicate_group([])
+
+    def test_independence_assessment_remains_json_serializable(self):
         assessment = {
             "status": "independent",
             "rationale": "Publisher owns the specification",
         }
-        serialized = json.dumps(assessment)
-        assert isinstance(serialized, str)
-        deserialized = json.loads(serialized)
-        assert deserialized == assessment
+        assert json.loads(json.dumps(assessment)) == assessment
+
+
+def _insert_test_run(cur, run_id):
+    cur.execute(
+        """INSERT INTO research_runs (
+            id, objective, query_plan, skill_version, llm_model, state, execution_mode
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id) DO NOTHING""",
+        (
+            str(run_id),
+            "test request",
+            "{}",
+            "1.0",
+            "test",
+            "created",
+            "agent_led",
+        ),
+    )
+
+
+def _insert_candidate(cur, candidate_id, run_id, ordinal):
+    now = datetime.now(timezone.utc)
+    cur.execute(
+        """INSERT INTO search_candidates (
+            id, run_id, canonical_url, canonical_url_sha256,
+            original_url, title, domain, backend, recurrence_count,
+            first_seen_at, last_seen_at, created_at, independence_assessment
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (
+            str(candidate_id),
+            str(run_id),
+            f"https://example.com/{ordinal}",
+            str(ordinal) * 64,
+            f"https://example.com/{ordinal}",
+            f"Test {ordinal}",
+            "example.com",
+            "test",
+            1,
+            now,
+            now,
+            now,
+            "{}",
+        ),
+    )
 
 
 @INTEGRATION_MARK
-def test_uow_assign_duplicate_group_creates_group():
-    """assign_duplicate_group creates a duplicate_groups row and links candidates."""
+def test_candidate_repository_assign_duplicate_group_creates_group():
     run_id = uuid.uuid4()
     group_id = uuid.uuid4()
-    c1_id = uuid.uuid4()
-    c2_id = uuid.uuid4()
+    candidate_ids = [uuid.uuid4(), uuid.uuid4()]
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
-        # Create a test run
-        cur.execute(
-            """INSERT INTO research_runs (id, objective, query_plan, skill_version,
-            llm_model, state, execution_mode)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING""",
-            (
-                str(run_id),
-                "test request",
-                "{}",
-                "1.0",
-                "test",
-                "created",
-                "agent_led",
-            ),
-        )
-
-        # Create test candidates
-        cur.execute(
-            """INSERT INTO search_candidates (id, run_id, canonical_url, canonical_url_sha256,
-            original_url, title, domain, backend, recurrence_count,
-            first_seen_at, last_seen_at, created_at, independence_assessment)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                str(c1_id),
-                str(run_id),
-                "https://example.com/1",
-                "a" * 64,
-                "https://example.com/1",
-                "Test 1",
-                "example.com",
-                "test",
-                1,
-                datetime.now(timezone.utc),
-                datetime.now(timezone.utc),
-                datetime.now(timezone.utc),
-                "{}",
-            ),
-        )
-        cur.execute(
-            """INSERT INTO search_candidates (id, run_id, canonical_url, canonical_url_sha256,
-            original_url, title, domain, backend, recurrence_count,
-            first_seen_at, last_seen_at, created_at, independence_assessment)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                str(c2_id),
-                str(run_id),
-                "https://example.com/2",
-                "b" * 64,
-                "https://example.com/2",
-                "Test 2",
-                "example.com",
-                "test",
-                1,
-                datetime.now(timezone.utc),
-                datetime.now(timezone.utc),
-                datetime.now(timezone.utc),
-                "{}",
-            ),
-        )
+        _insert_test_run(cur, run_id)
+        for ordinal, candidate_id in enumerate(candidate_ids, 1):
+            _insert_candidate(cur, candidate_id, run_id, ordinal)
         conn.commit()
 
-    # Now test the UoW method
-    uow = PostgresUnitOfWork(TEST_DSN, "test-index")
-    with uow:
-        result_group_id = uow.assign_duplicate_group([c1_id, c2_id], group_id, run_id)
-        assert result_group_id == group_id
+    with PostgresUnitOfWork(TEST_DSN, "test-index") as uow:
+        assert (
+            uow.candidates.assign_duplicate_group(candidate_ids, group_id, run_id)
+            == group_id
+        )
 
-    # Verify the group was created
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT id, run_id, rationale FROM duplicate_groups WHERE id = %s""",
+            "SELECT id, run_id, rationale FROM duplicate_groups WHERE id = %s",
             (str(group_id),),
         )
         row = cur.fetchone()
         assert row is not None
-        # psycopg 3 returns UUID columns as Python UUID objects
         db_group_id = uuid.UUID(row[0]) if isinstance(row[0], str) else row[0]
         db_run_id = uuid.UUID(row[1]) if isinstance(row[1], str) else row[1]
         assert db_group_id == group_id
         assert db_run_id == run_id
         assert row[2] == "legacy assignment"
 
-        # Verify candidates were linked
         cur.execute(
             """SELECT duplicate_group_id FROM search_candidates
             WHERE id = ANY(%s) AND run_id = %s""",
-            ([str(c1_id), str(c2_id)], str(run_id)),
+            ([str(value) for value in candidate_ids], str(run_id)),
         )
         rows = cur.fetchall()
         assert len(rows) == 2
-        for row in rows:
-            db_dg_id = uuid.UUID(row[0]) if isinstance(row[0], str) else row[0]
-            assert db_dg_id is not None
-            assert db_dg_id == group_id
+        assert all(
+            (uuid.UUID(item[0]) if isinstance(item[0], str) else item[0]) == group_id
+            for item in rows
+        )
 
 
 @INTEGRATION_MARK
-def test_uow_persist_duplicate_group_upserts():
-    """persist_duplicate_group upserts duplicate_groups rows."""
+def test_candidate_repository_persist_duplicate_group_upserts():
     group_id = uuid.uuid4()
     run_id = uuid.uuid4()
 
-    # Create a test run so the FK constraint is satisfied
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
-        cur.execute(
-            """INSERT INTO research_runs (id, objective, query_plan, skill_version,
-            llm_model, state, execution_mode)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING""",
-            (
-                str(run_id),
-                "test request",
-                "{}",
-                "1.0",
-                "test",
-                "created",
-                "agent_led",
-            ),
-        )
+        _insert_test_run(cur, run_id)
         conn.commit()
 
-    uow = PostgresUnitOfWork(TEST_DSN, "test-index")
-    with uow:
-        uow.persist_duplicate_group(group_id, run_id, "initial rationale")
+    with PostgresUnitOfWork(TEST_DSN, "test-index") as uow:
+        uow.candidates.persist_duplicate_group(group_id, run_id, "initial rationale")
+    with PostgresUnitOfWork(TEST_DSN, "test-index") as uow:
+        uow.candidates.persist_duplicate_group(group_id, run_id, "updated rationale")
 
-    # Verify initial insert
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT rationale FROM duplicate_groups WHERE id = %s""",
-            (str(group_id),),
+            "SELECT rationale FROM duplicate_groups WHERE id = %s", (str(group_id),)
         )
         row = cur.fetchone()
         assert row is not None
-        assert row[0] == "initial rationale"
-
-    # Update via upsert
-    uow = PostgresUnitOfWork(TEST_DSN, "test-index")
-    with uow:
-        uow.persist_duplicate_group(group_id, run_id, "updated rationale")
-
-    # Verify update
-    with connect(TEST_DSN) as conn, conn.cursor() as cur:
-        cur.execute(
-            """SELECT rationale FROM duplicate_groups WHERE id = %s""",
-            (str(group_id),),
-        )
-        row = cur.fetchone()
         assert row[0] == "updated rationale"
 
 
 @INTEGRATION_MARK
-def test_uow_update_candidate_independence():
-    """update_candidate_independence updates the independence_assessment column."""
+def test_candidate_repository_updates_independence_assessment():
     candidate_id = uuid.uuid4()
     run_id = uuid.uuid4()
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
-        # Create a test run
-        cur.execute(
-            """INSERT INTO research_runs (id, objective, query_plan, skill_version,
-            llm_model, state, execution_mode)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING""",
-            (
-                str(run_id),
-                "test request",
-                "{}",
-                "1.0",
-                "test",
-                "created",
-                "agent_led",
-            ),
-        )
-
-        # Create a test candidate
-        cur.execute(
-            """INSERT INTO search_candidates (id, run_id, canonical_url, canonical_url_sha256,
-            original_url, title, domain, backend, recurrence_count,
-            first_seen_at, last_seen_at, created_at, independence_assessment)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT DO NOTHING""",
-            (
-                str(candidate_id),
-                str(run_id),
-                "https://example.com/1",
-                "a" * 64,
-                "https://example.com/1",
-                "Test",
-                "example.com",
-                "test",
-                1,
-                datetime.now(timezone.utc),
-                datetime.now(timezone.utc),
-                datetime.now(timezone.utc),
-                "{}",
-            ),
-        )
+        _insert_test_run(cur, run_id)
+        _insert_candidate(cur, candidate_id, run_id, 3)
         conn.commit()
 
-    # Update independence assessment
     assessment = {
         "status": "independent",
         "rationale": "Publisher owns the specification",
     }
-    uow = PostgresUnitOfWork(TEST_DSN, "test-index")
-    with uow:
-        uow.update_candidate_independence(candidate_id, assessment)
+    with PostgresUnitOfWork(TEST_DSN, "test-index") as uow:
+        uow.candidates.update_candidate_independence(candidate_id, assessment)
 
-    # Verify update
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT independence_assessment FROM search_candidates
-            WHERE id = %s""",
+            "SELECT independence_assessment FROM search_candidates WHERE id = %s",
             (str(candidate_id),),
         )
         row = cur.fetchone()
         assert row is not None
-        # psycopg 3 deserializes jsonb to Python dict automatically
         stored = row[0] if isinstance(row[0], dict) else json.loads(row[0])
-        assert stored["status"] == "independent"
-        assert stored["rationale"] == "Publisher owns the specification"
+        assert stored == assessment
