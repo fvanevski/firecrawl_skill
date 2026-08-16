@@ -234,7 +234,9 @@ class PostgresCorpusRepository:
                     if chunk.tokenizer_name is not None:
                         metadata_dict["tokenizer_name"] = chunk.tokenizer_name
                     if chunk.parent_block_ordinal is not None:
-                        metadata_dict["parent_block_ordinal"] = chunk.parent_block_ordinal
+                        metadata_dict["parent_block_ordinal"] = (
+                            chunk.parent_block_ordinal
+                        )
 
                     cur.execute(
                         """INSERT INTO chunks(document_id,first_block_id,last_block_id,ordinal,text,token_count,content_sha256,

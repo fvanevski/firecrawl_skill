@@ -58,9 +58,7 @@ def test_corpus_and_derivation_methods_bind_to_canonical_repositories(monkeypatc
             uow.snapshots.persist_ingest.__self__, PostgresCorpusRepository
         )
         assert isinstance(uow.persist_ingest.__self__, PostgresCorpusRepository)
-        assert isinstance(
-            uow.start_ingestion_batch.__self__, PostgresCorpusRepository
-        )
+        assert isinstance(uow.start_ingestion_batch.__self__, PostgresCorpusRepository)
         assert isinstance(uow.derivations.create.__self__, PostgresDerivationRepository)
         assert isinstance(uow.create.__self__, PostgresDerivationRepository)
 

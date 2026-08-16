@@ -129,9 +129,7 @@ class PostgresRepositoryView:
         return getattr(self.__fallback_implementation, name)
 
     def __dir__(self) -> list[str]:
-        public_local = {
-            name for name in super().__dir__() if not name.startswith("_")
-        }
+        public_local = {name for name in super().__dir__() if not name.startswith("_")}
         delegated = {
             name
             for name in dir(self.__fallback_implementation)
