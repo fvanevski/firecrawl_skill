@@ -93,9 +93,7 @@ def test_build_ci_jobs_fails_closed_on_pyrefly_failure():
         candidate_sha="a" * 40,
     )
     assert "CI dependency typecheck concluded failure" in errors
-    typecheck_jobs = [
-        item for item in jobs if item["source_job_family"] == "typecheck"
-    ]
+    typecheck_jobs = [item for item in jobs if item["source_job_family"] == "typecheck"]
     assert [item["name"] for item in typecheck_jobs] == ["Pyrefly"]
     assert {item["conclusion"] for item in typecheck_jobs} == {"failure"}
 
