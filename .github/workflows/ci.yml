@@ -58,6 +58,7 @@ jobs:
             scripts/test_release_campaign_verifier.py \
             scripts/test_exact_head_ci_evidence.py \
             scripts/test_pytest_skip_verifier.py \
+            scripts/test_pyrefly_gate.py \
             scripts/test_package_boundary.py
 
   test:
@@ -310,21 +311,8 @@ jobs:
             pytest
           pyrefly --version
 
-      # Bootstrap only: this step is removed once the generated baseline is
-      # reviewed and committed. Normal CI must never update the baseline.
-      - name: Generate initial Pyrefly baseline
-        run: pyrefly check --baseline pyrefly-baseline.json --update-baseline
-
-      - name: Verify generated Pyrefly baseline
-        run: pyrefly check --baseline pyrefly-baseline.json --output-format=github
-
-      - name: Upload initial Pyrefly baseline
-        uses: actions/upload-artifact@v4
-        with:
-          name: pyrefly-baseline-${{ github.event.pull_request.head.sha || github.sha }}
-          path: pyrefly-baseline.json
-          if-no-files-found: error
-          retention-days: 7
+      - name: Run Pyrefly
+        run: pyrefly check --output-format=github
 
   release-evidence:
     name: "Release evidence (issue #145)"
