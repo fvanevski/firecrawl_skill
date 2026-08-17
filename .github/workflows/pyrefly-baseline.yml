@@ -1,20 +1,22 @@
-name: Pyrefly baseline proposal
+name: Pyrefly baseline bootstrap
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   baseline:
-    name: Generate Pyrefly baseline proposal
+    name: Commit verified initial Pyrefly baseline
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - name: Check out repository
+      - name: Check out exact branch head
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -34,17 +36,40 @@ jobs:
             pytest
           pyrefly --version
 
-      - name: Generate proposed baseline
-        continue-on-error: true
-        run: pyrefly check --baseline pyrefly-baseline.json --update-baseline
+      - name: Generate initial baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f pyrefly-baseline.json
+          pyrefly check --baseline pyrefly-baseline.json --update-baseline || true
+          test -s pyrefly-baseline.json
 
-      - name: Verify proposed baseline
+      - name: Verify baseline suppresses only existing diagnostics
         run: pyrefly check --baseline pyrefly-baseline.json --output-format=github
 
-      - name: Upload proposed baseline
-        uses: actions/upload-artifact@v4
-        with:
-          name: pyrefly-baseline-proposal-${{ github.sha }}
-          path: pyrefly-baseline.json
-          if-no-files-found: error
-          retention-days: 7
+      - name: Verify baseline artifact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED="6741d247592dbb5db66b3bfb80e181ad4175451bb418967e8dc3a78ec0e46067"
+          ACTUAL=$(sha256sum pyrefly-baseline.json | awk '{print $1}')
+          echo "expected=$EXPECTED"
+          echo "actual=$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+
+      - name: Commit baseline with exact-head precondition
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$GITHUB_REF_NAME"
+          REMOTE_SHA=$(git rev-parse "origin/$GITHUB_REF_NAME")
+          test "$REMOTE_SHA" = "$GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyrefly-baseline.json
+          git diff --cached --quiet && {
+            echo "baseline file was not created" >&2
+            exit 1
+          }
+          git commit -m "ci: commit initial Pyrefly baseline (#282)"
+          git push origin "HEAD:$GITHUB_REF_NAME"
