@@ -46,6 +46,22 @@ pyrefly check
 For an uncommitted working tree, include staged/unstaged Python paths in the
 bounded changed-file set rather than relying only on `BASE_REF...HEAD`.
 
+## Exact-head and Pyrefly exit-code evidence
+
+Validation evidence must distinguish source identity from GitHub's synthetic
+pull-request merge ref. When exact-head evidence is required, record
+`git rev-parse HEAD` and compare it with the authoritative task/PR head SHA.
+The authoritative `Pyrefly` PR job explicitly checks out
+`github.event.pull_request.head.sha`; workflow-dispatch validation uses the
+requested `candidate-sha` when supplied.
+
+Normal Ruff and Pyrefly validation commands must exit successfully. An
+intentional negative-control Pyrefly probe is different: it is valid only when
+Pyrefly returns diagnostic exit code `1` and the emitted diagnostic identifies
+the probe file. Pyrefly exit codes `3` and `101` represent infrastructure and
+internal/panic failures and must never be accepted as evidence that a negative
+control worked.
+
 ## Baseline policy
 
 `pyrefly-baseline.json` records typing debt that existed when Pyrefly became an
@@ -59,6 +75,9 @@ authoritative gate. It is not a general suppression mechanism.
 - Baseline additions or Pyrefly-version upgrades require a deliberate,
   separately reviewed tooling change with an explanation of every new debt
   class being accepted.
+- Manual baseline proposal generation may complete with Pyrefly exit code `0`
+  or diagnostic exit code `1`; infrastructure/internal failures are fatal and
+  must not be hidden with unconditional `continue-on-error`.
 
 ## Handoff evidence
 

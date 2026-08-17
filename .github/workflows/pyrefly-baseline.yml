@@ -35,8 +35,21 @@ jobs:
           pyrefly --version
 
       - name: Generate proposed baseline
-        continue-on-error: true
-        run: pyrefly check --baseline pyrefly-baseline.json --update-baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          pyrefly check --baseline pyrefly-baseline.json --update-baseline
+          rc=$?
+          set -e
+          case "$rc" in
+            0|1)
+              ;;
+            *)
+              echo "Pyrefly baseline generation did not complete normally (rc=$rc)." >&2
+              exit "$rc"
+              ;;
+          esac
 
       - name: Verify proposed baseline
         run: pyrefly check --baseline pyrefly-baseline.json --output-format=github

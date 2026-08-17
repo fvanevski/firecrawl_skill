@@ -50,11 +50,28 @@ def test_ci_runs_read_only_pyrefly_and_binds_release_evidence():
     assert "- typecheck" in workflow
     assert 'needs.typecheck.result }}"' in workflow
     assert '--typecheck-result "${{ needs.typecheck.result }}"' in workflow
+
+
+def test_ci_binds_pyrefly_to_exact_candidate_and_validates_negative_probe():
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    assert "Check out exact Pyrefly candidate" in workflow
+    assert (
+        "ref: ${{ inputs.candidate-sha || github.event.pull_request.head.sha || github.sha }}"
+        in workflow
+    )
+    assert "Verify checked-out Pyrefly candidate" in workflow
+    assert 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' in workflow
+    assert "Verify repository-root import resolution" in workflow
+    assert "scripts/model_gateway.py" in workflow
+    assert "scripts/fixtures/model_gateway.py" in workflow
     assert "Verify explicit changed-scope Pyrefly enforcement" in workflow
     assert 'pyrefly check "$PROBE" --output-format=github' in workflow
+    assert 'if [ "$rc" -ne 1 ]; then' in workflow
+    assert 'grep -Fq "$PROBE" "$OUTPUT"' in workflow
+    assert 'if [ "$rc" -eq 0 ]; then' not in workflow
 
 
-def test_baseline_regeneration_is_manual_only():
+def test_baseline_regeneration_is_manual_only_and_fails_closed():
     workflow = BASELINE_WORKFLOW.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in workflow
     assert "pull_request:" not in workflow
@@ -62,6 +79,10 @@ def test_baseline_regeneration_is_manual_only():
     assert "contents: read" in workflow
     assert "--update-baseline" in workflow
     assert "actions/upload-artifact@v4" in workflow
+    assert "continue-on-error: true" not in workflow
+    assert 'case "$rc" in' in workflow
+    assert "0|1)" in workflow
+    assert 'exit "$rc"' in workflow
 
 
 def test_local_agent_contract_requires_bounded_and_full_validation():
@@ -75,6 +96,9 @@ def test_local_agent_contract_requires_bounded_and_full_validation():
         'ruff check "${CHANGED_PY[@]}"',
         'pyrefly check "${CHANGED_PY[@]}"',
         "pyrefly check\n",
+        "Exact-head and Pyrefly exit-code evidence",
+        "exit code `1`",
+        "exit codes `3` and `101`",
     ):
         assert required in contract
 
@@ -101,9 +125,11 @@ def test_repository_root_scripts_namespace_resolves_without_baseline_debt():
     assert scripts_missing_imports == []
 
 
-def _missing_import_module(error: dict) -> str:
+def _missing_import_module(error: dict[str, object]) -> str:
     """Extract the dotted module name from a ``missing-import`` baseline entry."""
-    description = error.get("concise_description") or ""
+    description = error.get("concise_description")
+    if not isinstance(description, str):
+        return ""
     marker = "Cannot find module `"
     if not description.startswith(marker) or not description.endswith("`"):
         return ""

@@ -290,8 +290,18 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Check out repository
+      - name: Check out exact Pyrefly candidate
         uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate-sha || github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify checked-out Pyrefly candidate
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.candidate-sha || github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -314,11 +324,19 @@ jobs:
       - name: Run Pyrefly
         run: pyrefly check --output-format=github
 
+      - name: Verify repository-root import resolution
+        run: |
+          pyrefly check \
+            scripts/model_gateway.py \
+            scripts/fixtures/model_gateway.py \
+            --output-format=github
+
       - name: Verify explicit changed-scope Pyrefly enforcement
         shell: bash
         run: |
           set -euo pipefail
           PROBE="scripts/test_pyrefly_changed_scope_probe.py"
+          OUTPUT="$RUNNER_TEMP/pyrefly-changed-scope-probe.txt"
           trap 'rm -f "$PROBE"' EXIT
           cat > "$PROBE" <<'PY'
           def _pyrefly_changed_scope_probe() -> int:
@@ -326,11 +344,16 @@ jobs:
           PY
 
           set +e
-          pyrefly check "$PROBE" --output-format=github
+          pyrefly check "$PROBE" --output-format=github >"$OUTPUT" 2>&1
           rc=$?
           set -e
-          if [ "$rc" -eq 0 ]; then
-            echo "Pyrefly did not reject a new error in an explicitly named changed-scope test file." >&2
+          cat "$OUTPUT"
+          if [ "$rc" -ne 1 ]; then
+            echo "Expected Pyrefly diagnostic exit code 1 for the changed-scope probe; got rc=$rc." >&2
+            exit 1
+          fi
+          if ! grep -Fq "$PROBE" "$OUTPUT"; then
+            echo "Pyrefly returned diagnostic exit code 1 without identifying the probe file." >&2
             exit 1
           fi
 
