@@ -289,18 +289,6 @@
       "severity": "error"
     },
     {
-      "line": 23,
-      "column": 5,
-      "stop_line": 26,
-      "stop_column": 6,
-      "path": "scripts/fixtures/model_gateway.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `scripts.research_store.semantic_service`\n  Looked in these locations (from config in `/home/runner/work/firecrawl_skill/firecrawl_skill/pyproject.toml`):\n  Search path (from config file): [\"/home/runner/work/firecrawl_skill/firecrawl_skill/scripts\", \"/home/runner/work/firecrawl_skill/firecrawl_skill/src\"]\n  Import root (inferred from project layout): \"/home/runner/work/firecrawl_skill/firecrawl_skill/src\"\n  Site package path queried from interpreter: [\"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages\"]",
-      "concise_description": "Cannot find module `scripts.research_store.semantic_service`",
-      "severity": "error"
-    },
-    {
       "line": 484,
       "column": 9,
       "stop_line": 484,
@@ -478,18 +466,6 @@
       "name": "missing-attribute",
       "description": "Object of class `bool` has no attribute `values`\nObject of class `str` has no attribute `values`",
       "concise_description": "Object of class `bool` has no attribute `values`\nObject of class `str` has no attribute `values`",
-      "severity": "error"
-    },
-    {
-      "line": 23,
-      "column": 5,
-      "stop_line": 26,
-      "stop_column": 6,
-      "path": "scripts/model_gateway.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `scripts.research_store.semantic_service`\n  Looked in these locations (from config in `/home/runner/work/firecrawl_skill/firecrawl_skill/pyproject.toml`):\n  Search path (from config file): [\"/home/runner/work/firecrawl_skill/firecrawl_skill/scripts\", \"/home/runner/work/firecrawl_skill/firecrawl_skill/src\"]\n  Import root (inferred from project layout): \"/home/runner/work/firecrawl_skill/firecrawl_skill/src\"\n  Site package path queried from interpreter: [\"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages\"]",
-      "concise_description": "Cannot find module `scripts.research_store.semantic_service`",
       "severity": "error"
     },
     {

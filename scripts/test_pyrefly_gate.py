@@ -24,7 +24,7 @@ def test_pyrefly_is_exactly_pinned_and_configured():
     assert config["baseline"] == "pyrefly-baseline.json"
     assert config["python-version"] == "3.12"
     assert config["python-platform"] == "linux"
-    assert config["search-path"] == ["scripts", "src"]
+    assert config["search-path"] == ["scripts", "src", "."]
     assert config["project-includes"] == ["scripts/**/*.py", "src/**/*.py"]
     assert config["project-excludes"] == [
         "scripts/test_*.py",
@@ -77,3 +77,34 @@ def test_local_agent_contract_requires_bounded_and_full_validation():
         "pyrefly check\n",
     ):
         assert required in contract
+
+
+def test_repository_root_scripts_namespace_resolves_without_baseline_debt():
+    """``scripts.*`` in-repository imports resolve under the committed config.
+
+    ``scripts`` is a namespace package below the repository root, so an import
+    such as ``scripts.research_store.semantic_service`` only resolves once the
+    repo root (``.``) is on the search path. Regression for the missing-root
+    defect: the committed baseline must not carry a configuration-caused
+    ``missing-import`` for the ``scripts.`` namespace.
+    """
+    config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["pyrefly"]
+    assert config["search-path"] == ["scripts", "src", "."]
+
+    payload = json.loads(BASELINE.read_text(encoding="utf-8"))
+    scripts_missing_imports = [
+        error
+        for error in payload["errors"]
+        if error.get("name") == "missing-import"
+        and _missing_import_module(error).startswith("scripts.")
+    ]
+    assert scripts_missing_imports == []
+
+
+def _missing_import_module(error: dict) -> str:
+    """Extract the dotted module name from a ``missing-import`` baseline entry."""
+    description = error.get("concise_description") or ""
+    marker = "Cannot find module `"
+    if not description.startswith(marker) or not description.endswith("`"):
+        return ""
+    return description[len(marker) : -1]

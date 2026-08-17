@@ -60,7 +60,7 @@ project-includes = ["scripts/**/*.py", "src/**/*.py"]
 # test corpus keeps the baseline focused on maintained application/tooling code;
 # local changed-scope checks still type-check an explicitly changed test file.
 project-excludes = ["scripts/test_*.py", "scripts/**/test_*.py"]
-search-path = ["scripts", "src"]
+search-path = ["scripts", "src", "."]
 python-platform = "linux"
 python-version = "3.12"
 baseline = "pyrefly-baseline.json"
