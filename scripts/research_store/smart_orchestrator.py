@@ -1,7 +1,8 @@
 """Atomic smart-search planning and PostgreSQL-backed lifecycle resume.
 
-This module adapts the existing staged orchestrator to process restarts. It
-reconstructs stage inputs from PostgreSQL and immutable ``BLOB_ROOT`` payloads;
+This module preserves the historical smart-search facade while delegating resume
+control flow to ``research_store.orchestration``.  PostgreSQL reconstruction is
+provided through ``PostgresResumeStateReader`` and neutral application helpers;
 Qdrant and Valkey are never consulted as authorities.
 """
 
@@ -10,30 +11,24 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import UUID
 
 from research_domain import load_model, serialize_model
 from research_domain.models import ResearchSpec, SearchPlan
 
-from .domain import IngestRequest
-from .orchestrator import OrchestratorResult, ResearchOrchestrator
-from .stages import ContextKeys
-
-if TYPE_CHECKING:
-    from .resume_state_repository import PostgresResumeStateReader
+from .checkpoint_orchestrator import CheckpointResearchOrchestrator
+from .orchestrator import OrchestratorResult
+from .orchestration.resume_support import (
+    NETWORK_ENTRY_STATES,
+    PLANNING_STATES,
+    TERMINAL_STATES,
+    SmartResumeError,
+    coverage_context,
+    replay_extraction_inputs,
+)
 
 logger = logging.getLogger(__name__)
-
-NETWORK_ENTRY_STATES = frozenset(
-    {"created", "planning", "corpus_review", "coverage_review", "acquiring"}
-)
-PLANNING_STATES = frozenset({"created", "planning"})
-TERMINAL_STATES = frozenset({"completed", "partial", "failed", "cancelled"})
-
-
-class SmartResumeError(RuntimeError):
-    """Persisted smart-run state cannot be resumed without guessing."""
 
 
 @dataclass(frozen=True)
@@ -179,141 +174,59 @@ def persist_planning_bundle(
     )
 
 
-def _coverage_context(
-    orchestrator: ResearchOrchestrator, run_id: UUID
-) -> dict[str, Any]:
-    ledger = orchestrator.coverage_service.rebuild_projection(run_id)
-    status = getattr(getattr(ledger, "overall_status", None), "value", None)
-    items: list[dict[str, Any]] = []
-    targets: dict[str, list[str]] = {}
-    for item in getattr(ledger, "items", ()):
-        item_id = str(item.coverage_item_id)
-        items.append(
-            {
-                "coverage_item_id": item_id,
-                "item_type": getattr(item.item_type, "value", str(item.item_type)),
-                "subject_id": str(item.subject_id),
-                "remaining_gap": str(item.remaining_gap or ""),
-            }
-        )
-        for candidate_id in getattr(item, "candidate_ids", ()):
-            targets.setdefault(str(candidate_id), []).append(item_id)
-    context: dict[str, Any] = {
-        ContextKeys.COVERAGE_LEDGER: ledger,
-        "coverage_items": items,
-        "candidate_coverage_items": targets,
-        "coverage_revision": int(getattr(ledger, "revision", 0) or 0),
-    }
-    if status:
-        context[ContextKeys.COVERAGE_STATUS] = status
-        context[ContextKeys.OVERALL_STATUS] = status
-    return context
+def _coverage_context(orchestrator: Any, run_id: UUID) -> dict[str, Any]:
+    """Compatibility wrapper over the canonical coverage reconstruction helper."""
+    return coverage_context(orchestrator, run_id)
 
 
-def _reader_for(orchestrator: ResearchOrchestrator) -> PostgresResumeStateReader:
+def _reader_for(orchestrator: Any):
     from .resume_state_repository import PostgresResumeStateReader
 
     return PostgresResumeStateReader(orchestrator.run_service.uow_factory)
 
 
-def _counts(orchestrator: ResearchOrchestrator, run_id: UUID) -> dict[str, int]:
+def _counts(orchestrator: Any, run_id: UUID) -> dict[str, int]:
     counts = _reader_for(orchestrator).counts(run_id)
     return {"waves": counts.waves, "attempts": counts.attempts, "assets": counts.assets}
 
 
-def _authorized_queries(
-    orchestrator: ResearchOrchestrator, run_id: UUID
-) -> list[dict[str, Any]]:
+def _authorized_queries(orchestrator: Any, run_id: UUID) -> list[dict[str, Any]]:
     return _reader_for(orchestrator).authorized_queries(run_id)
 
 
-def _completed_candidates(orchestrator: ResearchOrchestrator, run_id: UUID) -> set[str]:
+def _completed_candidates(orchestrator: Any, run_id: UUID) -> set[str]:
     return _reader_for(orchestrator).completed_candidates(run_id)
 
 
 def _replay_extraction_inputs(
-    orchestrator: ResearchOrchestrator,
+    orchestrator: Any,
     run_id: UUID,
     context: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Recreate unprocessed ingest requests from authoritative response blobs."""
-    completed = _completed_candidates(orchestrator, run_id)
-    requests: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for response in orchestrator.run_service.list_search_responses(run_id):
-        if response.get("backend") == "orchestrator":
-            continue
-        if response.get("status") == "failed":
-            continue
-        occurrences = orchestrator.run_service.record_response_candidates(
-            run_id, UUID(str(response["id"]))
-        )
-        for occurrence in occurrences:
-            candidate_id = str(occurrence.get("candidate_id") or "")
-            if not candidate_id or candidate_id in completed or candidate_id in seen:
-                continue
-            seen.add(candidate_id)
-            raw_item = occurrence.get("raw_item") or {}
-            firecrawl = raw_item.get("metadata") or {}
-            url = occurrence.get("canonical_url") or occurrence.get("original_url")
-            metadata = {
-                "candidate_id": candidate_id,
-                "candidate_occurrence_id": str(occurrence.get("id")),
-                "search_response_id": str(response["id"]),
-                "resume_replay": True,
-                "firecrawl": {
-                    "result_index": int(occurrence.get("rank") or 0),
-                    "scrape_id": firecrawl.get("scrapeId"),
-                    "source_url": firecrawl.get("sourceURL") or url,
-                    "status_code": firecrawl.get("statusCode"),
-                },
-            }
-            markdown = raw_item.get("markdown")
-            if isinstance(markdown, str) and markdown.strip():
-                requests.append(
-                    {
-                        "request": IngestRequest(
-                            requested_url=url,
-                            final_url=firecrawl.get("url")
-                            or firecrawl.get("sourceURL")
-                            or url,
-                            content=markdown.encode(),
-                            normalized_content=markdown.encode(),
-                            mime_type="text/markdown",
-                            title=occurrence.get("title"),
-                            http_status=firecrawl.get("statusCode"),
-                            firecrawl_version="cli-1.19.27",
-                            crawl_options={
-                                "operation": "search --scrape replay",
-                                "formats": ["markdown"],
-                            },
-                            metadata=metadata,
-                        ),
-                        "metadata": metadata,
-                    }
-                )
-            else:
-                requests.append(
-                    {
-                        "requested_url": url or "unknown:",
-                        "error": "Firecrawl candidate has no scraped markdown",
-                        "metadata": metadata,
-                    }
-                )
-    context["raw_ingest_requests"] = requests
-    return requests
+    """Compatibility wrapper over the canonical resume reconstruction helper."""
+    return replay_extraction_inputs(
+        orchestrator,
+        run_id,
+        context,
+        completed_candidates=_completed_candidates(orchestrator, run_id),
+    )
 
 
-def _assets(orchestrator: ResearchOrchestrator, run_id: UUID) -> list[dict[str, Any]]:
+def _assets(orchestrator: Any, run_id: UUID) -> list[dict[str, Any]]:
     return _reader_for(orchestrator).assets(run_id)
 
 
-def _packet_revision(orchestrator: ResearchOrchestrator, run_id: UUID) -> int:
+def _packet_revision(orchestrator: Any, run_id: UUID) -> int:
     return _reader_for(orchestrator).packet_revision(run_id)
 
 
-class ResumableResearchOrchestrator(ResearchOrchestrator):
-    """Dispatch existing stage services from the persisted lifecycle state."""
+class ResumableResearchOrchestrator(CheckpointResearchOrchestrator):
+    """Compatibility facade for the canonical resume use case.
+
+    Checkpoint semantics are explicit in the inheritance hierarchy rather than
+    arising from package-import rebinding.  Production acquisition/extraction
+    classes are still supplied by the production composition/builder boundary.
+    """
 
     def _refresh(self, run_id: UUID) -> tuple[str, int]:
         status = self.run_service.status(run_id=run_id)
@@ -343,10 +256,7 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
         max_adaptive_cycles: int | None = None,
         context: dict[str, Any] | None = None,
     ) -> OrchestratorResult:
-        """Resume orchestration from persisted state.
-
-        Thin facade delegating to ``orchestration.resume.run_resume``.
-        """
+        """Resume orchestration from persisted state through the canonical use case."""
         from .orchestration.commands import RunResearchCommand
         from .orchestration.resume import run_resume
 

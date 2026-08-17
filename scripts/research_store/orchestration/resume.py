@@ -1,11 +1,12 @@
 """Canonical resume orchestration lifecycle.
 
 This module contains the single authoritative implementation of the
-resume control flow.  ``ResumableResearchOrchestrator.run`` delegates to
+resume control flow. ``ResumableResearchOrchestrator.run`` delegates to
 ``run_resume`` to avoid duplicating the logic.
 
 State queries are routed through ``ResumeStatePort`` so that no raw SQL
-lives in this package.
+lives in this package. Deterministic reconstruction helpers live in
+``resume_support`` and have no dependency on the compatibility facade.
 """
 
 from __future__ import annotations
@@ -15,16 +16,16 @@ import time
 
 from ..orchestrator import OrchestratorResult, ResearchOrchestrator
 from ..run_service import RunStateError, StaleRunRevisionError
-from ..smart_orchestrator import (
-    PLANNING_STATES,
-    TERMINAL_STATES,
-    SmartResumeError,
-    _coverage_context,
-    _replay_extraction_inputs,
-)
 from ..stages import ContextKeys
 from .commands import RunResearchCommand
 from .ports import ResumeStatePort
+from .resume_support import (
+    PLANNING_STATES,
+    TERMINAL_STATES,
+    SmartResumeError,
+    coverage_context,
+    replay_extraction_inputs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def run_resume(
 ) -> OrchestratorResult:
     """Execute the resume orchestration pipeline.
 
-    This is the canonical resume lifecycle.  ``ResumableResearchOrchestrator.run``
+    This is the canonical resume lifecycle. ``ResumableResearchOrchestrator.run``
     is a thin delegation to this function.
 
     Args:
@@ -73,7 +74,7 @@ def run_resume(
     ctx.setdefault(ContextKeys.EXTRACTION_ATTEMPTS, counts.attempts)
     ctx.setdefault(ContextKeys.SUCCESSFUL_URLS, counts.assets)
     if state not in PLANNING_STATES and state not in TERMINAL_STATES:
-        ctx.update(_coverage_context(orchestrator, run_id))
+        ctx.update(coverage_context(orchestrator, run_id))
     ctx.setdefault(
         ContextKeys.AUTHORIZED_QUERIES, state_port.authorized_queries(run_id)
     )
@@ -120,7 +121,7 @@ def run_resume(
             if result.error:
                 return orchestrator._failed_result(run_id, result.error)
             state, revision = orchestrator._refresh(run_id)
-            ctx.update(_coverage_context(orchestrator, run_id))
+            ctx.update(coverage_context(orchestrator, run_id))
             coverage_revision = int(ctx.get("coverage_revision") or 1)
             checkpoint = orchestrator._checkpoint(run_id, ctx, state)
             if checkpoint:
@@ -168,7 +169,12 @@ def run_resume(
             if state == "extracting":
                 inputs = list(ctx.get("raw_ingest_requests") or [])
                 if not inputs:
-                    inputs = _replay_extraction_inputs(orchestrator, run_id, ctx)
+                    inputs = replay_extraction_inputs(
+                        orchestrator,
+                        run_id,
+                        ctx,
+                        completed_candidates=state_port.completed_candidates(run_id),
+                    )
                 if inputs:
                     result = orchestrator._execute_stage(
                         "extraction",
@@ -246,7 +252,7 @@ def run_resume(
                 continue
 
             if state == "coverage_review":
-                ctx.update(_coverage_context(orchestrator, run_id))
+                ctx.update(coverage_context(orchestrator, run_id))
                 coverage_revision = int(ctx.get("coverage_revision") or 1)
                 if int(ctx.get(ContextKeys.WAVE_COUNT, 0)) >= max_cycles:
                     ctx["_budget_exhausted"] = True
@@ -285,7 +291,7 @@ def run_resume(
                 continue
 
             if state == "validating":
-                ctx.update(_coverage_context(orchestrator, run_id))
+                ctx.update(coverage_context(orchestrator, run_id))
                 ctx["_terminal_outcome"] = (
                     "completed"
                     if ctx.get(ContextKeys.OVERALL_STATUS) == "sufficient"
