@@ -5,6 +5,8 @@ on:
     branches:
       - main
     paths:
+      - "pyproject.toml"
+      - "requirements-typecheck.txt"
       - ".github/workflows/pyrefly-baseline.yml"
   workflow_dispatch:
 
