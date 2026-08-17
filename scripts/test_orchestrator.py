@@ -44,7 +44,6 @@ from research_store.orchestrator import (
     ContextKeys,
     CorpusReviewStage,
     CoverageReviewStage,
-    ExtractionStage,
     IndexingStage,
     OrchestratorConfig,
     OrchestratorResult,
@@ -1892,7 +1891,9 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         extraction_svc.store_normalized_blob.return_value = blob
         config = MockConfig()
 
-        stage = ExtractionStage(
+        from research_store.bounded_orchestrator import BoundedExtractionStage
+
+        stage = BoundedExtractionStage(
             run_service=run_svc,
             coverage_service=coverage_svc,
             config=config,

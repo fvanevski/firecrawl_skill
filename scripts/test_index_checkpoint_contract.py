@@ -85,10 +85,13 @@ def test_public_resume_contract_is_documented_and_exposed():
 
 
 def test_orchestrator_resumable_adapter_does_not_terminalize_checkpoint_work():
-    source = _source(STORE / "checkpoint_orchestrator.py")
+    source = _source(STORE / "orchestration" / "checkpoint.py")
     assert 'outcome="resumable"' in source
-    assert "super()._failed_result" in source
     assert "INDEX_CHECKPOINT_PENDING_PREFIX" in source
+    # The facade delegates to the canonical checkpoint module
+    facade = _source(STORE / "checkpoint_orchestrator.py")
+    assert "checkpoint_execute_stage" in facade
+    assert "checkpoint_failed_result" in facade
 
 
 def test_wrapper_direct_start_does_not_mutate_or_finalize_checkpoint():

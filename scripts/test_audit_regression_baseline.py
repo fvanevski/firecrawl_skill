@@ -21,7 +21,6 @@ from research_store.acquisition_authority import (
 )
 from research_store.blob import ContentAddressedBlobStore
 from research_store.indexing import IndexWorker
-from research_store.orchestrator import ResearchOrchestrator
 from research_store.parsing_legacy import parse_raw_search_response
 from research_store.postgres import PostgresUnitOfWork
 from research_store.run_service import ResearchRunService
@@ -653,8 +652,10 @@ def test_rc_08_provider_declared_no_results_are_empty(
 
 
 def test_rc_09_stage_execution_does_not_write_provider_response() -> None:
+    from research_store.checkpoint_orchestrator import CheckpointResearchOrchestrator
+
     run_service = _ProviderResponseRecordingRunService()
-    orchestrator = object.__new__(ResearchOrchestrator)
+    orchestrator = object.__new__(CheckpointResearchOrchestrator)
     orchestrator.run_service = run_service
     orchestrator._stages = {"planning": _SuccessfulStage()}
 

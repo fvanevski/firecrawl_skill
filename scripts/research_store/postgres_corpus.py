@@ -375,6 +375,48 @@ class PostgresCorpusRepository:
             if cur.rowcount != 1:
                 raise KeyError(external_run_id)
 
+    def count_run_assets(self, run_id) -> int:
+        """Count persisted asset snapshots produced by a run's extraction attempts."""
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) FROM asset_snapshots s
+                   JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
+                   WHERE ea.run_id=%s""",
+                (run_id,),
+            )
+            row = cur.fetchone()
+        return int(row[0] or 0)
+
+    def completed_candidate_ids(self, run_id) -> set[str]:
+        """Candidate IDs whose extraction attempts produced a persisted snapshot."""
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT DISTINCT ea.candidate_id
+                   FROM extraction_attempts ea
+                   JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
+                   WHERE ea.run_id=%s""",
+                (run_id,),
+            )
+            return {str(row[0]) for row in cur.fetchall()}
+
+    def resume_assets_for_run(self, run_id) -> list[tuple]:
+        """Return the exact resume asset projection (attempt, candidate, snapshot,
+        requested url, ordered chunk ids) for one run without materializing lists."""
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT ea.id,ea.candidate_id,s.id,s.requested_url,
+                          array_agg(ch.id ORDER BY ch.ordinal)
+                   FROM extraction_attempts ea
+                   JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
+                   JOIN documents d ON d.snapshot_id=s.id
+                   JOIN chunks ch ON ch.document_id=d.id
+                   WHERE ea.run_id=%s
+                   GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
+                   ORDER BY s.id""",
+                (run_id,),
+            )
+            return cur.fetchall()
+
     # Issue #217 remains the active batch-semantics authority. These thin
     # wrappers execute its exact functions against a private adapter carrying
     # the UoW-owned connection. The public repository object therefore does

@@ -313,12 +313,12 @@ def execute(
     cycles: int,
     stop_after_state: str | None,
 ):
-    from research_store.orchestrator import OrchestratorConfig
-    from research_store.search_provenance import (
-        ProvenanceResumableResearchOrchestrator,
+    from research_store.orchestration.composition import (
+        build_production_resumable_orchestrator,
     )
+    from research_store.orchestrator import OrchestratorConfig
 
-    orchestrator = ProvenanceResumableResearchOrchestrator.build(
+    orchestrator = build_production_resumable_orchestrator(
         config,
         orchestrator_config=OrchestratorConfig(
             execution_mode="autonomous_local",

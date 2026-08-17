@@ -196,6 +196,43 @@ class PostgresStrategyRevisionRepository:
             )
             return [self._row_to_proposal_mapping(row) for row in cur.fetchall()]
 
+    def list_accepted_search_proposals(self, run_id) -> list[dict[str, Any]]:
+        """Project accepted search proposals in persisted ascending revision order.
+
+        Resume historically reconstructed this state with one SQL statement using
+        ascending ``revision_order``. Keeping the projection in the canonical
+        strategy repository preserves both the ordering and single-snapshot read
+        semantics while preventing orchestration adapters from owning SQL.
+        """
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT p.proposal_id, p.proposed_queries
+                   FROM strategy_revisions p
+                   WHERE p.run_id=%s
+                     AND p.row_type='proposal'
+                     AND p.decision_type='search'
+                     AND EXISTS (
+                       SELECT 1
+                       FROM strategy_revisions d
+                       WHERE d.run_id=p.run_id
+                         AND d.row_type='decision'
+                         AND d.proposal_id=p.proposal_id
+                         AND d.outcome='accepted'
+                     )
+                   ORDER BY p.revision_order""",
+                (run_id,),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "proposal_id": str(proposal_id),
+                "decision_type": "search",
+                "proposed_queries": list(queries or []),
+            }
+            for proposal_id, queries in rows
+            if queries
+        ]
+
     def record_decision(
         self,
         run_id,

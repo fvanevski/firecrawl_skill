@@ -1066,3 +1066,40 @@ class PostgresResearchRepository:
             "spec_revision": row[2],
             "payload": row[3],
         }
+
+    def get_latest_budget_snapshot(self, run_id):
+        """Return the latest budget snapshot for one run, or ``None``."""
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT id,research_spec_id,spec_revision,run_revision,
+                          policy_version,policy_config_sha256,snapshot
+                   FROM research_budget_snapshots
+                   WHERE run_id=%s
+                   ORDER BY run_revision DESC,created_at DESC,id DESC
+                   LIMIT 1""",
+                (run_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0],
+            "research_spec_id": row[1],
+            "spec_revision": int(row[2]),
+            "run_revision": int(row[3]),
+            "policy_version": str(row[4]),
+            "policy_config_sha256": str(row[5]),
+            "snapshot": row[6],
+        }
+
+    def count_acquisition_waves(self, run_id):
+        """Count acquisition->extraction/coverage-review transitions for a run."""
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) FROM research_run_transitions
+                   WHERE run_id=%s AND prior_state='acquiring'
+                     AND next_state IN ('extracting','coverage_review')""",
+                (run_id,),
+            )
+            row = cur.fetchone()
+        return int(row[0] or 0)
