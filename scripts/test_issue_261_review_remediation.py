@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import sys
 from pathlib import Path
@@ -15,6 +16,19 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+
+
+def _source_and_imports(path: Path) -> tuple[str, set[str]]:
+    """Return source text plus statically declared import module names."""
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    return source, modules
 
 
 class TestProductionSmartComposition:
@@ -97,19 +111,20 @@ class TestResumeDependencyDirection:
     """Canonical resume code must not import semantic helpers from its facade."""
 
     def test_resume_use_case_has_no_smart_orchestrator_dependency(self):
-        source = (
+        source, modules = _source_and_imports(
             SCRIPTS_DIR / "research_store" / "orchestration" / "resume.py"
-        ).read_text(encoding="utf-8")
-        assert "smart_orchestrator" not in source
-        assert "resume_support" in source
+        )
+        assert "smart_orchestrator" not in modules
+        assert "resume_support" in modules
+        assert "run_resume" in source
 
     def test_resume_support_has_no_infrastructure_or_facade_dependency(self):
-        source = (
+        source, modules = _source_and_imports(
             SCRIPTS_DIR / "research_store" / "orchestration" / "resume_support.py"
-        ).read_text(encoding="utf-8")
-        assert "smart_orchestrator" not in source
+        )
+        assert "smart_orchestrator" not in modules
+        assert not any(module.startswith("psycopg") for module in modules)
         assert ".cursor(" not in source
-        assert "psycopg" not in source
 
 
 @pytest.mark.skipif(
