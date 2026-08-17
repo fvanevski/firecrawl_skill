@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
-from uuid import UUID
 
 from ..orchestrator import OrchestratorResult, ResearchOrchestrator
 from ..run_service import RunStateError, StaleRunRevisionError
@@ -25,6 +23,7 @@ from ..smart_orchestrator import (
     _replay_extraction_inputs,
 )
 from ..stages import ContextKeys
+from .commands import RunResearchCommand
 from .ports import ResumeStatePort
 
 logger = logging.getLogger(__name__)
@@ -32,12 +31,8 @@ logger = logging.getLogger(__name__)
 
 def run_resume(
     orchestrator: ResearchOrchestrator,
-    run_id: UUID,
-    spec: dict[str, Any],
-    search_plan: dict[str, Any],
+    command: RunResearchCommand,
     *,
-    max_adaptive_cycles: int | None = None,
-    context: dict[str, Any] | None = None,
     state_port: ResumeStatePort,
 ) -> OrchestratorResult:
     """Execute the resume orchestration pipeline.
@@ -47,16 +42,18 @@ def run_resume(
 
     Args:
         orchestrator: The orchestrator instance.
-        run_id: The research run UUID.
-        spec: The validated ResearchSpec as a dict.
-        search_plan: The validated SearchPlan as a dict.
-        max_adaptive_cycles: Override the default max cycles.
-        context: Additional context to pass to stages.
+        command: The ``RunResearchCommand`` carrying the run identity, spec,
+            search plan, cycle bound, and stage context.
         state_port: Read-only port for state queries.
 
     Returns:
         An ``OrchestratorResult`` describing the final outcome.
     """
+    run_id = command.run_id
+    spec = command.spec
+    search_plan = command.search_plan
+    max_adaptive_cycles = command.max_adaptive_cycles
+    context = command.context
     max_cycles = (
         max_adaptive_cycles or orchestrator.orchestrator_config.max_adaptive_cycles
     )

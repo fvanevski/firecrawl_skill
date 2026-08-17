@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from ..orchestrator import (
     ContextKeys,
@@ -20,18 +19,14 @@ from ..orchestrator import (
 from ..run_service import RunStateError, StaleRunRevisionError
 from ..stages import StageOutcome
 from ..terminal_decision import TerminalDecisionOutcome
+from .commands import RunResearchCommand
 
 logger = logging.getLogger(__name__)
 
 
 def run_research(
     orchestrator: ResearchOrchestrator,
-    run_id: UUID,
-    spec: dict[str, Any],
-    search_plan: dict[str, Any],
-    *,
-    max_adaptive_cycles: int | None = None,
-    context: dict[str, Any] | None = None,
+    command: RunResearchCommand,
 ) -> OrchestratorResult:
     """Execute the full coverage-led orchestration pipeline.
 
@@ -40,15 +35,17 @@ def run_research(
 
     Args:
         orchestrator: The orchestrator instance (provides services + stages).
-        run_id: The research run UUID.
-        spec: The validated ResearchSpec as a dict.
-        search_plan: The validated SearchPlan as a dict.
-        max_adaptive_cycles: Override the default max cycles.
-        context: Additional context to pass to stages.
+        command: The ``RunResearchCommand`` carrying the run identity, spec,
+            search plan, cycle bound, and stage context.
 
     Returns:
         An ``OrchestratorResult`` describing the final outcome.
     """
+    run_id = command.run_id
+    spec = command.spec
+    search_plan = command.search_plan
+    max_adaptive_cycles = command.max_adaptive_cycles
+    context = command.context
     max_cycles = (
         max_adaptive_cycles or orchestrator.orchestrator_config.max_adaptive_cycles
     )

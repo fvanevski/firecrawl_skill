@@ -1278,6 +1278,16 @@ class PostgresExtractionAttemptRepository:
             row = cur.fetchone()
         return None if row is None else self._row_to_extraction_attempt_mapping(row)
 
+    def count_for_run(self, run_id):
+        """Count extraction attempts recorded for one run without listing rows."""
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM extraction_attempts WHERE run_id=%s",
+                (str(run_id),),
+            )
+            row = cur.fetchone()
+        return int(row[0] or 0)
+
     @staticmethod
     def _row_to_extraction_attempt_mapping(row):
         keys = (

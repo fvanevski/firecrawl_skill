@@ -44,7 +44,6 @@ from research_store.orchestrator import (
     ContextKeys,
     CorpusReviewStage,
     CoverageReviewStage,
-    ExtractionStage,
     IndexingStage,
     OrchestratorConfig,
     OrchestratorResult,

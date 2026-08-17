@@ -20,26 +20,14 @@ class PostgresResumeStateReader:
         self._uow_factory = uow_factory
 
     def counts(self, run_id: UUID) -> ResumeCounts:
-        with (
-            self._uow_factory() as uow,
-            uow.connection.cursor() as cursor,
-        ):
-            cursor.execute(
-                """SELECT
-                     (SELECT count(*) FROM research_run_transitions
-                       WHERE run_id=%s AND prior_state='acquiring'
-                         AND next_state IN ('extracting','coverage_review')),
-                     (SELECT count(*) FROM extraction_attempts WHERE run_id=%s),
-                     (SELECT count(*) FROM asset_snapshots s
-                        JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
-                       WHERE ea.run_id=%s)""",
-                (run_id, run_id, run_id),
-            )
-            row = cursor.fetchone()
+        with self._uow_factory() as uow:
+            waves = uow.runs.count_acquisition_waves(run_id)
+            attempts = uow.extraction_attempts.count_for_run(run_id)
+            assets = uow.snapshots.count_run_assets(run_id)
         return ResumeCounts(
-            waves=int(row[0] or 0),
-            attempts=int(row[1] or 0),
-            assets=int(row[2] or 0),
+            waves=waves,
+            attempts=attempts,
+            assets=assets,
         )
 
     def authorized_queries(self, run_id: UUID) -> list[dict[str, Any]]:
@@ -73,37 +61,12 @@ class PostgresResumeStateReader:
         return results
 
     def completed_candidates(self, run_id: UUID) -> set[str]:
-        with (
-            self._uow_factory() as uow,
-            uow.connection.cursor() as cursor,
-        ):
-            cursor.execute(
-                """SELECT DISTINCT ea.candidate_id
-                   FROM extraction_attempts ea
-                   JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
-                   WHERE ea.run_id=%s""",
-                (run_id,),
-            )
-            return {str(row[0]) for row in cursor.fetchall()}
+        with self._uow_factory() as uow:
+            return uow.snapshots.completed_candidate_ids(run_id)
 
     def assets(self, run_id: UUID) -> list[dict[str, Any]]:
-        with (
-            self._uow_factory() as uow,
-            uow.connection.cursor() as cursor,
-        ):
-            cursor.execute(
-                """SELECT ea.id,ea.candidate_id,s.id,s.requested_url,
-                          array_agg(ch.id ORDER BY ch.ordinal)
-                   FROM extraction_attempts ea
-                   JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
-                   JOIN documents d ON d.snapshot_id=s.id
-                   JOIN chunks ch ON ch.document_id=d.id
-                   WHERE ea.run_id=%s
-                   GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
-                   ORDER BY s.id""",
-                (run_id,),
-            )
-            rows = cursor.fetchall()
+        with self._uow_factory() as uow:
+            rows = uow.snapshots.resume_assets_for_run(run_id)
         return [
             {
                 "status": "complete",

@@ -21,7 +21,6 @@ from research_store.acquisition_authority import (
 )
 from research_store.blob import ContentAddressedBlobStore
 from research_store.indexing import IndexWorker
-from research_store.orchestrator import ResearchOrchestrator
 from research_store.parsing_legacy import parse_raw_search_response
 from research_store.postgres import PostgresUnitOfWork
 from research_store.run_service import ResearchRunService

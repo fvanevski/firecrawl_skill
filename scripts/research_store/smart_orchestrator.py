@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from research_domain import load_model, serialize_model
@@ -18,8 +18,10 @@ from research_domain.models import ResearchSpec, SearchPlan
 
 from .domain import IngestRequest
 from .orchestrator import OrchestratorResult, ResearchOrchestrator
-from .resume_state_repository import PostgresResumeStateReader
 from .stages import ContextKeys
+
+if TYPE_CHECKING:
+    from .resume_state_repository import PostgresResumeStateReader
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +211,8 @@ def _coverage_context(
 
 
 def _reader_for(orchestrator: ResearchOrchestrator) -> PostgresResumeStateReader:
+    from .resume_state_repository import PostgresResumeStateReader
+
     return PostgresResumeStateReader(orchestrator.run_service.uow_factory)
 
 
@@ -343,17 +347,17 @@ class ResumableResearchOrchestrator(ResearchOrchestrator):
 
         Thin facade delegating to ``orchestration.resume.run_resume``.
         """
+        from .orchestration.commands import RunResearchCommand
         from .orchestration.resume import run_resume
 
-        return run_resume(
-            self,
-            run_id,
-            spec,
-            search_plan,
+        command = RunResearchCommand(
+            run_id=run_id,
+            spec=spec,
+            search_plan=search_plan,
             max_adaptive_cycles=max_adaptive_cycles,
-            context=context,
-            state_port=_reader_for(self),
+            context=dict(context or {}),
         )
+        return run_resume(self, command, state_port=_reader_for(self))
 
 
 __all__ = [

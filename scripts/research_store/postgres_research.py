@@ -1091,3 +1091,15 @@ class PostgresResearchRepository:
             "policy_config_sha256": str(row[5]),
             "snapshot": row[6],
         }
+
+    def count_acquisition_waves(self, run_id):
+        """Count acquisition->extraction/coverage-review transitions for a run."""
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) FROM research_run_transitions
+                   WHERE run_id=%s AND prior_state='acquiring'
+                     AND next_state IN ('extracting','coverage_review')""",
+                (run_id,),
+            )
+            row = cur.fetchone()
+        return int(row[0] or 0)

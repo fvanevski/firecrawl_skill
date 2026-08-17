@@ -104,10 +104,8 @@ def _wrapped_result(
 class TestCanonicalRouting:
     def test_public_adapter_is_bounded(self):
         from research_store import acquisition_service
-        from research_store.orchestration.composition import build_production_orchestrator
-        from research_store.bounded_orchestrator import (
-            BoundedAcquisitionStage,
-            BoundedExtractionStage,
+        from research_store.orchestration.composition import (
+            build_production_orchestrator,
         )
 
         assert (
@@ -115,11 +113,17 @@ class TestCanonicalRouting:
         )
         assert research_store.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
         # Composition root explicitly injects bounded stages
-        from research_store.checkpoint_orchestrator import CheckpointResearchOrchestrator
+        from research_store.checkpoint_orchestrator import (
+            CheckpointResearchOrchestrator,
+        )
 
-        assert issubclass(CheckpointResearchOrchestrator, research_store.orchestrator.ResearchOrchestrator)
+        assert issubclass(
+            CheckpointResearchOrchestrator,
+            research_store.orchestrator.ResearchOrchestrator,
+        )
         # Verify the composition root passes bounded classes
         import inspect
+
         source = inspect.getsource(build_production_orchestrator)
         assert "BoundedAcquisitionStage" in source
         assert "BoundedExtractionStage" in source

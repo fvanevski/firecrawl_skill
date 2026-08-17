@@ -2179,16 +2179,17 @@ class ResearchOrchestrator:
         Returns:
             An ``OrchestratorResult`` describing the final outcome.
         """
+        from .orchestration.commands import RunResearchCommand
         from .orchestration.lifecycle import run_research
 
-        return run_research(
-            self,
-            run_id,
-            spec,
-            search_plan,
+        command = RunResearchCommand(
+            run_id=run_id,
+            spec=spec,
+            search_plan=search_plan,
             max_adaptive_cycles=max_adaptive_cycles,
-            context=context,
+            context=dict(context or {}),
         )
+        return run_research(self, command)
 
     def run_from_external_id(
         self,
