@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import tomllib
 from pathlib import Path
 
@@ -18,8 +17,7 @@ LOCAL_AGENT_CONTRACT = ROOT / "references" / "local-agent-validation.md"
 
 def test_pyrefly_is_exactly_pinned_and_configured():
     requirements = TYPECHECK_REQUIREMENTS.read_text(encoding="utf-8")
-    pins = re.findall(r"(?m)^pyrefly==(\d+\.\d+\.\d+)$", requirements)
-    assert len(pins) == 1
+    assert "pyrefly==1.1.1" in requirements.splitlines()
 
     config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["pyrefly"]
     assert config["baseline"] == "pyrefly-baseline.json"

@@ -1,13 +1,6 @@
 name: Pyrefly baseline proposal
 
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "requirements-typecheck.txt"
-      - "pyproject.toml"
-      - ".github/workflows/pyrefly-baseline.yml"
   workflow_dispatch:
 
 permissions:
@@ -51,7 +44,7 @@ jobs:
       - name: Upload proposed baseline
         uses: actions/upload-artifact@v4
         with:
-          name: pyrefly-baseline-proposal-${{ github.event.pull_request.head.sha || github.sha }}
+          name: pyrefly-baseline-proposal-${{ github.sha }}
           path: pyrefly-baseline.json
           if-no-files-found: error
           retention-days: 7
