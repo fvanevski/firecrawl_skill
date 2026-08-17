@@ -1,8 +1,8 @@
 """Concrete PostgreSQL implementation of the ResumeStatePort.
 
-This module provides a read-only reader that coordinates canonical
-Phase-3 repositories via the unit-of-work to satisfy the narrow state
-queries needed by the resume lifecycle.  It contains no workflow policy.
+This module provides a read-only reader that coordinates canonical Phase-3
+repositories via the unit of work to satisfy the narrow state queries needed
+by the resume lifecycle. It contains no workflow policy and no raw SQL.
 """
 
 from __future__ import annotations
@@ -31,34 +31,14 @@ class PostgresResumeStateReader:
         )
 
     def authorized_queries(self, run_id: UUID) -> list[dict[str, Any]]:
+        """Return accepted search proposals in persisted ascending revision order.
+
+        The canonical strategy repository performs this as one SQL statement so
+        resume observes the same snapshot and ordering semantics as the historical
+        implementation.
+        """
         with self._uow_factory() as uow:
-            proposals = uow.strategy_revisions.list_proposals(run_id, limit=10_000)
-            results: list[dict[str, Any]] = []
-            for proposal in proposals:
-                if proposal["decision_type"] != "search":
-                    continue
-                queries = proposal.get("proposed_queries") or []
-                if not queries:
-                    continue
-                decision_ids = uow.strategy_revisions.list_decision_ids_for_proposal(
-                    run_id, proposal["proposal_id"]
-                )
-                accepted = False
-                for decision_id in decision_ids:
-                    decision = uow.strategy_revisions.get_decision(run_id, decision_id)
-                    if decision and decision.get("outcome") == "accepted":
-                        accepted = True
-                        break
-                if not accepted:
-                    continue
-                results.append(
-                    {
-                        "proposal_id": proposal["proposal_id"],
-                        "decision_type": "search",
-                        "proposed_queries": list(queries),
-                    }
-                )
-        return results
+            return uow.strategy_revisions.list_accepted_search_proposals(run_id)
 
     def completed_candidates(self, run_id: UUID) -> set[str]:
         with self._uow_factory() as uow:
@@ -85,7 +65,7 @@ class PostgresResumeStateReader:
         with self._uow_factory() as uow:
             packet = uow.evidence_packets.get_evidence_packet(run_id)
         if packet is None:
-            from .smart_orchestrator import SmartResumeError
+            from .orchestration.resume_support import SmartResumeError
 
             raise SmartResumeError("synthesizing run has no EvidencePacket")
         return packet.packet_revision
