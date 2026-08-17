@@ -1,0 +1,91 @@
+name: Orchestration boundary remediation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/fsearch_smart"
+      - "scripts/research_store/orchestration/**"
+      - "scripts/research_store/smart_orchestrator.py"
+      - "scripts/research_store/search_provenance.py"
+      - "scripts/research_store/resume_state_repository.py"
+      - "scripts/research_store/postgres_strategy.py"
+      - "scripts/test_orchestration_package.py"
+      - "scripts/test_issue_261_review_remediation.py"
+      - ".github/workflows/orchestration-boundary.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  orchestration-boundary:
+    name: "Orchestration boundary — Python ${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements-research-store.txt \
+            pytest
+
+      - name: Start disposable PostgreSQL
+        run: |
+          docker run --name pg -d \
+            -e POSTGRES_PASSWORD=postgres \
+            -p 5432:5432 \
+            postgres:16-alpine
+          sleep 5
+          for i in $(seq 1 10); do
+            PGPASSWORD=postgres psql \
+              -h 127.0.0.1 \
+              -U postgres \
+              -c "CREATE DATABASE firecrawl_orchestration_test;" \
+              2>/dev/null && break || sleep 1
+          done
+
+      - name: Migrate disposable PostgreSQL
+        env:
+          RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_orchestration_test"
+          RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_orchestration_test"
+          PYTHONPATH: scripts
+        run: |
+          python - <<'PY'
+          import os
+          from research_store.postgres import migrate
+
+          migrate(os.environ["RESEARCH_STORE_TEST_DATABASE_URL"])
+          PY
+
+      - name: Run issue 261 boundary regressions
+        env:
+          RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_orchestration_test"
+          RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_orchestration_test"
+        run: |
+          python -m pytest \
+            -q \
+            -ra \
+            -p no:cacheprovider \
+            scripts/test_issue_261_review_remediation.py \
+            scripts/test_orchestration_package.py

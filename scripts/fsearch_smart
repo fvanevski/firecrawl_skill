@@ -313,12 +313,12 @@ def execute(
     cycles: int,
     stop_after_state: str | None,
 ):
-    from research_store.orchestrator import OrchestratorConfig
-    from research_store.search_provenance import (
-        ProvenanceResumableResearchOrchestrator,
+    from research_store.orchestration.composition import (
+        build_production_resumable_orchestrator,
     )
+    from research_store.orchestrator import OrchestratorConfig
 
-    orchestrator = ProvenanceResumableResearchOrchestrator.build(
+    orchestrator = build_production_resumable_orchestrator(
         config,
         orchestrator_config=OrchestratorConfig(
             execution_mode="autonomous_local",
@@ -376,7 +376,7 @@ def main(argv=None) -> int:
             cycles = resolve_cycles(args.max_adaptive_cycles, budget, parser)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             parser.error(str(exc))
-        payload = dry_run(args.topic, invocation_id, spec, budget)
+        payload = dry_run(topic=args.topic, invocation_id=invocation_id, spec=spec, budget=budget)
         payload["strategy"]["max_adaptive_cycles"] = cycles
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
