@@ -99,6 +99,9 @@ def test_local_agent_contract_requires_bounded_and_full_validation():
         "Exact-head and Pyrefly exit-code evidence",
         "exit code `1`",
         "exit codes `3` and `101`",
+        "Repository merge-policy invariant",
+        "must require the exact `Pyrefly` status-check context",
+        "both required and successful",
     ):
         assert required in contract
 

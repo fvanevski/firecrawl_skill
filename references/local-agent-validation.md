@@ -62,6 +62,19 @@ the probe file. Pyrefly exit codes `3` and `101` represent infrastructure and
 internal/panic failures and must never be accepted as evidence that a negative
 control worked.
 
+## Repository merge-policy invariant
+
+The default `main` branch must require the exact `Pyrefly` status-check context
+through the effective GitHub ruleset or branch-protection policy. A successful
+workflow job that is not merge-required does not satisfy the repository's
+static-type merge authority.
+
+Before final gate closure, read back the effective merge requirements for the
+exact PR head and verify that `Pyrefly` is both required and successful. Do not
+infer this requirement from workflow YAML, a green check list, or draft PR
+state. If GitHub reports no required `Pyrefly` check, treat that as a merge-gate
+failure even when the job itself succeeds.
+
 ## Baseline policy
 
 `pyrefly-baseline.json` records typing debt that existed when Pyrefly became an
