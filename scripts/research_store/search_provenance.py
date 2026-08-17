@@ -105,12 +105,8 @@ class ProvenanceResumableResearchOrchestrator(ResumableResearchOrchestrator):
             orchestrator_config=orchestrator_config,
             corpus_service=corpus_service,
             terminal_config=terminal_config,
-            acquisition_stage_cls=(
-                acquisition_stage_cls or BoundedAcquisitionStage
-            ),
-            extraction_stage_cls=(
-                extraction_stage_cls or BoundedExtractionStage
-            ),
+            acquisition_stage_cls=(acquisition_stage_cls or BoundedAcquisitionStage),
+            extraction_stage_cls=(extraction_stage_cls or BoundedExtractionStage),
             indexing_stage_cls=indexing_stage_cls,
         )
 
