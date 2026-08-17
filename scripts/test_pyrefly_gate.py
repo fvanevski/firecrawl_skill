@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-import tomllib
 from pathlib import Path
+
+import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"
@@ -49,6 +50,8 @@ def test_ci_runs_read_only_pyrefly_and_binds_release_evidence():
     assert "- typecheck" in workflow
     assert 'needs.typecheck.result }}"' in workflow
     assert '--typecheck-result "${{ needs.typecheck.result }}"' in workflow
+    assert "Verify explicit changed-scope Pyrefly enforcement" in workflow
+    assert 'pyrefly check "$PROBE" --output-format=github' in workflow
 
 
 def test_baseline_regeneration_is_manual_only():

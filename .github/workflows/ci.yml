@@ -314,6 +314,26 @@ jobs:
       - name: Run Pyrefly
         run: pyrefly check --output-format=github
 
+      - name: Verify explicit changed-scope Pyrefly enforcement
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROBE="scripts/test_pyrefly_changed_scope_probe.py"
+          trap 'rm -f "$PROBE"' EXIT
+          cat > "$PROBE" <<'PY'
+          def _pyrefly_changed_scope_probe() -> int:
+              return "not-an-int"
+          PY
+
+          set +e
+          pyrefly check "$PROBE" --output-format=github
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "Pyrefly did not reject a new error in an explicitly named changed-scope test file." >&2
+            exit 1
+          fi
+
   release-evidence:
     name: "Release evidence (issue #145)"
     needs:
