@@ -38,6 +38,7 @@ JOB_FAMILIES: dict[str, tuple[str, ...]] = {
         "Strict campaign contract tests — Python 3.12",
     ),
     "lint": ("Ruff",),
+    "typecheck": ("Pyrefly",),
 }
 REQUIRED_CI_JOBS = tuple(
     job_name for family in JOB_FAMILIES.values() for job_name in family

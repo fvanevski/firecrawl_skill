@@ -60,7 +60,7 @@ def test_build_ci_jobs_expands_completed_dependency_families():
     )
     assert errors == []
     assert tuple(item["name"] for item in jobs) == REQUIRED_CI_JOBS
-    assert len(jobs) == 7
+    assert len(jobs) == 8
     assert {item["conclusion"] for item in jobs} == {"success"}
     assert {item["candidate_sha"] for item in jobs} == {sha}
     assert {item["run_id"] for item in jobs} == {"123"}
@@ -81,6 +81,21 @@ def test_build_ci_jobs_fails_closed_on_failed_or_missing_dependency():
     assert {
         item["conclusion"] for item in jobs if item["source_job_family"] == "test"
     } == {"failure"}
+
+
+def test_build_ci_jobs_fails_closed_on_pyrefly_failure():
+    results = _successful_results()
+    results["typecheck"] = "failure"
+    jobs, errors = build_ci_jobs(
+        results,
+        run_id="123",
+        run_url="https://example.invalid/run/123",
+        candidate_sha="a" * 40,
+    )
+    assert "CI dependency typecheck concluded failure" in errors
+    typecheck_jobs = [item for item in jobs if item["source_job_family"] == "typecheck"]
+    assert [item["name"] for item in typecheck_jobs] == ["Pyrefly"]
+    assert {item["conclusion"] for item in typecheck_jobs} == {"failure"}
 
 
 def test_validate_identity_binds_event_checkout_and_origin_main(tmp_path: Path):
@@ -120,6 +135,7 @@ def test_ci_uses_dependency_evidence_not_in_progress_run_discovery():
     assert "needs.test.result" in workflow
     assert "needs.strict-campaign-contract.result" in workflow
     assert "needs.lint.result" in workflow
+    assert "needs.typecheck.result" in workflow
     assert "if: always()" in workflow
 
 
