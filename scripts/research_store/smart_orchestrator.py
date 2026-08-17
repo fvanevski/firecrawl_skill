@@ -18,7 +18,6 @@ from research_domain import load_model, serialize_model
 from research_domain.models import ResearchSpec, SearchPlan
 
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
-from .orchestrator import OrchestratorResult
 from .orchestration.resume_support import (
     NETWORK_ENTRY_STATES,
     PLANNING_STATES,
@@ -27,6 +26,7 @@ from .orchestration.resume_support import (
     coverage_context,
     replay_extraction_inputs,
 )
+from .orchestrator import OrchestratorResult
 
 logger = logging.getLogger(__name__)
 

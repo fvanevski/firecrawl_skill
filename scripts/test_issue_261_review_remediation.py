@@ -21,7 +21,7 @@ class TestProductionSmartComposition:
     """The actual smart production builder must retain bounded/checkpoint semantics."""
 
     def test_provenance_builder_is_bounded_and_checkpoint_aware(self, monkeypatch):
-        import research_store.container as container
+        from research_store import container
         from research_store.bounded_orchestrator import (
             BoundedAcquisitionStage,
             BoundedExtractionStage,
@@ -112,7 +112,9 @@ class TestResumeDependencyDirection:
         assert "psycopg" not in source
 
 
-@pytest.mark.skipif(not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN")
+@pytest.mark.skipif(
+    not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
+)
 def test_resume_strategy_order_packet_revision_and_branch_cap():
     """Persisted strategy order must survive resume and determine the capped subset."""
     from budget_policy import DEFAULT_POLICY, conservative_research_spec
@@ -208,9 +210,10 @@ def test_resume_strategy_order_packet_revision_and_branch_cap():
         str(first_proposal),
         str(second_proposal),
     ]
-    assert [
-        row["proposed_queries"][0]["query"] for row in authorized
-    ] == ["adaptive-oldest", "adaptive-newest"]
+    assert [row["proposed_queries"][0]["query"] for row in authorized] == [
+        "adaptive-oldest",
+        "adaptive-newest",
+    ]
     assert reader.packet_revision(run_id) == 7
 
     spec = serialize_model(conservative_research_spec("resume order", "general"))
