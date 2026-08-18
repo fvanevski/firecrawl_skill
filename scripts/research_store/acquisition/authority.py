@@ -18,6 +18,7 @@ import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import TracebackType
 from typing import Any, Protocol, Self
 from uuid import UUID
 
@@ -31,9 +32,9 @@ class _AcquisitionCursor(Protocol):
 
     def __exit__(
         self,
-        exc_type: object,
-        exc_value: object,
-        traceback: object,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
     ) -> bool | None: ...
 
     def execute(self, query: str, params: object = ...) -> Any: ...
@@ -48,9 +49,9 @@ class _AcquisitionConnection(Protocol):
 
     def __exit__(
         self,
-        exc_type: object,
-        exc_value: object,
-        traceback: object,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
     ) -> bool | None: ...
 
     def cursor(self) -> _AcquisitionCursor: ...
