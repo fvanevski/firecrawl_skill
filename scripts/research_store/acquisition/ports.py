@@ -21,6 +21,17 @@ class SearchAdapter(Protocol):
     ) -> SearchAdapterResult: ...
 
 
+class CandidateScrapeAdapter(Protocol):
+    """Bounded candidate extraction used after discovery."""
+
+    def scrape_url(
+        self,
+        url: str,
+        *,
+        transient_retries: int | None = None,
+    ) -> SearchAdapterResult: ...
+
+
 class DirectScrapeAdapter(Protocol):
     def scrape(
         self,
@@ -33,4 +44,4 @@ class DirectScrapeAdapter(Protocol):
     ) -> ScrapeTransportResult: ...
 
 
-__all__ = ["DirectScrapeAdapter", "SearchAdapter"]
+__all__ = ["CandidateScrapeAdapter", "DirectScrapeAdapter", "SearchAdapter"]

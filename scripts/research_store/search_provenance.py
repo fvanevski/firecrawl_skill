@@ -9,8 +9,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from .acquisition_service import SearchProvenanceError
-from .bounded_orchestrator import BoundedAcquisitionStage, BoundedExtractionStage
+from .acquisition.service import SearchProvenanceError
+from .bounded_orchestrator import BoundedAcquisitionStage
 from .smart_orchestrator import ResumableResearchOrchestrator, SmartResumeError
 
 
@@ -100,13 +100,19 @@ class ProvenanceResumableResearchOrchestrator(ResumableResearchOrchestrator):
         indexing_stage_cls=None,
     ):
         """Build the smart production topology without import-time rebinding."""
+        if extraction_stage_cls is None:
+            # Lazy import keeps the historical direct build path cycle-safe while
+            # preserving the same production transport selection as composition.py.
+            from .orchestration.composition import ProductionBoundedExtractionStage
+
+            extraction_stage_cls = ProductionBoundedExtractionStage
         return super().build(
             config,
             orchestrator_config=orchestrator_config,
             corpus_service=corpus_service,
             terminal_config=terminal_config,
             acquisition_stage_cls=(acquisition_stage_cls or BoundedAcquisitionStage),
-            extraction_stage_cls=(extraction_stage_cls or BoundedExtractionStage),
+            extraction_stage_cls=extraction_stage_cls,
             indexing_stage_cls=indexing_stage_cls,
         )
 

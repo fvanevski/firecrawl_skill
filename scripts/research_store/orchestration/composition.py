@@ -7,10 +7,21 @@ indexing behavior and bounded acquisition/extraction.
 
 from __future__ import annotations
 
+from typing import Any
+
+from ..acquisition.adapters.bounded_firecrawl import BoundedFirecrawlSearchAdapter
 from ..bounded_orchestrator import BoundedAcquisitionStage, BoundedExtractionStage
 from ..checkpoint_orchestrator import CheckpointResearchOrchestrator
 from ..config import StoreConfig
 from ..orchestrator import OrchestratorConfig, ResearchOrchestrator
+
+
+class ProductionBoundedExtractionStage(BoundedExtractionStage):
+    """Production bounded extraction with explicit Firecrawl composition."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("scrape_adapter", BoundedFirecrawlSearchAdapter())
+        super().__init__(*args, **kwargs)
 
 
 def build_production_orchestrator(
@@ -23,7 +34,7 @@ def build_production_orchestrator(
         config,
         orchestrator_config=orchestrator_config,
         acquisition_stage_cls=BoundedAcquisitionStage,
-        extraction_stage_cls=BoundedExtractionStage,
+        extraction_stage_cls=ProductionBoundedExtractionStage,
     )
 
 
@@ -45,11 +56,12 @@ def build_production_resumable_orchestrator(
         config,
         orchestrator_config=orchestrator_config,
         acquisition_stage_cls=BoundedAcquisitionStage,
-        extraction_stage_cls=BoundedExtractionStage,
+        extraction_stage_cls=ProductionBoundedExtractionStage,
     )
 
 
 __all__ = [
+    "ProductionBoundedExtractionStage",
     "build_production_orchestrator",
     "build_production_resumable_orchestrator",
 ]
