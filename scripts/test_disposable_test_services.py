@@ -82,37 +82,34 @@ def make_fake_tools(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log_path = tmp_path / "docker.log"
+    curl_log_path = tmp_path / "curl.log"
 
     docker = bin_dir / "docker"
     docker.write_text(
-        """#!/usr/bin/env python3
-import os
-import sys
-from pathlib import Path
-
-args = sys.argv[1:]
-with Path(os.environ["FAKE_DOCKER_LOG"]).open("a") as stream:
-    stream.write(" ".join(args) + "\\n")
-
-if args and args[0] == "inspect":
-    if not os.environ.get("FAKE_DOCKER_EXISTS"):
-        raise SystemExit(1)
-    if "--format" in args:
-        template = args[args.index("--format") + 1]
-        if "disposable-test" in template:
-            print("true" if os.environ.get("FAKE_DOCKER_OWNED") == "1" else "false")
-        elif "test-namespace" in template:
-            print(os.environ.get("FAKE_DOCKER_NAMESPACE", ""))
-    raise SystemExit(0)
-
-raise SystemExit(0)
-"""
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$FAKE_DOCKER_LOG\"\n"
+        "if [[ ${1:-} == inspect ]]; then\n"
+        "  if [[ -z ${FAKE_DOCKER_EXISTS:-} ]]; then exit 1; fi\n"
+        "  if [[ \"$*\" == *disposable-test* ]]; then\n"
+        "    [[ ${FAKE_DOCKER_OWNED:-0} == 1 ]] && printf 'true\\n' || printf 'false\\n'\n"
+        "  elif [[ \"$*\" == *test-namespace* ]]; then\n"
+        "    printf '%s\\n' \"${FAKE_DOCKER_NAMESPACE:-}\"\n"
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [[ ${1:-} == start ]]; then\n"
+        "  target=${2:-}\n"
+        "  if [[ ${FAKE_DOCKER_START_FAIL:-} == postgres && $target == *_pg ]]; then exit 1; fi\n"
+        "  if [[ ${FAKE_DOCKER_START_FAIL:-} == qdrant && $target == *_qdrant ]]; then exit 1; fi\n"
+        "fi\n"
+        "exit 0\n"
     )
     docker.chmod(0o755)
 
     curl = bin_dir / "curl"
     curl.write_text(
         "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$FAKE_CURL_LOG\"\n"
         "if [[ ${FAKE_CURL_FAIL:-0} == 1 ]]; then exit 1; fi\n"
         "exit 0\n"
     )
@@ -125,6 +122,7 @@ raise SystemExit(0)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["FAKE_DOCKER_LOG"] = str(log_path)
+    env["FAKE_CURL_LOG"] = str(curl_log_path)
     if existing:
         env["FAKE_DOCKER_EXISTS"] = "1"
         env["FAKE_DOCKER_OWNED"] = "1" if owned else "0"
@@ -146,6 +144,22 @@ def test_up_uses_loopback_pinned_images_and_ownership_labels(tmp_path: Path) -> 
     assert "io.firecrawl-skill.disposable-test=true" in log
     assert "io.firecrawl-skill.test-namespace=fc263" in log
     assert 'CREATE DATABASE "fc263_test";' in log
+    assert "create --name fc263_pg" in log
+    assert "start fc263_pg" in log
+    assert "create --name fc263_qdrant" in log
+    assert "start fc263_qdrant" in log
+
+
+def test_qdrant_waits_for_readiness_endpoint(tmp_path: Path) -> None:
+    env, _ = make_fake_tools(tmp_path)
+
+    result = run_helper("--namespace", "fc263", "up", env=env)
+
+    assert result.returncode == 0, result.stderr
+    curl_log = (tmp_path / "curl.log").read_text().splitlines()
+    assert curl_log == [
+        "--fail --silent --show-error --max-time 2 http://127.0.0.1:55437/readyz"
+    ]
 
 
 def test_down_refuses_same_named_non_owned_container(tmp_path: Path) -> None:
@@ -166,13 +180,49 @@ def test_reset_qdrant_removes_owned_container_before_recreate(tmp_path: Path) ->
     assert result.returncode == 0, result.stderr
     log = log_path.read_text().splitlines()
     rm_index = next(i for i, line in enumerate(log) if line == "rm -f fc263_qdrant")
-    run_index = next(
-        i for i, line in enumerate(log) if line.startswith("run -d --name fc263_qdrant")
+    create_index = next(
+        i for i, line in enumerate(log) if line.startswith("create --name fc263_qdrant")
     )
-    assert rm_index < run_index
+    assert rm_index < create_index
 
 
-def test_up_cleans_partial_pair_when_qdrant_health_fails(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("service", "container"),
+    [("postgres", "fc263_pg"), ("qdrant", "fc263_qdrant")],
+)
+def test_up_cleans_created_container_when_docker_start_fails(
+    tmp_path: Path, service: str, container: str
+) -> None:
+    env, log_path = make_fake_tools(tmp_path)
+    env["FAKE_DOCKER_START_FAIL"] = service
+
+    result = run_helper("--namespace", "fc263", "up", env=env)
+
+    assert result.returncode != 0
+    log = log_path.read_text().splitlines()
+    assert any(line.startswith(f"create --name {container}") for line in log)
+    assert f"start {container}" in log
+    assert f"rm -f {container}" in log
+    if service == "qdrant":
+        assert "rm -f fc263_pg" in log
+
+
+def test_reset_qdrant_cleans_replacement_when_docker_start_fails(
+    tmp_path: Path,
+) -> None:
+    env, log_path = make_fake_tools(tmp_path, existing=True, owned=True)
+    env["FAKE_DOCKER_START_FAIL"] = "qdrant"
+
+    result = run_helper("--namespace", "fc263", "reset-qdrant", env=env)
+
+    assert result.returncode != 0
+    log = log_path.read_text().splitlines()
+    assert log.count("rm -f fc263_qdrant") == 2
+    assert any(line.startswith("create --name fc263_qdrant") for line in log)
+    assert "start fc263_qdrant" in log
+
+
+def test_up_cleans_partial_pair_when_qdrant_readiness_fails(tmp_path: Path) -> None:
     env, log_path = make_fake_tools(tmp_path)
     env["FAKE_CURL_FAIL"] = "1"
 

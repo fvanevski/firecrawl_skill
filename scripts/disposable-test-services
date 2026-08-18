@@ -148,7 +148,7 @@ assert_absent() {
 }
 
 start_postgres() {
-  docker run -d \
+  docker create \
     --name "$pg_container" \
     --label "${OWNER_LABEL}=true" \
     --label "${NAMESPACE_LABEL}=${namespace}" \
@@ -156,6 +156,7 @@ start_postgres() {
     -p "${HOST}:${pg_port}:5432" \
     "$POSTGRES_IMAGE" >/dev/null
   created_pg=1
+  docker start "$pg_container" >/dev/null
 
   local attempt
   for attempt in $(seq 1 30); do
@@ -172,7 +173,7 @@ start_postgres() {
 }
 
 start_qdrant() {
-  docker run -d \
+  docker create \
     --name "$qdrant_container" \
     --label "${OWNER_LABEL}=true" \
     --label "${NAMESPACE_LABEL}=${namespace}" \
@@ -180,13 +181,14 @@ start_qdrant() {
     -p "${HOST}:${qdrant_port}:6333" \
     "$QDRANT_IMAGE" >/dev/null
   created_qdrant=1
+  docker start "$qdrant_container" >/dev/null
 
   local attempt
   for attempt in $(seq 1 30); do
-    if curl --fail --silent --show-error --max-time 2 "${qdrant_url}/healthz" >/dev/null 2>&1; then
+    if curl --fail --silent --show-error --max-time 2 "${qdrant_url}/readyz" >/dev/null 2>&1; then
       return 0
     fi
-    (( attempt < 30 )) || fail "Qdrant did not become healthy"
+    (( attempt < 30 )) || fail "Qdrant did not become ready"
     sleep 1
   done
 }

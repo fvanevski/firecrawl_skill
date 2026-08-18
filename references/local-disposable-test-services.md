@@ -13,6 +13,8 @@ The local persistent services are **not** test targets:
 
 The helper refuses both known persistent ports, binds test services to `127.0.0.1` only, and labels every created container. `down` and `reset-qdrant` refuse to remove a same-named container unless those ownership labels match the requested namespace.
 
+Startup is deliberately split into `docker create` followed by `docker start`. The helper records a container as cleanup-owned immediately after successful labelled creation, before attempting the start. If the start, readiness probe, or PostgreSQL database initialization then fails, the active error trap removes only containers created by that invocation. This covers host-port bind failures that can occur during `docker start` after a container object already exists.
+
 The service images are pinned to the same versions used by the integration workflows:
 
 - PostgreSQL: `postgres:16-alpine`
@@ -29,9 +31,9 @@ eval "$(scripts/disposable-test-services --namespace fc263 up)"
 The helper:
 
 1. refuses to reuse existing `${namespace}_pg` or `${namespace}_qdrant` containers;
-2. starts PostgreSQL and waits for `pg_isready`;
+2. creates and starts PostgreSQL, then waits for `pg_isready`;
 3. creates `${namespace}_test` after normalizing `-` to `_`;
-4. starts a brand-new Qdrant container and waits for `/healthz`;
+4. creates and starts a brand-new Qdrant container, then waits for `/readyz`;
 5. prints the exact test environment exports.
 
 The generated PostgreSQL database always contains a standalone `test` segment, which satisfies `require_disposable_database_reset()`. The generated Qdrant reset acknowledgement exactly equals the disposable Qdrant URL, which satisfies `require_disposable_qdrant_url()`.
@@ -70,7 +72,9 @@ The repository test bootstrap may destructively rebuild schema in the dedicated 
 
 A disposable PostgreSQL container normally does **not** need recreation between repository integration-test batches when the suite's gated reset bootstrap runs successfully against the dedicated test database. Recreate the pair when diagnosing bootstrap failures or state that is outside the reset-managed schema/database.
 
-## Qdrant clean-state semantics
+## Qdrant readiness and clean-state semantics
+
+The helper waits for Qdrant `/readyz`, not merely `/healthz`, before reporting success. `/readyz` is the repository's service-readiness contract for integration workflows; local validation must not begin while Qdrant is only live but not yet ready to accept test traffic.
 
 `docker restart` is **not** a Qdrant reset. Container-local Qdrant storage survives restart and can retain points created by earlier test batches. Point-count, reconciliation, and orphan-detection tests can therefore become nondeterministic if a disposable Qdrant container is reused.
 
@@ -80,7 +84,7 @@ For an authoritative clean Qdrant identity, run:
 eval "$(scripts/disposable-test-services --namespace fc263 reset-qdrant)"
 ```
 
-`reset-qdrant` removes the helper-owned Qdrant container and creates a new one. It does not touch PostgreSQL.
+`reset-qdrant` removes the helper-owned Qdrant container and creates a new one. It does not touch PostgreSQL. If creation succeeds but startup/readiness fails, the replacement container is removed by the same cleanup-owned rule rather than being left behind.
 
 Interpret count/coverage mismatches in two stages:
 
@@ -88,6 +92,24 @@ Interpret count/coverage mismatches in two stages:
 2. Treat the result as a candidate implementation defect only if it reproduces against a freshly created Qdrant container and the expected disposable PostgreSQL test database.
 
 A collection reset performed by a particular test may be sufficient for that test, but container recreation is the strongest clean-state control and should be the baseline for diagnosing point-count-sensitive failures.
+
+## Review-validation handoff
+
+Central review remediation is complete only at source level. Independent local validation remains a separate evidence gate and must be run against the then-current exact 40-character PR head; CI success does not substitute for it.
+
+The local OpenCode agent should:
+
+1. use native Git to `git fetch origin`, resolve the PR head exactly, check it out detached or in an isolated worktree, and report `git rev-parse HEAD`, the base SHA, and the complete ACMR changed-file list;
+2. use Serena with `no-memories` for changed-symbol, reference, dependency, and diagnostic inspection;
+3. use RTK only to compress routine successful output;
+4. run `ruff check` and `ruff format --check --diff` on the exact changed Python paths;
+5. run repository-pinned `pyrefly check` on the explicit changed Python paths, including `scripts/test_disposable_test_services.py`, then run full-project `pyrefly check`;
+6. run focused `pytest -q scripts/test_disposable_test_services.py`;
+7. perform a real disposable-container smoke: `up`, verify PostgreSQL and Qdrant accept a first operation after the helper returns, exercise `reset-qdrant`, then `down`;
+8. use native/raw output for exact SHAs, Docker/service failures, and final worktree status; and
+9. treat any failure as review evidence rather than permission to change production code, tests, Pyrefly configuration/baseline, or validation gates.
+
+OpenViking may provide bounded historical rationale only; current source, Git, CI, and runtime evidence remain authoritative.
 
 ## Cleanup
 
