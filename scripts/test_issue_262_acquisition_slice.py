@@ -9,10 +9,16 @@ from uuid import uuid4
 
 import pytest
 import research_store
+from research_store import (
+    acquisition_authority as legacy_acquisition_authority,
+)
 from research_store import acquisition_service as legacy_acquisition_service
 from research_store import bounded_acquisition as legacy_bounded_acquisition
 from research_store import direct_scrape_service as legacy_direct_scrape
 from research_store import fsearch_service
+from research_store.acquisition import (
+    authority as canonical_acquisition_authority,
+)
 from research_store.acquisition.adapters.bounded_firecrawl import (
     BoundedFirecrawlSearchAdapter,
 )
@@ -229,4 +235,12 @@ def test_direct_scrape_default_selection_is_confined_to_builder_scope() -> None:
     )
     assert source.index("def build_direct_scrape_service") < source.index(
         "from .adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter"
+    )
+
+
+def test_authority_facade_preserves_historical_module_patch_hooks() -> None:
+    assert legacy_acquisition_authority.os is canonical_acquisition_authority.os
+    assert (
+        legacy_acquisition_authority.tempfile
+        is canonical_acquisition_authority.tempfile
     )

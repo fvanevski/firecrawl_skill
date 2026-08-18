@@ -88,7 +88,7 @@ facades rather than duplicate implementations:
 
 | Historical surface | Canonical target / compatibility behavior |
 |---|---|
-| `research_store.acquisition_authority` | Re-exports `research_store.acquisition.authority`. |
+| `research_store.acquisition_authority` | Re-exports `research_store.acquisition.authority`; additionally exposes the same `os` and `tempfile` stdlib module objects solely to preserve existing test/injection hooks (for example `os.fsync` and `tempfile.NamedTemporaryFile` monkeypatches). |
 | `research_store.acquisition_service` | Re-exports canonical application service/errors; historical `FirecrawlSearchAdapter` explicitly aliases `BoundedFirecrawlSearchAdapter`. |
 | `research_store.bounded_acquisition` | Re-exports canonical bounded adapter. |
 | `research_store.direct_scrape_service` | Re-exports canonical direct-scrape application/models plus the concrete scrape adapter for compatibility/composition callers. |
@@ -107,6 +107,22 @@ replaced by `CandidateScrapeAdapter`, and concrete selection moved to production
 composition. Same-object compatibility imports that do not select transport may
 remain temporarily where changing a very large unrelated module would add risk
 without changing dependency semantics; those facades contain no implementation.
+
+### `acquisition_authority` compatibility-hook note
+
+The historical `research_store.acquisition_authority` facade exposes the same
+`os` and `tempfile` module objects as the canonical
+`research_store.acquisition.authority` module solely to preserve existing
+test/injection hooks such as `os.fsync` and
+`tempfile.NamedTemporaryFile` monkeypatches. This restores no authority
+implementation: the canonical authority implementation remains exclusively in
+`research_store.acquisition.authority`. Local validation of the #262 branch
+exposed a regression in which the thin facade no longer exposed these module
+attributes, breaking the pre-existing historical authority tests. The
+issue-specific test
+`test_authority_facade_preserves_historical_module_patch_hooks` in
+`scripts/test_issue_262_acquisition_slice.py` now protects this compatibility
+surface.
 
 ### `SearchAdapterResult` ownership note
 
