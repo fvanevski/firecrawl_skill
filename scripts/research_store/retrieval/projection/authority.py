@@ -8,7 +8,7 @@ implement subtly different alias rules.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ...config import StoreConfig
@@ -20,7 +20,7 @@ def evaluate_required_alias_state(
     *,
     aliases: Mapping[str, str],
     required_alias_name: str,
-    active_definitions: list[Mapping[str, Any]],
+    active_definitions: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Evaluate the exact PostgreSQL-active-definition/required-alias contract.
 
