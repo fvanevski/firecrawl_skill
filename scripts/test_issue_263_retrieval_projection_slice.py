@@ -48,12 +48,37 @@ def _defined_symbols(path: Path) -> set[str]:
     }
 
 
+def _is_research_store_module(module: str, suffix: str) -> bool:
+    """Accept the supported source-test and canonical package import roots.
+
+    ``scripts/conftest.py`` deliberately places ``scripts`` first during the
+    historical pytest corpus, so modules may be loaded as ``research_store.*``.
+    Canonical source/wheel imports load the same implementation as
+    ``firecrawl_skill.research_store.*``. Ownership assertions care about the
+    exact capability-relative module, not which supported package root loaded it.
+    """
+    target = f"research_store.{suffix}"
+    return module == target or module.endswith(f".{target}")
+
+
+def test_module_ownership_matcher_is_exact_about_research_store_boundary() -> None:
+    assert _is_research_store_module(
+        "research_store.retrieval.ranking", "retrieval.ranking"
+    )
+    assert _is_research_store_module(
+        "firecrawl_skill.research_store.retrieval.ranking", "retrieval.ranking"
+    )
+    assert not _is_research_store_module(
+        "not_research_store.retrieval.ranking", "retrieval.ranking"
+    )
+
+
 def test_retrieval_module_surface_is_now_the_capability_package() -> None:
     assert hasattr(canonical_retrieval, "__path__")
     assert callable(canonical_retrieval.reciprocal_rank_fusion)
     assert callable(canonical_retrieval.pack_context)
-    assert canonical_retrieval.CohereCompatibleReranker.__module__.endswith(
-        ".research_store.retrieval.ranking"
+    assert _is_research_store_module(
+        canonical_retrieval.CohereCompatibleReranker.__module__, "retrieval.ranking"
     )
     assert _defined_symbols(STORE / "retrieval.py") == set()
     assert {"CohereCompatibleReranker", "reciprocal_rank_fusion"}.issubset(
@@ -63,8 +88,8 @@ def test_retrieval_module_surface_is_now_the_capability_package() -> None:
 
 def test_legacy_retrieval_service_is_canonical_application_service() -> None:
     assert legacy_retrieval_service is canonical_retrieval_service
-    assert canonical_retrieval_service.RetrievalService.__module__.endswith(
-        ".research_store.retrieval.service"
+    assert _is_research_store_module(
+        canonical_retrieval_service.RetrievalService.__module__, "retrieval.service"
     )
     assert _defined_symbols(STORE / "retrieval_service.py") == set()
 
@@ -72,19 +97,19 @@ def test_legacy_retrieval_service_is_canonical_application_service() -> None:
 def test_postgres_repositories_are_split_by_authority() -> None:
     assert LegacyPostgresRetrievalRepository is PostgresRetrievalRepository
     assert LegacyPostgresIndexJobRepository is PostgresIndexJobRepository
-    assert PostgresRetrievalRepository.__module__.endswith(
-        ".research_store.retrieval.postgres"
+    assert _is_research_store_module(
+        PostgresRetrievalRepository.__module__, "retrieval.postgres"
     )
-    assert PostgresIndexJobRepository.__module__.endswith(
-        ".research_store.retrieval.projection.postgres_jobs"
+    assert _is_research_store_module(
+        PostgresIndexJobRepository.__module__, "retrieval.projection.postgres_jobs"
     )
     assert _defined_symbols(STORE / "postgres_retrieval.py") == set()
 
 
 def test_legacy_qdrant_module_is_the_canonical_projection_module() -> None:
     assert legacy_qdrant is canonical_qdrant
-    assert canonical_qdrant.QdrantIndex.__module__.endswith(
-        ".research_store.retrieval.projection.qdrant"
+    assert _is_research_store_module(
+        canonical_qdrant.QdrantIndex.__module__, "retrieval.projection.qdrant"
     )
     assert _defined_symbols(STORE / "qdrant.py") == set()
 
@@ -96,9 +121,9 @@ def test_indexing_uses_baseline_stable_implementation_with_projection_namespace(
     assert canonical_indexing.OpenAICompatibleEmbedder is (
         legacy_indexing.OpenAICompatibleEmbedder
     )
-    assert legacy_indexing.IndexWorker.__module__.endswith(".research_store.indexing")
-    assert legacy_indexing.OpenAICompatibleEmbedder.__module__.endswith(
-        ".research_store.indexing"
+    assert _is_research_store_module(legacy_indexing.IndexWorker.__module__, "indexing")
+    assert _is_research_store_module(
+        legacy_indexing.OpenAICompatibleEmbedder.__module__, "indexing"
     )
     assert {"IndexWorker", "OpenAICompatibleEmbedder"}.issubset(
         _defined_symbols(STORE / "indexing.py")
@@ -109,11 +134,13 @@ def test_indexing_uses_baseline_stable_implementation_with_projection_namespace(
 def test_qdrant_authority_and_reconciliation_are_projection_infrastructure() -> None:
     assert legacy_authority is canonical_authority
     assert legacy_reconciliation is canonical_reconciliation
-    assert canonical_authority.evaluate_required_alias_state.__module__.endswith(
-        ".research_store.retrieval.projection.authority"
+    assert _is_research_store_module(
+        canonical_authority.evaluate_required_alias_state.__module__,
+        "retrieval.projection.authority",
     )
-    assert canonical_reconciliation.reconcile_projection_compat.__module__.endswith(
-        ".research_store.retrieval.projection.reconciliation"
+    assert _is_research_store_module(
+        canonical_reconciliation.reconcile_projection_compat.__module__,
+        "retrieval.projection.reconciliation",
     )
     assert _defined_symbols(STORE / "qdrant_authority.py") == set()
     assert _defined_symbols(STORE / "projection_reconciliation.py") == set()
@@ -128,11 +155,13 @@ def test_checkpoints_use_baseline_stable_implementation_with_projection_namespac
     assert canonical_checkpoint_stage.CheckpointIndexingStage is (
         legacy_checkpoint_stage.CheckpointIndexingStage
     )
-    assert legacy_checkpoint_service.IndexCheckpointService.__module__.endswith(
-        ".research_store.index_checkpoint_service"
+    assert _is_research_store_module(
+        legacy_checkpoint_service.IndexCheckpointService.__module__,
+        "index_checkpoint_service",
     )
-    assert legacy_checkpoint_stage.CheckpointIndexingStage.__module__.endswith(
-        ".research_store.checkpoint_indexing_stage"
+    assert _is_research_store_module(
+        legacy_checkpoint_stage.CheckpointIndexingStage.__module__,
+        "checkpoint_indexing_stage",
     )
     assert "IndexCheckpointService" in _defined_symbols(
         STORE / "index_checkpoint_service.py"
