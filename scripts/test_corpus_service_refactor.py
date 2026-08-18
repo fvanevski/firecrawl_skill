@@ -81,9 +81,9 @@ def test_retrieval_behavior_is_extracted_from_canonical_corpus_implementation() 
 
 def test_internal_corpus_builders_import_the_canonical_slice() -> None:
     container_source = (_STORE / "container.py").read_text(encoding="utf-8")
-    direct_scrape_source = (
-        _STORE / "acquisition" / "direct_scrape.py"
-    ).read_text(encoding="utf-8")
+    direct_scrape_source = (_STORE / "acquisition" / "direct_scrape.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "from .service import CorpusService" not in container_source
     assert "from .corpus_service import CorpusService" in container_source
