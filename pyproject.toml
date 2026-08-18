@@ -12,6 +12,8 @@ packages = [
   "firecrawl_skill",
   "firecrawl_skill._data",
   "firecrawl_skill.research_store",
+  "firecrawl_skill.research_store.acquisition",
+  "firecrawl_skill.research_store.acquisition.adapters",
   "firecrawl_skill.research_store.cli",
   "firecrawl_skill.research_store.parsing",
   "firecrawl_skill.research_domain",
@@ -31,6 +33,8 @@ py-modules = [
 firecrawl_skill = "src/firecrawl_skill"
 "firecrawl_skill._data" = "references"
 "firecrawl_skill.research_store" = "scripts/research_store"
+"firecrawl_skill.research_store.acquisition" = "scripts/research_store/acquisition"
+"firecrawl_skill.research_store.acquisition.adapters" = "scripts/research_store/acquisition/adapters"
 "firecrawl_skill.research_store.cli" = "scripts/research_store/cli"
 "firecrawl_skill.research_store.parsing" = "scripts/research_store/parsing"
 "firecrawl_skill.research_domain" = "scripts/research_domain"
@@ -47,18 +51,10 @@ research_domain = "src/research_domain"
 "firecrawl_skill._data" = ["budget-policy-v1.json"]
 
 [tool.ruff.lint.isort]
-# These public compatibility roots historically live below scripts/ and Ruff
-# classified them with external imports. Keep that classification stable while
-# their temporary src/ facades exist; #269 owns removal of the facades.
 known-third-party = ["research_domain", "research_store"]
 
 [tool.pyrefly]
-# Pyrefly is the repository's authoritative static type checker. Existing debt
-# is isolated in one reviewed baseline; normal validation must never update it.
 project-includes = ["scripts/**/*.py", "src/**/*.py"]
-# Runtime/contract behavior remains pytest authority. Excluding the historical
-# test corpus keeps the baseline focused on maintained application/tooling code;
-# local changed-scope checks still type-check an explicitly changed test file.
 project-excludes = ["scripts/test_*.py", "scripts/**/test_*.py"]
 search-path = ["scripts", "src", "."]
 python-platform = "linux"
