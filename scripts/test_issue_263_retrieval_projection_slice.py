@@ -5,8 +5,12 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from research_store import checkpoint_indexing_stage as legacy_checkpoint_stage
 from research_store import indexing as legacy_indexing
+from research_store import index_checkpoint_service as legacy_checkpoint_service
+from research_store import projection_reconciliation as legacy_reconciliation
 from research_store import qdrant as legacy_qdrant
+from research_store import qdrant_authority as legacy_authority
 from research_store import retrieval as canonical_retrieval
 from research_store import retrieval_service as legacy_retrieval_service
 from research_store.postgres_retrieval import (
@@ -17,8 +21,16 @@ from research_store.postgres_retrieval import (
 )
 from research_store.retrieval import service as canonical_retrieval_service
 from research_store.retrieval.postgres import PostgresRetrievalRepository
+from research_store.retrieval.projection import authority as canonical_authority
+from research_store.retrieval.projection import (
+    checkpoint_indexing_stage as canonical_checkpoint_stage,
+)
 from research_store.retrieval.projection import indexing as canonical_indexing
+from research_store.retrieval.projection import (
+    index_checkpoint_service as canonical_checkpoint_service,
+)
 from research_store.retrieval.projection import qdrant as canonical_qdrant
+from research_store.retrieval.projection import reconciliation as canonical_reconciliation
 from research_store.retrieval.projection.postgres_jobs import PostgresIndexJobRepository
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +93,32 @@ def test_legacy_indexing_module_is_the_canonical_projection_module() -> None:
         ".research_store.retrieval.projection.indexing"
     )
     assert _defined_symbols(STORE / "indexing.py") == set()
+
+
+def test_qdrant_authority_and_reconciliation_are_projection_infrastructure() -> None:
+    assert legacy_authority is canonical_authority
+    assert legacy_reconciliation is canonical_reconciliation
+    assert canonical_authority.evaluate_required_alias_state.__module__.endswith(
+        ".research_store.retrieval.projection.authority"
+    )
+    assert canonical_reconciliation.reconcile_projection_compat.__module__.endswith(
+        ".research_store.retrieval.projection.reconciliation"
+    )
+    assert _defined_symbols(STORE / "qdrant_authority.py") == set()
+    assert _defined_symbols(STORE / "projection_reconciliation.py") == set()
+
+
+def test_checkpoint_service_and_stage_are_projection_infrastructure() -> None:
+    assert legacy_checkpoint_service is canonical_checkpoint_service
+    assert legacy_checkpoint_stage is canonical_checkpoint_stage
+    assert canonical_checkpoint_service.IndexCheckpointService.__module__.endswith(
+        ".research_store.retrieval.projection.index_checkpoint_service"
+    )
+    assert canonical_checkpoint_stage.CheckpointIndexingStage.__module__.endswith(
+        ".research_store.retrieval.projection.checkpoint_indexing_stage"
+    )
+    assert _defined_symbols(STORE / "index_checkpoint_service.py") == set()
+    assert _defined_symbols(STORE / "checkpoint_indexing_stage.py") == set()
 
 
 def test_projection_boundary_declares_non_authoritative_qdrant_contract() -> None:
