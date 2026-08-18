@@ -101,7 +101,7 @@ def test_prepared_ingest_preserves_parser_and_chunker_provenance_contract() -> N
         request=request,
         canonical_url="https://example.test/",
         blob=blob,
-        normalized_content="body",
+        normalized_text="body",
         blocks=blocks,
         chunks=chunks,
         parser_name="pkg.Parser",
