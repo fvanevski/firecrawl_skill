@@ -84,9 +84,12 @@ def test_internal_corpus_builders_import_the_canonical_slice() -> None:
     direct_scrape_source = (
         _STORE / "acquisition" / "direct_scrape.py"
     ).read_text(encoding="utf-8")
-    for source in (container_source, direct_scrape_source):
-        assert "from .service import CorpusService" not in source
-        assert "from .corpus_service import CorpusService" in source
+
+    assert "from .service import CorpusService" not in container_source
+    assert "from .corpus_service import CorpusService" in container_source
+
+    assert "from ..service import CorpusService" not in direct_scrape_source
+    assert "from ..corpus_service import CorpusService" in direct_scrape_source
 
 
 def test_prepared_ingest_preserves_parser_and_chunker_provenance_contract() -> None:
