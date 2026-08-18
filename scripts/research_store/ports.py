@@ -6,12 +6,12 @@ from uuid import UUID
 
 from research_domain.models import RetrievalExecution
 
+from .acquisition.ports import SearchAdapter  # noqa: F401
 from .domain import (
     BlobReference,
     ExtractionQualityMetrics,
     IngestRequest,
     IngestResult,
-    SearchAdapterResult,
 )
 
 
@@ -392,19 +392,6 @@ class RetrievalIndex(Protocol):
 
 class QueueBackend(Protocol):
     def notify(self, job_id: UUID, ttl_seconds: int = 3600) -> None: ...
-
-
-class SearchAdapter(Protocol):
-    def search(
-        self,
-        query_text: str,
-        *,
-        backend: str = "firecrawl",
-        limit: int = 20,
-        sources: str = "web",
-        tbs: str | None = None,
-        **kwargs: Any,
-    ) -> SearchAdapterResult: ...
 
 
 class ExtractionAttemptRepository(Protocol):

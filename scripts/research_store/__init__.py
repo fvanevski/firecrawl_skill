@@ -1,19 +1,18 @@
 """Persistent research asset store for the Firecrawl skill."""
 
-from . import acquisition_service as _acquisition_service
 from . import bounded_orchestrator as _bounded_orchestrator
 from . import corpus_service as _corpus_service
 from . import postgres as _postgres
 from . import run_service as _run_service
 from . import workflow_service as _workflow_service
-from .acquisition_authority import (
+from .acquisition.adapters.bounded_firecrawl import BoundedFirecrawlSearchAdapter
+from .acquisition.authority import (
     AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
     require_authoritative_acquisition,
 )
-from .acquisition_service import AcquisitionService
+from .acquisition.service import AcquisitionService
 from .blob import ContentAddressedBlobStore
-from .bounded_acquisition import BoundedFirecrawlSearchAdapter
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
 from .config import StoreConfig
 from .corpus_service import CorpusService
@@ -69,11 +68,8 @@ ResearchRunService = GuardedResearchRunService
 _workflow_service.ResearchRunService = GuardedResearchRunService
 ResearchOrchestrator = CheckpointResearchOrchestrator
 
-# Issue #216 canonical provider/stage routing. ``AcquisitionService`` resolves
-# its default adapter from the module global at construction time.
-# Stage class injection is handled explicitly by the composition root
-# (``orchestration.composition.build_production_orchestrator``).
-_acquisition_service.FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
+# Preserve the historical root symbol without mutating acquisition_service at
+# import time. Production adapter selection is explicit in composition roots.
 FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
 
 # Issue #255 establishes explicit repository objects on the canonical UoW while

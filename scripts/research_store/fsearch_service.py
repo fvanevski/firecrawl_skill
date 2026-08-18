@@ -1,10 +1,10 @@
 """PostgreSQL-authoritative ``fsearch`` workflow and CLI.
 
 The workflow performs a run-bound authoritative preflight before constructing
-or invoking Firecrawl, persists the search response and candidates through
-``AcquisitionService``, and delegates selected extraction to
-``DirectScrapeService`` using stable candidate IDs. It never reads or writes
-scratch acquisition state.
+or invoking Firecrawl, persists the search response and candidates through the
+acquisition application service, and delegates selected extraction through the
+direct-scrape application boundary. Provider transport is selected only at the
+builder/composition edge.
 """
 
 from __future__ import annotations
@@ -14,32 +14,31 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
-from .acquisition_authority import (
+from .acquisition.adapters.firecrawl_search import MetadataOnlyFirecrawlSearchAdapter
+from .acquisition.authority import (
     AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
     require_authoritative_acquisition,
 )
-from .acquisition_service import (
+from .acquisition.direct_scrape import (
+    DirectScrapeError,
+    DirectScrapePersistenceError,
+)
+from .acquisition.models import DirectScrapeBatchResult, DirectScrapeRequest
+from .acquisition.service import (
     AcquisitionAuthorityChangedError,
     AcquisitionIdempotencyConflictError,
     AcquisitionResult,
     AcquisitionService,
 )
 from .config import StoreConfig
-from .direct_scrape_service import (
-    DirectScrapeBatchResult,
-    DirectScrapeError,
-    DirectScrapePersistenceError,
-    DirectScrapeRequest,
-)
-from .domain import SearchAdapterResult, utcnow
+from .domain import utcnow
 
 try:
     from candidate_ranking import (
@@ -257,133 +256,6 @@ class FSearchResult:
             "corpus_ids": corpus_ids,
             "error": _bounded_text(self.error),
         }
-
-
-class MetadataOnlyFirecrawlSearchAdapter:
-    """Run Firecrawl search without implicit scrape or filesystem output."""
-
-    def __init__(
-        self,
-        *,
-        executable: str = "firecrawl",
-        timeout_seconds: int = 60,
-        runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-    ) -> None:
-        self.executable = executable
-        self.timeout_seconds = timeout_seconds
-        self.runner = runner
-
-    def search(
-        self,
-        query_text: str,
-        *,
-        backend: str = "firecrawl",
-        limit: int = 20,
-        sources: str = "web",
-        tbs: str | None = None,
-        retries: int = 2,
-        **_: Any,
-    ) -> SearchAdapterResult:
-        if backend != "firecrawl":
-            raise ValueError(
-                "authoritative fsearch supports only the firecrawl backend"
-            )
-        if not query_text.strip():
-            raise ValueError("query_text must be non-empty")
-
-        command = [
-            self.executable,
-            "search",
-            query_text,
-            "--limit",
-            str(limit),
-            "--sources",
-            sources,
-            "--ignore-invalid-urls",
-            "--json",
-        ]
-        if tbs:
-            command.extend(["--tbs", tbs])
-
-        requested_at = utcnow()
-        last_code = 0
-        last_stdout = b""
-        last_stderr = b""
-        responded_at = requested_at
-        attempts = 0
-        for attempt in range(retries + 1):
-            attempts = attempt + 1
-            try:
-                process = self.runner(
-                    command,
-                    capture_output=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                last_code = 124
-                last_stdout = _as_bytes(exc.stdout)
-                last_stderr = str(exc).encode("utf-8", errors="replace")
-            except OSError as exc:
-                last_code = 127
-                last_stdout = b""
-                last_stderr = str(exc).encode("utf-8", errors="replace")
-            else:
-                last_code = int(process.returncode)
-                last_stdout = _as_bytes(process.stdout)
-                last_stderr = _as_bytes(process.stderr)
-            responded_at = utcnow()
-            if last_code == 0 and last_stdout:
-                return SearchAdapterResult(
-                    raw_payload=last_stdout,
-                    http_status=200,
-                    provider_request_id=None,
-                    transport_error=None,
-                    transport_metadata={
-                        "adapter": type(self).__name__,
-                        "attempts": attempts,
-                        "command": command,
-                        "exit_code": last_code,
-                        "implicit_scrape": False,
-                    },
-                    requested_at=requested_at,
-                    responded_at=responded_at,
-                )
-            diagnostic = last_stderr.decode("utf-8", errors="replace")
-            transient = any(
-                marker in diagnostic
-                for marker in ("EAI_AGAIN", "ENOTFOUND", "ECONNRESET", "ETIMEDOUT")
-            )
-            if not transient or attempt >= retries:
-                break
-
-        diagnostic = last_stderr.decode("utf-8", errors="replace").strip()
-        transport_error = _classify_search_transport_error(
-            last_code, diagnostic, bool(last_stdout)
-        )
-        payload = (
-            last_stdout
-            if last_code == 0 and last_stdout
-            else json.dumps({"success": False, "error": transport_error}).encode(
-                "utf-8"
-            )
-        )
-        return SearchAdapterResult(
-            raw_payload=payload,
-            http_status=500,
-            provider_request_id=None,
-            transport_error=transport_error,
-            transport_metadata={
-                "adapter": type(self).__name__,
-                "attempts": attempts,
-                "command": command,
-                "exit_code": last_code,
-                "stderr": _bounded_text(diagnostic),
-                "implicit_scrape": False,
-            },
-            requested_at=requested_at,
-            responded_at=responded_at,
-        )
 
 
 class FSearchService:
@@ -611,10 +483,6 @@ class FSearchService:
     def _rank_candidates(
         self, candidates: Sequence[Mapping[str, Any]]
     ) -> list[Mapping[str, Any]]:
-        """Rank candidates by relevance score with URL-type penalties.
-
-        Returns candidates sorted by computed ranking score descending.
-        """
         if compute_ranking_score is None or UrlType is None:
             return _ordered_candidates(candidates)
 
@@ -712,12 +580,7 @@ def build_fsearch_service(
     *,
     search_adapter_factory: Callable[[], Any] = MetadataOnlyFirecrawlSearchAdapter,
 ) -> FSearchService:
-    """Build the policy-complete authoritative fsearch service.
-
-    The implementation is imported lazily to avoid a module-initialization cycle:
-    ``fsearch_policy_service`` subclasses the compatibility service and imports
-    the request/result/CLI helpers defined above.
-    """
+    """Build the policy-complete authoritative fsearch service."""
     from .fsearch_policy_service import build_policy_fsearch_service
 
     return build_policy_fsearch_service(
@@ -962,20 +825,6 @@ def _exception_stage(exc: Exception) -> str:
     return "ingestion"
 
 
-def _classify_search_transport_error(
-    returncode: int, diagnostic: str, has_payload: bool
-) -> str:
-    for marker in ("EAI_AGAIN", "ENOTFOUND", "ECONNRESET", "ETIMEDOUT"):
-        if marker in diagnostic:
-            return f"Network transport error: {marker}"
-    if returncode == 0 and not has_payload:
-        return "Firecrawl search returned an empty response"
-    if diagnostic:
-        bounded = _bounded_text(diagnostic)
-        return f"Firecrawl search failed (exit {returncode}): {bounded}"
-    return f"Firecrawl search failed with exit code {returncode}"
-
-
 def _invocation_input(request: FSearchRequest, search_key: str) -> dict[str, Any]:
     return {
         "schema_version": "authoritative-fsearch-v1",
@@ -1032,12 +881,6 @@ def _extraction_key(
         separators=(",", ":"),
     )
     return f"fsearch-extraction:{hashlib.sha256(payload.encode()).hexdigest()}"
-
-
-def _as_bytes(value: bytes | str | None) -> bytes:
-    if value is None:
-        return b""
-    return value.encode("utf-8") if isinstance(value, str) else value
 
 
 def _bounded_text(value: str | None) -> str | None:

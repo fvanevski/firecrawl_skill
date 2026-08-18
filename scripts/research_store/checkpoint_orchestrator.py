@@ -36,14 +36,14 @@ class CheckpointResearchOrchestrator(ResearchOrchestrator):
         indexing_stage_cls=None,
     ):
         """Build checkpoint orchestration with bounded acquisition/extraction."""
-        if acquisition_stage_cls is None or extraction_stage_cls is None:
-            from .bounded_orchestrator import (
-                BoundedAcquisitionStage,
-                BoundedExtractionStage,
-            )
+        if acquisition_stage_cls is None:
+            from .bounded_orchestrator import BoundedAcquisitionStage
 
-            acquisition_stage_cls = acquisition_stage_cls or BoundedAcquisitionStage
-            extraction_stage_cls = extraction_stage_cls or BoundedExtractionStage
+            acquisition_stage_cls = BoundedAcquisitionStage
+        if extraction_stage_cls is None:
+            from .orchestration.composition import ProductionBoundedExtractionStage
+
+            extraction_stage_cls = ProductionBoundedExtractionStage
         return super().build(
             config,
             orchestrator_config=orchestrator_config,

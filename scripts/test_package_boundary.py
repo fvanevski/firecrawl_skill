@@ -93,16 +93,28 @@ def test_canonical_first_imports_preserve_canonical_module_identity() -> None:
         canonical_postgres = importlib.import_module(
             "firecrawl_skill.research_store.postgres"
         )
+        canonical_acquisition = importlib.import_module(
+            "firecrawl_skill.research_store.acquisition"
+        )
+        canonical_acquisition_service = importlib.import_module(
+            "firecrawl_skill.research_store.acquisition.service"
+        )
 
         legacy_domain = importlib.import_module("research_domain")
         legacy_models = importlib.import_module("research_domain.models")
         legacy_store = importlib.import_module("research_store")
         legacy_postgres = importlib.import_module("research_store.postgres")
+        legacy_acquisition = importlib.import_module("research_store.acquisition")
+        legacy_acquisition_service = importlib.import_module(
+            "research_store.acquisition.service"
+        )
 
         assert canonical_domain is legacy_domain
         assert canonical_models is legacy_models
         assert canonical_store is legacy_store
         assert canonical_postgres is legacy_postgres
+        assert canonical_acquisition is legacy_acquisition
+        assert canonical_acquisition_service is legacy_acquisition_service
         assert canonical_domain.HandoffPayload is legacy_domain.HandoffPayload
         assert canonical_store.ResearchRunService is legacy_store.ResearchRunService
 
@@ -118,6 +130,13 @@ def test_canonical_first_imports_preserve_canonical_module_identity() -> None:
         assert_canonical(canonical_store, "firecrawl_skill.research_store")
         assert_canonical(
             canonical_postgres, "firecrawl_skill.research_store.postgres"
+        )
+        assert_canonical(
+            canonical_acquisition, "firecrawl_skill.research_store.acquisition"
+        )
+        assert_canonical(
+            canonical_acquisition_service,
+            "firecrawl_skill.research_store.acquisition.service",
         )
         """
     )
@@ -139,6 +158,10 @@ def test_legacy_first_imports_delegate_to_canonical_module_identity() -> None:
         legacy_models = importlib.import_module("research_domain.models")
         legacy_store = importlib.import_module("research_store")
         legacy_postgres = importlib.import_module("research_store.postgres")
+        legacy_acquisition = importlib.import_module("research_store.acquisition")
+        legacy_acquisition_service = importlib.import_module(
+            "research_store.acquisition.service"
+        )
 
         canonical_domain = importlib.import_module("firecrawl_skill.research_domain")
         canonical_models = importlib.import_module("firecrawl_skill.research_domain.models")
@@ -146,17 +169,32 @@ def test_legacy_first_imports_delegate_to_canonical_module_identity() -> None:
         canonical_postgres = importlib.import_module(
             "firecrawl_skill.research_store.postgres"
         )
+        canonical_acquisition = importlib.import_module(
+            "firecrawl_skill.research_store.acquisition"
+        )
+        canonical_acquisition_service = importlib.import_module(
+            "firecrawl_skill.research_store.acquisition.service"
+        )
 
         assert canonical_domain is legacy_domain
         assert canonical_models is legacy_models
         assert canonical_store is legacy_store
         assert canonical_postgres is legacy_postgres
+        assert canonical_acquisition is legacy_acquisition
+        assert canonical_acquisition_service is legacy_acquisition_service
 
         assert_canonical(legacy_domain, "firecrawl_skill.research_domain")
         assert_canonical(legacy_models, "firecrawl_skill.research_domain.models")
         assert_canonical(legacy_store, "firecrawl_skill.research_store")
         assert_canonical(
             legacy_postgres, "firecrawl_skill.research_store.postgres"
+        )
+        assert_canonical(
+            legacy_acquisition, "firecrawl_skill.research_store.acquisition"
+        )
+        assert_canonical(
+            legacy_acquisition_service,
+            "firecrawl_skill.research_store.acquisition.service",
         )
         """
     )
@@ -212,6 +250,16 @@ def test_package_configuration_builds_and_runs_without_repository_path(
         "firecrawl_skill/_data/budget-policy-v1.json",
         "firecrawl_skill/research_store/__init__.py",
         "firecrawl_skill/research_store/postgres.py",
+        "firecrawl_skill/research_store/acquisition/__init__.py",
+        "firecrawl_skill/research_store/acquisition/authority.py",
+        "firecrawl_skill/research_store/acquisition/models.py",
+        "firecrawl_skill/research_store/acquisition/ports.py",
+        "firecrawl_skill/research_store/acquisition/service.py",
+        "firecrawl_skill/research_store/acquisition/direct_scrape.py",
+        "firecrawl_skill/research_store/acquisition/adapters/__init__.py",
+        "firecrawl_skill/research_store/acquisition/adapters/bounded_firecrawl.py",
+        "firecrawl_skill/research_store/acquisition/adapters/firecrawl_search.py",
+        "firecrawl_skill/research_store/acquisition/adapters/firecrawl_scrape.py",
         "firecrawl_skill/research_domain/__init__.py",
         "firecrawl_skill/research_domain/models.py",
         "research_store/__init__.py",
@@ -248,15 +296,39 @@ def test_package_configuration_builds_and_runs_without_repository_path(
                 canonical_postgres = importlib.import_module(
                     "firecrawl_skill.research_store.postgres"
                 )
+                canonical_acquisition = importlib.import_module(
+                    "firecrawl_skill.research_store.acquisition"
+                )
+                canonical_acquisition_service = importlib.import_module(
+                    "firecrawl_skill.research_store.acquisition.service"
+                )
+                canonical_direct_scrape = importlib.import_module(
+                    "firecrawl_skill.research_store.acquisition.direct_scrape"
+                )
+                canonical_bounded_adapter = importlib.import_module(
+                    "firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl"
+                )
+                canonical_search_adapter = importlib.import_module(
+                    "firecrawl_skill.research_store.acquisition.adapters.firecrawl_search"
+                )
+                canonical_scrape_adapter = importlib.import_module(
+                    "firecrawl_skill.research_store.acquisition.adapters.firecrawl_scrape"
+                )
                 legacy_domain = importlib.import_module("research_domain")
                 legacy_models = importlib.import_module("research_domain.models")
                 legacy_store = importlib.import_module("research_store")
                 legacy_postgres = importlib.import_module("research_store.postgres")
+                legacy_acquisition = importlib.import_module("research_store.acquisition")
+                legacy_acquisition_service = importlib.import_module(
+                    "research_store.acquisition.service"
+                )
 
                 assert canonical_domain is legacy_domain
                 assert canonical_models is legacy_models
                 assert canonical_store is legacy_store
                 assert canonical_postgres is legacy_postgres
+                assert canonical_acquisition is legacy_acquisition
+                assert canonical_acquisition_service is legacy_acquisition_service
 
                 assert canonical_domain.__name__ == "firecrawl_skill.research_domain"
                 assert canonical_domain.__spec__.name == "firecrawl_skill.research_domain"
@@ -274,6 +346,16 @@ def test_package_configuration_builds_and_runs_without_repository_path(
                 assert canonical_postgres.__spec__.name == (
                     "firecrawl_skill.research_store.postgres"
                 )
+                assert canonical_acquisition.__name__ == (
+                    "firecrawl_skill.research_store.acquisition"
+                )
+                assert canonical_acquisition_service.__name__ == (
+                    "firecrawl_skill.research_store.acquisition.service"
+                )
+                assert canonical_direct_scrape.DirectScrapeService
+                assert canonical_bounded_adapter.BoundedFirecrawlSearchAdapter
+                assert canonical_search_adapter.MetadataOnlyFirecrawlSearchAdapter
+                assert canonical_scrape_adapter.FirecrawlDirectScrapeAdapter
                 assert Path(budget_policy.POLICY_PATH).is_file()
                 """
             ),

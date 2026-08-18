@@ -28,6 +28,7 @@ import sys
 from dataclasses import FrozenInstanceError
 from hashlib import sha256
 from pathlib import Path
+from typing import LiteralString, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -132,7 +133,7 @@ class TestCommandDelegation:
 
         run_id = UUID("00000000-0000-0000-0000-000000000001")
         result = ResearchOrchestrator.run(
-            object(),
+            cast(ResearchOrchestrator, object()),
             run_id,
             {"query": "q"},
             {"queries": ["q1"]},
@@ -171,7 +172,7 @@ class TestCommandDelegation:
         )
         run_id = UUID("00000000-0000-0000-0000-000000000001")
         result = ResumableResearchOrchestrator.run(
-            orchestrator,
+            cast(ResumableResearchOrchestrator, orchestrator),
             run_id,
             {"query": "q"},
             {"queries": ["q1"]},
@@ -220,7 +221,7 @@ class TestCompositionRoot:
         source = inspect.getsource(build_production_orchestrator)
         assert "CheckpointResearchOrchestrator" in source
         assert "BoundedAcquisitionStage" in source
-        assert "BoundedExtractionStage" in source
+        assert "ProductionBoundedExtractionStage" in source
 
     def test_build_production_orchestrator_injects_bounded_stages(self):
         """The composition root must explicitly pass bounded stage classes."""
@@ -230,7 +231,7 @@ class TestCompositionRoot:
 
         source = inspect.getsource(build_production_orchestrator)
         assert "acquisition_stage_cls=BoundedAcquisitionStage" in source
-        assert "extraction_stage_cls=BoundedExtractionStage" in source
+        assert "extraction_stage_cls=ProductionBoundedExtractionStage" in source
 
 
 class TestCommandDataclass:
@@ -464,6 +465,9 @@ class TestResumeReaderIntegration:
         from research_store import postgres as pg
         from research_store.resume_state_repository import PostgresResumeStateReader
 
+        database_url = TEST_DSN
+        assert database_url is not None
+
         def sha(value: str) -> str:
             return sha256(value.encode()).hexdigest()
 
@@ -477,7 +481,7 @@ class TestResumeReaderIntegration:
         source_id = uuid4()
         url = f"https://example.com/resume-reader/{run_id}"
 
-        seed = [
+        seed: list[tuple[LiteralString, tuple[str, ...]]] = [
             (
                 (
                     "INSERT INTO research_runs (id, objective, query_plan, "
@@ -557,14 +561,14 @@ class TestResumeReaderIntegration:
                 (str(run_id), uuid4().hex),
             ),
         ]
-        with pg.connect(TEST_DSN) as conn, conn.cursor() as cur:
+        with pg.connect(database_url) as conn, conn.cursor() as cur:
             for statement, params in seed:
                 cur.execute(statement, params)
             conn.commit()
 
         try:
             reader = PostgresResumeStateReader(
-                lambda: pg.PostgresUnitOfWork(TEST_DSN, "resume-reader-test")
+                lambda: pg.PostgresUnitOfWork(database_url, "resume-reader-test")
             )
 
             counts = reader.counts(run_id)
@@ -586,7 +590,7 @@ class TestResumeReaderIntegration:
         finally:
             # research_run_transitions is append-only and blocks the run FK, so the
             # run and its transition are intentionally left in the disposable DB.
-            deletes = [
+            deletes: list[tuple[LiteralString, tuple[str, ...]]] = [
                 ("DELETE FROM chunks WHERE document_id=%s", (str(document_id),)),
                 ("DELETE FROM documents WHERE id=%s", (str(document_id),)),
                 (
@@ -603,7 +607,7 @@ class TestResumeReaderIntegration:
                 ),
                 ("DELETE FROM sources WHERE id=%s", (str(source_id),)),
             ]
-            with pg.connect(TEST_DSN) as conn, conn.cursor() as cur:
+            with pg.connect(database_url) as conn, conn.cursor() as cur:
                 conn.autocommit = True
                 for statement, params in deletes:
                     try:

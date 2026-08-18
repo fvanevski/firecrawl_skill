@@ -3,8 +3,9 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
-from .acquisition_authority import require_authoritative_acquisition
-from .acquisition_service import AcquisitionService
+from .acquisition.adapters.bounded_firecrawl import BoundedFirecrawlSearchAdapter
+from .acquisition.authority import require_authoritative_acquisition
+from .acquisition.service import AcquisitionService
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
 from .corpus_service import CorpusService
@@ -129,8 +130,14 @@ def build_semantic_service(config: StoreConfig | None = None) -> SemanticCallSer
 def build_acquisition_service(
     config: StoreConfig | None = None, search_adapter=None
 ) -> AcquisitionService:
+    """Compose acquisition policy with an explicit provider adapter."""
     config = config or StoreConfig.from_env()
     config.require_database()
+    adapter = (
+        search_adapter
+        if search_adapter is not None
+        else BoundedFirecrawlSearchAdapter()
+    )
     return AcquisitionService(
         partial(
             PostgresUnitOfWork,
@@ -144,7 +151,7 @@ def build_acquisition_service(
             config.chunker_version,
         ),
         blob_store=ContentAddressedBlobStore(config.blob_root),
-        search_adapter=search_adapter,
+        search_adapter=adapter,
         config=config,
         authority_preflight=require_authoritative_acquisition,
     )
