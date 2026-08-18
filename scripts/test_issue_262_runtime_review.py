@@ -14,13 +14,11 @@ sys.path.insert(0, str(SCRIPTS))
 # Importing the public package installs the issue #217 runtime compatibility
 # contract on BoundedExtractionStage.  The regression below deliberately tests
 # that effective runtime method rather than only inspecting its source module.
-import research_store  # noqa: E402,F401
-import research_store.orchestration.composition as composition  # noqa: E402
-from research_store.acquisition.models import SearchAdapterResult  # noqa: E402
-from research_store.bounded_orchestrator import BoundedExtractionStage  # noqa: E402
-from research_store.ingestion_batch_semantics import (  # noqa: E402
-    _bounded_extraction_execute,
-)
+import research_store
+from research_store.acquisition.models import SearchAdapterResult
+from research_store.bounded_orchestrator import BoundedExtractionStage
+from research_store.ingestion_batch_semantics import _bounded_extraction_execute
+from research_store.orchestration import composition
 
 
 class _RecordingCandidateScrapeAdapter:
@@ -65,6 +63,7 @@ def test_runtime_issue_217_execute_uses_production_candidate_scrape_port(
     that injected port for a provider-needed candidate.
     """
 
+    assert research_store.ResearchOrchestrator is not None
     assert BoundedExtractionStage.execute is _bounded_extraction_execute
 
     adapter = _RecordingCandidateScrapeAdapter()
