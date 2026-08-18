@@ -841,7 +841,9 @@ def _legacy_preflight_check(
                 PointStruct,
                 VectorParams,
             )
+            from research_store.config import StoreConfig
 
+            embedding_dimension = StoreConfig.from_env().embedding_dimension
             client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key or None)
             test_collection = "preflight_test_write_read"
             alias_name = os.environ.get("QDRANT_ALIAS", "research_chunks_active")
@@ -862,7 +864,10 @@ def _legacy_preflight_check(
                 try:
                     client.create_collection(
                         collection_name,
-                        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                        vectors_config=VectorParams(
+                            size=embedding_dimension,
+                            distance=Distance.COSINE,
+                        ),
                     )
                     client.create_payload_index(
                         collection_name,
@@ -873,7 +878,7 @@ def _legacy_preflight_check(
                     client.close()
                     raise
             test_id = str(uuid_module.uuid4())
-            test_vector = [0.0] * 768
+            test_vector = [0.0] * embedding_dimension
             client.upsert(
                 collection_name,
                 points=[

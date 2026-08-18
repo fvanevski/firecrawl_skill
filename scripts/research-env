@@ -3,6 +3,8 @@
 # Values remain file-backed; no secret is copied into the repository.
 #
 # Priority: explicit env vars > .env file > defaults / container secrets.
+# Embedding identity is the exception: it is deployment-specific and must be
+# supplied explicitly or by the root .env file.
 
 research_skill_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 research_env_file="$research_skill_root/.env"
@@ -77,9 +79,18 @@ fi
 
 export BLOB_ROOT="${BLOB_ROOT:-/opt/containers/research-assets/blobs}"
 export EMBEDDING_URL="${EMBEDDING_URL:-http://127.0.0.1:8004/v1/embeddings}"
-export EMBEDDING_MODEL="${EMBEDDING_MODEL:-embed}"
-export EMBEDDING_REVISION="${EMBEDDING_REVISION:-qwen3-embedding-0.6b-q4_k_m@8c605f43dcb0}"
-export EMBEDDING_DIMENSION="${EMBEDDING_DIMENSION:-1024}"
+for research_embedding_key in \
+  EMBEDDING_MODEL EMBEDDING_REVISION EMBEDDING_DIMENSION; do
+  if [[ -z "${!research_embedding_key:-}" ]]; then
+    echo "ERROR: $research_embedding_key must be set explicitly or in $research_env_file" >&2
+    return 1 2>/dev/null || exit 1
+  fi
+done
+if [[ ! "$EMBEDDING_DIMENSION" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: EMBEDDING_DIMENSION must be a positive integer" >&2
+  return 1 2>/dev/null || exit 1
+fi
+export EMBEDDING_MODEL EMBEDDING_REVISION EMBEDDING_DIMENSION
 export RERANKER_URL="${RERANKER_URL:-http://127.0.0.1:8004/v1/rerank}"
 export RERANKER_MODEL="${RERANKER_MODEL:-rerank}"
 export GENERATIVE_URL="${GENERATIVE_URL:-http://127.0.0.1:8004/v1}"
@@ -91,6 +102,6 @@ export CHUNKER_VERSION="${CHUNKER_VERSION:-hierarchical-v1}"
 export FIRECRAWL_RESEARCH_PYTHON="$research_python"
 
 unset research_skill_root research_env_file research_env_dump research_env_entry
-unset research_env_key research_env_value research_python
+unset research_env_key research_env_value research_embedding_key research_python
 unset research_postgres_dir research_qdrant_dir research_valkey_dir
 unset -f research_urlencode
