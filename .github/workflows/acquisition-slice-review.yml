@@ -145,18 +145,18 @@ jobs:
             PGPASSWORD=postgres psql \
               -h 127.0.0.1 \
               -U postgres \
-              -c "CREATE DATABASE firecrawl_acquisition_slice_review;" \
+              -c "CREATE DATABASE firecrawl_acquisition_slice_review_test;" \
               2>/dev/null && break
             sleep 1
           done
           PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -lqt \
-            | grep -q firecrawl_acquisition_slice_review
+            | grep -q firecrawl_acquisition_slice_review_test
 
       - name: Run focused acquisition-slice authorities
         env:
           RESEARCH_STORE_TEST_DATABASE_URL: >-
-            postgresql://postgres:postgres@127.0.0.1/firecrawl_acquisition_slice_review
-          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_acquisition_slice_review
+            postgresql://postgres:postgres@127.0.0.1/firecrawl_acquisition_slice_review_test
+          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_acquisition_slice_review_test
         run: |
           python -m pytest \
             -q \
