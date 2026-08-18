@@ -15,6 +15,22 @@ def _integer(name: str, default: int) -> int:
     return value
 
 
+def _required(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise ValueError(
+            f"{name} must be set explicitly or loaded from the repository .env"
+        )
+    return value
+
+
+def _required_integer(name: str) -> int:
+    value = int(_required(name))
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
 def _non_negative_integer(name: str, default: int) -> int:
     """Read an integer env var that may be zero (zero means "unlimited")."""
     value = int(os.environ.get(name, default))
@@ -87,11 +103,11 @@ class StoreConfig:
                     "BLOB_ROOT", Path.home() / ".local/share/firecrawl/blobs"
                 )
             ),
-            embedding_model=os.environ.get("EMBEDDING_MODEL", "embed"),
+            embedding_model=_required("EMBEDDING_MODEL"),
             embedding_url=os.environ.get("EMBEDDING_URL", ""),
             embedding_api_key=os.environ.get("EMBEDDING_API_KEY", ""),
-            embedding_revision=os.environ.get("EMBEDDING_REVISION", "main"),
-            embedding_dimension=_integer("EMBEDDING_DIMENSION", 1024),
+            embedding_revision=_required("EMBEDDING_REVISION"),
+            embedding_dimension=_required_integer("EMBEDDING_DIMENSION"),
             reranker_url=os.environ.get("RERANKER_URL", ""),
             reranker_model=os.environ.get("RERANKER_MODEL", "rerank"),
             reranker_api_key=os.environ.get("RERANKER_API_KEY", ""),

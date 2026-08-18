@@ -17,6 +17,13 @@ on:
 permissions:
   contents: read
 
+# CI has no ignored root .env, so use an explicit synthetic embedding identity.
+# Production wrappers resolve the deployment identity from their root .env.
+env:
+  EMBEDDING_MODEL: ci-test-embedding
+  EMBEDDING_REVISION: ci-test-revision
+  EMBEDDING_DIMENSION: "4"
+
 jobs:
   release-invariants:
     name: "Release invariants — Python ${{ matrix.python-version }}"

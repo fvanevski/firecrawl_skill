@@ -5,6 +5,9 @@ import pathlib
 import shutil
 import subprocess
 
+import pytest
+from research_store.config import StoreConfig
+
 SOURCE_ADAPTER = pathlib.Path(__file__).with_name("research-env")
 
 
@@ -47,6 +50,7 @@ source "$1"
 printf '%s\n' \
   "$EMBEDDING_MODEL" \
   "$EMBEDDING_REVISION" \
+  "$EMBEDDING_DIMENSION" \
   "${CUSTOM_FROM_ENV_FILE:-}"
 """,
             "bash",
@@ -66,7 +70,10 @@ def test_loads_root_env_and_ignores_legacy_nested_path(
 ) -> None:
     root, adapter, environment = _sandbox(tmp_path)
     (root / ".env").write_text(
-        'EMBEDDING_MODEL="root-model"\nCUSTOM_FROM_ENV_FILE="loaded from root"\n',
+        'EMBEDDING_MODEL="root-model"\n'
+        'EMBEDDING_REVISION="root-revision"\n'
+        'EMBEDDING_DIMENSION="384"\n'
+        'CUSTOM_FROM_ENV_FILE="loaded from root"\n',
         encoding="utf-8",
     )
     legacy_dir = root / "firecrawl"
@@ -80,7 +87,8 @@ def test_loads_root_env_and_ignores_legacy_nested_path(
 
     assert values == [
         "root-model",
-        "qwen3-embedding-0.6b-q4_k_m@8c605f43dcb0",
+        "root-revision",
+        "384",
         "loaded from root",
     ]
 
@@ -88,33 +96,52 @@ def test_loads_root_env_and_ignores_legacy_nested_path(
 def test_explicit_environment_wins_over_root_env(tmp_path: pathlib.Path) -> None:
     root, adapter, environment = _sandbox(tmp_path)
     (root / ".env").write_text(
-        'EMBEDDING_MODEL="file-model"\nEMBEDDING_REVISION="file-revision"\n',
+        'EMBEDDING_MODEL="file-model"\n'
+        'EMBEDDING_REVISION="file-revision"\n'
+        'EMBEDDING_DIMENSION="512"\n',
         encoding="utf-8",
     )
     environment["EMBEDDING_MODEL"] = "explicit-model"
 
     values = _source_values(root, adapter, environment)
 
-    assert values == ["explicit-model", "file-revision", ""]
+    assert values == ["explicit-model", "file-revision", "512", ""]
 
 
-def test_defaults_apply_when_root_env_is_absent(tmp_path: pathlib.Path) -> None:
+def test_missing_embedding_identity_fails_closed(tmp_path: pathlib.Path) -> None:
     root, adapter, environment = _sandbox(tmp_path)
 
-    values = _source_values(root, adapter, environment)
+    result = subprocess.run(
+        [
+            "bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            'set -euo pipefail; source "$1"',
+            "bash",
+            str(adapter),
+        ],
+        cwd=root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
-    assert values == [
-        "embed",
-        "qwen3-embedding-0.6b-q4_k_m@8c605f43dcb0",
-        "",
-    ]
+    assert result.returncode != 0
+    assert "EMBEDDING_MODEL must be set explicitly or in" in result.stderr
 
 
 def test_loading_env_preserves_caller_allexport_option(
     tmp_path: pathlib.Path,
 ) -> None:
     root, adapter, environment = _sandbox(tmp_path)
-    (root / ".env").write_text('EMBEDDING_MODEL="file-model"\n', encoding="utf-8")
+    (root / ".env").write_text(
+        'EMBEDDING_MODEL="file-model"\n'
+        'EMBEDDING_REVISION="file-revision"\n'
+        'EMBEDDING_DIMENSION="256"\n',
+        encoding="utf-8",
+    )
 
     result = subprocess.run(
         [
@@ -170,3 +197,34 @@ def test_malformed_root_env_fails_closed(tmp_path: pathlib.Path) -> None:
 
     assert result.returncode != 0
     assert "unable to load" in result.stderr
+
+
+def test_store_config_uses_resolved_embedding_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EMBEDDING_MODEL", "configured-model")
+    monkeypatch.setenv("EMBEDDING_REVISION", "configured-revision")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "640")
+
+    config = StoreConfig.from_env()
+
+    assert config.embedding_model == "configured-model"
+    assert config.embedding_revision == "configured-revision"
+    assert config.embedding_dimension == 640
+
+
+@pytest.mark.parametrize(
+    "missing_name",
+    ("EMBEDDING_MODEL", "EMBEDDING_REVISION", "EMBEDDING_DIMENSION"),
+)
+def test_store_config_requires_embedding_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_name: str,
+) -> None:
+    monkeypatch.setenv("EMBEDDING_MODEL", "configured-model")
+    monkeypatch.setenv("EMBEDDING_REVISION", "configured-revision")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "640")
+    monkeypatch.delenv(missing_name)
+
+    with pytest.raises(ValueError, match=missing_name):
+        StoreConfig.from_env()
