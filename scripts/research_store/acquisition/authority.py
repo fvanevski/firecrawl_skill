@@ -18,8 +18,7 @@ import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import TracebackType
-from typing import Any, Protocol, Self
+from typing import Any, Protocol, cast
 from uuid import UUID
 
 from ..config import StoreConfig
@@ -28,35 +27,9 @@ from ..run_service import TERMINAL_STATES
 
 
 class _AcquisitionCursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None: ...
-
     def execute(self, query: str, params: object = ...) -> Any: ...
 
     def fetchone(self) -> Any: ...
-
-    def fetchall(self) -> Any: ...
-
-
-class _AcquisitionConnection(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None: ...
-
-    def cursor(self) -> _AcquisitionCursor: ...
-
-    def rollback(self) -> None: ...
 
 
 class AcquisitionPreflightError(RuntimeError):
@@ -194,7 +167,7 @@ def require_authoritative_acquisition(
     run_id: UUID | str | None,
     dry_run: bool = False,
     config: StoreConfig | None = None,
-    connect_factory: Callable[[str], _AcquisitionConnection] = connect,
+    connect_factory: Callable[[str], object] = connect,
     expected_heads_factory: Callable[[], frozenset[str]] = _expected_schema_heads,
 ) -> AuthoritativeAcquisitionContext:
     resolved = config or StoreConfig.from_env()
@@ -211,7 +184,11 @@ def require_authoritative_acquisition(
     run_state: str | None = None
     lifecycle_revision: int | None = None
     try:
-        with connect_factory(resolved.database_url) as connection:
+        # psycopg exposes cursor() as an overload set while tests inject minimal
+        # DB-API fakes.  The factory is intentionally opaque at this seam; the
+        # acquisition contract is validated by the operations below and their
+        # fail-closed regression suite.
+        with cast(Any, connect_factory(resolved.database_url)) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT version_num FROM alembic_version")
                 current_heads = frozenset(row[0] for row in cursor.fetchall())
