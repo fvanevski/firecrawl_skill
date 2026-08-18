@@ -225,6 +225,34 @@ def test_production_orchestration_selects_bounded_candidate_transport() -> None:
     assert "extraction_stage_cls=extraction_stage_cls" in resume_source
 
 
+def test_public_checkpoint_builder_defaults_to_production_bounded_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from research_store.bounded_orchestrator import BoundedAcquisitionStage
+    from research_store.checkpoint_orchestrator import CheckpointResearchOrchestrator
+    from research_store.orchestration.composition import ProductionBoundedExtractionStage
+    from research_store.orchestrator import ResearchOrchestrator as BaseResearchOrchestrator
+
+    captured: dict[str, Any] = {}
+    sentinel = object()
+
+    def fake_build(cls: type[Any], config: Any = None, **kwargs: Any) -> Any:
+        captured["cls"] = cls
+        captured["config"] = config
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(BaseResearchOrchestrator, "build", classmethod(fake_build))
+    config = object()
+
+    assert research_store.ResearchOrchestrator is CheckpointResearchOrchestrator
+    assert CheckpointResearchOrchestrator.build(config) is sentinel
+    assert captured["cls"] is CheckpointResearchOrchestrator
+    assert captured["config"] is config
+    assert captured["acquisition_stage_cls"] is BoundedAcquisitionStage
+    assert captured["extraction_stage_cls"] is ProductionBoundedExtractionStage
+
+
 def test_direct_scrape_default_selection_is_confined_to_builder_scope() -> None:
     path = ACQUISITION / "direct_scrape.py"
     imports = _top_level_imports(path)
