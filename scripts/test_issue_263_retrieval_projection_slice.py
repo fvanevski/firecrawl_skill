@@ -5,8 +5,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from research_store import indexing as legacy_indexing
 from research_store import qdrant as legacy_qdrant
 from research_store import retrieval as canonical_retrieval
+from research_store.retrieval.projection import indexing as canonical_indexing
 from research_store.retrieval.projection import qdrant as canonical_qdrant
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +40,17 @@ def test_legacy_qdrant_module_is_the_canonical_projection_module() -> None:
         ".research_store.retrieval.projection.qdrant"
     )
     assert _defined_symbols(STORE / "qdrant.py") == set()
+
+
+def test_legacy_indexing_module_is_the_canonical_projection_module() -> None:
+    assert legacy_indexing is canonical_indexing
+    assert canonical_indexing.IndexWorker.__module__.endswith(
+        ".research_store.retrieval.projection.indexing"
+    )
+    assert canonical_indexing.OpenAICompatibleEmbedder.__module__.endswith(
+        ".research_store.retrieval.projection.indexing"
+    )
+    assert _defined_symbols(STORE / "indexing.py") == set()
 
 
 def test_projection_boundary_declares_non_authoritative_qdrant_contract() -> None:
