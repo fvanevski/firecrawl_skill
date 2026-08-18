@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections import defaultdict
-from urllib.request import Request, urlopen
+from urllib.request import Request as _DefaultRequest
+from urllib.request import urlopen as _default_urlopen
 
 
 def reciprocal_rank_fusion(
@@ -84,7 +86,10 @@ class CohereCompatibleReranker:
         documents = [
             item.get("excerpt") or item.get("title") or "" for item in candidates
         ]
-        request = Request(
+        package = sys.modules.get(__package__)
+        request_type = getattr(package, "Request", _DefaultRequest)
+        opener = getattr(package, "urlopen", _default_urlopen)
+        request = request_type(
             self.url,
             data=json.dumps(
                 {"model": self.model, "query": query, "documents": documents}
@@ -92,7 +97,7 @@ class CohereCompatibleReranker:
             headers=headers,
             method="POST",
         )
-        with urlopen(request, timeout=60) as response:
+        with opener(request, timeout=60) as response:
             results = json.load(response).get("results", [])
         scores = {
             int(item["index"]): float(item["relevance_score"]) for item in results
