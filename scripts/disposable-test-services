@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+POSTGRES_IMAGE="postgres:16-alpine"
+QDRANT_IMAGE="qdrant/qdrant:v1.18.3-unprivileged"
+HOST="127.0.0.1"
+DEFAULT_NAMESPACE="fc_local"
+DEFAULT_PG_PORT="55436"
+DEFAULT_QDRANT_PORT="55437"
+PROTECTED_PORTS=("55432" "6333")
+OWNER_LABEL="io.firecrawl-skill.disposable-test"
+NAMESPACE_LABEL="io.firecrawl-skill.test-namespace"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  scripts/disposable-test-services [options] <up|env|reset-qdrant|down>
+
+Options:
+  --namespace NAME    Disposable namespace (default: fc_local)
+  --pg-port PORT      Host PostgreSQL port (default: 55436)
+  --qdrant-port PORT  Host Qdrant port (default: 55437)
+  -h, --help          Show this help
+
+Examples:
+  eval "$(scripts/disposable-test-services --namespace fc263 up)"
+  scripts/disposable-test-services --namespace fc263 reset-qdrant
+  scripts/disposable-test-services --namespace fc263 down
+
+The helper binds only to 127.0.0.1, refuses the repository's known persistent
+service ports (55432 and 6333), and never reuses an existing test container.
+USAGE
+}
+
+fail() {
+  printf 'disposable-test-services: %s\n' "$*" >&2
+  return 1
+}
+
+log() {
+  printf 'disposable-test-services: %s\n' "$*" >&2
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}
+
+validate_port() {
+  local name="$1"
+  local port="$2"
+  [[ "$port" =~ ^[0-9]+$ ]] || fail "$name must be numeric: $port"
+  (( port >= 1024 && port <= 65535 )) || fail "$name must be between 1024 and 65535: $port"
+  local protected
+  for protected in "${PROTECTED_PORTS[@]}"; do
+    [[ "$port" != "$protected" ]] || fail "$name $port is reserved for a persistent local service"
+  done
+}
+
+namespace="$DEFAULT_NAMESPACE"
+pg_port="$DEFAULT_PG_PORT"
+qdrant_port="$DEFAULT_QDRANT_PORT"
+
+while (($#)); do
+  case "$1" in
+    --namespace)
+      (($# >= 2)) || fail "--namespace requires a value"
+      namespace="$2"
+      shift 2
+      ;;
+    --pg-port)
+      (($# >= 2)) || fail "--pg-port requires a value"
+      pg_port="$2"
+      shift 2
+      ;;
+    --qdrant-port)
+      (($# >= 2)) || fail "--qdrant-port requires a value"
+      qdrant_port="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    up|env|reset-qdrant|down)
+      command_name="$1"
+      shift
+      (($# == 0)) || fail "unexpected argument after command: $1"
+      break
+      ;;
+    *)
+      fail "unknown option or command: $1"
+      ;;
+  esac
+done
+
+[[ -n "${command_name:-}" ]] || { usage >&2; exit 2; }
+[[ "$namespace" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || \
+  fail "namespace must match ^[a-z0-9][a-z0-9_-]{0,47}$"
+validate_port "PostgreSQL port" "$pg_port"
+validate_port "Qdrant port" "$qdrant_port"
+[[ "$pg_port" != "$qdrant_port" ]] || fail "PostgreSQL and Qdrant host ports must differ"
+
+db_namespace="${namespace//-/_}"
+database_name="${db_namespace}_test"
+pg_container="${namespace}_pg"
+qdrant_container="${namespace}_qdrant"
+pg_url="postgresql://postgres:postgres@${HOST}:${pg_port}/${database_name}"
+qdrant_url="http://${HOST}:${qdrant_port}"
+created_pg=0
+created_qdrant=0
+
+emit_env() {
+  printf "export RESEARCH_STORE_TEST_DATABASE_URL='%s'\n" "$pg_url"
+  printf "export RESEARCH_STORE_TEST_ALLOW_RESET='%s'\n" "$database_name"
+  printf "export QDRANT_URL='%s'\n" "$qdrant_url"
+  printf "export RESEARCH_STORE_TEST_QDRANT_URL='%s'\n" "$qdrant_url"
+  printf "export RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET='%s'\n" "$qdrant_url"
+}
+
+container_exists() {
+  docker inspect "$1" >/dev/null 2>&1
+}
+
+container_label() {
+  local name="$1"
+  local label="$2"
+  docker inspect --format "{{ index .Config.Labels \"${label}\" }}" "$name" 2>/dev/null || true
+}
+
+assert_owned_if_exists() {
+  local name="$1"
+  if ! container_exists "$name"; then
+    return 0
+  fi
+  local owned actual_namespace
+  owned="$(container_label "$name" "$OWNER_LABEL")"
+  actual_namespace="$(container_label "$name" "$NAMESPACE_LABEL")"
+  [[ "$owned" == "true" && "$actual_namespace" == "$namespace" ]] || \
+    fail "refusing to modify existing non-owned container: $name"
+}
+
+assert_absent() {
+  local name="$1"
+  if container_exists "$name"; then
+    assert_owned_if_exists "$name"
+    fail "container already exists: $name; run 'down' first to guarantee fresh state"
+  fi
+}
+
+start_postgres() {
+  docker run -d \
+    --name "$pg_container" \
+    --label "${OWNER_LABEL}=true" \
+    --label "${NAMESPACE_LABEL}=${namespace}" \
+    -e POSTGRES_PASSWORD=postgres \
+    -p "${HOST}:${pg_port}:5432" \
+    "$POSTGRES_IMAGE" >/dev/null
+  created_pg=1
+
+  local attempt
+  for attempt in $(seq 1 30); do
+    if docker exec "$pg_container" pg_isready -U postgres -d postgres >/dev/null 2>&1; then
+      break
+    fi
+    (( attempt < 30 )) || fail "PostgreSQL did not become ready"
+    sleep 1
+  done
+
+  docker exec -e PGPASSWORD=postgres "$pg_container" \
+    psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+    -c "CREATE DATABASE \"${database_name}\";" >/dev/null
+}
+
+start_qdrant() {
+  docker run -d \
+    --name "$qdrant_container" \
+    --label "${OWNER_LABEL}=true" \
+    --label "${NAMESPACE_LABEL}=${namespace}" \
+    -e QDRANT__SERVICE__READ_ONLY_ACCESS=false \
+    -p "${HOST}:${qdrant_port}:6333" \
+    "$QDRANT_IMAGE" >/dev/null
+  created_qdrant=1
+
+  local attempt
+  for attempt in $(seq 1 30); do
+    if curl --fail --silent --show-error --max-time 2 "${qdrant_url}/healthz" >/dev/null 2>&1; then
+      return 0
+    fi
+    (( attempt < 30 )) || fail "Qdrant did not become healthy"
+    sleep 1
+  done
+}
+
+case "$command_name" in
+  env)
+    emit_env
+    ;;
+
+  up)
+    require_command docker
+    require_command curl
+    assert_absent "$pg_container"
+    assert_absent "$qdrant_container"
+
+    created_pg=0
+    created_qdrant=0
+    cleanup_partial() {
+      if (( created_qdrant )); then docker rm -f "$qdrant_container" >/dev/null 2>&1 || true; fi
+      if (( created_pg )); then docker rm -f "$pg_container" >/dev/null 2>&1 || true; fi
+    }
+    trap cleanup_partial ERR
+
+    log "starting fresh PostgreSQL ${POSTGRES_IMAGE} as ${pg_container} on ${HOST}:${pg_port}"
+    start_postgres
+    log "starting fresh Qdrant ${QDRANT_IMAGE} as ${qdrant_container} on ${HOST}:${qdrant_port}"
+    start_qdrant
+
+    trap - ERR
+    log "services ready; evaluate the emitted exports in the test shell"
+    emit_env
+    ;;
+
+  reset-qdrant)
+    require_command docker
+    require_command curl
+    assert_owned_if_exists "$qdrant_container"
+    if container_exists "$qdrant_container"; then
+      log "removing ${qdrant_container}; restart is intentionally insufficient for a clean projection"
+      docker rm -f "$qdrant_container" >/dev/null
+    fi
+    log "starting a fresh Qdrant container on ${HOST}:${qdrant_port}"
+    created_qdrant=0
+    cleanup_qdrant_failure() {
+      if (( created_qdrant )); then docker rm -f "$qdrant_container" >/dev/null 2>&1 || true; fi
+    }
+    trap cleanup_qdrant_failure ERR
+    start_qdrant
+    trap - ERR
+    emit_env
+    ;;
+
+  down)
+    require_command docker
+    # Validate ownership of every existing target before deleting either one.
+    assert_owned_if_exists "$pg_container"
+    assert_owned_if_exists "$qdrant_container"
+    if container_exists "$qdrant_container"; then
+      docker rm -f "$qdrant_container" >/dev/null
+      log "removed ${qdrant_container}"
+    fi
+    if container_exists "$pg_container"; then
+      docker rm -f "$pg_container" >/dev/null
+      log "removed ${pg_container}"
+    fi
+    ;;
+esac
