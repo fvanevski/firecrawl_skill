@@ -27,7 +27,9 @@ _REQUIRED_RETRIEVAL_FILES = {
 }
 
 
-def test_retrieval_projection_packages_build_and_import_in_isolation(tmp_path: Path) -> None:
+def test_retrieval_projection_packages_build_and_import_in_isolation(
+    tmp_path: Path,
+) -> None:
     result = subprocess.run(
         [
             sys.executable,
