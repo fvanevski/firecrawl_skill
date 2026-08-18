@@ -1,6 +1,6 @@
-"""Compatibility facade for the canonical retrieval capability package."""
+"""Unambiguous bridge for the historical ``research_store.retrieval`` module."""
 
-from .retrieval_core import (
+from .retrieval.ranking import (
     CohereCompatibleReranker as CohereCompatibleReranker,
     pack_context as pack_context,
     reciprocal_rank_fusion as reciprocal_rank_fusion,
