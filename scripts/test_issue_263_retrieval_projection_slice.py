@@ -9,9 +9,17 @@ from research_store import indexing as legacy_indexing
 from research_store import qdrant as legacy_qdrant
 from research_store import retrieval as canonical_retrieval
 from research_store import retrieval_service as legacy_retrieval_service
+from research_store.postgres_retrieval import (
+    PostgresIndexJobRepository as LegacyPostgresIndexJobRepository,
+)
+from research_store.postgres_retrieval import (
+    PostgresRetrievalRepository as LegacyPostgresRetrievalRepository,
+)
 from research_store.retrieval import service as canonical_retrieval_service
+from research_store.retrieval.postgres import PostgresRetrievalRepository
 from research_store.retrieval.projection import indexing as canonical_indexing
 from research_store.retrieval.projection import qdrant as canonical_qdrant
+from research_store.retrieval.projection.postgres_jobs import PostgresIndexJobRepository
 
 ROOT = Path(__file__).resolve().parents[1]
 STORE = ROOT / "scripts" / "research_store"
@@ -42,6 +50,18 @@ def test_legacy_retrieval_service_is_canonical_application_service() -> None:
         ".research_store.retrieval.service"
     )
     assert _defined_symbols(STORE / "retrieval_service.py") == set()
+
+
+def test_postgres_repositories_are_split_by_authority() -> None:
+    assert LegacyPostgresRetrievalRepository is PostgresRetrievalRepository
+    assert LegacyPostgresIndexJobRepository is PostgresIndexJobRepository
+    assert PostgresRetrievalRepository.__module__.endswith(
+        ".research_store.retrieval.postgres"
+    )
+    assert PostgresIndexJobRepository.__module__.endswith(
+        ".research_store.retrieval.projection.postgres_jobs"
+    )
+    assert _defined_symbols(STORE / "postgres_retrieval.py") == set()
 
 
 def test_legacy_qdrant_module_is_the_canonical_projection_module() -> None:
