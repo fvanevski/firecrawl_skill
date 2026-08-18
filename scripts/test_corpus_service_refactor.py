@@ -81,9 +81,9 @@ def test_retrieval_behavior_is_extracted_from_canonical_corpus_implementation() 
 
 def test_internal_corpus_builders_import_the_canonical_slice() -> None:
     container_source = (_STORE / "container.py").read_text(encoding="utf-8")
-    direct_scrape_source = (_STORE / "direct_scrape_service.py").read_text(
-        encoding="utf-8"
-    )
+    direct_scrape_source = (
+        _STORE / "acquisition" / "direct_scrape.py"
+    ).read_text(encoding="utf-8")
     for source in (container_source, direct_scrape_source):
         assert "from .service import CorpusService" not in source
         assert "from .corpus_service import CorpusService" in source
@@ -98,7 +98,7 @@ def test_prepared_ingest_preserves_parser_and_chunker_provenance_contract() -> N
         request=request,
         canonical_url="https://example.test/",
         blob=blob,
-        normalized_text="body",
+        normalized_content="body",
         blocks=blocks,
         chunks=chunks,
         parser_name="pkg.Parser",
