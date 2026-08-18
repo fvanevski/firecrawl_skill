@@ -8,7 +8,6 @@ from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-
 import research_store
 from research_store import acquisition_service as legacy_acquisition_service
 from research_store import bounded_acquisition as legacy_bounded_acquisition
@@ -46,9 +45,7 @@ def _tree(path: Path) -> ast.Module:
 
 
 def _defined_classes(path: Path) -> set[str]:
-    return {
-        node.name for node in _tree(path).body if isinstance(node, ast.ClassDef)
-    }
+    return {node.name for node in _tree(path).body if isinstance(node, ast.ClassDef)}
 
 
 def _top_level_imports(path: Path) -> set[str]:
@@ -90,9 +87,7 @@ def test_legacy_acquisition_symbols_are_same_object_compatibility_facades() -> N
 def test_acquisition_package_initializer_is_cycle_safe_and_inert() -> None:
     tree = _tree(ACQUISITION / "__init__.py")
     imports = [
-        node
-        for node in tree.body
-        if isinstance(node, (ast.Import, ast.ImportFrom))
+        node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
     ]
     assert imports == []
 
@@ -229,7 +224,9 @@ def test_direct_scrape_default_selection_is_confined_to_builder_scope() -> None:
     imports = _top_level_imports(path)
     assert not any(".adapters" in module for module in imports)
     source = path.read_text(encoding="utf-8")
-    assert "from .adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter" in source
+    assert (
+        "from .adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter" in source
+    )
     assert source.index("def build_direct_scrape_service") < source.index(
         "from .adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter"
     )

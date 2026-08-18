@@ -133,7 +133,11 @@ def build_acquisition_service(
     """Compose acquisition policy with an explicit provider adapter."""
     config = config or StoreConfig.from_env()
     config.require_database()
-    adapter = search_adapter if search_adapter is not None else BoundedFirecrawlSearchAdapter()
+    adapter = (
+        search_adapter
+        if search_adapter is not None
+        else BoundedFirecrawlSearchAdapter()
+    )
     return AcquisitionService(
         partial(
             PostgresUnitOfWork,

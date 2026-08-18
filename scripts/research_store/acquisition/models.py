@@ -202,9 +202,9 @@ class DirectScrapeBatchResult:
 
 
 __all__ = [
-    "AcquisitionResult",
     "DIRECT_SCRAPE_FORMAT_MIME_TYPES",
     "DIRECT_SCRAPE_SUPPORTED_FORMATS",
+    "AcquisitionResult",
     "DirectScrapeBatchResult",
     "DirectScrapeItemResult",
     "DirectScrapeRequest",

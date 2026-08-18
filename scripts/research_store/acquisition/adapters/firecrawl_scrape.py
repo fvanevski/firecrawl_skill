@@ -95,8 +95,16 @@ class FirecrawlDirectScrapeAdapter:
                 metadata={"failure_class": "network"},
             )
 
-        stdout = process.stdout.encode() if isinstance(process.stdout, str) else process.stdout
-        stderr = process.stderr.encode() if isinstance(process.stderr, str) else process.stderr
+        stdout = (
+            process.stdout.encode()
+            if isinstance(process.stdout, str)
+            else process.stdout
+        )
+        stderr = (
+            process.stderr.encode()
+            if isinstance(process.stderr, str)
+            else process.stderr
+        )
         return ScrapeTransportResult(
             raw_payload=stdout or b"",
             returncode=int(process.returncode),

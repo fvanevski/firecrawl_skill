@@ -102,7 +102,9 @@ class BoundedFirecrawlSearchAdapter:
                         "exit_code": command_result.returncode,
                         "first_byte_seconds": command_result.first_byte_seconds,
                         "provider_operation_seconds": command_result.elapsed_seconds,
-                        "elapsed_seconds": (responded_at - requested_at).total_seconds(),
+                        "elapsed_seconds": (
+                            responded_at - requested_at
+                        ).total_seconds(),
                         "timeout_reason": command_result.timeout_reason,
                         "cancelled": command_result.cancelled,
                         "deadline_policy": self.deadline_policy.to_dict(),
@@ -186,7 +188,9 @@ class BoundedFirecrawlSearchAdapter:
 
         while True:
             elapsed_before = time.monotonic() - started
-            remaining = self.deadline_policy.overall_candidate_timeout_seconds - elapsed_before
+            remaining = (
+                self.deadline_policy.overall_candidate_timeout_seconds - elapsed_before
+            )
             if remaining <= 0:
                 outcome = CandidatePreflightResult(
                     classification="timeout",
@@ -292,7 +296,9 @@ class BoundedFirecrawlSearchAdapter:
                         "attempts": attempt,
                         "operation": "candidate_scrape",
                         "exit_code": command_result.returncode,
-                        "stderr": redact_error_text(command_result.stderr, max_chars=500),
+                        "stderr": redact_error_text(
+                            command_result.stderr, max_chars=500
+                        ),
                         "first_byte_seconds": command_result.first_byte_seconds,
                         "provider_operation_seconds": command_result.elapsed_seconds,
                         "elapsed_seconds": total_elapsed,

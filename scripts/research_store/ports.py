@@ -6,7 +6,7 @@ from uuid import UUID
 
 from research_domain.models import RetrievalExecution
 
-from .acquisition.ports import SearchAdapter
+from .acquisition.ports import SearchAdapter  # noqa: F401
 from .domain import (
     BlobReference,
     ExtractionQualityMetrics,

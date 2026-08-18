@@ -147,7 +147,9 @@ def _classify_search_transport_error(
     if returncode == 0 and not has_payload:
         return "Firecrawl search returned an empty response"
     if diagnostic:
-        return f"Firecrawl search failed (exit {returncode}): {_bounded_text(diagnostic)}"
+        return (
+            f"Firecrawl search failed (exit {returncode}): {_bounded_text(diagnostic)}"
+        )
     return f"Firecrawl search failed with exit code {returncode}"
 
 
