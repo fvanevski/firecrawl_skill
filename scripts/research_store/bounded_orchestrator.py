@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 from budget_policy import DEFAULT_POLICY
 from research_domain import load_model
 
-from .bounded_acquisition import BoundedFirecrawlSearchAdapter
+from .acquisition.ports import CandidateScrapeAdapter
 from .domain import IngestRequest, SearchAdapterResult, utcnow
 from .orchestrator import (
     AcquisitionStage,
@@ -483,10 +483,15 @@ class BoundedAcquisitionStage(AcquisitionStage):
 class BoundedExtractionStage(ExtractionStage):
     """Run each candidate provider extraction under the issue #216 policy."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        scrape_adapter: CandidateScrapeAdapter | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.preflight_checker = CandidatePreflightChecker()
-        self.scrape_adapter = BoundedFirecrawlSearchAdapter()
+        self.scrape_adapter = scrape_adapter
 
     def execute(
         self,
@@ -542,6 +547,12 @@ class BoundedExtractionStage(ExtractionStage):
             )
 
             if request is None and (outcome is None or not outcome.terminal):
+                if scrape_adapter is None:
+                    return StageResult.failed(
+                        "extraction",
+                        "bounded candidate extraction requires an explicit "
+                        "CandidateScrapeAdapter",
+                    )
                 provider_result = scrape_adapter.scrape_url(str(requested_url))
                 raw_preflight = provider_result.transport_metadata.get("preflight")
                 if isinstance(raw_preflight, Mapping):
