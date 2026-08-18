@@ -230,8 +230,12 @@ def test_public_checkpoint_builder_defaults_to_production_bounded_extraction(
 ) -> None:
     from research_store.bounded_orchestrator import BoundedAcquisitionStage
     from research_store.checkpoint_orchestrator import CheckpointResearchOrchestrator
-    from research_store.orchestration.composition import ProductionBoundedExtractionStage
-    from research_store.orchestrator import ResearchOrchestrator as BaseResearchOrchestrator
+    from research_store.orchestration.composition import (
+        ProductionBoundedExtractionStage,
+    )
+    from research_store.orchestrator import (
+        ResearchOrchestrator as BaseResearchOrchestrator,
+    )
 
     captured: dict[str, Any] = {}
     sentinel = object()
