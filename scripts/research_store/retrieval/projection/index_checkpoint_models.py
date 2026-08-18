@@ -7,11 +7,6 @@ from ...index_checkpoint_models import (
     IndexCheckpointError,
     IndexCheckpointStaleError,
     IndexFinalization,
-    _checkpoint_from_row,
-    _iso,
-    _membership_digest,
-    _parse_datetime,
-    _required_datetime,
 )
 
 __all__ = [

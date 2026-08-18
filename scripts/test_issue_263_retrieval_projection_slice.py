@@ -5,14 +5,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from research_store import checkpoint_indexing_stage as legacy_checkpoint_stage
-from research_store import index_checkpoint_service as legacy_checkpoint_service
-from research_store import indexing as legacy_indexing
-from research_store import projection_reconciliation as legacy_reconciliation
-from research_store import qdrant as legacy_qdrant
-from research_store import qdrant_authority as legacy_authority
-from research_store import retrieval as canonical_retrieval
-from research_store import retrieval_service as legacy_retrieval_service
+from research_store import (
+    checkpoint_indexing_stage as legacy_checkpoint_stage,
+    index_checkpoint_service as legacy_checkpoint_service,
+    indexing as legacy_indexing,
+    projection_reconciliation as legacy_reconciliation,
+    qdrant as legacy_qdrant,
+    qdrant_authority as legacy_authority,
+    retrieval as canonical_retrieval,
+    retrieval_service as legacy_retrieval_service,
+)
 from research_store.postgres_retrieval import (
     PostgresIndexJobRepository as LegacyPostgresIndexJobRepository,
     PostgresRetrievalRepository as LegacyPostgresRetrievalRepository,
