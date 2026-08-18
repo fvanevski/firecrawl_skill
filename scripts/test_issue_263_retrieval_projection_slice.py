@@ -87,7 +87,9 @@ def test_legacy_qdrant_module_is_the_canonical_projection_module() -> None:
 
 def test_indexing_uses_baseline_stable_implementation_with_projection_namespace() -> None:
     assert canonical_indexing.IndexWorker is legacy_indexing.IndexWorker
-    assert canonical_indexing.OpenAICompatibleEmbedder is legacy_indexing.OpenAICompatibleEmbedder
+    assert canonical_indexing.OpenAICompatibleEmbedder is (
+        legacy_indexing.OpenAICompatibleEmbedder
+    )
     assert legacy_indexing.IndexWorker.__module__.endswith(".research_store.indexing")
     assert legacy_indexing.OpenAICompatibleEmbedder.__module__.endswith(
         ".research_store.indexing"
@@ -95,7 +97,9 @@ def test_indexing_uses_baseline_stable_implementation_with_projection_namespace(
     assert {"IndexWorker", "OpenAICompatibleEmbedder"}.issubset(
         _defined_symbols(STORE / "indexing.py")
     )
-    assert _defined_symbols(STORE / "retrieval" / "projection" / "indexing.py") == set()
+    assert (
+        _defined_symbols(STORE / "retrieval" / "projection" / "indexing.py") == set()
+    )
 
 
 def test_qdrant_authority_and_reconciliation_are_projection_infrastructure() -> None:
