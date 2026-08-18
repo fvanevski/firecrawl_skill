@@ -38,6 +38,17 @@ from research_store.retrieval.projection.postgres_jobs import PostgresIndexJobRe
 ROOT = Path(__file__).resolve().parents[1]
 STORE = ROOT / "scripts" / "research_store"
 
+_CHECKPOINT_FACADE_FILES = (
+    "checkpoint_indexing_stage.py",
+    "index_checkpoint_asset_membership.py",
+    "index_checkpoint_core.py",
+    "index_checkpoint_finalize.py",
+    "index_checkpoint_models.py",
+    "index_checkpoint_replay.py",
+    "index_checkpoint_service.py",
+    "index_checkpoint_store.py",
+)
+
 
 def _defined_symbols(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -80,7 +91,12 @@ def test_retrieval_module_surface_is_now_the_capability_package() -> None:
     assert _is_research_store_module(
         canonical_retrieval.CohereCompatibleReranker.__module__, "retrieval.ranking"
     )
+
+    # These sibling files are migration-only source residue. They must never
+    # regain domain implementation while #269 owns their eventual deletion.
     assert _defined_symbols(STORE / "retrieval.py") == set()
+    assert _defined_symbols(STORE / "retrieval_core.py") == set()
+
     assert {"CohereCompatibleReranker", "reciprocal_rank_fusion"}.issubset(
         _defined_symbols(STORE / "retrieval" / "ranking.py")
     )
@@ -169,18 +185,12 @@ def test_checkpoints_use_baseline_stable_implementation_with_projection_namespac
     assert "CheckpointIndexingStage" in _defined_symbols(
         STORE / "checkpoint_indexing_stage.py"
     )
-    assert (
-        _defined_symbols(
-            STORE / "retrieval" / "projection" / "index_checkpoint_service.py"
-        )
-        == set()
-    )
-    assert (
-        _defined_symbols(
-            STORE / "retrieval" / "projection" / "checkpoint_indexing_stage.py"
-        )
-        == set()
-    )
+
+    # The complete staged projection facade family must remain zero-domain-logic.
+    # Physical relocation is a #269 type-debt migration, not an implicit #263 move.
+    projection = STORE / "retrieval" / "projection"
+    for filename in _CHECKPOINT_FACADE_FILES:
+        assert _defined_symbols(projection / filename) == set()
 
 
 def test_projection_boundary_declares_non_authoritative_qdrant_contract() -> None:

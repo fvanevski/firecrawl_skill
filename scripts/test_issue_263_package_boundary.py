@@ -23,7 +23,13 @@ _REQUIRED_RETRIEVAL_FILES = {
     "firecrawl_skill/research_store/retrieval/projection/postgres_jobs.py",
     "firecrawl_skill/research_store/retrieval/projection/indexing.py",
     "firecrawl_skill/research_store/retrieval/projection/checkpoint_indexing_stage.py",
+    "firecrawl_skill/research_store/retrieval/projection/index_checkpoint_asset_membership.py",
+    "firecrawl_skill/research_store/retrieval/projection/index_checkpoint_core.py",
+    "firecrawl_skill/research_store/retrieval/projection/index_checkpoint_finalize.py",
+    "firecrawl_skill/research_store/retrieval/projection/index_checkpoint_models.py",
+    "firecrawl_skill/research_store/retrieval/projection/index_checkpoint_replay.py",
     "firecrawl_skill/research_store/retrieval/projection/index_checkpoint_service.py",
+    "firecrawl_skill/research_store/retrieval/projection/index_checkpoint_store.py",
 }
 
 
@@ -87,14 +93,74 @@ def test_retrieval_projection_packages_build_and_import_in_isolation(
                 authority = importlib.import_module(
                     "firecrawl_skill.research_store.retrieval.projection.authority"
                 )
-                checkpoint = importlib.import_module(
-                    "firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service"
+                projection_indexing = importlib.import_module(
+                    "firecrawl_skill.research_store.retrieval.projection.indexing"
+                )
+                checkpoint_stage = importlib.import_module(
+                    "firecrawl_skill.research_store.retrieval.projection."
+                    "checkpoint_indexing_stage"
+                )
+                checkpoint_asset_membership = importlib.import_module(
+                    "firecrawl_skill.research_store.retrieval.projection."
+                    "index_checkpoint_asset_membership"
+                )
+                checkpoint_core = importlib.import_module(
+                    "firecrawl_skill.research_store.retrieval.projection."
+                    "index_checkpoint_core"
+                )
+                checkpoint_finalize = importlib.import_module(
+                    "firecrawl_skill.research_store.retrieval.projection."
+                    "index_checkpoint_finalize"
+                )
+                checkpoint_models = importlib.import_module(
+                    "firecrawl_skill.research_store.retrieval.projection."
+                    "index_checkpoint_models"
+                )
+                checkpoint_replay = importlib.import_module(
+                    "firecrawl_skill.research_store.retrieval.projection."
+                    "index_checkpoint_replay"
+                )
+                checkpoint_service = importlib.import_module(
+                    "firecrawl_skill.research_store.retrieval.projection."
+                    "index_checkpoint_service"
+                )
+                checkpoint_store = importlib.import_module(
+                    "firecrawl_skill.research_store.retrieval.projection."
+                    "index_checkpoint_store"
                 )
 
                 legacy_retrieval = importlib.import_module("research_store.retrieval")
                 legacy_service = importlib.import_module("research_store.retrieval_service")
                 legacy_qdrant = importlib.import_module("research_store.qdrant")
                 legacy_authority = importlib.import_module("research_store.qdrant_authority")
+
+                root_indexing = importlib.import_module(
+                    "firecrawl_skill.research_store.indexing"
+                )
+                root_checkpoint_stage = importlib.import_module(
+                    "firecrawl_skill.research_store.checkpoint_indexing_stage"
+                )
+                root_checkpoint_asset_membership = importlib.import_module(
+                    "firecrawl_skill.research_store.index_checkpoint_asset_membership"
+                )
+                root_checkpoint_core = importlib.import_module(
+                    "firecrawl_skill.research_store.index_checkpoint_core"
+                )
+                root_checkpoint_finalize = importlib.import_module(
+                    "firecrawl_skill.research_store.index_checkpoint_finalize"
+                )
+                root_checkpoint_models = importlib.import_module(
+                    "firecrawl_skill.research_store.index_checkpoint_models"
+                )
+                root_checkpoint_replay = importlib.import_module(
+                    "firecrawl_skill.research_store.index_checkpoint_replay"
+                )
+                root_checkpoint_service = importlib.import_module(
+                    "firecrawl_skill.research_store.index_checkpoint_service"
+                )
+                root_checkpoint_store = importlib.import_module(
+                    "firecrawl_skill.research_store.index_checkpoint_store"
+                )
 
                 assert hasattr(retrieval, "__path__")
                 assert retrieval is legacy_retrieval
@@ -116,8 +182,43 @@ def test_retrieval_projection_packages_build_and_import_in_isolation(
                     "firecrawl_skill.research_store.retrieval.projection.qdrant"
                 )
                 assert projection.__doc__ and "non-authoritative" in projection.__doc__
-                assert checkpoint.IndexCheckpointService.__module__.endswith(
-                    ".research_store.index_checkpoint_service"
+
+                assert projection_indexing.IndexWorker is root_indexing.IndexWorker
+                assert (
+                    projection_indexing.OpenAICompatibleEmbedder
+                    is root_indexing.OpenAICompatibleEmbedder
+                )
+                assert (
+                    checkpoint_stage.CheckpointIndexingStage
+                    is root_checkpoint_stage.CheckpointIndexingStage
+                )
+                assert (
+                    checkpoint_asset_membership._IndexCheckpointAssetMembershipMixin
+                    is root_checkpoint_asset_membership._IndexCheckpointAssetMembershipMixin
+                )
+                assert (
+                    checkpoint_core._IndexCheckpointCoreMixin
+                    is root_checkpoint_core._IndexCheckpointCoreMixin
+                )
+                assert (
+                    checkpoint_finalize._IndexCheckpointFinalizeMixin
+                    is root_checkpoint_finalize._IndexCheckpointFinalizeMixin
+                )
+                assert (
+                    checkpoint_models.IndexCheckpoint
+                    is root_checkpoint_models.IndexCheckpoint
+                )
+                assert (
+                    checkpoint_replay.replay_completed_checkpoint
+                    is root_checkpoint_replay.replay_completed_checkpoint
+                )
+                assert (
+                    checkpoint_service.IndexCheckpointService
+                    is root_checkpoint_service.IndexCheckpointService
+                )
+                assert (
+                    checkpoint_store.IndexCheckpointStoreMixin
+                    is root_checkpoint_store.IndexCheckpointStoreMixin
                 )
                 """
             ),
