@@ -15,8 +15,6 @@ from research_store import retrieval as canonical_retrieval
 from research_store import retrieval_service as legacy_retrieval_service
 from research_store.postgres_retrieval import (
     PostgresIndexJobRepository as LegacyPostgresIndexJobRepository,
-)
-from research_store.postgres_retrieval import (
     PostgresRetrievalRepository as LegacyPostgresRetrievalRepository,
 )
 from research_store.retrieval import service as canonical_retrieval_service
