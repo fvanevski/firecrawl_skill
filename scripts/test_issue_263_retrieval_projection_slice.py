@@ -8,6 +8,8 @@ from pathlib import Path
 from research_store import indexing as legacy_indexing
 from research_store import qdrant as legacy_qdrant
 from research_store import retrieval as canonical_retrieval
+from research_store import retrieval_service as legacy_retrieval_service
+from research_store.retrieval import service as canonical_retrieval_service
 from research_store.retrieval.projection import indexing as canonical_indexing
 from research_store.retrieval.projection import qdrant as canonical_qdrant
 
@@ -32,6 +34,14 @@ def test_retrieval_module_surface_is_now_the_capability_package() -> None:
         ".research_store.retrieval"
     )
     assert _defined_symbols(STORE / "retrieval.py") == set()
+
+
+def test_legacy_retrieval_service_is_canonical_application_service() -> None:
+    assert legacy_retrieval_service is canonical_retrieval_service
+    assert canonical_retrieval_service.RetrievalService.__module__.endswith(
+        ".research_store.retrieval.service"
+    )
+    assert _defined_symbols(STORE / "retrieval_service.py") == set()
 
 
 def test_legacy_qdrant_module_is_the_canonical_projection_module() -> None:
