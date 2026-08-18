@@ -26,7 +26,11 @@ from research_store.acquisition.adapters.firecrawl_search import (
 from research_store.acquisition.authority import AuthoritativeAcquisitionContext
 from research_store.acquisition.direct_scrape import DirectScrapeService
 from research_store.acquisition.models import DirectScrapeRequest, SearchAdapterResult
-from research_store.acquisition.ports import DirectScrapeAdapter, SearchAdapter
+from research_store.acquisition.ports import (
+    CandidateScrapeAdapter,
+    DirectScrapeAdapter,
+    SearchAdapter,
+)
 from research_store.acquisition.service import AcquisitionService
 from research_store.config import StoreConfig
 from research_store.domain import SearchAdapterResult as DomainSearchAdapterResult
@@ -195,6 +199,29 @@ def test_generic_composition_root_selects_bounded_adapter_explicitly() -> None:
     source = (STORE / "container.py").read_text(encoding="utf-8")
     assert "BoundedFirecrawlSearchAdapter()" in source
     assert "search_adapter=adapter" in source
+
+
+def test_bounded_extraction_policy_depends_on_candidate_scrape_port() -> None:
+    path = STORE / "bounded_orchestrator.py"
+    source = path.read_text(encoding="utf-8")
+    imports = _top_level_imports(path)
+    assert "BoundedFirecrawlSearchAdapter" not in source
+    assert CandidateScrapeAdapter.__name__ in source
+    assert ".acquisition.ports" in imports
+    assert "self.scrape_adapter = scrape_adapter" in source
+
+
+def test_production_orchestration_selects_bounded_candidate_transport() -> None:
+    path = STORE / "orchestration" / "composition.py"
+    source = path.read_text(encoding="utf-8")
+    assert "class ProductionBoundedExtractionStage" in source
+    assert "BoundedFirecrawlSearchAdapter()" in source
+    assert "extraction_stage_cls=ProductionBoundedExtractionStage" in source
+
+    resume_source = (STORE / "search_provenance.py").read_text(encoding="utf-8")
+    assert "from .acquisition.service import SearchProvenanceError" in resume_source
+    assert "ProductionBoundedExtractionStage" in resume_source
+    assert "extraction_stage_cls=extraction_stage_cls" in resume_source
 
 
 def test_direct_scrape_default_selection_is_confined_to_builder_scope() -> None:
