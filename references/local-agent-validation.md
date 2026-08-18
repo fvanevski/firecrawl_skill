@@ -81,7 +81,7 @@ pyrefly check
 For an uncommitted working tree, include staged/unstaged Python paths in the
 bounded changed-file set rather than relying only on `BASE_SHA...HEAD`.
 
-## Exact-head CI and Pyrefly exit-code evidence
+## Exact-head and Pyrefly exit-code evidence
 
 Validation evidence must distinguish source identity from GitHub's synthetic
 pull-request merge ref. A workflow is exact-head evidence only when it checks

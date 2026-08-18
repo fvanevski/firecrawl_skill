@@ -15,7 +15,11 @@ from research_store.completion_provenance import CompletionProvenance
 from research_store.curated_run_service import CuratedRunError, CuratedRunService
 from research_store.direct_invocation_service import DirectInvocationService
 from research_store.invocation_service import InvocationError
-from research_store.run_service import PERMITTED_TRANSITIONS, ResearchRunService, RunStatus
+from research_store.run_service import (
+    PERMITTED_TRANSITIONS,
+    ResearchRunService,
+    RunStatus,
+)
 from research_store.workflow_service import RunIndexProgress, WorkflowOperationService
 
 SCRIPTS = Path(__file__).resolve().parent
