@@ -241,8 +241,8 @@ class TestCommandDataclass:
 
         cmd = RunResearchCommand(
             run_id=UUID("00000000-0000-0000-0000-000000000001"),
-            spec={},
-            search_plan={},
+            spec={"query": "test"},
+            search_plan={"queries": []},
         )
         with pytest.raises(FrozenInstanceError):
             cmd.run_id = UUID("00000000-0000-0000-0000-000000000002")  # type: ignore[misc]
