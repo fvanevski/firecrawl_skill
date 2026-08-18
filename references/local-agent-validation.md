@@ -5,19 +5,54 @@ Ruff for lint/format policy and Pyrefly for Python type correctness. Pyrefly is
 pinned in `requirements-typecheck.txt`; do not substitute mypy or ty as a merge
 authority.
 
+## Exact-head checkout comes first
+
+For PR review or remediation validation, source identity is an invariant, not
+metadata. The local agent must use native Git to fetch and detach at the exact
+40-character PR head supplied by Central before semantic inspection or test
+execution. Never validate an approximate branch name or GitHub's synthetic PR
+merge ref when an exact head is available.
+
+```bash
+git fetch origin
+
+git checkout --detach "$REVIEW_HEAD_SHA"
+test "$(git rev-parse HEAD)" = "$REVIEW_HEAD_SHA"
+git cat-file -e "$BASE_SHA^{commit}"
+
+git rev-parse HEAD
+git diff --name-status --find-renames "$BASE_SHA...$REVIEW_HEAD_SHA"
+```
+
+Record the raw `git rev-parse HEAD`, the exact base SHA, and the complete
+changed-file list before returning evidence. If the requested head cannot be
+resolved exactly, stop validation and report the identity failure rather than
+falling back to a branch tip or merge ref.
+
+For local-agent tooling, use Serena first for symbols/references/dependency
+inspection after the exact checkout is established. RTK may compress routine
+successful Ruff/Pyrefly/pytest output where it preserves the decisive result.
+Use native/raw Git for exact SHAs and complete diffs, and raw native command
+output for failures, database/runtime evidence, transaction/concurrency
+findings, release/security conclusions, or any case where filtering could hide
+decisive evidence. OpenViking may supply bounded historical rationale only; it
+never overrides current source, Git, CI, database, or runtime state.
+
 ## Completion sequence
 
 For substantive Python changes, the local agent must complete validation in
 this order before handoff:
 
-1. **Ruff on changed Python code.** Determine the Python files changed from the
-   task's authoritative base and run `ruff check` on that bounded set. Apply
-   `ruff format --check` to the same set when formatting could have changed.
+1. **Ruff on changed Python code.** Determine the existing added/copied/
+   modified/renamed Python files from the task's authoritative base and run
+   `ruff check` plus `ruff format --check --diff` on that explicit set.
 2. **Pyrefly on changed Python scope.** Run `pyrefly check <changed.py ...>` so
    interface/type errors are surfaced while the edit context is still narrow.
+   Include changed test files explicitly even when project defaults exclude the
+   historical test corpus.
 3. **Focused pytest.** Run the smallest deterministic unit/contract/integration
-   tests that exercise the behavior changed by the task. PostgreSQL/Qdrant or
-   other service-backed tests must use disposable local services.
+   tests that can falsify the changed behavior. PostgreSQL/Qdrant or other
+   service-backed tests must use disposable local services.
 4. **Full-project Pyrefly.** Run `pyrefly check` with no file arguments before
    handoff. This is mandatory even if the changed-scope check passed because a
    local interface change can break callers outside the edited files.
@@ -28,9 +63,9 @@ this order before handoff:
 A typical changed-file setup is:
 
 ```bash
-BASE_REF="${BASE_REF:-origin/main}"
 mapfile -t CHANGED_PY < <(
-  git diff --name-only --diff-filter=ACMR "$BASE_REF"...HEAD -- '*.py'
+  git diff --name-only --diff-filter=ACMR \
+    "$BASE_SHA...$REVIEW_HEAD_SHA" -- '*.py'
 )
 
 if ((${#CHANGED_PY[@]})); then
@@ -44,16 +79,23 @@ pyrefly check
 ```
 
 For an uncommitted working tree, include staged/unstaged Python paths in the
-bounded changed-file set rather than relying only on `BASE_REF...HEAD`.
+bounded changed-file set rather than relying only on `BASE_SHA...HEAD`.
 
-## Exact-head and Pyrefly exit-code evidence
+## Exact-head CI and Pyrefly exit-code evidence
 
 Validation evidence must distinguish source identity from GitHub's synthetic
-pull-request merge ref. When exact-head evidence is required, record
-`git rev-parse HEAD` and compare it with the authoritative task/PR head SHA.
-The authoritative `Pyrefly` PR job explicitly checks out
-`github.event.pull_request.head.sha`; workflow-dispatch validation uses the
-requested `candidate-sha` when supplied.
+pull-request merge ref. A workflow is exact-head evidence only when it checks
+out the immutable PR head/candidate SHA and asserts `git rev-parse HEAD` equals
+that SHA before running the authority. A check name or artifact containing the
+PR head is not sufficient if the underlying checkout used the synthetic merge
+commit.
+
+The acquisition slice has a dedicated
+`.github/workflows/acquisition-slice-review.yml` gate. It binds base/candidate
+identity first, then independently runs changed-scope Ruff, changed-scope
+Pyrefly, full-project Pyrefly, and the focused acquisition/authority/runtime
+pytest set. General merge-ref CI remains useful mergeability evidence, but it
+must not be substituted for this exact-head authority during #262 review.
 
 Normal Ruff and Pyrefly validation commands must exit successfully. An
 intentional negative-control Pyrefly probe is different: it is valid only when
@@ -70,10 +112,10 @@ workflow job that is not merge-required does not satisfy the repository's
 static-type merge authority.
 
 Before final gate closure, read back the effective merge requirements for the
-exact PR head and verify that `Pyrefly` is both required and successful. Do not
+exact PR head and verify that Pyrefly is both required and successful. Do not
 infer this requirement from workflow YAML, a green check list, or draft PR
-state. If GitHub reports no required `Pyrefly` check, treat that as a merge-gate
-failure even when the job itself succeeds.
+state. Missing ruleset/branch-protection visibility is incomplete policy
+evidence, not proof that no requirement exists.
 
 ## Baseline policy
 
@@ -92,9 +134,48 @@ authoritative gate. It is not a general suppression mechanism.
   or diagnostic exit code `1`; infrastructure/internal failures are fatal and
   must not be hidden with unconditional `continue-on-error`.
 
+## Acquisition-slice review handoff
+
+For issue #262 / PR #284, the local agent must run at the exact current PR head,
+not the historical head recorded in an earlier review. At minimum, in addition
+to the generic sequence above, focused pytest must include:
+
+```text
+scripts/test_issue_262_acquisition_slice.py
+scripts/test_issue_262_runtime_review.py
+scripts/test_acquisition_service.py
+scripts/test_acquisition_authority.py
+scripts/test_issue_216_extraction_preflight.py
+scripts/test_direct_scrape_service.py
+scripts/test_authoritative_fsearch.py
+scripts/test_authoritative_fsearch_review.py
+scripts/test_authoritative_fscrape.py
+scripts/test_authoritative_fscrape_cli.py
+scripts/test_postgres_acquisition_repositories.py
+scripts/test_package_boundary.py
+scripts/test_orchestrator.py
+scripts/test_issue_217_ingestion_batch_semantics.py
+scripts/test_audit_release_gate_matrix.py
+```
+
+The local agent must not alter production code, tests, workflow policy,
+Pyrefly configuration, or baseline merely to make this sequence pass. A
+failure is review evidence to return to Central.
+
 ## Handoff evidence
 
-Report the exact HEAD and the result of: changed-scope Ruff, changed-scope
-Pyrefly, focused pytest, full-project Pyrefly, and relevant broader tests. A
-failure that requires semantic production changes must be returned as evidence
-rather than hidden by weakening typing, lint, or test configuration.
+Report separately:
+
+- exact `git rev-parse HEAD` and authoritative base SHA;
+- complete changed-file list;
+- changed-scope Ruff check;
+- changed-scope Ruff format check;
+- changed-scope Pyrefly;
+- focused pytest, including skip summary;
+- full-project Pyrefly;
+- relevant broader contract/integration tests;
+- any required disposable PostgreSQL/Qdrant/Valkey runtime evidence.
+
+A failure that requires semantic production changes must be returned as
+evidence rather than hidden by weakening typing, lint, test, authority, or
+release configuration.
