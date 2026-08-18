@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -28,6 +28,7 @@ from research_store.acquisition.direct_scrape import DirectScrapeService
 from research_store.acquisition.models import DirectScrapeRequest, SearchAdapterResult
 from research_store.acquisition.ports import DirectScrapeAdapter, SearchAdapter
 from research_store.acquisition.service import AcquisitionService
+from research_store.config import StoreConfig
 from research_store.domain import SearchAdapterResult as DomainSearchAdapterResult
 from research_store.ports import SearchAdapter as LegacySearchAdapter
 
@@ -175,7 +176,7 @@ def test_direct_scrape_preflight_failure_prevents_adapter_construction() -> None
         raise RuntimeError("preflight rejected")
 
     service = DirectScrapeService(
-        config=Any,  # runtime-unused: preflight fails before config inspection
+        config=cast(StoreConfig, object()),
         uow_factory=lambda: None,
         blob_store=object(),
         corpus_service=object(),
