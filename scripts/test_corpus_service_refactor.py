@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 from research_store import corpus_service, retrieval_service, service
+from research_store.domain import IngestRequest
 
 _STORE = Path(__file__).resolve().parent / "research_store"
 _RETRIEVAL_METHODS = {
@@ -93,7 +94,13 @@ def test_internal_corpus_builders_import_the_canonical_slice() -> None:
 
 
 def test_prepared_ingest_preserves_parser_and_chunker_provenance_contract() -> None:
-    request = object()
+    request = IngestRequest(
+        requested_url="https://example.test/",
+        final_url="https://example.test/",
+        content=b"body",
+        normalized_content=b"body",
+        mime_type="text/plain",
+    )
     blob = object()
     blocks = (object(),)
     chunks = (object(),)

@@ -149,5 +149,6 @@ def test_runtime_issue_217_execute_uses_production_candidate_scrape_port(
     corpus_service.finalize_ingestion_batch.assert_called_once_with(batch_id, "failed")
     run_service.transition.assert_called_once()
     assert result.error is None
+    assert result.details is not None
     assert result.details["preflight_terminal_count"] == 1
     assert result.details["batch_id"] == batch_id

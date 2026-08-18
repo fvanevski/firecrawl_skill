@@ -7,13 +7,15 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from research_store.completion_provenance import CompletionProvenance
 from research_store.curated_run_service import CuratedRunError, CuratedRunService
 from research_store.direct_invocation_service import DirectInvocationService
 from research_store.invocation_service import InvocationError
-from research_store.run_service import PERMITTED_TRANSITIONS, RunStatus
+from research_store.run_service import PERMITTED_TRANSITIONS, ResearchRunService, RunStatus
 from research_store.workflow_service import RunIndexProgress, WorkflowOperationService
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -126,8 +128,12 @@ class _LifecycleCompletion:
 
 
 class _Workflow(WorkflowOperationService):
-    def __init__(self, runs, invocations):
-        super().__init__(runs, invocations)
+    def __init__(self, runs: _RunService, invocations: _InvocationService):
+        super().__init__(
+            cast(ResearchRunService, runs),
+            cast(DirectInvocationService, invocations),
+        )
+        self._test_runs = runs
         self.progress = RunIndexProgress(
             assets=4,
             chunks=4,
@@ -138,13 +144,20 @@ class _Workflow(WorkflowOperationService):
             complete=4,
         )
 
-    def index_progress(self, run_id):
-        assert run_id == self.run_service.run_id
+    def index_progress(self, run_id: UUID) -> RunIndexProgress:
+        assert run_id == self._test_runs.run_id
         return self.progress
 
-    def _assert_completion_gates(self, run_id, **_assertions):
-        assert run_id == self.run_service.run_id
-        return _LifecycleCompletion()
+    def _assert_completion_gates(
+        self,
+        run_id: UUID,
+        *,
+        source_manifest_sha256: str | None,
+        answer_sha256: str | None,
+        provenance_type: str | None,
+    ) -> CompletionProvenance:
+        assert run_id == self._test_runs.run_id
+        return cast(CompletionProvenance, _LifecycleCompletion())
 
 
 class _PromotionService:
@@ -198,9 +211,22 @@ class _PromotionService:
 
 
 class _CuratedService(CuratedRunService):
+    def __init__(
+        self,
+        run_service: _RunService,
+        workflow_service: WorkflowOperationService,
+        promotion_service: Any,
+    ) -> None:
+        self._test_runs = run_service
+        super().__init__(
+            cast(ResearchRunService, run_service),
+            workflow_service,
+            promotion_service,
+        )
+
     def mode(self, run_id: UUID) -> str:
-        assert run_id == self.run_service.run_id
-        return self.run_service.run_mode
+        assert run_id == self._test_runs.run_id
+        return self._test_runs.run_mode
 
 
 def _service(*, subject_count=4, fail_seal_once=False):
@@ -339,6 +365,7 @@ class _DirectCursor:
         elif normalized.startswith("SELECT id,run_id,operation,status,input"):
             self.row = None
         elif normalized.startswith("INSERT INTO research_invocations"):
+            assert params is not None
             self.connection.insert_metadata = json.loads(params[-1])
             self.row = (self.connection.invocation_id,)
         else:
@@ -428,6 +455,7 @@ def test_direct_invocation_locks_and_persists_exact_state_revision():
         if statement.startswith("INSERT INTO research_invocations")
     )
     assert select_index < insert_index
+    assert connection.event is not None
     assert connection.event[1]["payload"]["lifecycle_state"] == "acquiring"
     assert connection.event[1]["payload"]["lifecycle_revision"] == 7
 
