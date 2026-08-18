@@ -54,6 +54,7 @@ jobs:
             -ra \
             --junitxml="$PYTEST_JUNIT" \
             -p no:cacheprovider \
+            scripts/test_disposable_test_services.py \
             scripts/test_audit_regression_baseline.py \
             scripts/test_issue_213_search_empty_telemetry.py \
             scripts/test_issue_219_verifier_inconclusive.py \
