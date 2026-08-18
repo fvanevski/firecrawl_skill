@@ -60,16 +60,18 @@ def _defined_symbols(path: Path) -> set[str]:
 
 
 def _is_research_store_module(module: str, suffix: str) -> bool:
-    """Accept the supported source-test and canonical package import roots.
+    """Accept only the two supported package roots for one exact module suffix.
 
     ``scripts/conftest.py`` deliberately places ``scripts`` first during the
-    historical pytest corpus, so modules may be loaded as ``research_store.*``.
-    Canonical source/wheel imports load the same implementation as
-    ``firecrawl_skill.research_store.*``. Ownership assertions care about the
-    exact capability-relative module, not which supported package root loaded it.
+    historical pytest corpus, so source tests may load ``research_store.*``.
+    Canonical source/wheel imports use ``firecrawl_skill.research_store.*``.
+    Arbitrary prefixes are not supported identities and must not satisfy an
+    ownership assertion merely because they end with the same module suffix.
     """
-    target = f"research_store.{suffix}"
-    return module == target or module.endswith(f".{target}")
+    return module in {
+        f"research_store.{suffix}",
+        f"firecrawl_skill.research_store.{suffix}",
+    }
 
 
 def test_module_ownership_matcher_is_exact_about_research_store_boundary() -> None:
@@ -81,6 +83,9 @@ def test_module_ownership_matcher_is_exact_about_research_store_boundary() -> No
     )
     assert not _is_research_store_module(
         "not_research_store.retrieval.ranking", "retrieval.ranking"
+    )
+    assert not _is_research_store_module(
+        "shadow.research_store.retrieval.ranking", "retrieval.ranking"
     )
 
 

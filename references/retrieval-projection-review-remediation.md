@@ -1,211 +1,184 @@
 # Issue #263 / PR #285 review remediation
 
-This document records Central remediation for PR #285. It is a scope,
-finding-disposition, and validation contract; it is not a substitute for fresh
-exact-head GitHub or local runtime evidence.
+This document records the Central remediation state for PR #285 after the
+independent review bound to base
+`9ce02b7b555a1ebc4abd46b186b197cc4a8be38f` and reviewed head
+`9218f943df2d38ae0c49e671b154fa94f780f5bd`.
 
-## Review revisions
+The formal independent review at that head is review `4963811089`, state
+`CHANGES_REQUESTED`. The remediation commit that edits this document creates a
+new PR head; therefore all prior exact-head CI, local validation, and review
+conclusions become historical evidence until re-established at the new exact
+40-character head.
 
-The first local validation findings were produced at:
+## Remediation scope
 
-- base: `9ce02b7b555a1ebc4abd46b186b197cc4a8be38f`;
-- reviewed head: `ab9c83545dfc7c0cbd8b26f3f354f2f92dfec57f`.
+This pass does not redesign retrieval behavior, PostgreSQL authority, Qdrant
+projection semantics, index lifecycle rules, lease/checkpoint behavior, or
+Pyrefly policy. Central changes only defects or documentation that are properly
+owned by #263. Destructive compatibility cleanup and the final physical locality
+migration remain owned by #269.
 
-The later independent Central review was bound to:
+## Blocking review findings
 
-- base: `9ce02b7b555a1ebc4abd46b186b197cc4a8be38f`;
-- reviewed head: `556e8230b944e4b049b5cc0410a74861cac4e63d`;
-- formal review ID: `4963113015`;
-- formal review state: `COMMENTED`.
+### Fresh local exact-head validation
 
-The commit containing the remediation in this document necessarily creates a new
-PR head. All CI, local-test, and review conclusions tied to either earlier head
-are historical evidence only until repeated or independently re-established at
-the new exact 40-character head.
+The independent review could not establish the required local OpenCode evidence
+for `9218f943df2d38ae0c49e671b154fa94f780f5bd`. This is an evidence blocker, not a
+production-code defect.
 
-## Independent-review finding disposition
+**Central disposition:** no source workaround is permitted. This remediation
+makes the handoff contract explicit; the local agent must validate the *new*
+post-remediation PR head. Previous local PASS results are stale after any Central
+commit.
 
-### Blocking findings
+The local agent must report separately:
 
-The independent review found **no blocking implementation finding** at
-`556e8230b944e4b049b5cc0410a74861cac4e63d`. There is therefore no production
-correctness repair to invent in this remediation.
+1. native `git fetch origin`;
+2. exact 40-character `git rev-parse HEAD` matching the PR head;
+3. the base SHA used and complete ACMR changed-file list;
+4. changed-scope `ruff check`;
+5. changed-scope `ruff format --check --diff`;
+6. changed-scope `pyrefly check <changed.py ...>`, including changed tests;
+7. focused #263 pytest plus relevant PostgreSQL/Qdrant/checkpoint/protection
+   tests;
+8. full-project `pyrefly check`;
+9. relevant broader contract/integration suites;
+10. base-to-head/worktree `git diff --check`, final exact HEAD, and clean
+    worktree evidence.
 
-The earlier source-test import-prefix blocker was already corrected by making the
-#263 structural ownership checks exact about the `research_store.<suffix>`
-boundary while accepting the two supported package roots.
+A local failure is evidence. It does not authorize production-code, test,
+Pyrefly-config, baseline, or validation-gate changes.
 
-### Important non-blocking: shadowed retrieval migration files
+### Merge-policy evidence is incomplete
 
-Affected files:
+At the reviewed head, `gh_get_merge_requirements` returned exact-head,
+review/thread, and base-freshness evidence, but reported
+`policy_evidence_complete=false` and `checks_evidence_complete=false` because
+classic branch-protection visibility returned HTTP 404.
 
-- `scripts/research_store/retrieval.py`
-- `scripts/research_store/retrieval_core.py`
+**Central disposition:** this is a Central GitHub-policy/tooling evidence gate,
+not a repository implementation defect and not local-agent remediation work. No
+PR source change can legitimately turn incomplete GitHub policy visibility into
+complete evidence. The local agent must not modify branch protection, CI policy,
+tests, required-check configuration, or validation scope to manufacture a green
+result.
 
-After `research_store.retrieval` became a package, these sibling files are not
-the authoritative ordinary import boundary. They contain no classes or functions
-and must not acquire domain logic.
+After fresh local evidence is collected, Central must re-run
+`gh_get_merge_requirements` on the then-current exact head. If policy/check-policy
+visibility is still incomplete, the PR remains blocked and the GitHub/MCP policy
+visibility problem must be remediated separately before approval or merge
+readiness can be asserted.
 
-**Disposition:** intentionally retained for the migration phase and carried as a
-mandatory deletion item in #269. This is not an untracked deferral. Issue #269
-explicitly owns removal of migration-only compatibility scaffolding only after
-current-source reference analysis proves supported callers have migrated.
+## Important non-blocking findings
 
-#263 now makes the temporary state testable:
-`scripts/test_issue_263_retrieval_projection_slice.py` fails if either file
-regains a class or function definition, and
-`scripts/test_issue_263_package_boundary.py` proves that installed canonical
-imports resolve to the `retrieval/` package.
+### Shadowed retrieval migration files
 
-The smallest correct final remediation is destructive deletion under #269 after
-its caller/reference audit. Deleting them opportunistically in #263 would violate
-the campaign's sequencing/compatibility authority.
+`scripts/research_store/retrieval.py` and
+`scripts/research_store/retrieval_core.py` are non-authoritative migration
+residue after `research_store.retrieval` became a package. They contain no domain
+classes/functions and must not regain implementation logic.
 
-### Important non-blocking: staged indexing/checkpoint locality
+**Disposition:** unchanged in #263. Issue #269 explicitly owns their deletion
+after current-source reference analysis proves supported callers no longer depend
+on the migration surfaces. Deleting them now would bypass the compatibility
+sequencing required by #269.
 
-Affected canonical namespace:
+### Staged indexing/checkpoint locality
 
-- `research_store.retrieval.projection.indexing`
-- `research_store.retrieval.projection.checkpoint_indexing_stage`
-- `research_store.retrieval.projection.index_checkpoint_*`
+`research_store.retrieval.projection.indexing`,
+`checkpoint_indexing_stage`, and the `index_checkpoint_*` facade family expose
+the canonical projection namespace while implementation bodies remain at
+baseline-stable historical paths.
 
-The projection namespace currently exposes zero-domain-logic facades over a
-single historical root implementation family.
+**Disposition:** unchanged in #263. Issue #269 owns the physical move, caller
+audit, facade retirement, and Pyrefly type-debt migration. That work may not
+expand `pyrefly-baseline.json`, add broad suppressions, weaken Pyrefly scope or
+configuration, or upgrade Pyrefly merely to make the move green. Obsolete
+path-keyed baseline entries must be removed after successful relocation.
 
-**Disposition:** the canonical ownership boundary is accepted for #263; physical
-implementation relocation is mandatory #269 work, coupled to a reviewed Pyrefly
-type-debt migration. The existing baseline contains path-keyed debt in the
-historical indexing/checkpoint files. #263 must not hide that debt by expanding
-`pyrefly-baseline.json`, adding broad suppressions, or weakening type-check scope.
+These two items are therefore tracked architecture debt, not unresolved #263
+correctness defects.
 
-The temporary arrangement is now independently constrained in two ways:
+## Test/documentation gaps
 
-1. the source structural regression requires every checkpoint projection facade
-   to define no class/function implementation; and
-2. the isolated-wheel regression imports the complete facade family and verifies
-   identity with the single historical implementation.
+### Ownership matcher accepted arbitrary prefixes
 
-#269 must physically relocate the implementation, resolve/review the affected type
-debt, remove obsolete baseline entries, and then retire the temporary facades.
+The reviewed implementation of
+`scripts/test_issue_263_retrieval_projection_slice.py::_is_research_store_module`
+accepted any module ending in `.research_store.<suffix>`, which meant an
+unsupported identity such as
+`shadow.research_store.retrieval.ranking` could incorrectly satisfy the structural
+ownership oracle.
 
-### Test/documentation gap: incomplete checkpoint wheel coverage
+**Disposition: fixed in this remediation.** The matcher now accepts exactly the
+two supported roots:
 
-The prior isolated-wheel regression omitted explicit member/import checks for:
+- `research_store.<suffix>`;
+- `firecrawl_skill.research_store.<suffix>`.
 
-- `index_checkpoint_asset_membership.py`
-- `index_checkpoint_core.py`
-- `index_checkpoint_finalize.py`
-- `index_checkpoint_models.py`
-- `index_checkpoint_replay.py`
-- `index_checkpoint_store.py`
+The regression now explicitly rejects an arbitrary `shadow.research_store.*`
+prefix. This closes the independent review's test gap without changing production
+imports or runtime semantics.
 
-**Disposition: fixed in #263.**
+### Complete checkpoint-facade wheel coverage
 
-`scripts/test_issue_263_package_boundary.py` now enumerates every new checkpoint
-projection facade as a required wheel member, imports each facade outside the
-repository source tree, imports the corresponding historical implementation, and
-proves object identity across the staged boundary.
+The earlier isolated-wheel gap remains closed: the package-boundary regression
+requires and imports the complete checkpoint facade family and verifies identity
+with the single staged implementation family. No additional change is required
+in this pass.
 
-The source structural regression independently checks the complete facade family
-for zero domain definitions.
+## Codex Review automated suggestions
 
-### Codex Review automated suggestions
+Immediately before this remediation, authoritative GitHub evidence for PR #285
+showed:
 
-At the last reviewed exact head, authoritative GitHub PR review/thread state and
-PR conversation metadata exposed no Codex Review review, thread, or automated
-suggestion text. No concrete Codex suggestion is therefore available to
-implement.
+- two formal reviews total (the historical Central COMMENTED review and the
+  current Central `CHANGES_REQUESTED` review);
+- zero review threads;
+- zero PR conversation comments; and
+- 35 untruncated checks, none representing a Codex Review suggestion surface.
 
-**Disposition:** none outstanding in observable GitHub state. This remediation
-does not fabricate or infer unseen bot comments. If Codex posts a concrete
-suggestion at a later head, it becomes new exact-head evidence and must be
-reviewed on its merits before phase-gate closure.
+No Codex Review review, inline thread, conversation comment, check description,
+or concrete automated suggestion text was observable. Therefore there is no
+Codex implementation item to invent or pre-resolve.
 
-## Previous remediation retained
+This status is head-sensitive. Central must re-read review/thread/comment/check
+state after the remediation head is created and again before final review
+closure. Any later concrete Codex suggestion must be dispositioned on its merits.
 
-The earlier remediation remains in force:
+## Local agent authority boundary
 
-- source tests and canonical source/wheel imports may legitimately use different
-  leading module prefixes;
-- the dedicated exact-head workflow executes the issue-specific structural and
-  package regressions;
-- nested retrieval/projection setuptools mappings are tested in an isolated
-  built wheel;
-- PostgreSQL/Qdrant authority and compatibility surfaces are documented in
-  `references/retrieval-projection-boundary.md`;
-- `scripts/conftest.py` path ordering is intentionally unchanged;
-- the unrelated
-  `test_candidate_replay_api.py::test_list_candidates_paginated_invalid_parameters`
-  failure remains out of #263 because it reproduces at the immutable base; and
-- informational Pyrefly `unnecessary-type-conversion` warnings in moved Qdrant
-  code are not converted into runtime changes merely to silence warnings.
+The local OpenCode agent is an execution and evidence collector only.
 
-## Exact-head remote gate
+- **Serena (`no-memories`)**: first-line semantic navigation, changed-symbol and
+  reference inspection, dependency implications, and diagnostics. Inspect before
+  any mechanical edit and audit afterward.
+- **RTK**: compress routine successful Ruff/Pyrefly/pytest/search output only when
+  decisive evidence is preserved.
+- **OpenViking**: bounded historical rationale only; never authority for mutable
+  source, Git, CI, database, runtime, or release state.
+- **Native tools**: authoritative exact Git SHAs/diffs, failures, PostgreSQL and
+  Qdrant evidence, container/service diagnostics, and final worktree state.
 
-`.github/workflows/retrieval-projection-slice-review.yml` performs:
+The local agent must not redesign or substantially refactor implementation during
+review validation. If validation exposes a substantive defect, report the raw
+failure and return remediation to Central unless separately authorized.
 
-1. immutable candidate checkout and SHA assertion;
-2. exact base-to-head `git diff --check`;
-3. ACMR changed-Python derivation;
-4. changed-scope Ruff lint and formatter checks;
-5. changed-scope Pyrefly including changed tests;
-6. full-project Pyrefly;
-7. disposable PostgreSQL and Qdrant startup;
-8. focused #263 structural/package/retrieval/projection/reconciliation/checkpoint
-   tests; and
-9. bounded JSON evidence recording base, candidate, tested SHA, and authority
-   families.
+## Central post-handoff closure
 
-The gate must not update the Pyrefly baseline, add suppressions, change Pyrefly
-version/scope, or mutate non-disposable infrastructure.
+After the local evidence handoff, Central must:
 
-## Fresh local handoff requirement
+1. re-fetch PR #285 and bind to the exact current base/head;
+2. invalidate the handoff if the head moved;
+3. inspect the new base-to-head diff and completeness metadata;
+4. re-check current Codex/review/thread/conversation evidence;
+5. require successful exact-head Ruff, repository-pinned Pyrefly, focused pytest,
+   and applicable broader contract/integration authorities;
+6. re-run `gh_get_merge_requirements` and require complete policy/check/review/
+   thread/base-freshness evidence before asserting merge readiness; and
+7. only then choose a formal review disposition through the dedicated 0.9.0
+   review surface.
 
-The Central remediation commit invalidates every previous local exact-head PASS.
-Local OpenCode validation must begin by fetching and verifying the new
-40-character PR head.
-
-The local agent is an execution/evidence layer:
-
-- **Serena (`no-memories`)**: first-line semantic navigation, changed symbols,
-  references, dependencies, and diagnostics; inspect before any mechanical edit
-  and audit afterward.
-- **RTK**: routine successful Ruff/Pyrefly/pytest/search output when compression
-  preserves decisive evidence.
-- **OpenViking**: bounded historical rationale only; never authority for current
-  source, Git, CI, database, or runtime state.
-- **Native tools**: exact Git SHAs/diffs, failures, PostgreSQL/Qdrant runtime
-  evidence, service/container diagnostics, and final worktree state.
-
-Minimum local validation at the new exact head:
-
-1. `git fetch origin`, exact 40-character HEAD verification, base SHA, and
-   complete ACMR changed-file list;
-2. changed-scope `ruff check`;
-3. changed-scope `ruff format --check --diff`;
-4. changed-scope `pyrefly check <changed.py ...>`, including changed tests;
-5. #263 structural/package/corpus-service regressions;
-6. focused retrieval/projection/PostgreSQL/Qdrant/checkpoint/protection tests;
-7. full-project `pyrefly check`;
-8. relevant broader integration/contract tests;
-9. base-to-head and worktree `git diff --check`; and
-10. final exact HEAD plus clean worktree evidence.
-
-A validation failure is evidence, not permission to alter production code,
-tests, Pyrefly configuration, baseline, or authority gates. Substantive
-remediation returns to Central unless separately authorized.
-
-## Central source-remediation closure
-
-Before local handoff, Central source remediation is complete when:
-
-- the full checkpoint facade wheel/import gap is closed;
-- temporary compatibility/locality exceptions are explicit, tested, and carried
-  into #269's authoritative cleanup scope;
-- current observable Codex Review state has no undispositioned suggestion;
-- the PR body no longer represents stale local evidence as current; and
-- fresh exact-head remote Ruff, Pyrefly, package, pytest/contract/integration
-  authorities succeed on the new head.
-
-No merge, ready-for-review transition, approval, issue closure, or #269 cleanup
-is implied by this document.
+No merge, ready-for-review transition, approval, issue closure, compatibility
+cleanup, or branch-policy weakening is implied by this remediation.
