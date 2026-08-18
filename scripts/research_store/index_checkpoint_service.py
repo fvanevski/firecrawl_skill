@@ -1,10 +1,17 @@
-"""Compatibility alias for canonical projection checkpoint service."""
+"""Durable PostgreSQL indexing checkpoints and guarded finalization."""
 
-import sys as _sys
+from .index_checkpoint_asset_membership import (
+    _IndexCheckpointAssetMembershipMixin,
+)
+from .index_checkpoint_core import _IndexCheckpointCoreMixin
+from .index_checkpoint_finalize import _IndexCheckpointFinalizeMixin
+from .index_checkpoint_store import IndexCheckpointStoreMixin
 
-from .retrieval.projection import index_checkpoint_service as _canonical
-from .retrieval.projection.index_checkpoint_service import IndexCheckpointService
 
-__all__ = ["IndexCheckpointService"]
-
-_sys.modules[__name__] = _canonical
+class IndexCheckpointService(
+    _IndexCheckpointCoreMixin,
+    _IndexCheckpointFinalizeMixin,
+    _IndexCheckpointAssetMembershipMixin,
+    IndexCheckpointStoreMixin,
+):
+    """Seal, observe, resume, and atomically finalize one run's index set."""
