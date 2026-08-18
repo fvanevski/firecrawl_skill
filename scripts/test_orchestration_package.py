@@ -220,7 +220,7 @@ class TestCompositionRoot:
         source = inspect.getsource(build_production_orchestrator)
         assert "CheckpointResearchOrchestrator" in source
         assert "BoundedAcquisitionStage" in source
-        assert "BoundedExtractionStage" in source
+        assert "ProductionBoundedExtractionStage" in source
 
     def test_build_production_orchestrator_injects_bounded_stages(self):
         """The composition root must explicitly pass bounded stage classes."""
@@ -230,7 +230,7 @@ class TestCompositionRoot:
 
         source = inspect.getsource(build_production_orchestrator)
         assert "acquisition_stage_cls=BoundedAcquisitionStage" in source
-        assert "extraction_stage_cls=BoundedExtractionStage" in source
+        assert "extraction_stage_cls=ProductionBoundedExtractionStage" in source
 
 
 class TestCommandDataclass:
@@ -241,8 +241,8 @@ class TestCommandDataclass:
 
         cmd = RunResearchCommand(
             run_id=UUID("00000000-0000-0000-0000-000000000001"),
-            spec={"query": "test"},
-            search_plan={"queries": []},
+            spec={},
+            search_plan={},
         )
         with pytest.raises(FrozenInstanceError):
             cmd.run_id = UUID("00000000-0000-0000-0000-000000000002")  # type: ignore[misc]

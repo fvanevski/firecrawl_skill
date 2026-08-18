@@ -584,9 +584,9 @@ class AcquisitionService:
         metadata = adapter_result.transport_metadata or {}
         explicit_values: list[tuple[str, int]] = []
         for field_name in ("attempt", "attempts"):
-            if field_name not in metadata or metadata.get(field_name) is None:
-                continue
             raw = metadata.get(field_name)
+            if raw is None:
+                continue
             if isinstance(raw, bool):
                 raise SearchProvenanceError(
                     "provider attempt metadata must contain a positive 32-bit "
@@ -669,7 +669,7 @@ class AcquisitionService:
         run_id: UUID,
         idempotency_key: str,
         request_envelope: Mapping[str, Any],
-        authority_context: AuthoritativeAcquisitionContext | None,
+        authority_context: AuthoritativeAcquisitionContext,
     ) -> AcquisitionResult | None:
         with uow.connection.cursor() as cur:
             cur.execute(

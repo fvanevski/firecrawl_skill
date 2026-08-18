@@ -454,7 +454,7 @@ class DirectScrapeService:
         self,
         context: AuthoritativeAcquisitionContext,
         requests: Sequence[DirectScrapeRequest],
-        candidates: Mapping[int, Mapping[str, Any]],
+        candidates: dict[int, dict[str, Any]],
         idempotency_key: str,
         external_invocation_id: str | None,
         parent_invocation_id: UUID | None,
