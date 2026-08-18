@@ -87,12 +87,12 @@ def make_fake_tools(
     docker = bin_dir / "docker"
     docker.write_text(
         "#!/usr/bin/env bash\n"
-        "printf '%s\\n' \"$*\" >> \"$FAKE_DOCKER_LOG\"\n"
+        'printf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"\n'
         "if [[ ${1:-} == inspect ]]; then\n"
         "  if [[ -z ${FAKE_DOCKER_EXISTS:-} ]]; then exit 1; fi\n"
-        "  if [[ \"$*\" == *disposable-test* ]]; then\n"
+        '  if [[ "$*" == *disposable-test* ]]; then\n'
         "    [[ ${FAKE_DOCKER_OWNED:-0} == 1 ]] && printf 'true\\n' || printf 'false\\n'\n"
-        "  elif [[ \"$*\" == *test-namespace* ]]; then\n"
+        '  elif [[ "$*" == *test-namespace* ]]; then\n'
         "    printf '%s\\n' \"${FAKE_DOCKER_NAMESPACE:-}\"\n"
         "  fi\n"
         "  exit 0\n"
@@ -109,7 +109,7 @@ def make_fake_tools(
     curl = bin_dir / "curl"
     curl.write_text(
         "#!/usr/bin/env bash\n"
-        "printf '%s\\n' \"$*\" >> \"$FAKE_CURL_LOG\"\n"
+        'printf \'%s\\n\' "$*" >> "$FAKE_CURL_LOG"\n'
         "if [[ ${FAKE_CURL_FAIL:-0} == 1 ]]; then exit 1; fi\n"
         "exit 0\n"
     )
