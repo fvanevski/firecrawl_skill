@@ -9,7 +9,9 @@ import pytest
 SCRIPT = Path(__file__).with_name("disposable-test-services")
 
 
-def run_helper(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def run_helper(
+    *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(SCRIPT), *args],
         check=False,
@@ -41,7 +43,9 @@ def test_namespace_normalization_preserves_standalone_test_segment() -> None:
     assert "RESEARCH_STORE_TEST_ALLOW_RESET='issue_263_test'" in result.stdout
 
 
-@pytest.mark.parametrize("namespace", ["", "../oops", "UpperCase", "has.dot", "with space"])
+@pytest.mark.parametrize(
+    "namespace", ["", "../oops", "UpperCase", "has.dot", "with space"]
+)
 def test_invalid_namespace_fails_closed(namespace: str) -> None:
     result = run_helper("--namespace", namespace, "env")
 
@@ -72,7 +76,9 @@ def test_services_cannot_share_a_host_port() -> None:
     assert "host ports must differ" in result.stderr
 
 
-def make_fake_tools(tmp_path: Path, *, existing: bool = False, owned: bool = True) -> tuple[dict[str, str], Path]:
+def make_fake_tools(
+    tmp_path: Path, *, existing: bool = False, owned: bool = True
+) -> tuple[dict[str, str], Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log_path = tmp_path / "docker.log"
@@ -160,7 +166,9 @@ def test_reset_qdrant_removes_owned_container_before_recreate(tmp_path: Path) ->
     assert result.returncode == 0, result.stderr
     log = log_path.read_text().splitlines()
     rm_index = next(i for i, line in enumerate(log) if line == "rm -f fc263_qdrant")
-    run_index = next(i for i, line in enumerate(log) if line.startswith("run -d --name fc263_qdrant"))
+    run_index = next(
+        i for i, line in enumerate(log) if line.startswith("run -d --name fc263_qdrant")
+    )
     assert rm_index < run_index
 
 
