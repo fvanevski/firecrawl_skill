@@ -86,7 +86,8 @@ class CohereCompatibleReranker:
         documents = [
             item.get("excerpt") or item.get("title") or "" for item in candidates
         ]
-        package = sys.modules.get(__package__)
+        package_name = __package__
+        package = sys.modules.get(package_name) if package_name else None
         request_type = getattr(package, "Request", _DefaultRequest)
         opener = getattr(package, "urlopen", _default_urlopen)
         request = request_type(
