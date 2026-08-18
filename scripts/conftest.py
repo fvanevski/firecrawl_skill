@@ -26,6 +26,12 @@ pytest_plugins = ("qdrant_test_support",)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
 
+# Clean CI runners do not have the ignored deployment .env. Give every pytest
+# workflow one synthetic identity while preserving any explicit test override.
+os.environ.setdefault("EMBEDDING_MODEL", "pytest-embedding")
+os.environ.setdefault("EMBEDDING_REVISION", "pytest-revision")
+os.environ.setdefault("EMBEDDING_DIMENSION", "4")
+
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item):
