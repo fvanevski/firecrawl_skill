@@ -33,8 +33,8 @@ class _AcquisitionCursor(Protocol):
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None: ...
 
     def execute(self, query: str, params: object = ...) -> Any: ...
@@ -50,8 +50,8 @@ class _AcquisitionConnection(Protocol):
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None: ...
 
     def cursor(self) -> _AcquisitionCursor: ...
