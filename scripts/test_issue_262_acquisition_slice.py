@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -25,7 +26,7 @@ from research_store.acquisition.adapters.firecrawl_search import (
 from research_store.acquisition.authority import AuthoritativeAcquisitionContext
 from research_store.acquisition.direct_scrape import DirectScrapeService
 from research_store.acquisition.models import DirectScrapeRequest, SearchAdapterResult
-from research_store.acquisition.ports import SearchAdapter
+from research_store.acquisition.ports import DirectScrapeAdapter, SearchAdapter
 from research_store.acquisition.service import AcquisitionService
 from research_store.domain import SearchAdapterResult as DomainSearchAdapterResult
 from research_store.ports import SearchAdapter as LegacySearchAdapter
@@ -41,10 +42,7 @@ def _tree(path: Path) -> ast.Module:
 
 def _defined_classes(path: Path) -> set[str]:
     return {
-        node.name
-        for node in _tree(path).body
-        if isinstance(node, (ast.ClassDef, ast.AsyncFunctionDef))
-        and isinstance(node, ast.ClassDef)
+        node.name for node in _tree(path).body if isinstance(node, ast.ClassDef)
     }
 
 
@@ -139,7 +137,7 @@ def test_search_service_requires_explicit_adapter_before_uow_or_provider_use(
     run_id = uuid4()
     uow_calls = 0
 
-    def forbidden_uow():
+    def forbidden_uow() -> Any:
         nonlocal uow_calls
         uow_calls += 1
         raise AssertionError("UoW must not be touched without an adapter")
@@ -168,16 +166,16 @@ def test_search_service_requires_explicit_adapter_before_uow_or_provider_use(
 def test_direct_scrape_preflight_failure_prevents_adapter_construction() -> None:
     adapter_constructions = 0
 
-    def adapter_factory():
+    def adapter_factory() -> DirectScrapeAdapter:
         nonlocal adapter_constructions
         adapter_constructions += 1
         raise AssertionError("adapter must not be constructed after preflight failure")
 
-    def fail_preflight(**_kwargs):
+    def fail_preflight(**_kwargs: Any) -> AuthoritativeAcquisitionContext:
         raise RuntimeError("preflight rejected")
 
     service = DirectScrapeService(
-        config=object(),
+        config=Any,  # runtime-unused: preflight fails before config inspection
         uow_factory=lambda: None,
         blob_store=object(),
         corpus_service=object(),
