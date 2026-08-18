@@ -18,7 +18,7 @@ import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 from uuid import UUID
 
 from ..config import StoreConfig
@@ -27,13 +27,13 @@ from ..run_service import TERMINAL_STATES
 
 
 class _AcquisitionCursor(Protocol):
-    def __enter__(self) -> _AcquisitionCursor: ...
+    def __enter__(self) -> Self: ...
 
     def __exit__(
         self,
-        exc_type: Any,
-        exc_value: Any,
-        traceback: Any,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
     ) -> bool | None: ...
 
     def execute(self, query: str, params: object = ...) -> Any: ...
@@ -44,13 +44,13 @@ class _AcquisitionCursor(Protocol):
 
 
 class _AcquisitionConnection(Protocol):
-    def __enter__(self) -> _AcquisitionConnection: ...
+    def __enter__(self) -> Self: ...
 
     def __exit__(
         self,
-        exc_type: Any,
-        exc_value: Any,
-        traceback: Any,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
     ) -> bool | None: ...
 
     def cursor(self) -> _AcquisitionCursor: ...
