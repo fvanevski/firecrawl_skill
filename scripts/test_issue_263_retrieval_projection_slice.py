@@ -89,7 +89,9 @@ def test_legacy_qdrant_module_is_the_canonical_projection_module() -> None:
     assert _defined_symbols(STORE / "qdrant.py") == set()
 
 
-def test_indexing_uses_baseline_stable_implementation_with_projection_namespace() -> None:
+def test_indexing_uses_baseline_stable_implementation_with_projection_namespace() -> (
+    None
+):
     assert canonical_indexing.IndexWorker is legacy_indexing.IndexWorker
     assert canonical_indexing.OpenAICompatibleEmbedder is (
         legacy_indexing.OpenAICompatibleEmbedder
@@ -101,9 +103,7 @@ def test_indexing_uses_baseline_stable_implementation_with_projection_namespace(
     assert {"IndexWorker", "OpenAICompatibleEmbedder"}.issubset(
         _defined_symbols(STORE / "indexing.py")
     )
-    assert (
-        _defined_symbols(STORE / "retrieval" / "projection" / "indexing.py") == set()
-    )
+    assert _defined_symbols(STORE / "retrieval" / "projection" / "indexing.py") == set()
 
 
 def test_qdrant_authority_and_reconciliation_are_projection_infrastructure() -> None:
@@ -119,7 +119,9 @@ def test_qdrant_authority_and_reconciliation_are_projection_infrastructure() -> 
     assert _defined_symbols(STORE / "projection_reconciliation.py") == set()
 
 
-def test_checkpoints_use_baseline_stable_implementation_with_projection_namespace() -> None:
+def test_checkpoints_use_baseline_stable_implementation_with_projection_namespace() -> (
+    None
+):
     assert canonical_checkpoint_service.IndexCheckpointService is (
         legacy_checkpoint_service.IndexCheckpointService
     )
@@ -153,8 +155,8 @@ def test_checkpoints_use_baseline_stable_implementation_with_projection_namespac
 
 
 def test_projection_boundary_declares_non_authoritative_qdrant_contract() -> None:
-    source = (
-        STORE / "retrieval" / "projection" / "__init__.py"
-    ).read_text(encoding="utf-8")
+    source = (STORE / "retrieval" / "projection" / "__init__.py").read_text(
+        encoding="utf-8"
+    )
     assert "Qdrant remains rebuildable and non-authoritative" in source
     assert "PostgreSQL retains durable" in source
