@@ -147,6 +147,10 @@ def test_direct_scrape_builder_delegates_to_canonical_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from research_store.acquisition import direct_scrape as legacy
+    from research_store.acquisition import direct_scrape_application as application
+
+    assert legacy.DirectScrapeService is application.DirectScrapeService
+    assert legacy.DirectScrapePersistenceError is application.DirectScrapePersistenceError
 
     sentinel = object()
     config = cast(StoreConfig, object())
@@ -171,6 +175,22 @@ def test_direct_scrape_builder_delegates_to_canonical_root(
 
     assert result is sentinel
     assert received == {"config": config, "adapter_factory": adapter_factory}
+
+
+def test_direct_scrape_application_has_no_composition_back_edge() -> None:
+    facade = _PACKAGE_ROOT / "acquisition" / "direct_scrape.py"
+    application = _PACKAGE_ROOT / "acquisition" / "direct_scrape_application.py"
+
+    assert _composition_imports(facade)
+    assert _composition_imports(application) == []
+
+    application_tree = ast.parse(application.read_text(encoding="utf-8"))
+    assert any(
+        isinstance(node, ast.ClassDef) and node.name == "DirectScrapeService"
+        for node in application_tree.body
+    )
+    facade_tree = ast.parse(facade.read_text(encoding="utf-8"))
+    assert not any(isinstance(node, ast.ClassDef) for node in facade_tree.body)
 
 
 def test_orchestration_legacy_surface_reexports_canonical_root() -> None:

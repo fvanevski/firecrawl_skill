@@ -1,10 +1,10 @@
 """Canonical production composition root for the research store.
 
-This module is the only production package surface that constructs concrete
-unit-of-work factories, infrastructure adapters, and application services from
-``StoreConfig``.  It owns wiring only: deterministic policy, persistence
-semantics, workflow decisions, and transaction behavior remain in their
-respective services and repositories.
+This module is the canonical ``StoreConfig``-driven surface that constructs
+unit-of-work factories, infrastructure adapters, and application services.
+It owns wiring only: deterministic policy, persistence semantics, workflow
+decisions, and transaction behavior remain in their respective services and
+repositories.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from .strategy_service import StrategyRevisionService
 from .valkey_queue import ValkeyQueue
 
 if TYPE_CHECKING:
-    from .acquisition.direct_scrape import DirectScrapeService
+    from .acquisition.direct_scrape_application import DirectScrapeService
     from .acquisition.ports import DirectScrapeAdapter
 
 UowFactory = Callable[[], PostgresUnitOfWork]
@@ -280,7 +280,7 @@ def build_direct_scrape_service(
     adapter_factory: Callable[[], DirectScrapeAdapter] | None = None,
 ) -> DirectScrapeService:
     """Compose the authoritative direct-scrape service and provider adapter."""
-    from .acquisition.direct_scrape import DirectScrapeService
+    from .acquisition.direct_scrape_application import DirectScrapeService
     from .parsing import get_registry
 
     if adapter_factory is None:
