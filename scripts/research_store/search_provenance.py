@@ -101,9 +101,10 @@ class ProvenanceResumableResearchOrchestrator(ResumableResearchOrchestrator):
     ):
         """Build the smart production topology without import-time rebinding."""
         if extraction_stage_cls is None:
-            # Lazy import keeps the historical direct build path cycle-safe while
-            # preserving the same production transport selection as composition.py.
-            from .orchestration.composition import ProductionBoundedExtractionStage
+            # This leaf primitive preserves the historical bounded production
+            # default without importing the canonical root or its compatibility
+            # facade back into application/orchestrator code.
+            from .production_topology import ProductionBoundedExtractionStage
 
             extraction_stage_cls = ProductionBoundedExtractionStage
         return super().build(

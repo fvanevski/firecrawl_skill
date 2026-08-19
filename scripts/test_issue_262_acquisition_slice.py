@@ -19,6 +19,7 @@ from research_store import fsearch_service
 from research_store.acquisition import (
     authority as canonical_acquisition_authority,
 )
+from research_store.acquisition import direct_scrape as capability_direct_scrape
 from research_store.acquisition.adapters.bounded_firecrawl import (
     BoundedFirecrawlSearchAdapter,
 )
@@ -30,7 +31,16 @@ from research_store.acquisition.adapters.firecrawl_search import (
 )
 from research_store.acquisition.authority import AuthoritativeAcquisitionContext
 from research_store.acquisition.direct_scrape import DirectScrapeService
-from research_store.acquisition.models import DirectScrapeRequest, SearchAdapterResult
+from research_store.acquisition.direct_scrape_application import (
+    DirectScrapeService as CanonicalDirectScrapeService,
+)
+from research_store.acquisition.models import (
+    DirectScrapeBatchResult,
+    DirectScrapeItemResult,
+    DirectScrapeRequest,
+    ScrapeTransportResult,
+    SearchAdapterResult,
+)
 from research_store.acquisition.ports import (
     CandidateScrapeAdapter,
     DirectScrapeAdapter,
@@ -65,6 +75,18 @@ def _top_level_imports(path: Path) -> set[str]:
     return imports
 
 
+def _all_imports(path: Path) -> set[str]:
+    imports: set[str] = set()
+    for node in ast.walk(_tree(path)):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            prefix = "." * node.level
+            module = node.module or ""
+            imports.add(f"{prefix}{module}")
+    return imports
+
+
 def test_legacy_acquisition_symbols_are_same_object_compatibility_facades() -> None:
     assert legacy_acquisition_service.AcquisitionService is AcquisitionService
     assert (
@@ -76,7 +98,13 @@ def test_legacy_acquisition_symbols_are_same_object_compatibility_facades() -> N
         legacy_bounded_acquisition.BoundedFirecrawlSearchAdapter
         is BoundedFirecrawlSearchAdapter
     )
-    assert legacy_direct_scrape.DirectScrapeService is DirectScrapeService
+    assert DirectScrapeService is CanonicalDirectScrapeService
+    assert capability_direct_scrape.DirectScrapeService is CanonicalDirectScrapeService
+    assert capability_direct_scrape.DirectScrapeRequest is DirectScrapeRequest
+    assert capability_direct_scrape.DirectScrapeBatchResult is DirectScrapeBatchResult
+    assert capability_direct_scrape.DirectScrapeItemResult is DirectScrapeItemResult
+    assert capability_direct_scrape.ScrapeTransportResult is ScrapeTransportResult
+    assert legacy_direct_scrape.DirectScrapeService is CanonicalDirectScrapeService
     assert legacy_direct_scrape.DirectScrapeRequest is DirectScrapeRequest
     assert (
         legacy_direct_scrape.FirecrawlDirectScrapeAdapter
@@ -105,7 +133,7 @@ def test_root_package_no_longer_rewrites_acquisition_adapter_global() -> None:
 
 
 def test_application_modules_have_no_top_level_transport_dependency() -> None:
-    for relative in ("service.py", "direct_scrape.py"):
+    for relative in ("service.py", "direct_scrape_application.py"):
         imports = _top_level_imports(ACQUISITION / relative)
         assert "subprocess" not in imports
         assert not any(".adapters" in module for module in imports)
@@ -197,7 +225,7 @@ def test_direct_scrape_preflight_failure_prevents_adapter_construction() -> None
 
 
 def test_generic_composition_root_selects_bounded_adapter_explicitly() -> None:
-    source = (STORE / "container.py").read_text(encoding="utf-8")
+    source = (STORE / "composition.py").read_text(encoding="utf-8")
     assert "BoundedFirecrawlSearchAdapter()" in source
     assert "search_adapter=adapter" in source
 
@@ -213,16 +241,17 @@ def test_bounded_extraction_policy_depends_on_candidate_scrape_port() -> None:
 
 
 def test_production_orchestration_selects_bounded_candidate_transport() -> None:
-    path = STORE / "orchestration" / "composition.py"
-    source = path.read_text(encoding="utf-8")
-    assert "class ProductionBoundedExtractionStage" in source
-    assert "BoundedFirecrawlSearchAdapter()" in source
-    assert "extraction_stage_cls=ProductionBoundedExtractionStage" in source
+    topology_source = (STORE / "production_topology.py").read_text(encoding="utf-8")
+    composition_source = (STORE / "composition.py").read_text(encoding="utf-8")
+    assert "class ProductionBoundedExtractionStage" in topology_source
+    assert "BoundedFirecrawlSearchAdapter()" in topology_source
+    assert "extraction_stage_cls=ProductionBoundedExtractionStage" in composition_source
 
     resume_source = (STORE / "search_provenance.py").read_text(encoding="utf-8")
     assert "from .acquisition.service import SearchProvenanceError" in resume_source
     assert "ProductionBoundedExtractionStage" in resume_source
     assert "extraction_stage_cls=extraction_stage_cls" in resume_source
+    assert "orchestration.composition" not in resume_source
 
 
 def test_public_checkpoint_builder_defaults_to_production_bounded_extraction(
@@ -258,15 +287,22 @@ def test_public_checkpoint_builder_defaults_to_production_bounded_extraction(
 
 
 def test_direct_scrape_default_selection_is_confined_to_builder_scope() -> None:
-    path = ACQUISITION / "direct_scrape.py"
-    imports = _top_level_imports(path)
-    assert not any(".adapters" in module for module in imports)
-    source = path.read_text(encoding="utf-8")
-    assert (
-        "from .adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter" in source
-    )
-    assert source.index("def build_direct_scrape_service") < source.index(
-        "from .adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter"
+    application_path = ACQUISITION / "direct_scrape_application.py"
+    application_imports = _all_imports(application_path)
+    application_source = application_path.read_text(encoding="utf-8")
+    assert not any(".adapters" in module for module in application_imports)
+    assert "FirecrawlDirectScrapeAdapter" not in application_source
+    assert not any("composition" in module for module in application_imports)
+
+    facade_source = (ACQUISITION / "direct_scrape.py").read_text(encoding="utf-8")
+    assert "from .. import composition as _composition" in facade_source
+    assert "_composition.build_direct_scrape_service(" in facade_source
+
+    composition_source = (STORE / "composition.py").read_text(encoding="utf-8")
+    adapter_import = "from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter"
+    assert adapter_import in composition_source
+    assert composition_source.index("def build_direct_scrape_service") < (
+        composition_source.index(adapter_import)
     )
 
 
