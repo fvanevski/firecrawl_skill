@@ -193,10 +193,7 @@ Use the following contract on the exact PR head:
    Git, CI, database or runtime authority.
 5. Run changed-scope `ruff check` and `ruff format --check --diff` on exact ACMR
    Python paths.
-6. Run repo-pinned `pyrefly check <changed.py ...>` on the changed non-test
-   Python paths (the historical test corpus, `test_*.py`, is excluded from the
-   changed-scope set, matching the CI gate), followed later by full-project
-   `pyrefly check` with no file arguments.
+6. Run repo-pinned `pyrefly check <changed.py ...>` on the same exact ACMR Python set, including changed tests, followed later by full-project `pyrefly check` with no file arguments.
 7. Run the smallest focused regressions first, including
    `test_issue_267_composition_root.py`, `test_issue_262_acquisition_slice.py`,
    `test_corpus_service_refactor.py`, `test_orchestration_package.py` and
