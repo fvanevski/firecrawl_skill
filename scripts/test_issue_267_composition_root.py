@@ -143,7 +143,9 @@ def _bound_or_referenced_names(tree: ast.AST) -> set[str]:
     names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            names.update(alias.asname or alias.name.split(".", 1)[0] for alias in node.names)
+            names.update(
+                alias.asname or alias.name.split(".", 1)[0] for alias in node.names
+            )
         elif isinstance(node, ast.ImportFrom):
             names.update(alias.asname or alias.name for alias in node.names)
     return names
