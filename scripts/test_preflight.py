@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -117,7 +118,7 @@ def test_redact_url_credentials_masks_password_without_changing_endpoint():
 
 
 def test_probe_qdrant_uses_active_alias_and_named_dense_vector(monkeypatch):
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     class Index:
         def __init__(self, *_args):
