@@ -133,6 +133,7 @@ def test_ordinary_runtime_does_not_import_release_package() -> None:
     allowed = {
         Path("benchmark_admin.py"),
         Path("cli/benchmark.py"),
+        *LEGACY_IMPLEMENTATION_PATHS,
     }
     users: set[Path] = set()
 

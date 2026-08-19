@@ -52,19 +52,25 @@ def test_ci_runs_read_only_pyrefly_and_binds_release_evidence():
     assert '--typecheck-result "${{ needs.typecheck.result }}"' in workflow
 
 
-def test_ci_binds_pyrefly_to_exact_candidate_and_validates_negative_probe():
+def test_ci_binds_pyrefly_to_exact_candidate_and_validates_changed_scope_and_probe():
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     assert "Check out exact Pyrefly candidate" in workflow
     assert (
         "ref: ${{ inputs.candidate-sha || github.event.pull_request.head.sha || github.sha }}"
         in workflow
     )
+    assert "fetch-depth: 0" in workflow
     assert "Verify checked-out Pyrefly candidate" in workflow
     assert 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' in workflow
+    assert "Run Pyrefly on actual changed Python scope" in workflow
+    assert "BASE_SHA: ${{ github.event.pull_request.base.sha }}" in workflow
+    assert "HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in workflow
+    assert 'git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- \'*.py\'' in workflow
+    assert 'pyrefly check "${changed_python[@]}" --output-format=github' in workflow
     assert "Verify repository-root import resolution" in workflow
     assert "scripts/model_gateway.py" in workflow
     assert "scripts/fixtures/model_gateway.py" in workflow
-    assert "Verify explicit changed-scope Pyrefly enforcement" in workflow
+    assert "Verify Pyrefly explicit-file diagnostic behavior" in workflow
     assert 'pyrefly check "$PROBE" --output-format=github' in workflow
     assert 'if [ "$rc" -ne 1 ]; then' in workflow
     assert 'grep -Fq "$PROBE" "$OUTPUT"' in workflow
