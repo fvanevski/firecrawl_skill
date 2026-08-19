@@ -13,7 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import research_store.retrieval as retrieval_module
 from model_gateway import StructuredResult
-from research_store import preflight
+from research_store.release import preflight
 from research_store.retrieval import CohereCompatibleReranker
 
 
@@ -117,7 +117,7 @@ def test_redact_url_credentials_masks_password_without_changing_endpoint():
 
 
 def test_probe_qdrant_uses_active_alias_and_named_dense_vector(monkeypatch):
-    calls = []
+    calls: list[tuple[object, ...]] = []
 
     class Index:
         def __init__(self, *_args):
