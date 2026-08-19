@@ -1,14 +1,17 @@
 # Acquisition capability boundary
 
-Issue #262 consolidates the acquisition vertical slice while preserving the
-existing authoritative research contracts. The refactor is structural: it does
-not broaden provider behavior, change PostgreSQL authority, replace Firecrawl,
-or alter the deterministic bounded-extraction policies established by earlier
-issues.
+Issue #262 consolidated the acquisition vertical slice while preserving the
+existing authoritative research contracts. Phase-5 issue #267 further separates
+composition from application implementation; this document reflects the current
+post-#267 ownership while preserving the #262 behavioral boundary.
+
+The refactors are structural. They do not broaden provider behavior, change
+PostgreSQL authority, replace Firecrawl, or alter bounded extraction,
+idempotency, retry, provenance or failure semantics.
 
 ## Authority and behavioral invariants
 
-The following contracts are unchanged and remain authoritative:
+The following contracts remain authoritative:
 
 - PostgreSQL owns research-run lifecycle state, acquisition records,
   idempotency, invocation/provenance identity, candidate identity, and corpus
@@ -16,13 +19,13 @@ The following contracts are unchanged and remain authoritative:
 - `BLOB_ROOT` owns immutable content-addressed provider/corpus bytes.
 - Qdrant is a rebuildable projection rather than an authority store.
 - Valkey is optional transient coordination rather than durable workflow state.
-- Acquisition must fail closed before constructing or invoking Firecrawl when
-  database configuration, schema head, privileges, run eligibility,
-  lifecycle revision, or durable blob-root readiness is invalid.
+- Acquisition fails closed before constructing or invoking Firecrawl when
+  database configuration, schema head, privileges, run eligibility, lifecycle
+  revision or durable blob-root readiness is invalid.
 - Firecrawl search discovery does not perform an implicit scrape.
-- Candidate scrape/extraction remains a distinct bounded operation with the
-  established first-byte, provider-operation, and overall-candidate deadlines,
-  retry limits, failure classification, diagnostic redaction, and cancellation
+- Candidate scrape/extraction is a distinct bounded operation with the
+  established first-byte, provider-operation and overall-candidate deadlines,
+  retry limits, failure classification, diagnostic redaction and cancellation
   semantics.
 - Search idempotency/provenance, direct-scrape replay, extraction-attempt
   lineage, and failure persistence remain PostgreSQL-authoritative.
@@ -32,28 +35,28 @@ The following contracts are unchanged and remain authoritative:
 | Responsibility | Canonical location | Dependency rule |
 |---|---|---|
 | Acquisition authority/preflight | `research_store.acquisition.authority` | May use PostgreSQL/config/blob readiness; must not construct provider transport. |
-| Acquisition-facing models | `research_store.acquisition.models` | Shared by application policy and adapters. `SearchAdapterResult` is a same-object compatibility re-export of the existing domain model in this phase. |
+| Acquisition-facing models | `research_store.acquisition.models` | Shared by application policy and adapters. `SearchAdapterResult` remains a same-object compatibility exposure of the existing domain model. |
 | Provider ports | `research_store.acquisition.ports` | Defines `SearchAdapter`, `CandidateScrapeAdapter`, and `DirectScrapeAdapter`; contains no concrete provider. |
 | Search application/persistence policy | `research_store.acquisition.service` | Depends on `SearchAdapter`, never a concrete Firecrawl class. |
 | Bounded extraction stage policy | `research_store.bounded_orchestrator.BoundedExtractionStage` | Depends on `CandidateScrapeAdapter`; it never imports or constructs Firecrawl. |
-| Direct-scrape application/persistence policy | `research_store.acquisition.direct_scrape` | Depends on `DirectScrapeAdapter`; provider selection is confined to builder/composition scope after authority checks. |
-| Bounded Firecrawl search/scrape transport | `research_store.acquisition.adapters.bounded_firecrawl` | Concrete network/CLI adapter; preserves issue #216 bounded behavior. |
+| Direct-scrape application/persistence policy | `research_store.acquisition.direct_scrape_application` | Depends on `DirectScrapeAdapter`; contains authority, persistence, idempotency, retry and failure semantics and does not depend on composition. |
+| Historical direct-scrape capability surface | `research_store.acquisition.direct_scrape` | Same-object facade over the application implementation; historical builder delegates to canonical composition. |
+| Bounded Firecrawl search/scrape transport | `research_store.acquisition.adapters.bounded_firecrawl` | Concrete network/CLI adapter preserving issue #216 bounded behavior. |
 | Metadata-only Firecrawl search transport | `research_store.acquisition.adapters.firecrawl_search` | Concrete discovery-only search adapter used by authoritative `fsearch`. |
 | Direct Firecrawl scrape transport | `research_store.acquisition.adapters.firecrawl_scrape` | Concrete direct scrape CLI adapter; contains no persistence policy. |
-| Generic acquisition composition | `research_store.container.build_acquisition_service` | Selects `BoundedFirecrawlSearchAdapter` when no adapter is explicitly supplied. |
-| Production bounded extraction composition | `research_store.orchestration.composition.ProductionBoundedExtractionStage` | Injects `BoundedFirecrawlSearchAdapter` into the candidate-scrape port; fresh and resumable production builders select this composed stage. |
-| Authoritative fsearch composition | `research_store.fsearch_policy_service.build_policy_fsearch_service` | Selects metadata-only search transport and direct-scrape service. |
-| Direct/fscrape composition | `build_direct_scrape_service` / `research_store.fscrape_service` | Selects `FirecrawlDirectScrapeAdapter` at the composition edge. |
+| Generic acquisition composition | `research_store.composition.build_acquisition_service` | Selects `BoundedFirecrawlSearchAdapter` when no adapter is explicitly supplied; `research_store.container` is a compatibility re-export. |
+| Production bounded extraction primitive | `research_store.production_topology.ProductionBoundedExtractionStage` | Injects `BoundedFirecrawlSearchAdapter` through `CandidateScrapeAdapter`; contains no service/UoW/config resolution or workflow policy. |
+| Fresh/resumable production orchestration | `research_store.composition` | Selects bounded acquisition plus the production bounded extraction primitive. |
+| Authoritative fsearch composition | `research_store.fsearch_policy_service.build_policy_fsearch_service` | Selects metadata-only search transport and the public direct-scrape builder surface. |
+| Direct/fscrape composition | `research_store.composition.build_direct_scrape_service` / `research_store.fscrape_service` | Selects `FirecrawlDirectScrapeAdapter` at the composition edge after application authority boundaries are preserved. |
 
-The `research_store.acquisition` package initializer is intentionally inert.
-Callers import the explicit submodule they need. This prevents package import
-from pulling PostgreSQL or provider transport dependencies through an implicit
-cycle and makes dependency direction visible at each call site.
+The `research_store.acquisition` package initializer remains intentionally inert.
+Callers import explicit submodules, preventing package initialization from
+pulling PostgreSQL or provider transport through an implicit cycle.
 
 ## Explicit adapter selection
 
-The effective provider behavior that existed before #262 is preserved
-explicitly instead of through package-global mutation:
+The provider behavior established by #262 is unchanged:
 
 | Call path | Adapter selected |
 |---|---|
@@ -63,215 +66,135 @@ explicitly instead of through package-global mutation:
 | Direct scrape / `fscrape` | `FirecrawlDirectScrapeAdapter` |
 | Direct test/application injection | Caller-supplied implementation of the corresponding port |
 
-`AcquisitionService` itself no longer chooses a concrete adapter. A directly
-constructed service with no adapter rejects a valid provider execution before
-creating a provider invocation or touching its UoW. This is a configuration
-failure, not a transport fallback.
+`AcquisitionService` does not choose a concrete adapter. A directly constructed
+service with no adapter rejects provider execution before creating a provider
+invocation or touching its UoW.
 
-`BoundedExtractionStage` no longer constructs `BoundedFirecrawlSearchAdapter`.
-It accepts a `CandidateScrapeAdapter`; tests may continue to provide the
-existing `_candidate_scrape_adapter` context override, while production fresh
-and resumable builders inject the bounded Firecrawl implementation in
-`orchestration.composition`. A candidate that already carries authoritative
-content or a terminal preflight outcome does not require a provider call.
+`BoundedExtractionStage` accepts a `CandidateScrapeAdapter`; it does not construct
+Firecrawl. The narrow `production_topology` leaf supplies the concrete bounded
+adapter only for production stage construction. The canonical fresh/resumable
+builders in `research_store.composition` select that stage explicitly, while
+historical direct orchestrator builders use the same leaf primitive to preserve
+their Phase-4 runtime defaults without depending back on composition.
 
-`DirectScrapeService` receives an adapter factory. Its execution order remains
-preflight -> direct-scrape privilege validation -> persisted invocation/candidate
-resolution -> adapter construction -> provider invocation. A preflight failure
-therefore cannot construct or invoke Firecrawl.
+`DirectScrapeService` receives an adapter factory. Its execution order remains:
+
+```text
+preflight
+-> direct-scrape privilege validation
+-> persisted invocation/candidate resolution
+-> adapter construction
+-> provider invocation
+```
+
+A preflight or privilege failure therefore cannot construct or invoke Firecrawl.
+The #267 physical split of the application module does not change this ordering.
+
+## Direct-scrape Phase-5 split
+
+The initial #267 implementation left `DirectScrapeService` and its historical
+builder in the same application module. Because that builder delegated to the
+canonical root, the application module depended back on composition.
+
+The reviewed remediation establishes:
+
+```text
+acquisition.direct_scrape              compatibility facade + builder
+          |
+          +--> direct_scrape_application   application/persistence policy
+          |
+          +--> composition.build_direct_scrape_service
+                       |
+                       +--> direct_scrape_application.DirectScrapeService
+                       +--> FirecrawlDirectScrapeAdapter
+```
+
+The service/error classes exposed from `acquisition.direct_scrape` are the exact
+objects owned by `direct_scrape_application`; no wrapper subclass or copied
+model was introduced. The application implementation contains no composition or
+concrete-adapter dependency.
 
 ## Compatibility facades and caller audit
 
-The pre-refactor paths had active repository callers, especially tests and
-entrypoint/composition code. They are retained as thin same-object compatibility
-facades rather than duplicate implementations:
+Active historical callers are retained as thin compatibility surfaces rather
+than duplicate implementations:
 
 | Historical surface | Canonical target / compatibility behavior |
 |---|---|
-| `research_store.acquisition_authority` | Re-exports `research_store.acquisition.authority`; additionally exposes the same `os` and `tempfile` stdlib module objects solely to preserve existing test/injection hooks (for example `os.fsync` and `tempfile.NamedTemporaryFile` monkeypatches). |
-| `research_store.acquisition_service` | Re-exports canonical application service/errors; historical `FirecrawlSearchAdapter` explicitly aliases `BoundedFirecrawlSearchAdapter`. |
+| `research_store.acquisition_authority` | Re-exports `research_store.acquisition.authority`; also exposes the same `os` and `tempfile` module objects for established test/injection hooks. |
+| `research_store.acquisition_service` | Re-exports canonical application service/errors; historical `FirecrawlSearchAdapter` aliases `BoundedFirecrawlSearchAdapter`. |
 | `research_store.bounded_acquisition` | Re-exports canonical bounded adapter. |
-| `research_store.direct_scrape_service` | Re-exports canonical direct-scrape application/models plus the concrete scrape adapter for compatibility/composition callers. |
+| `research_store.acquisition.direct_scrape` | Re-exports the direct-scrape application implementation and retains the capability-local builder as a composition delegate. |
+| `research_store.direct_scrape_service` | Re-exports the direct-scrape capability/models plus concrete scrape adapter for historical callers. |
 | `research_store.ports.SearchAdapter` | Same object as `research_store.acquisition.ports.SearchAdapter`. |
-| `research_store.FirecrawlSearchAdapter` | Explicit root alias to `BoundedFirecrawlSearchAdapter`; it no longer rewrites another module global. |
-| `research_store.fsearch_service.MetadataOnlyFirecrawlSearchAdapter` | Compatibility import of the canonical metadata-only adapter while internal composition migrates to the adapter package. |
+| `research_store.FirecrawlSearchAdapter` | Root compatibility alias to `BoundedFirecrawlSearchAdapter`; no module-global rewrite occurs. |
+| `research_store.fsearch_service.MetadataOnlyFirecrawlSearchAdapter` | Compatibility import of the canonical metadata-only adapter. |
 
-The obsolete concrete class bodies in the historical acquisition/direct-scrape
-modules were removed only after a repository reference audit. Future removal of
-these compatibility facades requires a new caller/reference audit and is not
-part of #262.
+Future removal of these surfaces requires a fresh caller/reference audit and is
+owned by later Phase-5 compatibility cleanup, not by #267.
 
-The post-refactor import audit also found an internal concrete dependency in
-`BoundedExtractionStage`; this was not treated as harmless compatibility. It was
-replaced by `CandidateScrapeAdapter`, and concrete selection moved to production
-composition. Same-object compatibility imports that do not select transport may
-remain temporarily where changing a very large unrelated module would add risk
-without changing dependency semantics; those facades contain no implementation.
+## #262 findings and current disposition
 
-### `acquisition_authority` compatibility-hook note
+The original acquisition refactor corrected these structural defects, and #267
+does not reopen them:
 
-The historical `research_store.acquisition_authority` facade exposes the same
-`os` and `tempfile` module objects as the canonical
-`research_store.acquisition.authority` module solely to preserve existing
-test/injection hooks such as `os.fsync` and
-`tempfile.NamedTemporaryFile` monkeypatches. This restores no authority
-implementation: the canonical authority implementation remains exclusively in
-`research_store.acquisition.authority`. Local validation of the #262 branch
-exposed a regression in which the thin facade no longer exposed these module
-attributes, breaking the pre-existing historical authority tests. The
-issue-specific test
-`test_authority_facade_preserves_historical_module_patch_hooks` in
-`scripts/test_issue_262_acquisition_slice.py` now protects this compatibility
-surface.
+1. hidden import-time adapter replacement was removed;
+2. concrete Firecrawl search implementation was removed from application
+   service code;
+3. direct-scrape provider mechanics were separated from application/persistence
+   policy;
+4. metadata-only fsearch transport moved behind the adapter package;
+5. nested acquisition packages were registered and covered by wheel/isolation
+   tests;
+6. authority relocation preserved the Alembic root/head contract;
+7. the acquisition package initializer remained inert and cycle-safe;
+8. bounded extraction policy depends on `CandidateScrapeAdapter`, not concrete
+   Firecrawl transport.
 
-### `SearchAdapterResult` ownership note
+Phase-5 #267 strengthens item 3 further by separating the direct-scrape
+application implementation from the historical builder facade. It also moves
+shared production bounded-stage adapter injection to the constrained
+`production_topology` leaf so historical orchestrator builders do not depend on
+a composition facade.
 
-`SearchAdapterResult` predates the acquisition package and is used broadly via
-`research_store.domain`. #262 exposes that exact class through
-`research_store.acquisition.models` rather than creating a second model type.
-This preserves object identity and avoids unrelated domain churn. Acquisition
-application/adapters import it through the acquisition-facing model surface;
-a later domain decomposition may move physical ownership only with a separate
-caller audit.
+## Test and package evidence
 
-## Findings remediation
+The current regressions cover:
 
-### Blocking findings
+- same-object acquisition/direct-scrape compatibility identities;
+- inert acquisition package initialization;
+- no application-level concrete adapter dependency;
+- preflight-before-adapter construction;
+- bounded extraction port ownership and production adapter injection;
+- canonical direct-scrape application independence from composition;
+- historical builder delegation to canonical composition;
+- checkpoint/smart historical builder use of the leaf production topology;
+- wheel inclusion and isolated import of both
+  `acquisition.direct_scrape_application` and `production_topology`.
 
-1. **Hidden import-time adapter replacement.** The root package previously
-   assigned `acquisition_service.FirecrawlSearchAdapter =
-   BoundedFirecrawlSearchAdapter`. The mutation is removed. Compatibility is a
-   normal alias and production selection is explicit in composition.
-2. **Duplicate/obsolete Firecrawl search implementation in application
-   service.** The concrete subprocess implementation was removed from the
-   service module. `AcquisitionService` depends only on `SearchAdapter`.
-3. **Direct-scrape application and transport were co-located.** Persistence,
-   authority, idempotency, and retry policy now live in
-   `acquisition.direct_scrape`; Firecrawl CLI mechanics live in
-   `acquisition.adapters.firecrawl_scrape`.
-4. **Authoritative fsearch carried another concrete search transport.** The
-   metadata-only adapter now lives in `acquisition.adapters.firecrawl_search`;
-   `fsearch_service` contains workflow/CLI behavior rather than an adapter
-   implementation.
-5. **Nested packages could be absent from built wheels.** Both acquisition
-   packages are explicitly registered in `pyproject.toml`, and wheel/isolation
-   regressions require every canonical acquisition module.
-6. **Moving acquisition authority changed its relative repository depth.** The
-   canonical authority resolves the Alembic repository root at the corrected
-   package depth while retaining the same schema-head contract.
-7. **Potential acquisition-package import cycle.** The package initializer is
-   intentionally import-free; explicit submodule imports prevent an
-   `acquisition -> authority/postgres -> ports -> acquisition` initialization
-   cycle.
-8. **Bounded extraction policy still constructed concrete Firecrawl.** The
-   issue #216 stage previously instantiated `BoundedFirecrawlSearchAdapter` in
-   its own constructor. It now depends on `CandidateScrapeAdapter`; production
-   composition supplies the bounded Firecrawl adapter for both fresh and smart
-   resumable orchestration.
+Existing acquisition-authority, bounded-preflight, acquisition-service,
+direct-scrape, authoritative-fsearch/fscrape, PostgreSQL acquisition repository,
+package-boundary and orchestration suites remain the behavioral authorities.
+Structural AST checks do not replace these runtime tests.
 
-### Important but non-blocking findings
+## #262 acceptance-criteria mapping after #267
 
-- Historical imports remain same-object facades instead of wrapper subclasses
-  or copied models.
-- The old global `SearchAdapter` protocol is not duplicated; it re-exports the
-  acquisition-owned port.
-- `SearchAdapterResult` is intentionally a same-object re-export rather than a
-  new nominal type.
-- `search_provenance` now imports `SearchProvenanceError` from the canonical
-  acquisition service and resolves the production bounded extraction class
-  through the composition boundary.
-- Existing operator entrypoint targets remain unchanged.
-- Concrete adapter aliases retained for compatibility are not provider
-  selection inside application service constructors.
-- `provider_preflight`, candidate policy/ranking, extraction policy,
-  PostgreSQL repositories/schema, Qdrant, and Valkey were deliberately left
-  outside this structural issue to avoid behavioral scope expansion.
-
-### Codex Review automated suggestions
-
-No pull request existed for `refactor/acquisition-slice` when this central
-implementation was prepared, so there was no repository-specific Codex Review
-thread that could be read or truthfully marked resolved before local handoff.
-The implementation nevertheless adds explicit regressions for the classes of
-structural problem an automated review can detect here: hidden import mutation,
-package initialization cycles, duplicate concrete adapters, application-level
-transport coupling, compatibility identity drift, fail-closed adapter
-construction, bounded-stage concrete provider selection, and missing wheel
-contents.
-
-After local validation and PR creation, the central reviewer must fetch the
-actual exact-head Codex Review comments. Any concrete suggestion must be
-resolved or explicitly dispositioned against the authoritative contracts before
-the PR can satisfy the #260 phase gate. This document must not be used as a
-claim that future automated comments are already resolved.
-
-### Test and documentary gaps closed by #262
-
-- `scripts/test_issue_262_acquisition_slice.py` covers compatibility identity,
-  inert package initialization, removal of the root monkeypatch, concrete
-  adapter definition ownership, explicit search-adapter configuration,
-  direct-scrape preflight-before-adapter construction, bounded-extraction port
-  ownership, and fresh/resumable production composition wiring.
-- `scripts/test_package_boundary.py` requires all acquisition package/adapters
-  in the built wheel and imports the canonical nested package from an isolated
-  installation rather than the repository source tree.
-- Existing acquisition-authority, bounded-preflight, acquisition-service,
-  direct-scrape, authoritative-fsearch/fscrape, PostgreSQL acquisition
-  repository, and package-boundary suites remain the behavioral regression
-  authority.
-- This document supplies the boundary map, compatibility rationale, preserved
-  invariants, findings disposition, and acceptance-criteria mapping required by
-  the issue.
-
-## Acceptance-criteria mapping
-
-| #262 acceptance criterion | Implementation | Required evidence |
+| #262 criterion | Current implementation | Required evidence |
 |---|---|---|
-| 1. Coherent acquisition package | `acquisition/{authority,models,ports,service,direct_scrape}.py` | issue-specific structural tests; package/wheel test |
-| 2. Explicit Firecrawl adapter boundary | `acquisition/adapters/*`; `SearchAdapter` / `CandidateScrapeAdapter` / `DirectScrapeAdapter` | structural adapter-ownership tests; focused adapter/service tests |
-| 3. Preserve authority and direct/search/scrape contracts | authority implementation moved with corrected root depth; same-object facades; unchanged entrypoint targets | authority/service/fsearch/fscrape regressions and integration tests |
-| 4. Preserve bounded acquisition/failure semantics | bounded adapter implementation moved behind canonical path; shared `provider_preflight` unchanged; bounded extraction receives the adapter through a port | issue #216 preflight tests plus acquisition/direct-scrape failure tests |
-| 5. Application policy does not select concrete transport | search service requires injected `SearchAdapter`; bounded extraction receives `CandidateScrapeAdapter`; direct service receives adapter factory; composition roots select concrete adapters | issue-specific AST/side-effect tests and production composition tests |
-| 6. Remove duplicate wrappers only after audit | obsolete concrete implementations removed; active historical module paths retained as facades | semantic caller/reference evidence plus compatibility identity tests |
+| Coherent acquisition package | `acquisition/{authority,models,ports,service,direct_scrape_application}.py` plus compatibility `direct_scrape.py` | issue-specific structural tests; package/wheel test |
+| Explicit Firecrawl adapter boundary | `acquisition/adapters/*`; provider ports | structural adapter-ownership and focused adapter/service tests |
+| Preserve authority/direct/search/scrape contracts | unchanged authority/application semantics and same-object facades | authority/service/fsearch/fscrape regressions and integration tests |
+| Preserve bounded acquisition/failure semantics | bounded adapter + shared provider preflight + port-driven bounded stage | issue #216 and acquisition/direct-scrape failure tests |
+| Application policy does not select concrete transport | application services receive ports/factories; canonical/leaf production wiring selects adapters | #262/#267 import and side-effect tests plus production composition tests |
+| Remove duplicate wrappers only after audit | active historical paths remain thin facades | caller/reference evidence and compatibility identity tests |
 
-## Local validation handoff contract
+## Validation handoff
 
-The central implementation must be validated locally at the exact branch HEAD.
-The local agent is an execution/evidence layer, not an architecture owner.
-Substantive failures return to central ChatGPT for correction; do not redesign
-production code or weaken lint/type/test policy locally.
+The exact-head local validation contract for the combined #262/#267 boundary is
+defined in `references/composition-root.md` and
+`references/local-agent-validation.md`. Any PostgreSQL reset-authorized or
+Qdrant-mutating test must use `scripts/disposable-test-services`; persistent
+personal services are never review targets.
 
-Use the repository validation order from `references/local-agent-validation.md`:
-
-1. Determine changed Python files from the authoritative #262 base and run
-   changed-scope `ruff check` plus `ruff format --check --diff`.
-2. Run `pyrefly check <changed.py ...>` including changed tests. Pyrefly is
-   pinned by `requirements-typecheck.txt`; do not substitute another type
-   checker or update `pyrefly-baseline.json`.
-3. Run focused deterministic pytest for the acquisition slice.
-4. Run full-project `pyrefly check` with no file arguments.
-5. Run relevant broader acquisition/PostgreSQL/package gates.
-6. Run `git diff --check` and report exact base/head SHAs.
-
-Focused tests should include at minimum:
-
-```text
-scripts/test_issue_262_acquisition_slice.py
-scripts/test_acquisition_service.py
-scripts/test_acquisition_authority.py
-scripts/test_issue_216_extraction_preflight.py
-scripts/test_direct_scrape_service.py
-scripts/test_authoritative_fsearch.py
-scripts/test_authoritative_fsearch_review.py
-scripts/test_authoritative_fscrape.py
-scripts/test_authoritative_fscrape_cli.py
-scripts/test_postgres_acquisition_repositories.py
-scripts/test_package_boundary.py
-scripts/test_orchestrator.py
-scripts/test_issue_217_ingestion_batch_semantics.py
-scripts/test_audit_release_gate_matrix.py
-```
-
-PostgreSQL-backed tests must use the configured disposable test environment.
-Do not invent credentials. Report an unavailable integration environment as a
-skip/gap rather than silently substituting a different authority.
+No migration, schema, transaction or authority change is introduced by the
+Phase-5 module split.
