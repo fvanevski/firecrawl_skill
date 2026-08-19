@@ -37,7 +37,9 @@ class BenchmarkDatasetLoader:
     def __init__(self, dataset: BenchmarkDataset):
         self.dataset = dataset
         self.objectives = list(dataset.objectives)
-        self.quality_thresholds = dict(dataset.quality_thresholds)
+        self.quality_thresholds: dict[str, float | int | str] = dict(
+            dataset.quality_thresholds
+        )
 
     @classmethod
     def from_file(cls, path: str | Path) -> BenchmarkDatasetLoader:
