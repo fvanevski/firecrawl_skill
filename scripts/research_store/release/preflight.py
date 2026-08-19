@@ -394,7 +394,7 @@ def probe_reranker() -> str:
     numeric: list[float] = []
     for score in scores:
         if isinstance(score, bool) or not isinstance(score, (int, float)):
-            raise RuntimeError(
+            raise TypeError(
                 f"reranker returned non-numeric score: {score!r}; scores={scores!r}"
             )
         numeric_score = float(score)
