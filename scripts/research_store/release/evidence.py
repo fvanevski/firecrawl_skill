@@ -54,12 +54,10 @@ REQUIRED_CI_JOBS = (
     "Strict Campaign (issue #144) — Python 3.12",
 )
 
-RELEASE_SOURCE_ARTIFACT_PATHS = frozenset(
-    {
-        "scripts/research_store/release/benchmark.py",
-        "scripts/research_store/release/workflow.py",
-    }
-)
+RELEASE_SOURCE_ARTIFACT_PATHS = {
+    "release_benchmark.py": "scripts/research_store/release/benchmark.py",
+    "workflow_benchmark.py": "scripts/research_store/release/workflow.py",
+}
 
 
 def compute_required_ci_jobs(repo_path: str | Path | None = None) -> tuple[str, ...]:
@@ -415,8 +413,8 @@ class ReleaseEvidenceGenerator:
         artifact_paths = [
             ("benchmark-v2.json", "tests/fixtures/benchmark/benchmark-v2.json"),
             ("ci.yml", ".github/workflows/ci.yml"),
-            ("release-benchmark.py", "scripts/research_store/release/benchmark.py"),
-            ("workflow-benchmark.py", "scripts/research_store/release/workflow.py"),
+            ("release_benchmark.py", "scripts/research_store/release/benchmark.py"),
+            ("workflow_benchmark.py", "scripts/research_store/release/workflow.py"),
         ]
         for name, rel_path in artifact_paths:
             p = self.repo / rel_path
@@ -703,7 +701,7 @@ class ReleaseEvidenceVerifier:
             path_lower = path_normalized.lower()
             if "ci" in name_lower or ".github" in path_lower or "ci.yml" in path_lower:
                 found_categories.add("ci")
-            elif path_normalized in RELEASE_SOURCE_ARTIFACT_PATHS:
+            elif path_normalized in RELEASE_SOURCE_ARTIFACT_PATHS.values():
                 found_categories.add("source")
             elif "benchmark" in name_lower or "benchmark" in path_lower:
                 found_categories.add("benchmark")

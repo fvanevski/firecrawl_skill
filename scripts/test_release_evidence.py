@@ -28,7 +28,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.release_evidence import (
+from research_store.release.evidence import (
     REQUIRED_CI_JOBS,
     CiJobResult,
     Fingerprint,
@@ -171,7 +171,7 @@ class TestManifestGeneration:
 
             artifact_names = {a.name for a in manifest.artifacts}
             assert "ci.yml" in artifact_names
-            assert "release-benchmark.py" in artifact_names
+            assert "release_benchmark.py" in artifact_names
 
     def test_generate_excludes_untracked_files(self):
         """Untracked files (e.g. recovery-report.txt) are excluded from artifacts."""
@@ -224,7 +224,7 @@ class TestManifestGeneration:
             artifact_names = {a.name for a in manifest.artifacts}
             # Tracked files are included
             assert "ci.yml" in artifact_names
-            assert "release-benchmark.py" in artifact_names
+            assert "release_benchmark.py" in artifact_names
             # Untracked file is excluded
             assert "recovery-report.txt" not in artifact_names
 
@@ -763,7 +763,7 @@ class TestVerification:
             sha = _current_sha(repo)
 
             # Create an artifact with a WRONG hash
-            from research_store.release_evidence import ArtifactReference
+            from research_store.release.evidence import ArtifactReference
 
             artifacts = (
                 ArtifactReference(
@@ -846,7 +846,7 @@ class TestVerification:
             sha = _current_sha(repo)
 
             # Create artifacts that match required categories: ci, benchmark, source, recovery
-            from research_store.release_evidence import (
+            from research_store.release.evidence import (
                 ArtifactReference,
                 _file_sha256,
             )
@@ -865,7 +865,7 @@ class TestVerification:
                     path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
-                    name="release-benchmark.py",
+                    name="release_benchmark.py",
                     sha256=_file_sha256(
                         repo / "scripts" / "research_store" / "release" / "benchmark.py"
                     ),
@@ -1306,7 +1306,7 @@ class TestSerialization:
             CiJobResult(name="Test — Python 3.11", conclusion="success", run_id="123"),
             CiJobResult(name="Ruff", conclusion="success", run_id="456"),
         ]
-        from research_store.release_evidence import ArtifactReference
+        from research_store.release.evidence import ArtifactReference
 
         artifacts = (
             ArtifactReference(
@@ -1347,7 +1347,7 @@ class TestSerialization:
         ci_jobs = [
             CiJobResult(name="Test — Python 3.11", conclusion="success", run_id="123"),
         ]
-        from research_store.release_evidence import ArtifactReference
+        from research_store.release.evidence import ArtifactReference
 
         artifacts = (ArtifactReference(name="test", sha256="abc", path="test"),)
         fingerprints = (
@@ -1540,7 +1540,7 @@ class TestEdgeCases:
             )
             sha = _current_sha(repo)
 
-            from research_store.release_evidence import ArtifactReference
+            from research_store.release.evidence import ArtifactReference
 
             # Reference a file that doesn't exist
             artifacts = (
@@ -2016,7 +2016,7 @@ class TestIntegration:
 
             # Create a manifest WITHOUT the recovery artifact
             # (simulates a tampered manifest that removed the recovery entry)
-            from research_store.release_evidence import (
+            from research_store.release.evidence import (
                 ArtifactReference,
                 _file_sha256,
             )
@@ -2035,7 +2035,7 @@ class TestIntegration:
                     path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
-                    name="release-benchmark.py",
+                    name="release_benchmark.py",
                     sha256=_file_sha256(
                         repo / "scripts" / "research_store" / "release" / "benchmark.py"
                     ),
@@ -2093,7 +2093,7 @@ class TestIntegration:
             )
             sha = _current_sha(repo)
 
-            from research_store.release_evidence import (
+            from research_store.release.evidence import (
                 ArtifactReference,
                 _file_sha256,
             )
@@ -2113,7 +2113,7 @@ class TestIntegration:
                     path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
-                    name="release-benchmark.py",
+                    name="release_benchmark.py",
                     sha256=_file_sha256(
                         repo / "scripts" / "research_store" / "release" / "benchmark.py"
                     ),
@@ -2225,7 +2225,7 @@ class TestIntegration:
 
             # Build a manifest without any recovery artifact
             # (simulates a manifest that omitted the recovery entry)
-            from research_store.release_evidence import (
+            from research_store.release.evidence import (
                 ArtifactReference,
                 Fingerprint,
                 _file_sha256,
@@ -2280,7 +2280,7 @@ class TestIntegration:
                     path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
-                    name="release-benchmark.py",
+                    name="release_benchmark.py",
                     sha256=_file_sha256(
                         repo / "scripts" / "research_store" / "release" / "benchmark.py"
                     ),

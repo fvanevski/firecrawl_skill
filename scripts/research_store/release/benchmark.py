@@ -1136,7 +1136,7 @@ class MetricEngine:
                 (str(run_id), str(run_id)),
             )
             row = cur.fetchone()
-            if row and len(row) >= 2:
+            if row and isinstance(row, (list, tuple)) and len(row) >= 2:
                 sc = int(row[0] or 0)
                 ur = int(row[1] or 0)
                 result.update(
@@ -1171,7 +1171,7 @@ class MetricEngine:
                 (str(run_id),),
             )
             row = cur.fetchone()
-            if row and len(row) >= 5:
+            if row and isinstance(row, (list, tuple)) and len(row) >= 5:
                 batch_count = int(row[0] or 0)
                 vector_count = int(row[1] or 0)
                 failed_count = int(row[2] or 0)
@@ -1220,7 +1220,7 @@ class MetricEngine:
                 (str(run_id), device_type),
             )
             row = cur.fetchone()
-            if row and len(row) >= 8:
+            if row and isinstance(row, (list, tuple)) and len(row) >= 8:
                 result.update(
                     total_count=int(row[0] or 0),
                     measured_count=int(row[1] or 0),
