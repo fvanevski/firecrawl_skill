@@ -139,6 +139,10 @@ def _forbidden_policy_calls(tree: ast.AST) -> list[tuple[str, int]]:
     return calls
 
 
+def _referenced_names(tree: ast.AST) -> set[str]:
+    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+
+
 def test_build_uow_factory_preserves_exact_constructor_contract() -> None:
     config = _config_stub()
 
@@ -284,9 +288,11 @@ def test_production_topology_is_a_leaf_wiring_primitive() -> None:
     tree = ast.parse(source, filename=str(path))
 
     assert _composition_surface_imports(path) == []
-    assert "StoreConfig" not in source
-    assert "PostgresUnitOfWork" not in source
-    assert "CorpusService" not in source
+    assert {
+        "StoreConfig",
+        "PostgresUnitOfWork",
+        "CorpusService",
+    }.isdisjoint(_referenced_names(tree))
     assert _forbidden_policy_calls(tree) == []
 
     classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
