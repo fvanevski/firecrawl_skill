@@ -391,11 +391,16 @@ def probe_reranker() -> str:
     if len(reranked) != len(candidates):
         raise RuntimeError("reranker did not return every supplied candidate")
     scores = [item.get("reranker_score") for item in reranked]
-    if any(score is None or not math.isfinite(float(score)) for score in scores):
-        raise RuntimeError(
-            f"reranker returned missing or non-finite scores: {scores!r}"
-        )
-    numeric = [float(score) for score in scores]
+    numeric: list[float] = []
+    for score in scores:
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise RuntimeError(
+                f"reranker returned non-numeric score: {score!r}; scores={scores!r}"
+            )
+        numeric_score = float(score)
+        if not math.isfinite(numeric_score):
+            raise RuntimeError(f"reranker returned non-finite scores: {scores!r}")
+        numeric.append(numeric_score)
     if numeric != sorted(numeric, reverse=True):
         raise RuntimeError(f"reranker output is not ordered by score: {numeric!r}")
     return f"Reranker endpoint: production adapter OK ({len(reranked)} documents)"
