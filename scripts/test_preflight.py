@@ -55,6 +55,54 @@ def test_production_reranker_adapter_consumes_relevance_score(monkeypatch):
     assert [item["reranker_score"] for item in result] == [0.9, 0.2]
 
 
+def _configure_preflight_reranker(
+    monkeypatch: pytest.MonkeyPatch, scores: list[object]
+) -> None:
+    monkeypatch.setattr(
+        preflight,
+        "_config",
+        lambda **_kwargs: SimpleNamespace(
+            reranker_url="http://reranker/v1/rerank",
+            reranker_model="rerank",
+            reranker_api_key="",
+        ),
+    )
+
+    class Reranker:
+        def __init__(self, *_args):
+            pass
+
+        def __call__(self, _query, _candidates):
+            return [{"reranker_score": score} for score in scores]
+
+    monkeypatch.setattr(preflight, "CohereCompatibleReranker", Reranker)
+
+
+def test_probe_reranker_accepts_finite_descending_numeric_scores(monkeypatch):
+    _configure_preflight_reranker(monkeypatch, [0.9, 0.2])
+    assert preflight.probe_reranker().endswith("(2 documents)")
+
+
+@pytest.mark.parametrize(
+    ("scores", "error_type", "message"),
+    [
+        ([0.9, None], TypeError, "non-numeric score"),
+        ([0.9, True], TypeError, "non-numeric score"),
+        ([0.9, float("nan")], RuntimeError, "non-finite scores"),
+        ([0.2, 0.9], RuntimeError, "not ordered by score"),
+    ],
+)
+def test_probe_reranker_rejects_invalid_score_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    scores: list[object],
+    error_type: type[Exception],
+    message: str,
+):
+    _configure_preflight_reranker(monkeypatch, scores)
+    with pytest.raises(error_type, match=message):
+        preflight.probe_reranker()
+
+
 def test_redact_url_credentials_masks_password_without_changing_endpoint():
     assert (
         preflight._redact_url_credentials(
