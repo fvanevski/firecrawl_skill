@@ -196,9 +196,9 @@ export RESEARCH_STORE_TEST_ALLOW_RESET='firecrawl_test'
 env PYTHONDONTWRITEBYTECODE=1 \
   pytest -q -p no:cacheprovider \
   tests/contract/test_asset_promotion_contract.py \
-  tests/unit/test_asset_promotion_integration.py \
-  tests/unit/test_asset_promotion_reopen_concurrency.py \
-  tests/unit/test_asset_promotion_migration_compat.py \
+  tests/integration/test_asset_promotion_integration.py \
+  tests/integration/test_asset_promotion_reopen_concurrency.py \
+  tests/integration/test_asset_promotion_migration_compat.py \
   tests/integration/test_research_store_integration.py \
   tests/unit/test_workflow_service.py \
   tests/contract/test_documentation.py

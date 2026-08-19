@@ -509,7 +509,8 @@ def test_public_contract_wires_production_boundaries_and_no_smart_expansion():
         SCRIPTS.parent / ".github" / "workflows" / "index-checkpoint.yml"
     ).read_text(encoding="utf-8")
     assert "tests/unit/test_curated_run_lifecycle.py" in workflow
-    assert "tests/unit/test_curated_run_integration.py" in workflow
+    assert "tests/integration/test_curated_run_integration.py" in workflow
+    assert "tests/unit/test_curated_run_integration.py" not in workflow
     for source in (service, invocation):
         calls = {
             node.func.attr
