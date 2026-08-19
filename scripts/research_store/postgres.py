@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlsplit
 
 if TYPE_CHECKING:
@@ -92,7 +93,6 @@ class PostgresUnitOfWork:
     contract; these annotations do not install fallbacks or change dispatch.
     """
 
-    # Canonical repository roles installed by PostgresRepositoryContext.bind().
     sources: PostgresRepositoryView
     snapshots: PostgresRepositoryView
     documents: PostgresRepositoryView
@@ -116,9 +116,6 @@ class PostgresUnitOfWork:
     synthesis_stages: PostgresRepositoryView
     _repository_context: PostgresRepositoryContext
 
-    # Explicit compatibility delegates installed by PostgresRepositoryContext.
-    # They remain callable attributes rather than class methods because runtime
-    # ownership stays with the canonical connection-bound repositories.
     persist_ingest: Callable[..., Any]
     ensure_index_definition: Callable[..., Any]
     link_run_asset: Callable[..., Any]
