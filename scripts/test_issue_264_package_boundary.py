@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _REQUIRED_FILES = {
     "firecrawl_skill/research_store/assessment/__init__.py",
     "firecrawl_skill/research_store/assessment/audit.py",
+    "firecrawl_skill/research_store/assessment/audit_packet.py",
     "firecrawl_skill/research_store/assessment/binding.py",
     "firecrawl_skill/research_store/assessment/claims.py",
     "firecrawl_skill/research_store/assessment/coverage.py",
@@ -74,22 +75,71 @@ def test_assessment_reporting_packages_build_and_import_in_isolation(
                 audit = importlib.import_module(
                     "firecrawl_skill.research_store.assessment.audit"
                 )
+                audit_packet = importlib.import_module(
+                    "firecrawl_skill.research_store.assessment.audit_packet"
+                )
                 coverage = importlib.import_module(
                     "firecrawl_skill.research_store.assessment.coverage"
                 )
-                reporting = importlib.import_module(
-                    "firecrawl_skill.research_store.reporting"
+                quality = importlib.import_module(
+                    "firecrawl_skill.research_store.assessment.quality"
                 )
+                duplicates = importlib.import_module(
+                    "firecrawl_skill.research_store.assessment.duplicates"
+                )
+                grouping = importlib.import_module(
+                    "firecrawl_skill.research_store.assessment.grouping"
+                )
+                evidence = importlib.import_module(
+                    "firecrawl_skill.research_store.assessment.evidence"
+                )
+                binding = importlib.import_module(
+                    "firecrawl_skill.research_store.assessment.binding"
+                )
+                packet_validation = importlib.import_module(
+                    "firecrawl_skill.research_store.assessment.validation"
+                )
+                construction = importlib.import_module(
+                    "firecrawl_skill.research_store.reporting.construction"
+                )
+                report_validation = importlib.import_module(
+                    "firecrawl_skill.research_store.reporting.validation"
+                )
+                artifacts = importlib.import_module(
+                    "firecrawl_skill.research_store.reporting.artifacts"
+                )
+
                 service = importlib.import_module(
                     "firecrawl_skill.research_store.service"
                 )
                 root_coverage = importlib.import_module(
                     "firecrawl_skill.research_store.coverage_service"
                 )
+                root_quality = importlib.import_module(
+                    "firecrawl_skill.research_store.quality_service"
+                )
+                root_duplicates = importlib.import_module(
+                    "firecrawl_skill.research_store.duplicate_service"
+                )
+                root_grouping = importlib.import_module(
+                    "firecrawl_skill.research_store.evidence_grouping"
+                )
+                root_audit_packet = importlib.import_module(
+                    "firecrawl_skill.research_store.audit_packet"
+                )
+                root_evidence = importlib.import_module(
+                    "firecrawl_skill.research_store.evidence"
+                )
+                root_binding = importlib.import_module(
+                    "firecrawl_skill.research_store.claim_binding_service"
+                )
+                root_packet_validation = importlib.import_module(
+                    "firecrawl_skill.research_store.packet_validator"
+                )
                 root_report = importlib.import_module(
                     "firecrawl_skill.research_store.report_service"
                 )
-                root_validator = importlib.import_module(
+                root_report_validation = importlib.import_module(
                     "firecrawl_skill.research_store.report_validator"
                 )
                 root_artifacts = importlib.import_module(
@@ -102,12 +152,47 @@ def test_assessment_reporting_packages_build_and_import_in_isolation(
                 assert audit.AuditService.__module__ == (
                     "firecrawl_skill.research_store.assessment.audit"
                 )
+                assert coverage.CoverageService.__module__ == (
+                    "firecrawl_skill.research_store.assessment.coverage"
+                )
+                assert quality.QualityService.__module__ == (
+                    "firecrawl_skill.research_store.assessment.quality"
+                )
+                assert duplicates.DuplicateGroupService.__module__ == (
+                    "firecrawl_skill.research_store.assessment.duplicates"
+                )
+                assert grouping.EvidenceGroupingService.__module__ == (
+                    "firecrawl_skill.research_store.assessment.grouping"
+                )
+                assert audit_packet.compute_audit_packet_hash_from_db.__module__ == (
+                    "firecrawl_skill.research_store.assessment.audit_packet"
+                )
+                assert artifacts.ReportArtifactService.__module__ == (
+                    "firecrawl_skill.research_store.reporting.artifacts"
+                )
+
                 assert service.ClaimManifestService is claims.ClaimManifestService
                 assert service.AuditService is audit.AuditService
-                assert coverage.CoverageService is root_coverage.CoverageService
-                assert reporting.LocalSynthesisService is root_report.LocalSynthesisService
-                assert reporting.ReportValidator is root_validator.ReportValidator
-                assert reporting.ReportArtifactService is root_artifacts.ReportArtifactService
+                assert root_coverage.CoverageService is coverage.CoverageService
+                assert root_quality.QualityService is quality.QualityService
+                assert root_duplicates.DuplicateGroupService is duplicates.DuplicateGroupService
+                assert root_grouping.EvidenceGroupingService is grouping.EvidenceGroupingService
+                assert (
+                    root_audit_packet.compute_audit_packet_hash_from_db
+                    is audit_packet.compute_audit_packet_hash_from_db
+                )
+                assert evidence.EvidenceService is root_evidence.EvidenceService
+                assert binding.ClaimBindingService is root_binding.ClaimBindingService
+                assert (
+                    packet_validation.EvidencePacketValidator
+                    is root_packet_validation.EvidencePacketValidator
+                )
+                assert construction.LocalSynthesisService is root_report.LocalSynthesisService
+                assert (
+                    report_validation.ReportValidator
+                    is root_report_validation.ReportValidator
+                )
+                assert artifacts.ReportArtifactService is root_artifacts.ReportArtifactService
                 """
             ),
         ],
