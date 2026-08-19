@@ -17,11 +17,12 @@ from research_domain.models import (
 )
 from research_domain.registry import load_model
 
+from .assessment.claims import ClaimManifestService
+from .assessment.coverage import CoverageService
+from .assessment.validation import EvidencePacketValidator
 from .authorized_semantic import call_authorized_structured as call_structured
-from .coverage_service import CoverageService
-from .packet_validator import EvidencePacketValidator
+from .corpus_service import CorpusService
 from .semantic_service import SemanticCallService
-from .service import ClaimManifestService, CorpusService
 
 
 @dataclass(frozen=True)
@@ -280,7 +281,7 @@ class EvidencePreparationService:
         )
         initial_revision = self.evidence.persist_packet(packet)
 
-        from .claim_binding_service import ClaimBindingService
+        from .assessment.binding import ClaimBindingService
 
         binding_service = ClaimBindingService(self.semantic, self.evidence)
         bound_revision = binding_service.evaluate_claims(

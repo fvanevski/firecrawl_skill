@@ -16,8 +16,8 @@ from research_domain.models import (
     RetrievalProvenance,
 )
 
-from .duplicate_service import DuplicateGroupService
-from .evidence_grouping import EvidenceGroupingService
+from .assessment.duplicates import DuplicateGroupService
+from .assessment.grouping import EvidenceGroupingService
 from .tokenizer_registry import get_tokenizer
 
 try:

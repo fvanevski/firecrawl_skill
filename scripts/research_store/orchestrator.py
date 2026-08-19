@@ -31,8 +31,8 @@ from budget_policy import DEFAULT_POLICY
 from research_domain import load_model
 
 from .acquisition_service import AcquisitionService
+from .assessment.coverage import CoverageService
 from .config import StoreConfig
-from .coverage_service import CoverageService
 from .run_service import (
     ResearchRunService,
     RunStateError,

@@ -198,7 +198,7 @@ def run(args, config, deps) -> int:
         status = run_service.status(external_id=args.external_id)
         target_hash = args.target_hash
         if not target_hash:
-            from ..audit_packet import compute_audit_packet_hash_from_db
+            from ..assessment.audit_packet import compute_audit_packet_hash_from_db
 
             target_hash = compute_audit_packet_hash_from_db(
                 status.id, run_service.uow_factory
