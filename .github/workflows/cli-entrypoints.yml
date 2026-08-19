@@ -58,16 +58,16 @@ jobs:
             scripts/research_store/cli/__init__.py \
             scripts/research_store/cli/compatibility.py \
             scripts/research_store/store_admin.py \
-            scripts/test_cli_entrypoints.py
+            tests/contract/test_cli_entrypoints.py
           ruff format --check \
             scripts/research_store/cli/__init__.py \
             scripts/research_store/cli/compatibility.py \
             scripts/research_store/store_admin.py \
-            scripts/test_cli_entrypoints.py
+            tests/contract/test_cli_entrypoints.py
 
       - name: Run CLI entrypoint contract regressions
         run: |
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_cli_entrypoints.py
+            tests/contract/test_cli_entrypoints.py

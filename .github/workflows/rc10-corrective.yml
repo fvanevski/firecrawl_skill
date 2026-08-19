@@ -87,7 +87,7 @@ jobs:
             -ra \
             -p no:cacheprovider \
             --junitxml="$CORRECTIVE_JUNIT" \
-            scripts/test_release_campaign_corrective.py
+            tests/integration/test_release_campaign_corrective.py
           python scripts/verify_corrective_junit.py \
             --junitxml "$CORRECTIVE_JUNIT" \
             --test-name test_current_schema_completion_and_stage_timing_diagnostics
@@ -101,7 +101,7 @@ jobs:
             scripts/verify_release_campaign_strict.py \
             scripts/enforce_release_campaign_outcomes.py \
             scripts/verify_corrective_junit.py \
-            scripts/test_release_campaign_corrective.py
+            tests/integration/test_release_campaign_corrective.py
           ruff format --check \
             scripts/release_campaign_timing.py \
             scripts/release_campaign_timing_contract.py \
@@ -109,7 +109,7 @@ jobs:
             scripts/verify_release_campaign_strict.py \
             scripts/enforce_release_campaign_outcomes.py \
             scripts/verify_corrective_junit.py \
-            scripts/test_release_campaign_corrective.py
+            tests/integration/test_release_campaign_corrective.py
 
       - name: Upload node-level corrective evidence
         if: always()

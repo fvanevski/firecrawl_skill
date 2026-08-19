@@ -11,8 +11,8 @@ on:
       - "scripts/research_store/search_provenance.py"
       - "scripts/research_store/resume_state_repository.py"
       - "scripts/research_store/postgres_strategy.py"
-      - "scripts/test_orchestration_package.py"
-      - "scripts/test_issue_261_review_remediation.py"
+      - "tests/integration/test_orchestration_package.py"
+      - "tests/integration/test_issue_261_review_remediation.py"
       - ".github/workflows/orchestration-boundary.yml"
   workflow_dispatch:
 
@@ -87,5 +87,5 @@ jobs:
             -q \
             -ra \
             -p no:cacheprovider \
-            scripts/test_issue_261_review_remediation.py \
-            scripts/test_orchestration_package.py
+            tests/integration/test_issue_261_review_remediation.py \
+            tests/integration/test_orchestration_package.py

@@ -128,7 +128,7 @@ or provisional synthesis to satisfy an authoritative completion gate.
 
 ## Regression and CI coverage
 
-`scripts/test_issue_216_extraction_preflight.py` covers:
+`tests/integration/test_issue_216_extraction_preflight.py` covers:
 
 - empty and whitespace markdown;
 - anti-bot challenges and a legitimate “bot detection” article false-positive

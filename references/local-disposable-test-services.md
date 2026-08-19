@@ -103,8 +103,8 @@ The local OpenCode agent should:
 2. use Serena with `no-memories` for changed-symbol, reference, dependency, and diagnostic inspection;
 3. use RTK only to compress routine successful output;
 4. run `ruff check` and `ruff format --check --diff` on the exact changed Python paths;
-5. run repository-pinned `pyrefly check` on the explicit changed Python paths, including `scripts/test_disposable_test_services.py`, then run full-project `pyrefly check`;
-6. run focused `pytest -q scripts/test_disposable_test_services.py`;
+5. run repository-pinned `pyrefly check` on the explicit changed non-test Python paths (the historical test corpus is excluded from the changed-scope set, matching the CI gate), then run full-project `pyrefly check`;
+6. run focused `pytest -q tests/acceptance/test_disposable_test_services.py`;
 7. perform a real disposable-container smoke: `up`, verify PostgreSQL and Qdrant accept a first operation after the helper returns, exercise `reset-qdrant`, then `down`;
 8. use native/raw output for exact SHAs, Docker/service failures, and final worktree status; and
 9. treat any failure as review evidence rather than permission to change production code, tests, Pyrefly configuration/baseline, or validation gates.

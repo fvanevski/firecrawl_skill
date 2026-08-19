@@ -77,17 +77,17 @@ jobs:
             -q \
             -ra \
             -p no:cacheprovider \
-            scripts/test_workflow_service.py \
-            scripts/test_completion_provenance_integration.py \
-            scripts/test_completion_provenance_terminal_guard.py \
-            scripts/test_curated_run_lifecycle.py \
-            scripts/test_curated_run_integration.py \
-            scripts/test_curated_run_documentation.py \
-            scripts/test_curated_run_cli.py \
-            scripts/test_index_checkpoint_contract.py \
-            scripts/test_asset_promotion_contract.py \
-            scripts/test_index_checkpoint_terminal_integration.py \
-            scripts/test_asset_promotion_integration.py \
-            scripts/test_asset_promotion_reopen_concurrency.py \
-            scripts/test_asset_promotion_migration_compat.py \
-            scripts/test_index_checkpoint_review_regressions.py
+            tests/unit/test_workflow_service.py \
+            tests/integration/test_completion_provenance_integration.py \
+            tests/integration/test_completion_provenance_terminal_guard.py \
+            tests/unit/test_curated_run_lifecycle.py \
+            tests/unit/test_curated_run_integration.py \
+            tests/contract/test_curated_run_documentation.py \
+            tests/contract/test_curated_run_cli.py \
+            tests/contract/test_index_checkpoint_contract.py \
+            tests/contract/test_asset_promotion_contract.py \
+            tests/integration/test_index_checkpoint_terminal_integration.py \
+            tests/unit/test_asset_promotion_integration.py \
+            tests/unit/test_asset_promotion_reopen_concurrency.py \
+            tests/unit/test_asset_promotion_migration_compat.py \
+            tests/integration/test_index_checkpoint_review_regressions.py

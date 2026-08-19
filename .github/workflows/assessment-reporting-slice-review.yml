@@ -21,8 +21,8 @@ on:
       - "scripts/research_store/completion_provenance.py"
       - "scripts/research_store/assessment/**"
       - "scripts/research_store/reporting/**"
-      - "scripts/test_issue_264_assessment_reporting_slice.py"
-      - "scripts/test_issue_264_package_boundary.py"
+      - "tests/contract/test_issue_264_assessment_reporting_slice.py"
+      - "tests/contract/test_issue_264_package_boundary.py"
       - "references/assessment-reporting-boundary.md"
       - ".github/workflows/assessment-reporting-slice-review.yml"
   workflow_dispatch:
@@ -157,19 +157,19 @@ jobs:
             -q \
             -ra \
             -p no:cacheprovider \
-            scripts/test_issue_264_assessment_reporting_slice.py \
-            scripts/test_issue_264_package_boundary.py \
-            scripts/test_coverage_model.py \
-            scripts/test_quality_evaluator.py \
-            scripts/test_duplicate_service.py \
-            scripts/test_evidence_grouping.py \
-            scripts/test_claims_evidence.py \
-            scripts/test_audit_persistence.py \
-            scripts/test_evidence_packet.py \
-            scripts/test_packet_validator.py \
-            scripts/test_packet_validator_integration.py \
-            scripts/test_report_validator.py \
-            scripts/test_workflow_service.py
+            tests/contract/test_issue_264_assessment_reporting_slice.py \
+            tests/contract/test_issue_264_package_boundary.py \
+            tests/unit/test_coverage_model.py \
+            tests/unit/test_quality_evaluator.py \
+            tests/unit/test_duplicate_service.py \
+            tests/unit/test_evidence_grouping.py \
+            tests/integration/test_claims_evidence.py \
+            tests/integration/test_audit_persistence.py \
+            tests/integration/test_evidence_packet.py \
+            tests/unit/test_packet_validator.py \
+            tests/integration/test_packet_validator_integration.py \
+            tests/unit/test_report_validator.py \
+            tests/unit/test_workflow_service.py
 
       - name: Write exact-head review evidence
         env:

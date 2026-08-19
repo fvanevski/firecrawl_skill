@@ -64,6 +64,6 @@ jobs:
           RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET: "http://127.0.0.1:6333"
         run: |
           python -m pytest -q -p no:cacheprovider \
-            scripts/test_qdrant_authority.py \
-            scripts/test_qdrant_reconciliation_contract.py \
-            scripts/test_qdrant_reconciliation_integration.py
+            tests/unit/test_qdrant_authority.py \
+            tests/contract/test_qdrant_reconciliation_contract.py \
+            tests/integration/test_qdrant_reconciliation_integration.py

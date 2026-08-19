@@ -86,7 +86,7 @@ External automation consuming the pre-#220 doctor JSON shape must migrate to `do
 
 ## Regression gates
 
-`scripts/test_issue_220_doctor_diagnostics.py` exercises the production diagnostic service and canonical launcher contract. It covers:
+`tests/unit/test_issue_220_doctor_diagnostics.py` exercises the production diagnostic service and canonical launcher contract. It covers:
 
 - all seven domains and per-domain status;
 - healthy referenced blobs plus unrelated orphan inventory;

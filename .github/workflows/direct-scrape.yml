@@ -79,16 +79,16 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_direct_scrape_service.py \
-            scripts/test_authoritative_fscrape.py \
-            scripts/test_authoritative_fscrape_cli.py
+            tests/integration/test_direct_scrape_service.py \
+            tests/integration/test_authoritative_fscrape.py \
+            tests/unit/test_authoritative_fscrape_cli.py
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_acquisition_authority.py \
+            tests/integration/test_acquisition_authority.py \
             -k 'legacy_surface_inventory or fscrape_has_no_legacy_storage_markers'
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_workflow.py \
+            tests/contract/test_workflow.py \
             -k fscrape

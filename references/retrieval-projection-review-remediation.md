@@ -50,9 +50,9 @@ The local OpenCode agent must:
    and diagnostic inspection;
 5. run `ruff check` on the exact changed Python paths;
 6. run `ruff format --check --diff` on those same paths;
-7. run repository-pinned `pyrefly check <changed.py ...>` and explicitly include
-   changed tests even though the historical test corpus is excluded from normal
-   project scope;
+7. run repository-pinned `pyrefly check <changed.py ...>` on the changed non-test
+   Python paths (the historical test corpus, `test_*.py`, is excluded from the
+   changed-scope set, matching the CI gate);
 8. run the smallest deterministic #263 structural/package/retrieval/projection/
    PostgreSQL/Qdrant/checkpoint/protection pytest set capable of falsifying the
    change;

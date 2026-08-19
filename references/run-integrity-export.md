@@ -87,7 +87,7 @@ This change adds no database schema migration. It consumes the existing through-
 
 ## Verification matrix
 
-Issue-specific validation is in `scripts/test_explicit_export_reproducibility.py`, with exact census classification in `scripts/test_index_census.py`. Required repository validation remains:
+Issue-specific validation is in `tests/integration/test_explicit_export_reproducibility.py`, with exact census classification in `tests/unit/test_index_census.py`. Required repository validation remains:
 
 ```bash
 rtk proxy ruff check .

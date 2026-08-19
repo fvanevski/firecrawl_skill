@@ -195,13 +195,13 @@ export RESEARCH_STORE_TEST_ALLOW_RESET='firecrawl_test'
 
 env PYTHONDONTWRITEBYTECODE=1 \
   pytest -q -p no:cacheprovider \
-  scripts/test_asset_promotion_contract.py \
-  scripts/test_asset_promotion_integration.py \
-  scripts/test_asset_promotion_reopen_concurrency.py \
-  scripts/test_asset_promotion_migration_compat.py \
-  scripts/test_research_store_integration.py \
-  scripts/test_workflow_service.py \
-  scripts/test_documentation.py
+  tests/contract/test_asset_promotion_contract.py \
+  tests/unit/test_asset_promotion_integration.py \
+  tests/unit/test_asset_promotion_reopen_concurrency.py \
+  tests/unit/test_asset_promotion_migration_compat.py \
+  tests/integration/test_research_store_integration.py \
+  tests/unit/test_workflow_service.py \
+  tests/contract/test_documentation.py
 ```
 
 Release acceptance also requires Python 3.11 and 3.12, Ruff, disposable Qdrant and Valkey, worker recovery, exact-head evidence, and the authoritative wrapper gates.

@@ -17,9 +17,9 @@ on:
       - "scripts/research_store/checkpoint_indexing_stage.py"
       - "scripts/research_store/index_checkpoint_*.py"
       - "scripts/research_store/retrieval/**"
-      - "scripts/test_issue_263_retrieval_projection_slice.py"
-      - "scripts/test_issue_263_package_boundary.py"
-      - "scripts/test_corpus_service_refactor.py"
+      - "tests/unit/test_issue_263_retrieval_projection_slice.py"
+      - "tests/contract/test_issue_263_package_boundary.py"
+      - "tests/unit/test_corpus_service_refactor.py"
       - "references/retrieval-projection-boundary.md"
       - "references/retrieval-projection-review-remediation.md"
       - ".github/workflows/retrieval-projection-slice-review.yml"
@@ -171,22 +171,22 @@ jobs:
             -q \
             -ra \
             -p no:cacheprovider \
-            scripts/test_issue_263_retrieval_projection_slice.py \
-            scripts/test_issue_263_package_boundary.py \
-            scripts/test_corpus_service_refactor.py \
-            scripts/test_preflight.py::test_production_reranker_adapter_consumes_relevance_score \
-            scripts/test_qdrant_authority.py \
-            scripts/test_qdrant_reconciliation_contract.py \
-            scripts/test_qdrant_reconciliation_integration.py \
-            scripts/test_arc17_qdrant_protection.py \
-            scripts/test_index_census.py \
-            scripts/test_index_drain.py \
-            scripts/test_index_checkpoint_contract.py \
-            scripts/test_index_checkpoint_review_regressions.py \
-            scripts/test_index_checkpoint_terminal_integration.py \
-            scripts/test_retrieval_benchmark.py \
-            scripts/test_evidence_packet.py \
-            scripts/test_postgres_corpus_repositories.py
+            tests/unit/test_issue_263_retrieval_projection_slice.py \
+            tests/contract/test_issue_263_package_boundary.py \
+            tests/unit/test_corpus_service_refactor.py \
+            tests/unit/test_preflight.py::test_production_reranker_adapter_consumes_relevance_score \
+            tests/unit/test_qdrant_authority.py \
+            tests/contract/test_qdrant_reconciliation_contract.py \
+            tests/integration/test_qdrant_reconciliation_integration.py \
+            tests/integration/test_arc17_qdrant_protection.py \
+            tests/unit/test_index_census.py \
+            tests/unit/test_index_drain.py \
+            tests/contract/test_index_checkpoint_contract.py \
+            tests/integration/test_index_checkpoint_review_regressions.py \
+            tests/integration/test_index_checkpoint_terminal_integration.py \
+            tests/unit/test_retrieval_benchmark.py \
+            tests/integration/test_evidence_packet.py \
+            tests/integration/test_postgres_corpus_repositories.py
 
       - name: Write exact-head review evidence
         env:

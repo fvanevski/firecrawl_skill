@@ -72,4 +72,4 @@ jobs:
             -q \
             -ra \
             -p no:cacheprovider \
-            scripts/test_acquisition_authority.py
+            tests/integration/test_acquisition_authority.py

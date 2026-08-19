@@ -46,10 +46,11 @@ this order before handoff:
 1. **Ruff on changed Python code.** Determine the existing added/copied/
    modified/renamed Python files from the task's authoritative base and run
    `ruff check` plus `ruff format --check --diff` on that explicit set.
-2. **Pyrefly on changed Python scope.** Run `pyrefly check <changed.py ...>` so
-   interface/type errors are surfaced while the edit context is still narrow.
-   Include changed test files explicitly even when project defaults exclude the
-   historical test corpus.
+ 2. **Pyrefly on changed Python scope.** Run `pyrefly check <changed.py ...>` so
+    interface/type errors are surfaced while the edit context is still narrow.
+    Exclude the historical test corpus (`test_*.py`) from this explicit check,
+    matching the CI changed-scope gate: the test corpus is outside the Pyrefly
+    baseline and is not type-policed there.
 3. **Focused pytest.** Run the smallest deterministic unit/contract/integration
    tests that can falsify the changed behavior. PostgreSQL/Qdrant or other
    service-backed tests must use disposable local services.
@@ -71,7 +72,15 @@ mapfile -t CHANGED_PY < <(
 if ((${#CHANGED_PY[@]})); then
   ruff check "${CHANGED_PY[@]}"
   ruff format --check --diff "${CHANGED_PY[@]}"
-  pyrefly check "${CHANGED_PY[@]}"
+  # The historical test corpus is outside the Pyrefly baseline, so the
+  # changed-scope type check skips test_*.py (Ruff still lints every changed
+  # Python file, including tests).
+  mapfile -t CHANGED_PY_TYPECHECK < <(
+    printf '%s\n' "${CHANGED_PY[@]}" | grep -vE '(^|/)test_[^/]*\.py$' || true
+  )
+  if ((${#CHANGED_PY_TYPECHECK[@]})); then
+    pyrefly check "${CHANGED_PY_TYPECHECK[@]}"
+  fi
 fi
 
 # After focused tests:
@@ -141,21 +150,21 @@ not the historical head recorded in an earlier review. At minimum, in addition
 to the generic sequence above, focused pytest must include:
 
 ```text
-scripts/test_issue_262_acquisition_slice.py
-scripts/test_issue_262_runtime_review.py
-scripts/test_acquisition_service.py
-scripts/test_acquisition_authority.py
-scripts/test_issue_216_extraction_preflight.py
-scripts/test_direct_scrape_service.py
-scripts/test_authoritative_fsearch.py
-scripts/test_authoritative_fsearch_review.py
-scripts/test_authoritative_fscrape.py
-scripts/test_authoritative_fscrape_cli.py
-scripts/test_postgres_acquisition_repositories.py
-scripts/test_package_boundary.py
-scripts/test_orchestrator.py
-scripts/test_issue_217_ingestion_batch_semantics.py
-scripts/test_audit_release_gate_matrix.py
+tests/contract/test_issue_262_acquisition_slice.py
+tests/unit/test_issue_262_runtime_review.py
+tests/integration/test_acquisition_service.py
+tests/integration/test_acquisition_authority.py
+tests/integration/test_issue_216_extraction_preflight.py
+tests/integration/test_direct_scrape_service.py
+tests/integration/test_authoritative_fsearch.py
+tests/integration/test_authoritative_fsearch_review.py
+tests/integration/test_authoritative_fscrape.py
+tests/unit/test_authoritative_fscrape_cli.py
+tests/integration/test_postgres_acquisition_repositories.py
+tests/contract/test_package_boundary.py
+tests/unit/test_orchestrator.py
+tests/integration/test_issue_217_ingestion_batch_semantics.py
+tests/integration/test_audit_release_gate_matrix.py
 ```
 
 The local agent must not alter production code, tests, workflow policy,

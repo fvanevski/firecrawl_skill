@@ -79,20 +79,20 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_authoritative_fsearch.py \
-            scripts/test_authoritative_fsearch_review.py \
-            scripts/test_issue_213_search_empty_telemetry.py \
-            scripts/test_candidate_ranking.py \
-            scripts/test_issue_215_authoritative_fsearch.py \
-            scripts/test_issue_215_completion_budget.py \
-            scripts/test_issue_215_migration_contract.py
+            tests/integration/test_authoritative_fsearch.py \
+            tests/integration/test_authoritative_fsearch_review.py \
+            tests/unit/test_issue_213_search_empty_telemetry.py \
+            tests/unit/test_candidate_ranking.py \
+            tests/integration/test_issue_215_authoritative_fsearch.py \
+            tests/unit/test_issue_215_completion_budget.py \
+            tests/integration/test_issue_215_migration_contract.py
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_workflow.py \
+            tests/contract/test_workflow.py \
             -k fsearch
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_authoritative_smart_validation.py \
-            scripts/test_authoritative_live_validation_profiles.py
+            tests/integration/test_authoritative_smart_validation.py \
+            tests/acceptance/test_authoritative_live_validation_profiles.py

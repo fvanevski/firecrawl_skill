@@ -116,7 +116,7 @@ requires a forward repair or restoration from a PostgreSQL backup.
 
 ## Regression coverage
 
-`scripts/test_issue_217_ingestion_batch_semantics.py` covers exact MIN/MAX
+`tests/integration/test_issue_217_ingestion_batch_semantics.py` covers exact MIN/MAX
 constituent timing, fail-closed missing terminal evidence, exact outcome IDs and
 failure classes, cancellation, seal/insert serialization, reused-snapshot
 provenance, real v42 retry/export compatibility, and ARC-05 stage-specific read
