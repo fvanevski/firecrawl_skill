@@ -11,7 +11,7 @@ COMMANDS = {"benchmark"}
 
 def run(args, config, deps) -> int:
     if args.benchmark_subcommand == "run":
-        from ..benchmark_admin import run_campaign
+        from ..release.admin import run_campaign
 
         output, outcome = run_campaign(config, args)
         if args.benchmark_output:
