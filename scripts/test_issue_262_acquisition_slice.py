@@ -265,9 +265,7 @@ def test_direct_scrape_default_selection_is_confined_to_builder_scope() -> None:
     assert "FirecrawlDirectScrapeAdapter" not in source
 
     composition_source = (STORE / "composition.py").read_text(encoding="utf-8")
-    adapter_import = (
-        "from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter"
-    )
+    adapter_import = "from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter"
     assert adapter_import in composition_source
     assert composition_source.index("def build_direct_scrape_service") < (
         composition_source.index(adapter_import)
