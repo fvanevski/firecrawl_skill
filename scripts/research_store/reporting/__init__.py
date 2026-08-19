@@ -1,27 +1,10 @@
 """Canonical report construction, validation, and persistence slice.
 
-The large synthesis and validation implementations remain at their reviewed,
-baseline-tracked paths in issue #264.  The package establishes the canonical
-reporting capability boundary without changing report/evidence revision,
-citation, artifact, or completion semantics.  #269 owns final facade cleanup.
+Use the explicit submodules ``reporting.construction``,
+``reporting.validation``, and ``reporting.artifacts``.  The package does not
+eagerly import those services because temporary #269 compatibility facades
+still route legacy flat imports into this namespace and eager imports would
+create partially initialized legacy-module cycles.
 """
 
-from .artifacts import ReportArtifactService
-from .construction import LocalSynthesisService
-from .validation import (
-    ClaimResolution,
-    ReportValidationFinding,
-    ReportValidationResult,
-    ReportValidationSeverity,
-    ReportValidator,
-)
-
-__all__ = [
-    "ClaimResolution",
-    "LocalSynthesisService",
-    "ReportArtifactService",
-    "ReportValidationFinding",
-    "ReportValidationResult",
-    "ReportValidationSeverity",
-    "ReportValidator",
-]
+__all__: list[str] = []

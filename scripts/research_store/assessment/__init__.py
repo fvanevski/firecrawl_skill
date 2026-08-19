@@ -1,10 +1,10 @@
 """Canonical assessment vertical slice.
 
 Issue #264 groups deterministic assessment and PostgreSQL-backed assessment
-services behind one discoverable package boundary.  Several long-lived flat
-modules remain temporary compatibility/debt bridges until the campaign cleanup
-issue owns their physical relocation; the canonical claim and audit services
-live here directly.
+services behind one discoverable package boundary. Baseline-tracked flat
+modules remain temporary bridges until their existing type debt is resolved;
+debt-free assessment implementations are owned directly here, with legacy
+flat import paths retained only as #269 compatibility facades.
 """
 
 from .audit import (
@@ -14,6 +14,7 @@ from .audit import (
     compute_audit_identity_hash,
     resolve_model_fingerprint,
 )
+from .audit_packet import compute_audit_packet_hash_from_db
 from .claims import ClaimManifestService
 
 __all__ = [
@@ -22,5 +23,6 @@ __all__ = [
     "AuditService",
     "ClaimManifestService",
     "compute_audit_identity_hash",
+    "compute_audit_packet_hash_from_db",
     "resolve_model_fingerprint",
 ]
