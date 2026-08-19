@@ -197,7 +197,7 @@ def test_direct_scrape_preflight_failure_prevents_adapter_construction() -> None
 
 
 def test_generic_composition_root_selects_bounded_adapter_explicitly() -> None:
-    source = (STORE / "container.py").read_text(encoding="utf-8")
+    source = (STORE / "composition.py").read_text(encoding="utf-8")
     assert "BoundedFirecrawlSearchAdapter()" in source
     assert "search_adapter=adapter" in source
 
@@ -213,7 +213,7 @@ def test_bounded_extraction_policy_depends_on_candidate_scrape_port() -> None:
 
 
 def test_production_orchestration_selects_bounded_candidate_transport() -> None:
-    path = STORE / "orchestration" / "composition.py"
+    path = STORE / "composition.py"
     source = path.read_text(encoding="utf-8")
     assert "class ProductionBoundedExtractionStage" in source
     assert "BoundedFirecrawlSearchAdapter()" in source
@@ -262,11 +262,15 @@ def test_direct_scrape_default_selection_is_confined_to_builder_scope() -> None:
     imports = _top_level_imports(path)
     assert not any(".adapters" in module for module in imports)
     source = path.read_text(encoding="utf-8")
-    assert (
-        "from .adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter" in source
+    assert "FirecrawlDirectScrapeAdapter" not in source
+
+    composition_source = (STORE / "composition.py").read_text(encoding="utf-8")
+    adapter_import = (
+        "from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter"
     )
-    assert source.index("def build_direct_scrape_service") < source.index(
-        "from .adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter"
+    assert adapter_import in composition_source
+    assert composition_source.index("def build_direct_scrape_service") < (
+        composition_source.index(adapter_import)
     )
 
 

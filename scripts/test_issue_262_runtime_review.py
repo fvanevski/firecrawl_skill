@@ -15,10 +15,10 @@ sys.path.insert(0, str(SCRIPTS))
 # contract on BoundedExtractionStage.  The regression below deliberately tests
 # that effective runtime method rather than only inspecting its source module.
 import research_store
+from research_store import composition
 from research_store.acquisition.models import SearchAdapterResult
 from research_store.bounded_orchestrator import BoundedExtractionStage
 from research_store.ingestion_batch_semantics import _bounded_extraction_execute
-from research_store.orchestration import composition
 
 
 class _RecordingCandidateScrapeAdapter:
