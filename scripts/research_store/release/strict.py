@@ -417,6 +417,15 @@ def _run_campaign(
     )
 
     dataset_hash = _compute_file_hash(dataset_path)
+    raw_operational_ratio_limit = loader.quality_thresholds.get(
+        "max_operational_reproducibility_ratio",
+        config.operational_reproducibility_ratio_limit,
+    )
+    if not isinstance(raw_operational_ratio_limit, (int, float, str)):
+        raise TypeError(
+            "max_operational_reproducibility_ratio must be numeric or numeric text"
+        )
+    operational_ratio_limit = float(raw_operational_ratio_limit)
     env_manifest = {
         **_build_env_manifest(candidate_sha, dataset_path, dataset_hash),
         "database_url_set": bool(database_url),
@@ -426,12 +435,7 @@ def _run_campaign(
         "objective_ids": list(objective_ids) if objective_ids else ["all"],
         "reproducibility_tolerance": reproducibility_tolerance,
         "reproducibility_policy_version": "reproducibility-policy-v2",
-        "operational_reproducibility_ratio_limit": float(
-            loader.quality_thresholds.get(
-                "max_operational_reproducibility_ratio",
-                config.operational_reproducibility_ratio_limit,
-            )
-        ),
+        "operational_reproducibility_ratio_limit": operational_ratio_limit,
     }
     _write_json_atomic(artifacts_dir / "environment.json", env_manifest)
     (artifacts_dir / "summary.txt").write_text(
