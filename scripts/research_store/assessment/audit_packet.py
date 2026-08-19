@@ -9,7 +9,11 @@ from uuid import UUID
 
 
 def compute_audit_packet_hash_from_db(run_id: UUID, uow_factory: Callable) -> str:
-    """Hash the complete authoritative run projection used for semantic audit."""
+    """Hash the complete authoritative run projection used for semantic audit.
+
+    The projection is read directly from PostgreSQL; no filesystem state
+    participates in audit identity.
+    """
     with uow_factory() as uow, uow.connection.cursor() as cur:
         cur.execute(
             "SELECT row_to_json(r) FROM research_runs r WHERE r.id=%s",
@@ -71,6 +75,3 @@ def compute_audit_packet_hash_from_db(run_id: UUID, uow_factory: Callable) -> st
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
-
-
-__all__ = ["compute_audit_packet_hash_from_db"]

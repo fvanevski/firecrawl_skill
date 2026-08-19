@@ -227,7 +227,7 @@ def build_claim_service(config: StoreConfig | None = None):
     """Build a ClaimManifestService wired to the PostgreSQL database."""
     config = config or StoreConfig.from_env()
     config.require_database()
-    from .service import ClaimManifestService
+    from .assessment.claims import ClaimManifestService
 
     return ClaimManifestService(
         partial(
@@ -326,7 +326,7 @@ def build_resource_governor(
 
 def build_audit_service(config: StoreConfig | Any | None = None):
     """Build an AuditService from a store config or existing UoW factory."""
-    from .service import AuditService
+    from .assessment.audit import AuditService
 
     if config is not None and not isinstance(config, StoreConfig):
         return AuditService(config)

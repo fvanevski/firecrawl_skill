@@ -160,8 +160,9 @@ jobs:
             scripts/test_issue_264_assessment_reporting_slice.py \
             scripts/test_issue_264_package_boundary.py \
             scripts/test_coverage_model.py \
-            scripts/test_quality_service.py \
+            scripts/test_quality_evaluator.py \
             scripts/test_duplicate_service.py \
+            scripts/test_evidence_grouping.py \
             scripts/test_claims_evidence.py \
             scripts/test_audit_persistence.py \
             scripts/test_evidence_packet.py \

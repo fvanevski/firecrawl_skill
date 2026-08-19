@@ -53,12 +53,8 @@ def test_debt_free_assessment_implementations_are_canonical() -> None:
 
     assert coverage.CoverageService.__module__.endswith("assessment.coverage")
     assert quality.QualityService.__module__.endswith("assessment.quality")
-    assert duplicates.DuplicateGroupService.__module__.endswith(
-        "assessment.duplicates"
-    )
-    assert grouping.EvidenceGroupingService.__module__.endswith(
-        "assessment.grouping"
-    )
+    assert duplicates.DuplicateGroupService.__module__.endswith("assessment.duplicates")
+    assert grouping.EvidenceGroupingService.__module__.endswith("assessment.grouping")
     assert audit_packet.compute_audit_packet_hash_from_db.__module__.endswith(
         "assessment.audit_packet"
     )

@@ -13,6 +13,7 @@ from .assessment.coverage import (
     DuplicateCoverageEventError,
     StaleCoverageRevisionError,
     UnknownCoverageItemError,
+    _json_sha256,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "DuplicateCoverageEventError",
     "StaleCoverageRevisionError",
     "UnknownCoverageItemError",
+    "_json_sha256",
 ]

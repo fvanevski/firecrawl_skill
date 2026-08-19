@@ -58,6 +58,11 @@ def _json_sha256(value: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
 class CoverageError(ValueError):
     """A coverage operation violated a schema or policy invariant."""
 
@@ -72,6 +77,11 @@ class UnknownCoverageItemError(CoverageError):
 
 class DuplicateCoverageEventError(CoverageError):
     """An idempotency key already exists for this run."""
+
+
+# ---------------------------------------------------------------------------
+# Domain types
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -186,11 +196,31 @@ class CoverageSnapshot:
         }
 
 
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+
+
 class CoverageService:
-    """Append-only coverage event ledger and projection builder."""
+    """Append-only coverage event ledger and projection builder.
+
+    Public API:
+
+    * ``create_items_from_spec`` — seed coverage items from a ResearchSpec.
+    * ``apply_event`` — apply one coverage event (idempotent, stale-reject).
+    * ``rebuild_projection`` — rebuild current coverage from events.
+    * ``create_snapshot`` — materialize an immutable ledger snapshot.
+    * ``current_projection`` — return the latest snapshot or rebuild.
+    * ``list_events`` — query events by run, item, or type.
+    * ``get_snapshot`` — retrieve a snapshot by revision.
+    """
 
     def __init__(self, uow_factory: Callable) -> None:
         self.uow_factory = uow_factory
+
+    # ------------------------------------------------------------------
+    # Item creation
+    # ------------------------------------------------------------------
 
     def create_items_from_spec(
         self,
@@ -202,7 +232,11 @@ class CoverageService:
         source_event_id: UUID | None = None,
         source_invocation_id: UUID | None = None,
     ) -> list[CoverageItem]:
-        """Seed coverage items from a validated ResearchSpec."""
+        """Seed coverage items from a validated ResearchSpec.
+
+        This is the initial population step.  Each question, claim, and
+        requirement becomes a coverage item with status ``unassessed``.
+        """
         if not run_id:
             raise CoverageError("run_id is required")
         if spec is None:
@@ -214,6 +248,7 @@ class CoverageService:
         source_reqs = spec.get("required_source_classes", [])
         corroboration_reqs = spec.get("corroboration_requirements", [])
         contradiction_reqs = spec.get("contradiction_requirements", [])
+
         items: list[dict[str, Any]] = []
 
         for q in questions:
@@ -224,6 +259,7 @@ class CoverageService:
                     "text": q.get("text", ""),
                 }
             )
+
         for c in claims:
             items.append(
                 {
@@ -232,6 +268,7 @@ class CoverageService:
                     "text": c.get("statement", ""),
                 }
             )
+
         for fr in freshness_reqs:
             items.append(
                 {
@@ -240,6 +277,7 @@ class CoverageService:
                     "text": fr.get("description", ""),
                 }
             )
+
         for sr in source_reqs:
             items.append(
                 {
@@ -248,6 +286,7 @@ class CoverageService:
                     "text": sr.get("source_class", ""),
                 }
             )
+
         for cr in corroboration_reqs:
             items.append(
                 {
@@ -256,6 +295,7 @@ class CoverageService:
                     "text": cr.get("description", ""),
                 }
             )
+
         for cr in contradiction_reqs:
             items.append(
                 {
@@ -300,6 +340,10 @@ class CoverageService:
             for item, eid in zip(items, event_ids)
         ]
 
+    # ------------------------------------------------------------------
+    # Event application
+    # ------------------------------------------------------------------
+
     def apply_event(
         self,
         run_id: UUID,
@@ -317,7 +361,14 @@ class CoverageService:
         payload: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> CoverageEvent:
-        """Apply one coverage event with idempotency and stale-revision guards."""
+        """Apply one coverage event.
+
+        Idempotent: if ``idempotency_key`` already exists for this run,
+        the original event is returned without side effects.
+
+        Stale-reject: the new coverage_revision must exceed the current
+        coverage revision stored on ``research_runs``.
+        """
         if not run_id:
             raise CoverageError("run_id is required")
         if not event_type:
@@ -343,7 +394,13 @@ class CoverageService:
                 payload=payload or {},
                 idempotency_key=idempotency_key,
             )
+
         return CoverageEvent.from_mapping(result)
+
+    # ------------------------------------------------------------------
+    # Workflow observation event helpers (FR-012, FR-013)
+    # These record deterministic observations, NOT semantic support.
+    # ------------------------------------------------------------------
 
     def apply_candidate_identified(
         self,
@@ -355,6 +412,12 @@ class CoverageService:
         source_event_id: UUID | None = None,
         source_invocation_id: UUID | None = None,
     ) -> CoverageEvent:
+        """Record that a candidate was identified for a coverage item.
+
+        This is a deterministic observation — it does NOT imply semantic
+        support for any claim.  The candidate_id is stored in the event
+        payload and will be picked up by projection rebuilding.
+        """
         if not run_id:
             raise CoverageError("run_id is required")
         if not item_id:
@@ -367,7 +430,9 @@ class CoverageService:
             item_id=item_id,
             item_type="claim",
             subject_id=str(candidate_id),
-            payload={"candidate_id": str(candidate_id)},
+            payload={
+                "candidate_id": str(candidate_id),
+            },
             idempotency_key=idempotency_key or f"candidate:{run_id}:{candidate_id}",
             source_event_id=source_event_id,
             source_invocation_id=source_invocation_id,
@@ -384,6 +449,11 @@ class CoverageService:
         source_event_id: UUID | None = None,
         source_invocation_id: UUID | None = None,
     ) -> CoverageEvent:
+        """Record that extraction was attempted for a source.
+
+        This is a process observation — it does NOT imply successful
+        acquisition or semantic support.
+        """
         if not run_id:
             raise CoverageError("run_id is required")
         if not item_id:
@@ -396,7 +466,10 @@ class CoverageService:
             item_id=item_id,
             item_type="source_requirement",
             subject_id=source_url,
-            payload={"source_url": source_url, "extraction_status": extraction_status},
+            payload={
+                "source_url": source_url,
+                "extraction_status": extraction_status,
+            },
             idempotency_key=idempotency_key or f"extract:{run_id}:{source_url}",
             source_event_id=source_event_id,
             source_invocation_id=source_invocation_id,
@@ -412,6 +485,12 @@ class CoverageService:
         source_event_id: UUID | None = None,
         source_invocation_id: UUID | None = None,
     ) -> CoverageEvent:
+        """Record that content was successfully acquired from a source.
+
+        This updates the item status to ``acquired`` and tracks the source
+        URL for independent-source counting.  Acquisition is a deterministic
+        fact — it does NOT imply that a claim is semantically supported.
+        """
         if not run_id:
             raise CoverageError("run_id is required")
         if not item_id:
@@ -424,7 +503,9 @@ class CoverageService:
             item_id=item_id,
             item_type="source_requirement",
             subject_id=source_url,
-            payload={"source_url": source_url},
+            payload={
+                "source_url": source_url,
+            },
             idempotency_key=idempotency_key or f"acquired:{run_id}:{source_url}",
             source_event_id=source_event_id,
             source_invocation_id=source_invocation_id,
@@ -440,6 +521,11 @@ class CoverageService:
         source_event_id: UUID | None = None,
         source_invocation_id: UUID | None = None,
     ) -> CoverageEvent:
+        """Record that evidence passages were retrieved.
+
+        This is an observation — it does NOT change the item status to
+        supported.  Semantic support is a separate judgment.
+        """
         if not run_id:
             raise CoverageError("run_id is required")
         if not item_id:
@@ -452,7 +538,9 @@ class CoverageService:
             item_id=item_id,
             item_type="claim",
             subject_id=str(item_id),
-            payload={"passage_ids": [str(pid) for pid in passage_ids]},
+            payload={
+                "passage_ids": [str(pid) for pid in passage_ids],
+            },
             idempotency_key=idempotency_key or f"evidence:{run_id}:{item_id}",
             source_event_id=source_event_id,
             source_invocation_id=source_invocation_id,
@@ -468,6 +556,7 @@ class CoverageService:
         source_event_id: UUID | None = None,
         source_invocation_id: UUID | None = None,
     ) -> CoverageEvent:
+        """Record that an authority class was observed for a source."""
         if not run_id:
             raise CoverageError("run_id is required")
         if not item_id:
@@ -480,7 +569,9 @@ class CoverageService:
             item_id=item_id,
             item_type="source_requirement",
             subject_id=authority_class,
-            payload={"authority_class": authority_class},
+            payload={
+                "authority_class": authority_class,
+            },
             idempotency_key=idempotency_key
             or f"source_class:{run_id}:{authority_class}",
             source_event_id=source_event_id,
@@ -497,6 +588,7 @@ class CoverageService:
         source_event_id: UUID | None = None,
         source_invocation_id: UUID | None = None,
     ) -> CoverageEvent:
+        """Record that freshness information was observed."""
         if not run_id:
             raise CoverageError("run_id is required")
         if not item_id:
@@ -509,11 +601,17 @@ class CoverageService:
             item_id=item_id,
             item_type="freshness_requirement",
             subject_id=str(item_id),
-            payload={"freshness_status": freshness_status},
+            payload={
+                "freshness_status": freshness_status,
+            },
             idempotency_key=idempotency_key or f"freshness:{run_id}:{item_id}",
             source_event_id=source_event_id,
             source_invocation_id=source_invocation_id,
         )
+
+    # ------------------------------------------------------------------
+    # Projection rebuilding
+    # ------------------------------------------------------------------
 
     def rebuild_projection(
         self,
@@ -522,6 +620,12 @@ class CoverageService:
         idempotency_key: str | None = None,
         source_event_id: UUID | None = None,
     ) -> CoverageLedger:
+        """Rebuild the current coverage projection from events.
+
+        Deterministic: events are processed in
+        ``(coverage_revision, id)`` order.  The resulting ledger is
+        materialized as a snapshot.
+        """
         with self.uow_factory() as uow:
             ledger = uow.coverage.rebuild_projection(
                 run_id,
@@ -569,6 +673,10 @@ class CoverageService:
             mechanical_failures=(),
         )
 
+    # ------------------------------------------------------------------
+    # Snapshots
+    # ------------------------------------------------------------------
+
     def create_snapshot(
         self,
         run_id: UUID,
@@ -578,12 +686,14 @@ class CoverageService:
         idempotency_key: str | None = None,
         triggering_event_id: UUID | None = None,
     ) -> CoverageSnapshot:
+        """Materialize an immutable ledger snapshot."""
         if not run_id:
             raise CoverageError("run_id is required")
         if coverage_revision < 1:
             raise CoverageError("coverage_revision must be positive")
         if not ledger:
             raise CoverageError("ledger content is required")
+
         content_hash = _json_sha256(ledger)
         with self.uow_factory() as uow:
             result = uow.coverage.create_snapshot(
@@ -615,6 +725,10 @@ class CoverageService:
             return result
         return CoverageSnapshot.from_mapping(result)
 
+    # ------------------------------------------------------------------
+    # Querying
+    # ------------------------------------------------------------------
+
     def list_events(
         self,
         run_id: UUID,
@@ -632,7 +746,7 @@ class CoverageService:
                 limit=limit,
                 offset=offset,
             )
-        return [CoverageEvent.from_mapping(row) for row in rows]
+        return [CoverageEvent.from_mapping(r) for r in rows]
 
     def get_event(self, run_id: UUID, event_id: UUID) -> CoverageEvent:
         with self.uow_factory() as uow:
@@ -652,15 +766,32 @@ class CoverageService:
             return uow.coverage.count_events(run_id)
 
     def coverage_items_exist(self, run_id: UUID) -> bool:
+        """Return True if coverage items have been created for this run."""
         with self.uow_factory() as uow:
             return uow.coverage.count_coverage_items(run_id) > 0
 
     def coverage_summary(self, run_id: UUID) -> dict[str, Any]:
+        """Return a compact coverage summary for a run.
+
+        Rebuilds the current projection and returns a dict with:
+
+        * ``run_id`` — the run identifier
+        * ``coverage_revision`` — the current coverage revision
+        * ``total_items`` — total number of coverage items
+        * ``status_counts`` — per-status counts (deterministic observation)
+        * ``type_counts`` — per-type counts
+        * ``overall_status`` — the projected overall status
+        * ``schema_version`` — always ``coverage-ledger-v1``
+
+        This is the read-side API for issue #23 (coverage initialization).
+        """
         revision = self.get_current_revision(run_id)
         if revision < 1:
             return {
                 "schema_version": "coverage-ledger-v1",
                 "run_id": str(run_id),
+                # Sentinel: 0 means no items exist; not a valid coverage
+                # revision (DDL requires coverage_revision > 0).
                 "coverage_revision": 0,
                 "total_items": 0,
                 "status_counts": {},
@@ -686,6 +817,10 @@ class CoverageService:
             "type_counts": dict(sorted(type_counts.items())),
             "overall_status": ledger.overall_status.value,
         }
+
+    # ------------------------------------------------------------------
+    # String <-> enum helpers
+    # ------------------------------------------------------------------
 
 
 def _str_to_item_type(value: str) -> CoverageItemType:

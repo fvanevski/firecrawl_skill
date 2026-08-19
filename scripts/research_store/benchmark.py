@@ -56,7 +56,7 @@ from research_domain.models import (
     RetrievalMode,
 )
 
-from .duplicate_service import DuplicateGroupService
+from .assessment.duplicates import DuplicateGroupService
 from .retrieval import (
     reciprocal_rank_fusion,
 )

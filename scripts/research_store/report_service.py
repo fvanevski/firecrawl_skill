@@ -1077,7 +1077,7 @@ class LocalSynthesisService:
         rather than creating a new one each time.  Tests may inject a mock via
         ``LocalSynthesisService.__init__`` to avoid real LLM calls.
         """
-        from .claim_binding_service import ClaimBindingService
+        from .assessment.binding import ClaimBindingService
 
         if self._binding_service is None:
             self._binding_service = ClaimBindingService(self.semantic, self.evidence)
@@ -1831,7 +1831,7 @@ class LocalSynthesisService:
         safety net for unit tests with mocked dependencies; the correct fix
         is for those tests to provide a proper EvidencePacket mock.
         """
-        from .report_artifact_service import ReportArtifactService
+        from .reporting.artifacts import ReportArtifactService
 
         # Read the citation_pass artifact from synthesis_stages.
         with uow_factory() as uow:
