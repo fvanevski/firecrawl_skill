@@ -8,6 +8,7 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
@@ -44,6 +45,15 @@ def _config(
         qdrant_url=qdrant_url or config.qdrant_url,
         qdrant_api_key=qdrant_api_key or config.qdrant_api_key,
     )
+
+
+def _heartbeat_age_seconds(value: object | None) -> float | None:
+    """Normalize PostgreSQL EXTRACT output without accepting arbitrary values."""
+    if value is None:
+        return None
+    if not isinstance(value, (int, float, Decimal)):
+        raise TypeError(f"unexpected worker-heartbeat age type: {type(value).__name__}")
+    return float(value)
 
 
 def probe_postgres(database_url: str) -> str:
@@ -85,15 +95,15 @@ def probe_postgres(database_url: str) -> str:
         worker_row = cur.fetchone()
         if worker_row is None:
             raise RuntimeError("worker-heartbeat query returned no row")
-        worker_age = worker_row[0]
-        if worker_age is None or float(worker_age) > 90:
+        worker_age_seconds = _heartbeat_age_seconds(worker_row[0])
+        if worker_age_seconds is None or worker_age_seconds > 90:
             raise RuntimeError(
                 "index worker heartbeat is missing or stale "
-                f"(age={worker_age if worker_age is not None else 'missing'} seconds)"
+                f"(age={worker_age_seconds if worker_age_seconds is not None else 'missing'} seconds)"
             )
     return (
         f"PostgreSQL: {database_name} ({table_count} tables); "
-        f"schema={schema_current}; worker heartbeat={float(worker_age):.1f}s; "
+        f"schema={schema_current}; worker heartbeat={worker_age_seconds:.1f}s; "
         f"{str(database_version)[:40]}"
     )
 
@@ -467,8 +477,8 @@ def _worker_heartbeat_is_fresh(database_url: str) -> bool:
                FROM index_worker_heartbeats"""
         )
         row = cur.fetchone()
-        age = row[0] if row else None
-    return age is not None and float(age) <= 90
+        age_seconds = _heartbeat_age_seconds(row[0] if row else None)
+    return age_seconds is not None and age_seconds <= 90
 
 
 def probe_index_worker(

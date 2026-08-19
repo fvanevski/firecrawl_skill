@@ -37,7 +37,7 @@ class BenchmarkDatasetLoader:
     def __init__(self, dataset: BenchmarkDataset):
         self.dataset = dataset
         self.objectives = list(dataset.objectives)
-        self.quality_thresholds: dict[str, float | int | str] = dict(
+        self.quality_thresholds: dict[str, float | bool] = dict(
             dataset.quality_thresholds
         )
 
