@@ -36,7 +36,7 @@ import enum
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -320,7 +320,9 @@ class MetricEngine:
     ) -> None:
         self.database_url = database_url
         self.config = config
-        self._connection = None
+        # psycopg is an optional runtime dependency imported dynamically. Keep the
+        # handle explicitly dynamic while preserving fail-closed connection checks.
+        self._connection: Any = None
 
     def connect(self) -> None:
         try:
@@ -957,15 +959,23 @@ class MetricEngine:
             gpu_status = MetricStatus.INCOMPLETE
         if cpu_status != MetricStatus.MEASURED or gpu_status != MetricStatus.MEASURED:
             performance = PerformanceMeasurement(
-                **{
-                    **performance.__dict__,
-                    "cpu_percent": performance.cpu_percent
+                schema_version=performance.schema_version,
+                total_latency_ms=performance.total_latency_ms,
+                total_tokens=performance.total_tokens,
+                semantic_calls=performance.semantic_calls,
+                cache_hit_rate=performance.cache_hit_rate,
+                cache_miss_rate=performance.cache_miss_rate,
+                embedding_throughput=performance.embedding_throughput,
+                cpu_percent=(
+                    performance.cpu_percent
                     if cpu_status == MetricStatus.MEASURED
-                    else None,
-                    "gpu_memory_mb": performance.gpu_memory_mb
+                    else None
+                ),
+                gpu_memory_mb=(
+                    performance.gpu_memory_mb
                     if gpu_status == MetricStatus.MEASURED
-                    else None,
-                }
+                    else None
+                ),
             )
         metrics = (
             PerformanceMetric(
@@ -1079,8 +1089,12 @@ class MetricEngine:
         )
         return performance, metrics
 
-    def _check_token_completeness(self, run_id: UUID) -> dict:
-        result = {"semantic_calls": 0, "usage_records": 0, "uncovered_calls": 0}
+    def _check_token_completeness(self, run_id: UUID) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "semantic_calls": 0,
+            "usage_records": 0,
+            "uncovered_calls": 0,
+        }
         try:
             cur = self._connection.execute(
                 """SELECT
@@ -1104,8 +1118,8 @@ class MetricEngine:
                 pass
         return result
 
-    def _check_embedding_completeness(self, run_id: UUID) -> dict:
-        result = {
+    def _check_embedding_completeness(self, run_id: UUID) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "batch_count": 0,
             "vector_count": 0,
             "failed_count": 0,
@@ -1145,8 +1159,10 @@ class MetricEngine:
                 pass
         return result
 
-    def _check_resource_completeness(self, run_id: UUID, device_type: str) -> dict:
-        result = {
+    def _check_resource_completeness(
+        self, run_id: UUID, device_type: str
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "total_count": 0,
             "measured_count": 0,
             "unavailable_count": 0,
@@ -1189,8 +1205,8 @@ class MetricEngine:
                 pass
         return result
 
-    def _read_resource_source(self, run_id: UUID, device_type: str) -> dict:
-        result = {
+    def _read_resource_source(self, run_id: UUID, device_type: str) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "record_ids": (),
             "measured_count": 0,
             "total_count": 0,
@@ -1235,8 +1251,8 @@ class MetricEngine:
             )
         return result
 
-    def _read_telemetry(self, run_id: UUID) -> dict:
-        result = {
+    def _read_telemetry(self, run_id: UUID) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "total_tokens": 0,
             "token_source": "unavailable",
             "cache_lookups": 0,
@@ -1430,6 +1446,10 @@ class ReleaseBenchmarkRunner:
         campaign_timestamp = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
         self._validate_modes()
         objectives = self._select_objectives()
+        operational_limit = self.loader.quality_thresholds.get(
+            "max_operational_reproducibility_ratio",
+            self.config.operational_reproducibility_ratio_limit,
+        )
         environment: dict[str, Any] = {
             "python_version": os.sys.version.split()[0],
             "platform": os.uname().sysname + " " + os.uname().release,
@@ -1439,12 +1459,7 @@ class ReleaseBenchmarkRunner:
             "modes": ",".join(self.config.execution_modes),
             "reproducibility_policy_version": REPRODUCIBILITY_POLICY_VERSION,
             "reproducibility_relative_tolerance": self.config.reproducibility_tolerance,
-            "operational_reproducibility_ratio_limit": float(
-                self.loader.quality_thresholds.get(
-                    "max_operational_reproducibility_ratio",
-                    self.config.operational_reproducibility_ratio_limit,
-                )
-            ),
+            "operational_reproducibility_ratio_limit": float(operational_limit),
             "operational_absolute_tolerances": dict(OPERATIONAL_ABSOLUTE_TOLERANCES),
         }
         runs: list[CampaignRun] = []
@@ -1494,7 +1509,7 @@ class ReleaseBenchmarkRunner:
         quality_metrics: tuple[QualityMetric, ...] = ()
         performance_metrics: tuple[PerformanceMetric, ...] = ()
         integrity_checks: tuple[DeterministicIntegrityCheck, ...] = ()
-        resource_samples: tuple[object, ...] = ()
+        resource_samples: tuple[Any, ...] = ()
         orchestration_outcome: str | None = None
         try:
             from research_store.config import StoreConfig
@@ -1503,9 +1518,7 @@ class ReleaseBenchmarkRunner:
 
             config = StoreConfig.from_env()
             if self.config.database_url:
-                config = config.__class__(
-                    **{**config.__dict__, "database_url": self.config.database_url}
-                )
+                config = replace(config, database_url=self.config.database_url)
             config.require_database()
             os.environ.pop("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES", None)
             if mode == "deterministic_debug":
@@ -1532,7 +1545,9 @@ class ReleaseBenchmarkRunner:
             spec = serialize_model(conservative_research_spec(objective.objective, "general"))
             candidate_sha = os.environ.get("CANDIDATE_SHA")
             if not candidate_sha:
-                raise ValueError("CANDIDATE_SHA environment variable is required for strict benchmark campaigns")
+                raise ValueError(
+                    "CANDIDATE_SHA environment variable is required for strict benchmark campaigns"
+                )
             configured_queries = tuple(
                 f"https://raw.githubusercontent.com/fvanevski/firecrawl_skill/{candidate_sha}/{source.file_path}"
                 for source in objective.known_relevant_sources[:3]
@@ -1580,12 +1595,13 @@ class ReleaseBenchmarkRunner:
             if metric_engine is not None and run_id:
                 from research_store.telemetry_service import PerformanceTelemetryService
 
-                telemetry_svc = PerformanceTelemetryService(metric_engine._connection)
-                self._populate_endpoint_usage(telemetry_svc, UUID(run_id), metric_engine._connection)
-                self._populate_cache_events(telemetry_svc, UUID(run_id), metric_engine._connection)
+                connection = metric_engine._connection
+                telemetry_svc = PerformanceTelemetryService(connection)
+                self._populate_endpoint_usage(telemetry_svc, UUID(run_id), connection)
+                self._populate_cache_events(telemetry_svc, UUID(run_id), connection)
                 self._persist_resource_samples(telemetry_svc, UUID(run_id), resource_samples)
                 telemetry_svc.build_summary(UUID(run_id), stages=RELEASE_CACHE_STAGES)
-                metric_engine._connection.commit()
+                connection.commit()
             if metric_engine is not None:
                 quality, quality_metrics = metric_engine.extract_quality_metrics(
                     UUID(run_id), objective=objective
@@ -1596,14 +1612,22 @@ class ReleaseBenchmarkRunner:
             else:
                 errors.append("no metric engine available — metrics not extracted")
         except Exception as exc:
-            logger.exception("benchmark execution FAILED for mode=%s objective=%s", mode, objective.id)
+            logger.exception(
+                "benchmark execution FAILED for mode=%s objective=%s",
+                mode,
+                objective.id,
+            )
             errors.append(f"execution failed: {exc}")
         try:
             integrity_checks = tuple(
                 self.integrity_checker.check(name) for name in self.config.integrity_checks
             )
         except Exception:  # noqa: BLE001
-            logger.warning("integrity checks FAILED for mode=%s objective=%s", mode, objective.id)
+            logger.warning(
+                "integrity checks FAILED for mode=%s objective=%s",
+                mode,
+                objective.id,
+            )
             errors.append("integrity checks failed")
         return CampaignRun(
             campaign_id=campaign_id,
@@ -1649,7 +1673,7 @@ class ReleaseBenchmarkRunner:
                 )
 
     def _persist_resource_samples(
-        self, telemetry_svc, run_id: UUID, samples: tuple[object, ...]
+        self, telemetry_svc, run_id: UUID, samples: tuple[Any, ...]
     ) -> None:
         for sample in samples:
             bound = sample.__class__(**{**sample.__dict__, "run_id": str(run_id)})
@@ -1673,7 +1697,9 @@ class ReleaseBenchmarkRunner:
                     hit=(raw_hit == "true"),
                 )
 
-    def _campaign_to_workflow_results(self, runs: list[CampaignRun]) -> list[WorkflowRunResult]:
+    def _campaign_to_workflow_results(
+        self, runs: list[CampaignRun]
+    ) -> list[WorkflowRunResult]:
         results: list[WorkflowRunResult] = []
         for run in runs:
             quality = run.quality or QualityMeasurement(
@@ -1707,7 +1733,6 @@ class ReleaseBenchmarkRunner:
                     errors=run.errors,
                     quality_metrics=run.quality_metrics,
                     performance_metrics=run.performance_metrics,
-                    orchestration_outcome=run.orchestration_outcome,
                 )
             )
         return results
@@ -1733,27 +1758,53 @@ class ReleaseBenchmarkRunner:
                 return None
             return QualityMeasurement(
                 schema_version="quality-measurement-v3",
-                candidate_recall=self._mean([r.quality.candidate_recall for r in items]),
-                source_quality_score=self._mean([r.quality.source_quality_score for r in items]),
-                coverage_completeness=self._mean([r.quality.coverage_completeness for r in items]),
-                unsupported_claim_rate=self._mean([r.quality.unsupported_claim_rate for r in items]),
-                citation_accuracy=self._mean([r.quality.citation_accuracy for r in items]),
-                report_quality_score=self._mean([r.quality.report_quality_score for r in items]),
+                candidate_recall=self._mean(
+                    [r.quality.candidate_recall for r in items]
+                ),
+                source_quality_score=self._mean(
+                    [r.quality.source_quality_score for r in items]
+                ),
+                coverage_completeness=self._mean(
+                    [r.quality.coverage_completeness for r in items]
+                ),
+                unsupported_claim_rate=self._mean(
+                    [r.quality.unsupported_claim_rate for r in items]
+                ),
+                citation_accuracy=self._mean(
+                    [r.quality.citation_accuracy for r in items]
+                ),
+                report_quality_score=self._mean(
+                    [r.quality.report_quality_score for r in items]
+                ),
             )
 
-        def avg_performance(items: list[WorkflowRunResult]) -> PerformanceMeasurement | None:
+        def avg_performance(
+            items: list[WorkflowRunResult],
+        ) -> PerformanceMeasurement | None:
             if not items:
                 return None
             total_tokens = self._mean([r.performance.total_tokens for r in items])
             return PerformanceMeasurement(
                 schema_version="performance-measurement-v2",
-                total_latency_ms=self._mean([r.performance.total_latency_ms for r in items]) or 0.0,
+                total_latency_ms=(
+                    self._mean([r.performance.total_latency_ms for r in items]) or 0.0
+                ),
                 total_tokens=int(total_tokens) if total_tokens is not None else None,
-                semantic_calls=int(self._mean([r.performance.semantic_calls for r in items]) or 0),
-                cache_hit_rate=self._mean([r.performance.cache_hit_rate for r in items]),
-                cache_miss_rate=self._mean([r.performance.cache_miss_rate for r in items]),
-                embedding_throughput=self._mean([r.performance.embedding_throughput for r in items]),
-                gpu_memory_mb=self._mean([r.performance.gpu_memory_mb for r in items]),
+                semantic_calls=int(
+                    self._mean([r.performance.semantic_calls for r in items]) or 0
+                ),
+                cache_hit_rate=self._mean(
+                    [r.performance.cache_hit_rate for r in items]
+                ),
+                cache_miss_rate=self._mean(
+                    [r.performance.cache_miss_rate for r in items]
+                ),
+                embedding_throughput=self._mean(
+                    [r.performance.embedding_throughput for r in items]
+                ),
+                gpu_memory_mb=self._mean(
+                    [r.performance.gpu_memory_mb for r in items]
+                ),
                 cpu_percent=self._mean([r.performance.cpu_percent for r in items]),
             )
 
@@ -1774,11 +1825,15 @@ class ReleaseBenchmarkRunner:
                 and avg_q.candidate_recall is not None
                 and baseline_quality.candidate_recall > 0
             ):
-                quality_vs_baseline[mode] = avg_q.candidate_recall / baseline_quality.candidate_recall
+                quality_vs_baseline[mode] = (
+                    avg_q.candidate_recall / baseline_quality.candidate_recall
+                )
             else:
                 quality_vs_baseline[mode] = 1.0
             if baseline_perf and avg_p and baseline_perf.total_latency_ms > 0:
-                performance_vs_baseline[mode] = avg_p.total_latency_ms / baseline_perf.total_latency_ms
+                performance_vs_baseline[mode] = (
+                    avg_p.total_latency_ms / baseline_perf.total_latency_ms
+                )
             else:
                 performance_vs_baseline[mode] = 1.0
         return WorkflowComparison(
@@ -1788,18 +1843,42 @@ class ReleaseBenchmarkRunner:
             quality_vs_baseline=quality_vs_baseline,
             performance_vs_baseline=performance_vs_baseline,
             integrity_regression=any(
-                not check.passed for result in results for check in result.integrity_checks
+                not check.passed
+                for result in results
+                for check in result.integrity_checks
             ),
         )
 
-    def _build_recommendation(self, comparison: WorkflowComparison) -> ReleaseRecommendation:
+    @staticmethod
+    def _quality_statuses(result: WorkflowRunResult) -> dict[str, MetricStatus]:
+        return {
+            metric.name: metric.status
+            for metric in result.quality_metrics
+            if isinstance(metric, QualityMetric)
+        }
+
+    @staticmethod
+    def _performance_statuses(result: WorkflowRunResult) -> dict[str, MetricStatus]:
+        return {
+            metric.name: metric.status
+            for metric in result.performance_metrics
+            if isinstance(metric, PerformanceMetric)
+        }
+
+    def _build_recommendation(
+        self, comparison: WorkflowComparison
+    ) -> ReleaseRecommendation:
         withdrawn: list[str] = []
-        limitations = list(self.config.known_limitations) if self.config.known_limitations else [
-            "CPU-based embedding and reranking causes high latency (~8.5s per embedding batch)",
-            "GPU is reserved for local LLM agents; embedding/reranker run on CPU",
-            "Local embedding models (nomic-embed-text, bge-m3) may have lower recall than OpenAI",
-            "Local reranker (cross-encoder) may be slower than cloud alternatives",
-        ]
+        limitations = (
+            list(self.config.known_limitations)
+            if self.config.known_limitations
+            else [
+                "CPU-based embedding and reranking causes high latency (~8.5s per embedding batch)",
+                "GPU is reserved for local LLM agents; embedding/reranker run on CPU",
+                "Local embedding models (nomic-embed-text, bge-m3) may have lower recall than OpenAI",
+                "Local reranker (cross-encoder) may be slower than cloud alternatives",
+            ]
+        )
         thresholds = self.loader.quality_thresholds
         mode_results: dict[str, list[WorkflowRunResult]] = {}
         for result in comparison.results:
@@ -1813,28 +1892,39 @@ class ReleaseBenchmarkRunner:
         )
         for mode, items in mode_results.items():
             for result in items:
-                statuses = {m.name: m.status for m in result.quality_metrics}
+                statuses = self._quality_statuses(result)
                 for field_name, threshold_name, default, direction in quality_thresholds:
                     value = getattr(result.quality, field_name)
                     if statuses.get(field_name) != MetricStatus.MEASURED:
                         value = None
-                    threshold = thresholds.get(threshold_name, default)
+                    threshold = float(thresholds.get(threshold_name, default))
                     if value is None:
                         continue
-                    failed = value < threshold if direction == "min" else value > threshold
+                    failed = (
+                        value < threshold
+                        if direction == "min"
+                        else value > threshold
+                    )
                     if failed:
                         operator = ">=" if direction == "min" else "<="
                         withdrawn.append(
-                            f"{field_name} {operator} {threshold} — {mode} achieved {value:.3f}"
+                            f"{field_name} {operator} {threshold} — "
+                            f"{mode} achieved {value:.3f}"
                         )
                 if self.config.strict:
                     if result.errors:
-                        withdrawn.append(f"{mode} encountered execution errors: {result.errors}")
-                    if result.orchestration_outcome != "completed":
                         withdrawn.append(
-                            f"{mode} orchestration did not complete (outcome: {result.orchestration_outcome})"
+                            f"{mode} encountered execution errors: {result.errors}"
                         )
-                    observed_quality = {m.name: m.status for m in result.quality_metrics}
+                    orchestration_outcome = getattr(
+                        result, "orchestration_outcome", "completed"
+                    )
+                    if orchestration_outcome != "completed":
+                        withdrawn.append(
+                            f"{mode} orchestration did not complete "
+                            f"(outcome: {orchestration_outcome})"
+                        )
+                    observed_quality = self._quality_statuses(result)
                     for metric in MANDATORY_QUALITY_METRICS:
                         status = observed_quality.get(metric, MetricStatus.UNAVAILABLE)
                         if status not in STRICT_ACCEPTABLE_QUALITY_STATUSES:
@@ -1842,7 +1932,7 @@ class ReleaseBenchmarkRunner:
                                 f"quality metric {metric} is {status.value} (not measured) — "
                                 f"{mode} cannot satisfy release policy"
                             )
-                    observed_perf = {m.name: m.status for m in result.performance_metrics}
+                    observed_perf = self._performance_statuses(result)
                     for metric in MANDATORY_PERFORMANCE_METRICS:
                         status = observed_perf.get(metric, MetricStatus.UNAVAILABLE)
                         if status not in STRICT_ACCEPTABLE_PERFORMANCE_STATUSES:
@@ -1852,13 +1942,17 @@ class ReleaseBenchmarkRunner:
                             )
                     for check in result.integrity_checks:
                         if not check.passed:
-                            withdrawn.append(f"{mode} failed integrity check: {check.check_name}")
-        max_latency_ratio = thresholds.get("max_latency_ratio_vs_baseline")
-        if max_latency_ratio is not None:
+                            withdrawn.append(
+                                f"{mode} failed integrity check: {check.check_name}"
+                            )
+        max_latency_ratio_raw = thresholds.get("max_latency_ratio_vs_baseline")
+        if max_latency_ratio_raw is not None:
+            max_latency_ratio = float(max_latency_ratio_raw)
             for mode, ratio in comparison.performance_vs_baseline.items():
                 if ratio > max_latency_ratio:
                     withdrawn.append(
-                        f"latency_ratio <= {max_latency_ratio} — {mode} achieved {ratio:.3f}"
+                        f"latency_ratio <= {max_latency_ratio} — "
+                        f"{mode} achieved {ratio:.3f}"
                     )
         p0_regressions = (
             ("deterministic integrity check failed — regression detected",)
@@ -1897,16 +1991,17 @@ class ReleaseBenchmarkRunner:
     ) -> ReproducibilityComparison:
         if tolerance is None:
             tolerance = self.config.reproducibility_tolerance
-        operational_ratio_limit = float(
-            self.loader.quality_thresholds.get(
-                "max_operational_reproducibility_ratio",
-                self.config.operational_reproducibility_ratio_limit,
-            )
+        operational_limit = self.loader.quality_thresholds.get(
+            "max_operational_reproducibility_ratio",
+            self.config.operational_reproducibility_ratio_limit,
         )
+        operational_ratio_limit = float(operational_limit)
         if operational_ratio_limit < 1.0:
             raise ValueError("max_operational_reproducibility_ratio must be >= 1")
 
-        def index_runs(result: ReleaseBenchmarkResult) -> dict[tuple[str, str], CampaignRun]:
+        def index_runs(
+            result: ReleaseBenchmarkResult,
+        ) -> dict[tuple[str, str], CampaignRun]:
             return {(run.mode, run.objective_id): run for run in result.runs}
 
         idx_a = index_runs(campaign_a)
@@ -1921,9 +2016,13 @@ class ReleaseBenchmarkRunner:
         if keys_a != keys_b:
             all_within = False
             if keys_a - keys_b:
-                details.append(f"mode/objective sets differ: missing from B: {sorted(keys_a - keys_b)}")
+                details.append(
+                    f"mode/objective sets differ: missing from B: {sorted(keys_a - keys_b)}"
+                )
             if keys_b - keys_a:
-                details.append(f"mode/objective sets differ: missing from A: {sorted(keys_b - keys_a)}")
+                details.append(
+                    f"mode/objective sets differ: missing from A: {sorted(keys_b - keys_a)}"
+                )
         elif not keys_a:
             all_within = False
             details.append("no runs in either campaign — cannot compare reproducibility")
@@ -1949,7 +2048,12 @@ class ReleaseBenchmarkRunner:
                     status_b = q_status_b.get(field_name, MetricStatus.UNAVAILABLE)
                     if status_a == status_b == MetricStatus.NOT_APPLICABLE:
                         continue
-                    if status_a != MetricStatus.MEASURED or status_b != MetricStatus.MEASURED or val_a is None or val_b is None:
+                    if (
+                        status_a != MetricStatus.MEASURED
+                        or status_b != MetricStatus.MEASURED
+                        or val_a is None
+                        or val_b is None
+                    ):
                         all_within = False
                         details.append(
                             f"{mode}.{objective_id}.{field_name}: not reproducible — "
@@ -1958,11 +2062,14 @@ class ReleaseBenchmarkRunner:
                         continue
                     denom = abs(val_a) if abs(val_a) > 1e-9 else 1.0
                     rel_diff = abs(val_b - val_a) / denom
-                    quality_tolerances.append((f"{mode}.{objective_id}.{field_name}", val_a, val_b, rel_diff))
+                    quality_tolerances.append(
+                        (f"{mode}.{objective_id}.{field_name}", val_a, val_b, rel_diff)
+                    )
                     if rel_diff > tolerance:
                         all_within = False
                         details.append(
-                            f"{mode}.{objective_id}.{field_name}: {val_a:.4f} vs {val_b:.4f} "
+                            f"{mode}.{objective_id}.{field_name}: "
+                            f"{val_a:.4f} vs {val_b:.4f} "
                             f"(rel diff {rel_diff:.4f} > {tolerance})"
                         )
             if run_a.performance and run_b.performance:
@@ -1981,7 +2088,12 @@ class ReleaseBenchmarkRunner:
                     status_b = p_status_b.get(field_name, MetricStatus.UNAVAILABLE)
                     if status_a == status_b == MetricStatus.NOT_APPLICABLE:
                         continue
-                    if status_a != MetricStatus.MEASURED or status_b != MetricStatus.MEASURED or val_a is None or val_b is None:
+                    if (
+                        status_a != MetricStatus.MEASURED
+                        or status_b != MetricStatus.MEASURED
+                        or val_a is None
+                        or val_b is None
+                    ):
                         all_within = False
                         details.append(
                             f"{mode}.{objective_id}.{field_name}: not reproducible — "
@@ -1998,26 +2110,46 @@ class ReleaseBenchmarkRunner:
                     if field_name in OPERATIONAL_PERFORMANCE_METRICS:
                         smaller = min(abs(a), abs(b))
                         larger = max(abs(a), abs(b))
-                        ratio = 1.0 if larger <= 1e-9 else float("inf") if smaller <= 1e-9 else larger / smaller
-                        absolute_tolerance = OPERATIONAL_ABSOLUTE_TOLERANCES.get(field_name)
-                        within = within or ratio <= operational_ratio_limit or (
-                            absolute_tolerance is not None and abs_diff <= absolute_tolerance
+                        ratio = (
+                            1.0
+                            if larger <= 1e-9
+                            else float("inf")
+                            if smaller <= 1e-9
+                            else larger / smaller
                         )
-                        failure_limit = f"ratio {ratio:.4f} > {operational_ratio_limit}"
+                        absolute_tolerance = OPERATIONAL_ABSOLUTE_TOLERANCES.get(
+                            field_name
+                        )
+                        within = (
+                            within
+                            or ratio <= operational_ratio_limit
+                            or (
+                                absolute_tolerance is not None
+                                and abs_diff <= absolute_tolerance
+                            )
+                        )
+                        failure_limit = (
+                            f"ratio {ratio:.4f} > {operational_ratio_limit}"
+                        )
                         if absolute_tolerance is not None:
-                            failure_limit += f" and abs diff {abs_diff:.4f} > {absolute_tolerance}"
+                            failure_limit += (
+                                f" and abs diff {abs_diff:.4f} > {absolute_tolerance}"
+                            )
                         if within and rel_diff > tolerance:
                             observations.append(
-                                f"{mode}.{objective_id}.{field_name}: operational variance accepted by "
-                                f"{REPRODUCIBILITY_POLICY_VERSION} — {a:.4f} vs {b:.4f}; "
-                                f"rel diff={rel_diff:.4f}; ratio={ratio:.4f}; "
-                                f"ratio_limit={operational_ratio_limit}"
+                                f"{mode}.{objective_id}.{field_name}: operational variance "
+                                f"accepted by {REPRODUCIBILITY_POLICY_VERSION} — "
+                                f"{a:.4f} vs {b:.4f}; rel diff={rel_diff:.4f}; "
+                                f"ratio={ratio:.4f}; ratio_limit={operational_ratio_limit}"
                             )
-                    performance_tolerances.append((f"{mode}.{objective_id}.{field_name}", a, b, rel_diff))
+                    performance_tolerances.append(
+                        (f"{mode}.{objective_id}.{field_name}", a, b, rel_diff)
+                    )
                     if not within:
                         all_within = False
                         details.append(
-                            f"{mode}.{objective_id}.{field_name}: {a:.4f} vs {b:.4f} ({failure_limit})"
+                            f"{mode}.{objective_id}.{field_name}: "
+                            f"{a:.4f} vs {b:.4f} ({failure_limit})"
                         )
         return ReproducibilityComparison(
             run_a_id=campaign_a.campaign_id,
@@ -2029,7 +2161,9 @@ class ReleaseBenchmarkRunner:
             policy_version=REPRODUCIBILITY_POLICY_VERSION,
             relative_tolerance=tolerance,
             operational_ratio_limit=operational_ratio_limit,
-            operational_absolute_tolerances=tuple(sorted(OPERATIONAL_ABSOLUTE_TOLERANCES.items())),
+            operational_absolute_tolerances=tuple(
+                sorted(OPERATIONAL_ABSOLUTE_TOLERANCES.items())
+            ),
             all_within_tolerance=all_within,
             observations=tuple(observations),
             details=tuple(details),
@@ -2046,7 +2180,11 @@ def run_release_benchmark(
     operational_reproducibility_ratio_limit: float = 2.0,
     known_limitations: tuple[str, ...] = (),
 ) -> ReleaseBenchmarkResult:
-    loader = dataset if isinstance(dataset, BenchmarkDatasetLoader) else BenchmarkDatasetLoader(dataset)
+    loader = (
+        dataset
+        if isinstance(dataset, BenchmarkDatasetLoader)
+        else BenchmarkDatasetLoader(dataset)
+    )
     config = ReleaseBenchmarkConfig(
         database_url=database_url,
         blob_root=blob_root,
