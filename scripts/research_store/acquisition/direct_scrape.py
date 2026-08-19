@@ -1196,44 +1196,11 @@ def build_direct_scrape_service(
     *,
     adapter_factory: Callable[[], DirectScrapeAdapter] | None = None,
 ) -> DirectScrapeService:
-    """Compose direct-scrape policy with an explicit provider transport."""
-    from functools import partial
+    """Delegate legacy capability-local construction to the canonical root."""
+    from .. import composition as _composition
 
-    from ..blob import ContentAddressedBlobStore
-    from ..corpus_service import CorpusService
-    from ..parsing import get_registry
-    from ..postgres import PostgresUnitOfWork
-
-    if adapter_factory is None:
-        from .adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter
-
-        adapter_factory = FirecrawlDirectScrapeAdapter
-
-    resolved = config or StoreConfig.from_env()
-    resolved.require_database()
-    uow_factory = partial(
-        PostgresUnitOfWork,
-        resolved.database_url,
-        resolved.physical_collection,
-        resolved.embedding_model,
-        resolved.embedding_revision,
-        resolved.embedding_dimension,
-        resolved.parser_version,
-        resolved.normalization_version,
-        resolved.chunker_version,
-    )
-    blob_store = ContentAddressedBlobStore(resolved.blob_root)
-    corpus_service = CorpusService(
-        resolved,
-        uow_factory,
-        blob_store,
-        parser_registry=get_registry(),
-    )
-    return DirectScrapeService(
-        resolved,
-        uow_factory,
-        blob_store,
-        corpus_service,
+    return _composition.build_direct_scrape_service(
+        config,
         adapter_factory=adapter_factory,
     )
 
