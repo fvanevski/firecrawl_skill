@@ -12,10 +12,6 @@ import sys as _sys
 
 from .. import preflight as _impl
 from ..preflight import (
-    _config,
-    _probe_writable_directory,
-    _redact_url_credentials,
-    _worker_heartbeat_is_fresh,
     probe_embedding,
     probe_firecrawl,
     probe_generative,

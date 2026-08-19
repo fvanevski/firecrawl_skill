@@ -11,6 +11,6 @@ from __future__ import annotations
 import sys as _sys
 
 from .. import release_benchmark as _impl
-from ..release_benchmark import *  # noqa: F403
+from ..release_benchmark import *
 
 _sys.modules[__name__] = _impl

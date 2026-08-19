@@ -17,8 +17,6 @@ from ..workflow_benchmark import (
     WorkflowBenchmarkConfig,
     WorkflowBenchmarkResult,
     WorkflowBenchmarkRunner,
-    _build_dataset,
-    _build_objective,
     load_benchmark_dataset,
     run_benchmark,
 )

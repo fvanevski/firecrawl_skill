@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import ast
 import importlib
-import tomllib
 from pathlib import Path
+
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 RESEARCH_STORE = ROOT / "scripts" / "research_store"
@@ -49,7 +50,9 @@ def test_release_package_is_in_distribution_mapping() -> None:
 def test_baseline_tracked_release_implementations_keep_reviewed_paths() -> None:
     baseline = (ROOT / "pyrefly-baseline.json").read_text(encoding="utf-8")
     for path in BASELINE_TRACKED_RELEASE_PATHS:
-        assert path in baseline, f"reviewed Pyrefly debt path unexpectedly moved: {path}"
+        assert path in baseline, (
+            f"reviewed Pyrefly debt path unexpectedly moved: {path}"
+        )
 
 
 def _imports_release_package(module_name: str) -> bool:
