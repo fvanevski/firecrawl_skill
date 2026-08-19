@@ -70,6 +70,7 @@ def test_ci_binds_pyrefly_to_exact_candidate_and_validates_changed_scope_and_pro
         in workflow
     )
     assert 'pyrefly check "${changed_python[@]}" --output-format=github' in workflow
+    assert "grep -vE '(^|/)test_[^/]*\\.py$'" not in workflow
     assert "Verify repository-root import resolution" in workflow
     assert "scripts/model_gateway.py" in workflow
     assert "scripts/fixtures/model_gateway.py" in workflow
@@ -103,8 +104,8 @@ def test_local_agent_contract_requires_bounded_and_full_validation():
         "Full-project Pyrefly",
         "Relevant broader tests",
         'ruff check "${CHANGED_PY[@]}"',
-        'pyrefly check "${CHANGED_PY_TYPECHECK[@]}"',
-        "grep -vE '(^|/)test_[^/]*\\.py$'",
+        'pyrefly check "${CHANGED_PY[@]}"',
+        "Include changed test files explicitly",
         "pyrefly check\n",
         "Exact-head and Pyrefly exit-code evidence",
         "exit code `1`",
@@ -114,6 +115,8 @@ def test_local_agent_contract_requires_bounded_and_full_validation():
         "both required and successful",
     ):
         assert required in contract
+    assert "CHANGED_PY_TYPECHECK" not in contract
+    assert "grep -vE '(^|/)test_[^/]*\\.py$'" not in contract
 
 
 def test_repository_root_scripts_namespace_resolves_without_baseline_debt():

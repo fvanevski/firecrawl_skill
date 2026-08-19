@@ -337,11 +337,10 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t changed_python < <(
-            git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.py' \
-              | grep -vE '(^|/)test_[^/]*\.py$' || true
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.py'
           )
           if ((${#changed_python[@]} == 0)); then
-            echo "No changed non-test Python paths."
+            echo "No changed Python paths."
             exit 0
           fi
           printf 'Pyrefly changed path: %s\n' "${changed_python[@]}"

@@ -115,16 +115,13 @@ jobs:
             ruff format --check --diff "${CHANGED_PY[@]}"
           fi
 
-      - name: Pyrefly on exact changed non-test Python scope
+      - name: Pyrefly on exact changed Python scope
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t CHANGED_PY_TYPECHECK < <(
-            grep -vE '(^|/)test_[^/]*\.py$' \
-              "$RUNNER_TEMP/changed-python.txt" || true
-          )
-          if ((${#CHANGED_PY_TYPECHECK[@]})); then
-            pyrefly check "${CHANGED_PY_TYPECHECK[@]}"
+          mapfile -t CHANGED_PY < "$RUNNER_TEMP/changed-python.txt"
+          if ((${#CHANGED_PY[@]})); then
+            pyrefly check "${CHANGED_PY[@]}"
           fi
 
       - name: Full-project Pyrefly

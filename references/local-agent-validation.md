@@ -46,11 +46,10 @@ this order before handoff:
 1. **Ruff on changed Python code.** Determine the existing added/copied/
    modified/renamed Python files from the task's authoritative base and run
    `ruff check` plus `ruff format --check --diff` on that explicit set.
- 2. **Pyrefly on changed Python scope.** Run `pyrefly check <changed.py ...>` so
-    interface/type errors are surfaced while the edit context is still narrow.
-    Exclude the historical test corpus (`test_*.py`) from this explicit check,
-    matching the CI changed-scope gate: the test corpus is outside the Pyrefly
-    baseline and is not type-policed there.
+2. **Pyrefly on changed Python scope.** Run `pyrefly check <changed.py ...>` so
+   interface/type errors are surfaced while the edit context is still narrow.
+   Include changed test files explicitly even when project defaults exclude the
+   historical test corpus.
 3. **Focused pytest.** Run the smallest deterministic unit/contract/integration
    tests that can falsify the changed behavior. PostgreSQL/Qdrant or other
    service-backed tests must use disposable local services.
@@ -72,15 +71,7 @@ mapfile -t CHANGED_PY < <(
 if ((${#CHANGED_PY[@]})); then
   ruff check "${CHANGED_PY[@]}"
   ruff format --check --diff "${CHANGED_PY[@]}"
-  # The historical test corpus is outside the Pyrefly baseline, so the
-  # changed-scope type check skips test_*.py (Ruff still lints every changed
-  # Python file, including tests).
-  mapfile -t CHANGED_PY_TYPECHECK < <(
-    printf '%s\n' "${CHANGED_PY[@]}" | grep -vE '(^|/)test_[^/]*\.py$' || true
-  )
-  if ((${#CHANGED_PY_TYPECHECK[@]})); then
-    pyrefly check "${CHANGED_PY_TYPECHECK[@]}"
-  fi
+  pyrefly check "${CHANGED_PY[@]}"
 fi
 
 # After focused tests:
