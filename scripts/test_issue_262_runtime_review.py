@@ -15,7 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 # contract on BoundedExtractionStage.  The regression below deliberately tests
 # that effective runtime method rather than only inspecting its source module.
 import research_store
-from research_store import composition
+from research_store import composition, production_topology
 from research_store.acquisition.models import SearchAdapterResult
 from research_store.bounded_orchestrator import BoundedExtractionStage
 from research_store.ingestion_batch_semantics import _bounded_extraction_execute
@@ -58,17 +58,22 @@ def test_runtime_issue_217_execute_uses_production_candidate_scrape_port(
     This closes the independent-review gap left by source-only structural tests:
     after the ordinary ``research_store`` import has replaced
     ``BoundedExtractionStage.execute`` with the issue #217 compatibility method,
-    a production stage constructed without an explicit scrape adapter must still
-    receive the bounded candidate transport from the composition root and use
-    that injected port for a provider-needed candidate.
+    a production stage constructed through the canonical composition surface
+    without an explicit scrape adapter must still receive the bounded candidate
+    transport from the leaf production-topology owner and use that injected port
+    for a provider-needed candidate.
     """
 
     assert research_store.ResearchOrchestrator is not None
     assert BoundedExtractionStage.execute is _bounded_extraction_execute
+    assert (
+        composition.ProductionBoundedExtractionStage
+        is production_topology.ProductionBoundedExtractionStage
+    )
 
     adapter = _RecordingCandidateScrapeAdapter()
     monkeypatch.setattr(
-        composition,
+        production_topology,
         "BoundedFirecrawlSearchAdapter",
         lambda: adapter,
     )
