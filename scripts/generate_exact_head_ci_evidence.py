@@ -56,6 +56,12 @@ REQUIRED_FINGERPRINT_CATEGORIES = frozenset(
         "hardware",
     }
 )
+CANONICAL_RELEASE_SOURCE_PATHS = frozenset(
+    {
+        "scripts/research_store/release/benchmark.py",
+        "scripts/research_store/release/workflow.py",
+    }
+)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -178,12 +184,10 @@ def validate_generated_manifest(
         elif sha256_file(path) != artifact.sha256:
             errors.append(f"manifest artifact hash mismatch: {artifact.path}")
         name = artifact.name.lower()
-        logical_path = artifact.path.lower()
+        logical_path = artifact.path.replace("\\", "/").lower()
         if "ci" in name or ".github" in logical_path or "ci.yml" in logical_path:
             artifact_categories.add("ci")
-        elif (
-            "release_benchmark" in logical_path or "workflow_benchmark" in logical_path
-        ):
+        elif logical_path in CANONICAL_RELEASE_SOURCE_PATHS:
             artifact_categories.add("source")
         elif "benchmark" in name or "benchmark" in logical_path:
             artifact_categories.add("benchmark")

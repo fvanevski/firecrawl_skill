@@ -17,6 +17,7 @@ packages = [
   "firecrawl_skill.research_store.assessment",
   "firecrawl_skill.research_store.cli",
   "firecrawl_skill.research_store.parsing",
+  "firecrawl_skill.research_store.release",
   "firecrawl_skill.research_store.reporting",
   "firecrawl_skill.research_store.retrieval",
   "firecrawl_skill.research_store.retrieval.projection",
@@ -42,6 +43,7 @@ firecrawl_skill = "src/firecrawl_skill"
 "firecrawl_skill.research_store.assessment" = "scripts/research_store/assessment"
 "firecrawl_skill.research_store.cli" = "scripts/research_store/cli"
 "firecrawl_skill.research_store.parsing" = "scripts/research_store/parsing"
+"firecrawl_skill.research_store.release" = "scripts/research_store/release"
 "firecrawl_skill.research_store.reporting" = "scripts/research_store/reporting"
 "firecrawl_skill.research_store.retrieval" = "scripts/research_store/retrieval"
 "firecrawl_skill.research_store.retrieval.projection" = "scripts/research_store/retrieval/projection"

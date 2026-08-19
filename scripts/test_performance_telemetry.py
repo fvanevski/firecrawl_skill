@@ -536,6 +536,7 @@ class TestResourceSampler:
         assert sample.device_type == "cpu"
         assert sample.sample_type == "process_cpu_percent_normalized"
         assert sample.status == "measured"
+        assert sample.value is not None
         assert 0 <= sample.value <= 100
 
     @pytest.mark.skipif(not _HAS_PSUTIL_TEST, reason="psutil not available")
@@ -994,6 +995,7 @@ class TestStrictModeRejection:
             10,
             3,
             7,
+            1,
             50.0,
             48,
             2.5,
