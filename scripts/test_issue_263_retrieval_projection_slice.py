@@ -37,6 +37,7 @@ from research_store.retrieval.projection.postgres_jobs import PostgresIndexJobRe
 
 ROOT = Path(__file__).resolve().parents[1]
 STORE = ROOT / "scripts" / "research_store"
+WORKFLOW = ROOT / ".github" / "workflows" / "retrieval-projection-slice-review.yml"
 
 _CHECKPOINT_FACADE_FILES = (
     "checkpoint_indexing_stage.py",
@@ -204,3 +205,17 @@ def test_projection_boundary_declares_non_authoritative_qdrant_contract() -> Non
     )
     assert "Qdrant remains rebuildable and non-authoritative" in source
     assert "PostgreSQL retains durable" in source
+
+
+def test_slice_workflow_tracks_staged_root_implementations() -> None:
+    """The dedicated #263 gate must rerun when staged implementations change."""
+    configured_paths = {
+        line.strip()
+        for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("-")
+    }
+    assert {
+        '- "scripts/research_store/indexing.py"',
+        '- "scripts/research_store/checkpoint_indexing_stage.py"',
+        '- "scripts/research_store/index_checkpoint_*.py"',
+    } <= configured_paths
