@@ -1,29 +1,14 @@
 from __future__ import annotations
 
-from functools import partial
 from typing import Any
 from uuid import UUID
 
+from .composition import build_uow_factory as uow_factory
 from .indexing import IndexWorker, OpenAICompatibleEmbedder
-from .postgres import PostgresUnitOfWork
 from .qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
 from .qdrant_authority import read_required_alias_state
 from .store_runtime import database
 from .valkey_queue import ValkeyQueue
-
-
-def uow_factory(config):
-    return partial(
-        PostgresUnitOfWork,
-        config.database_url,
-        config.physical_collection,
-        config.embedding_model,
-        config.embedding_revision,
-        config.embedding_dimension,
-        config.parser_version,
-        config.normalization_version,
-        config.chunker_version,
-    )
 
 
 def qdrant(config, collection=None, dimension=None, distance="Cosine"):
