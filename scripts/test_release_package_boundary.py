@@ -67,7 +67,9 @@ def test_release_package_is_in_distribution_mapping() -> None:
 def test_canonical_release_implementations_are_not_pyrefly_baselined() -> None:
     baseline = (ROOT / "pyrefly-baseline.json").read_text(encoding="utf-8")
     for path in CANONICAL_IMPLEMENTATION_PATHS:
-        assert path not in baseline, f"canonical implementation must not be baselined: {path}"
+        assert path not in baseline, (
+            f"canonical implementation must not be baselined: {path}"
+        )
 
 
 def test_legacy_release_modules_are_zero_domain_logic_facades() -> None:
@@ -79,7 +81,9 @@ def test_legacy_release_modules_are_zero_domain_logic_facades() -> None:
             for node in ast.walk(tree)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         ]
-        assert not definitions, f"legacy release facade contains implementation: {relative}"
+        assert not definitions, (
+            f"legacy release facade contains implementation: {relative}"
+        )
 
 
 def test_canonical_release_modules_own_expected_definitions() -> None:

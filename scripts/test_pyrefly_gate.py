@@ -65,7 +65,10 @@ def test_ci_binds_pyrefly_to_exact_candidate_and_validates_changed_scope_and_pro
     assert "Run Pyrefly on actual changed Python scope" in workflow
     assert "BASE_SHA: ${{ github.event.pull_request.base.sha }}" in workflow
     assert "HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in workflow
-    assert 'git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- \'*.py\'' in workflow
+    assert (
+        'git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- \'*.py\''
+        in workflow
+    )
     assert 'pyrefly check "${changed_python[@]}" --output-format=github' in workflow
     assert "Verify repository-root import resolution" in workflow
     assert "scripts/model_gateway.py" in workflow

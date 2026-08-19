@@ -272,7 +272,9 @@ def _run_campaign(
             "campaign_timestamp": result.campaign_timestamp,
             "environment": result.environment,
             "recommendation": {
-                "outcome": result.recommendation.outcome if result.recommendation else None,
+                "outcome": result.recommendation.outcome
+                if result.recommendation
+                else None,
                 "supported_claims": result.recommendation.supported_claims
                 if result.recommendation
                 else (),
@@ -324,7 +326,9 @@ def _run_campaign(
                         {
                             "name": qm.name,
                             "value": qm.value,
-                            "status": getattr(qm, "status", MetricStatus.UNEVALUATED).value,
+                            "status": getattr(
+                                qm, "status", MetricStatus.UNEVALUATED
+                            ).value,
                             "formula": qm.formula,
                             "source": {
                                 "table": qm.source.table,
@@ -376,7 +380,9 @@ def _run_campaign(
                         {
                             "name": pm.name,
                             "value": pm.value,
-                            "status": getattr(pm, "status", MetricStatus.UNEVALUATED).value,
+                            "status": getattr(
+                                pm, "status", MetricStatus.UNEVALUATED
+                            ).value,
                             "formula": pm.formula,
                             "source": {
                                 "table": pm.source.table,

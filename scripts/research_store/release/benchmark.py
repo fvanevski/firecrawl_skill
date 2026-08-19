@@ -177,7 +177,9 @@ def _annotated_source_quality(
         )
     expected_classes = set(objective.expected_source_classes)
     relevant_sources = tuple(
-        source for source in objective.known_relevant_sources if source.role == "relevant"
+        source
+        for source in objective.known_relevant_sources
+        if source.role == "relevant"
     )
     distractor_sources = tuple(
         source
@@ -392,7 +394,9 @@ class MetricEngine:
                 else "unavailable — no versioned labeled relevant set"
             )
             recall_source_table = (
-                "search_candidates" if candidate_count == 0 else "benchmark_ground_truth"
+                "search_candidates"
+                if candidate_count == 0
+                else "benchmark_ground_truth"
             )
         source_quality, source_quality_formula, source_quality_status = (
             _annotated_source_quality(candidates, objective)
@@ -545,7 +549,9 @@ class MetricEngine:
         support_weight = 0.25
         packet_weight = 0.15
         with self._connection.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM evidence_packets WHERE run_id = %s", (run_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM evidence_packets WHERE run_id = %s", (run_id,)
+            )
             packet_row = cur.fetchone()
         packet_count = int(packet_row[0] or 0) if packet_row else 0
         packet_present = 1.0 if packet_count > 0 else 0.0
@@ -745,7 +751,9 @@ class MetricEngine:
             telemetry["gpu_samples"] == 0 or not telemetry.get("telemetry_tables_exist")
         )
         with self._connection.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM semantic_calls WHERE run_id = %s", (run_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM semantic_calls WHERE run_id = %s", (run_id,)
+            )
             semantic_row = cur.fetchone()
         semantic_calls = int(semantic_row[0] or 0) if semantic_row else 0
         token_completeness = self._check_token_completeness(run_id)
@@ -788,7 +796,9 @@ class MetricEngine:
             )
         else:
             cache_hit_rate = None
-            cache_formula = "unavailable — no lookups in the versioned release cache-stage set"
+            cache_formula = (
+                "unavailable — no lookups in the versioned release cache-stage set"
+            )
         cache_event_ids: tuple[str, ...] = ()
         cache_stages: tuple[str, ...] = ()
         try:
@@ -814,13 +824,18 @@ class MetricEngine:
         embedding_throughput = telemetry["embedding_throughput"]
         emb_failures: list[str] = []
         if embedding_completeness.get("failed_count", 0) > 0:
-            emb_failures.append(f"failed_count={embedding_completeness['failed_count']}")
+            emb_failures.append(
+                f"failed_count={embedding_completeness['failed_count']}"
+            )
         if embedding_completeness.get("text_vector_mismatch", False):
             emb_failures.append(
                 f"total_texts({embedding_completeness['total_texts']}) != "
                 f"vector_count({embedding_completeness['vector_count']})"
             )
-        if telemetry["embedding_batch_count"] > 0 and telemetry["embedding_elapsed_seconds"] > 0:
+        if (
+            telemetry["embedding_batch_count"] > 0
+            and telemetry["embedding_elapsed_seconds"] > 0
+        ):
             emb_formula = (
                 f"run_embedding_throughput: {telemetry['embedding_total_texts']}/"
                 f"{telemetry['embedding_elapsed_seconds']:.3f}s"
@@ -829,10 +844,14 @@ class MetricEngine:
                 emb_formula += " — completeness: " + "; ".join(emb_failures)
         elif strict_embedding_unavailable:
             embedding_throughput = None
-            emb_formula = "unavailable — no completed embedding work with measured duration"
+            emb_formula = (
+                "unavailable — no completed embedding work with measured duration"
+            )
         else:
             embedding_throughput = max(0.0, 1000.0 / max(1, latency_ms / 100))
-            emb_formula = "1000 / max(1, latency_ms / 100) — run_embedding_throughput absent"
+            emb_formula = (
+                "1000 / max(1, latency_ms / 100) — run_embedding_throughput absent"
+            )
         cpu_pct = telemetry["cpu_mean_percent"]
         if cpu_pct is None:
             cpu_pct = None if strict_cpu_unavailable else self._legacy_cpu_percent()
@@ -879,7 +898,9 @@ class MetricEngine:
             total_latency_ms=round(latency_ms, 2),
             total_tokens=total_tokens,
             semantic_calls=semantic_calls,
-            cache_hit_rate=round(cache_hit_rate, 6) if cache_hit_rate is not None else None,
+            cache_hit_rate=round(cache_hit_rate, 6)
+            if cache_hit_rate is not None
+            else None,
             cache_miss_rate=round(1.0 - cache_hit_rate, 6)
             if cache_hit_rate is not None
             else None,
@@ -927,13 +948,21 @@ class MetricEngine:
         gpu_source = self._read_resource_source(run_id, "gpu")
         cpu_completeness = self._check_resource_completeness(run_id, "cpu")
         gpu_completeness = self._check_resource_completeness(run_id, "gpu")
-        cpu_nonmeasured = cpu_completeness["total_count"] - cpu_completeness["measured_count"]
-        gpu_nonmeasured = gpu_completeness["total_count"] - gpu_completeness["measured_count"]
+        cpu_nonmeasured = (
+            cpu_completeness["total_count"] - cpu_completeness["measured_count"]
+        )
+        gpu_nonmeasured = (
+            gpu_completeness["total_count"] - gpu_completeness["measured_count"]
+        )
         if cpu_completeness["invalid_count"]:
             cpu_status = MetricStatus.INVALID
         elif cpu_nonmeasured and cpu_completeness["measured_count"]:
             cpu_status = MetricStatus.INCOMPLETE
-        elif strict and cpu_status == MetricStatus.MEASURED and cpu_completeness["measured_count"] < STRICT_MIN_CPU_SAMPLES:
+        elif (
+            strict
+            and cpu_status == MetricStatus.MEASURED
+            and cpu_completeness["measured_count"] < STRICT_MIN_CPU_SAMPLES
+        ):
             cpu_status = MetricStatus.INCOMPLETE
             cpu_formula += (
                 "; incomplete — strict periodic window requires at least "
@@ -944,7 +973,11 @@ class MetricEngine:
             gpu_status = MetricStatus.INVALID
         elif gpu_nonmeasured and gpu_completeness["measured_count"]:
             gpu_status = MetricStatus.INCOMPLETE
-        elif strict and gpu_status == MetricStatus.MEASURED and gpu_completeness["measured_count"] < STRICT_MIN_GPU_SAMPLES:
+        elif (
+            strict
+            and gpu_status == MetricStatus.MEASURED
+            and gpu_completeness["measured_count"] < STRICT_MIN_GPU_SAMPLES
+        ):
             gpu_status = MetricStatus.INCOMPLETE
             gpu_formula += (
                 "; incomplete — strict periodic window requires at least "
@@ -1430,14 +1463,21 @@ class ReleaseBenchmarkRunner:
                     f"Unknown benchmark mode: {mode}. Valid modes: {', '.join(RELEASE_MODES)}"
                 )
             seen.add(mode)
-        if "agent_led" in self.config.execution_modes and self.config.host_artifact_supplier is None:
+        if (
+            "agent_led" in self.config.execution_modes
+            and self.config.host_artifact_supplier is None
+        ):
             raise RuntimeError(
                 "agent_led benchmark requires a HostArtifactSupplier to ensure genuine external authority"
             )
 
     def _select_objectives(self) -> list[BenchmarkObjective]:
         if self.config.objective_ids:
-            return [obj for obj in self.loader.objectives if obj.id in self.config.objective_ids]
+            return [
+                obj
+                for obj in self.loader.objectives
+                if obj.id in self.config.objective_ids
+            ]
         return list(self.loader.objectives)
 
     def run(self) -> ReleaseBenchmarkResult:
@@ -1469,13 +1509,17 @@ class ReleaseBenchmarkRunner:
             try:
                 metric_engine.connect()
             except Exception:  # noqa: BLE001
-                logger.warning("MetricEngine failed to connect; campaign runs will record errors")
+                logger.warning(
+                    "MetricEngine failed to connect; campaign runs will record errors"
+                )
                 metric_engine = None
         try:
             for mode in self.config.execution_modes:
                 for objective in objectives:
                     runs.append(
-                        self._execute_benchmark_run(campaign_id, mode, objective, metric_engine)
+                        self._execute_benchmark_run(
+                            campaign_id, mode, objective, metric_engine
+                        )
                     )
         finally:
             if metric_engine is not None:
@@ -1542,7 +1586,9 @@ class ReleaseBenchmarkRunner:
             from budget_policy import conservative_research_spec
             from research_domain import serialize_model
 
-            spec = serialize_model(conservative_research_spec(objective.objective, "general"))
+            spec = serialize_model(
+                conservative_research_spec(objective.objective, "general")
+            )
             candidate_sha = os.environ.get("CANDIDATE_SHA")
             if not candidate_sha:
                 raise ValueError(
@@ -1561,9 +1607,13 @@ class ReleaseBenchmarkRunner:
                         "query_id": str(uuid4()),
                         "query": query,
                         "facet": "benchmark_source",
-                        "target_question_ids": [q["question_id"] for q in spec["questions"]],
+                        "target_question_ids": [
+                            q["question_id"] for q in spec["questions"]
+                        ],
                         "target_claim_ids": [],
-                        "intended_source_classes": list(objective.expected_source_classes),
+                        "intended_source_classes": list(
+                            objective.expected_source_classes
+                        ),
                         "expected_organizations": [],
                         "freshness_requirement": spec["time_window"],
                         "expected_contribution": "answer",
@@ -1599,15 +1649,17 @@ class ReleaseBenchmarkRunner:
                 telemetry_svc = PerformanceTelemetryService(connection)
                 self._populate_endpoint_usage(telemetry_svc, UUID(run_id), connection)
                 self._populate_cache_events(telemetry_svc, UUID(run_id), connection)
-                self._persist_resource_samples(telemetry_svc, UUID(run_id), resource_samples)
+                self._persist_resource_samples(
+                    telemetry_svc, UUID(run_id), resource_samples
+                )
                 telemetry_svc.build_summary(UUID(run_id), stages=RELEASE_CACHE_STAGES)
                 connection.commit()
             if metric_engine is not None:
                 quality, quality_metrics = metric_engine.extract_quality_metrics(
                     UUID(run_id), objective=objective
                 )
-                performance, performance_metrics = metric_engine.extract_performance_metrics(
-                    UUID(run_id), start
+                performance, performance_metrics = (
+                    metric_engine.extract_performance_metrics(UUID(run_id), start)
                 )
             else:
                 errors.append("no metric engine available — metrics not extracted")
@@ -1620,7 +1672,8 @@ class ReleaseBenchmarkRunner:
             errors.append(f"execution failed: {exc}")
         try:
             integrity_checks = tuple(
-                self.integrity_checker.check(name) for name in self.config.integrity_checks
+                self.integrity_checker.check(name)
+                for name in self.config.integrity_checks
             )
         except Exception:  # noqa: BLE001
             logger.warning(
@@ -1802,9 +1855,7 @@ class ReleaseBenchmarkRunner:
                 embedding_throughput=self._mean(
                     [r.performance.embedding_throughput for r in items]
                 ),
-                gpu_memory_mb=self._mean(
-                    [r.performance.gpu_memory_mb for r in items]
-                ),
+                gpu_memory_mb=self._mean([r.performance.gpu_memory_mb for r in items]),
                 cpu_percent=self._mean([r.performance.cpu_percent for r in items]),
             )
 
@@ -1893,7 +1944,12 @@ class ReleaseBenchmarkRunner:
         for mode, items in mode_results.items():
             for result in items:
                 statuses = self._quality_statuses(result)
-                for field_name, threshold_name, default, direction in quality_thresholds:
+                for (
+                    field_name,
+                    threshold_name,
+                    default,
+                    direction,
+                ) in quality_thresholds:
                     value = getattr(result.quality, field_name)
                     if statuses.get(field_name) != MetricStatus.MEASURED:
                         value = None
@@ -1901,9 +1957,7 @@ class ReleaseBenchmarkRunner:
                     if value is None:
                         continue
                     failed = (
-                        value < threshold
-                        if direction == "min"
-                        else value > threshold
+                        value < threshold if direction == "min" else value > threshold
                     )
                     if failed:
                         operator = ">=" if direction == "min" else "<="
@@ -2025,7 +2079,9 @@ class ReleaseBenchmarkRunner:
                 )
         elif not keys_a:
             all_within = False
-            details.append("no runs in either campaign — cannot compare reproducibility")
+            details.append(
+                "no runs in either campaign — cannot compare reproducibility"
+            )
         for mode, objective_id in sorted(keys_a & keys_b):
             run_a = idx_a[(mode, objective_id)]
             run_b = idx_b[(mode, objective_id)]
@@ -2128,9 +2184,7 @@ class ReleaseBenchmarkRunner:
                                 and abs_diff <= absolute_tolerance
                             )
                         )
-                        failure_limit = (
-                            f"ratio {ratio:.4f} > {operational_ratio_limit}"
-                        )
+                        failure_limit = f"ratio {ratio:.4f} > {operational_ratio_limit}"
                         if absolute_tolerance is not None:
                             failure_limit += (
                                 f" and abs diff {abs_diff:.4f} > {absolute_tolerance}"

@@ -802,7 +802,11 @@ class WorkflowBenchmarkRunner:
                 baseline_quality.candidate_recall if baseline_quality else None
             )
             avg_recall = avg.candidate_recall if avg else None
-            if baseline_recall is not None and avg_recall is not None and baseline_recall > 0:
+            if (
+                baseline_recall is not None
+                and avg_recall is not None
+                and baseline_recall > 0
+            ):
                 quality_vs_baseline[mode] = avg_recall / baseline_recall
             else:
                 quality_vs_baseline[mode] = 1.0
@@ -928,7 +932,10 @@ class WorkflowBenchmarkRunner:
         min_citation = thresholds.get("min_citation_accuracy", 0.8)
         for result in comparison.results:
             quality = result.quality
-            if quality.candidate_recall is not None and quality.candidate_recall < min_recall:
+            if (
+                quality.candidate_recall is not None
+                and quality.candidate_recall < min_recall
+            ):
                 withdrawn.append(
                     f"candidate_recall >= {min_recall} — "
                     f"{result.workflow_mode} achieved {quality.candidate_recall:.3f}"
@@ -957,7 +964,10 @@ class WorkflowBenchmarkRunner:
                     f"unsupported_claim_rate <= {max_unsupported} — "
                     f"{result.workflow_mode} achieved {quality.unsupported_claim_rate:.3f}"
                 )
-            if quality.citation_accuracy is not None and quality.citation_accuracy < min_citation:
+            if (
+                quality.citation_accuracy is not None
+                and quality.citation_accuracy < min_citation
+            ):
                 withdrawn.append(
                     f"citation_accuracy >= {min_citation} — "
                     f"{result.workflow_mode} achieved {quality.citation_accuracy:.3f}"
