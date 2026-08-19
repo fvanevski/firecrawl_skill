@@ -190,7 +190,9 @@ def test_direct_scrape_builder_delegates_to_canonical_root(
     from research_store.acquisition import direct_scrape_application as application
 
     assert legacy.DirectScrapeService is application.DirectScrapeService
-    assert legacy.DirectScrapePersistenceError is application.DirectScrapePersistenceError
+    assert (
+        legacy.DirectScrapePersistenceError is application.DirectScrapePersistenceError
+    )
 
     sentinel = object()
     config = cast(StoreConfig, object())
@@ -238,7 +240,10 @@ def test_historical_orchestrator_builders_do_not_depend_back_on_composition() ->
         path = _PACKAGE_ROOT / relative
         source = path.read_text(encoding="utf-8")
         assert _composition_surface_imports(path) == [], relative
-        assert "from .production_topology import ProductionBoundedExtractionStage" in source
+        assert (
+            "from .production_topology import ProductionBoundedExtractionStage"
+            in source
+        )
 
 
 def test_orchestration_legacy_surface_reexports_canonical_root() -> None:
@@ -254,10 +259,14 @@ def test_orchestration_legacy_surface_reexports_canonical_root() -> None:
         is composition.build_production_resumable_orchestrator
     )
     assert legacy.ProductionBoundedExtractionStage is ProductionBoundedExtractionStage
-    assert composition.ProductionBoundedExtractionStage is ProductionBoundedExtractionStage
+    assert (
+        composition.ProductionBoundedExtractionStage is ProductionBoundedExtractionStage
+    )
 
 
-def test_only_explicit_facades_and_operator_wiring_import_composition_surfaces() -> None:
+def test_only_explicit_facades_and_operator_wiring_import_composition_surfaces() -> (
+    None
+):
     importers: set[str] = set()
     for path in sorted(_PACKAGE_ROOT.rglob("*.py")):
         relative = path.relative_to(_PACKAGE_ROOT).as_posix()
