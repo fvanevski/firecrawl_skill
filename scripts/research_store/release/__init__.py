@@ -1,6 +1,7 @@
 """Canonical release and benchmark evaluation boundary.
 
-Issue #265 moves release-only campaign, benchmark, evidence, and validation
-responsibilities under this package.  Temporary flat import paths remain only
-as compatibility facades until #269 removes campaign scaffolding.
+Issue #265 establishes this package as the structural destination for
+release-only campaign, benchmark, evidence, validation, and CLI-assembly
+responsibilities. Baseline-tracked implementations remain temporary bridge
+targets until #269 removes the compatibility scaffolding.
 """
