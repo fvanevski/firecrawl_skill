@@ -20,6 +20,12 @@ from .direct_scrape_application import (
     _ResolvedTarget,
     require_direct_scrape_persistence,
 )
+from .models import (
+    DirectScrapeBatchResult,
+    DirectScrapeItemResult,
+    DirectScrapeRequest,
+    ScrapeTransportResult,
+)
 from .ports import DirectScrapeAdapter
 
 
@@ -39,9 +45,13 @@ def build_direct_scrape_service(
 
 __all__ = [
     "DIRECT_SCRAPE_TABLE_PRIVILEGES",
+    "DirectScrapeBatchResult",
     "DirectScrapeError",
+    "DirectScrapeItemResult",
     "DirectScrapePersistenceError",
+    "DirectScrapeRequest",
     "DirectScrapeService",
+    "ScrapeTransportResult",
     "_ResolvedTarget",
     "build_direct_scrape_service",
     "require_direct_scrape_persistence",

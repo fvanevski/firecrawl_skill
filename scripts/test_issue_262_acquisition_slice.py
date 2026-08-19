@@ -19,6 +19,7 @@ from research_store import fsearch_service
 from research_store.acquisition import (
     authority as canonical_acquisition_authority,
 )
+from research_store.acquisition import direct_scrape as capability_direct_scrape
 from research_store.acquisition.adapters.bounded_firecrawl import (
     BoundedFirecrawlSearchAdapter,
 )
@@ -33,7 +34,13 @@ from research_store.acquisition.direct_scrape import DirectScrapeService
 from research_store.acquisition.direct_scrape_application import (
     DirectScrapeService as CanonicalDirectScrapeService,
 )
-from research_store.acquisition.models import DirectScrapeRequest, SearchAdapterResult
+from research_store.acquisition.models import (
+    DirectScrapeBatchResult,
+    DirectScrapeItemResult,
+    DirectScrapeRequest,
+    ScrapeTransportResult,
+    SearchAdapterResult,
+)
 from research_store.acquisition.ports import (
     CandidateScrapeAdapter,
     DirectScrapeAdapter,
@@ -68,6 +75,18 @@ def _top_level_imports(path: Path) -> set[str]:
     return imports
 
 
+def _all_imports(path: Path) -> set[str]:
+    imports: set[str] = set()
+    for node in ast.walk(_tree(path)):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            prefix = "." * node.level
+            module = node.module or ""
+            imports.add(f"{prefix}{module}")
+    return imports
+
+
 def test_legacy_acquisition_symbols_are_same_object_compatibility_facades() -> None:
     assert legacy_acquisition_service.AcquisitionService is AcquisitionService
     assert (
@@ -80,6 +99,11 @@ def test_legacy_acquisition_symbols_are_same_object_compatibility_facades() -> N
         is BoundedFirecrawlSearchAdapter
     )
     assert DirectScrapeService is CanonicalDirectScrapeService
+    assert capability_direct_scrape.DirectScrapeService is CanonicalDirectScrapeService
+    assert capability_direct_scrape.DirectScrapeRequest is DirectScrapeRequest
+    assert capability_direct_scrape.DirectScrapeBatchResult is DirectScrapeBatchResult
+    assert capability_direct_scrape.DirectScrapeItemResult is DirectScrapeItemResult
+    assert capability_direct_scrape.ScrapeTransportResult is ScrapeTransportResult
     assert legacy_direct_scrape.DirectScrapeService is CanonicalDirectScrapeService
     assert legacy_direct_scrape.DirectScrapeRequest is DirectScrapeRequest
     assert (
@@ -264,11 +288,11 @@ def test_public_checkpoint_builder_defaults_to_production_bounded_extraction(
 
 def test_direct_scrape_default_selection_is_confined_to_builder_scope() -> None:
     application_path = ACQUISITION / "direct_scrape_application.py"
-    application_imports = _top_level_imports(application_path)
+    application_imports = _all_imports(application_path)
     application_source = application_path.read_text(encoding="utf-8")
     assert not any(".adapters" in module for module in application_imports)
     assert "FirecrawlDirectScrapeAdapter" not in application_source
-    assert "composition" not in application_source
+    assert not any("composition" in module for module in application_imports)
 
     facade_source = (ACQUISITION / "direct_scrape.py").read_text(encoding="utf-8")
     assert "from .. import composition as _composition" in facade_source
