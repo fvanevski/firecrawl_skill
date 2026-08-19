@@ -490,7 +490,9 @@ def test_public_contract_wires_production_boundaries_and_no_smart_expansion():
     invocation = (STORE / "direct_invocation_service.py").read_text(encoding="utf-8")
     composition = (STORE / "composition.py").read_text(encoding="utf-8")
     container = (STORE / "container.py").read_text(encoding="utf-8")
-    scrape = (STORE / "acquisition" / "direct_scrape.py").read_text(encoding="utf-8")
+    scrape_application = (
+        STORE / "acquisition" / "direct_scrape_application.py"
+    ).read_text(encoding="utf-8")
     for command in ("--run-mode", "prepare", "retain", "reject", "seal-acquisition"):
         assert command in frun
     assert "--mode" in frun
@@ -500,7 +502,7 @@ def test_public_contract_wires_production_boundaries_and_no_smart_expansion():
     assert "DirectInvocationService" in composition
     assert "DirectInvocationService" not in container
     assert "from .composition import (" in container
-    assert '"lifecycle_state": lifecycle_state' in scrape
+    assert '"lifecycle_state": lifecycle_state' in scrape_application
     assert "smart_search" not in service
     assert "smart expansion" not in service.lower()
     workflow = (
