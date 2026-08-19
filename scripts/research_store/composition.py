@@ -1,10 +1,15 @@
 """Canonical production composition root for the research store.
 
 This module is the canonical ``StoreConfig``-driven surface that constructs
-unit-of-work factories, infrastructure adapters, and application services.
-It owns wiring only: deterministic policy, persistence semantics, workflow
-decisions, and transaction behavior remain in their respective services and
-repositories.
+unit-of-work factories, infrastructure adapters, application services, and
+production orchestrators.  It owns wiring only: deterministic policy,
+persistence semantics, workflow decisions, and transaction behavior remain in
+their respective services and repositories.
+
+``production_topology`` is a deliberately smaller leaf wiring primitive used to
+preserve historical direct orchestrator-builder defaults without making those
+application/orchestrator modules depend back on this root.  It is not a second
+service/UoW composition root.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from .acquisition.adapters.bounded_firecrawl import BoundedFirecrawlSearchAdapte
 from .acquisition.authority import require_authoritative_acquisition
 from .acquisition.service import AcquisitionService
 from .blob import ContentAddressedBlobStore
-from .bounded_orchestrator import BoundedAcquisitionStage, BoundedExtractionStage
+from .bounded_orchestrator import BoundedAcquisitionStage
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
 from .config import StoreConfig
 from .corpus_service import CorpusService
@@ -26,6 +31,7 @@ from .indexing import OpenAICompatibleEmbedder
 from .lifecycle_guard import GuardedResearchRunService as ResearchRunService
 from .orchestrator import OrchestratorConfig, ResearchOrchestrator
 from .postgres import PostgresUnitOfWork
+from .production_topology import ProductionBoundedExtractionStage
 from .qdrant import QdrantIndex
 from .retrieval import CohereCompatibleReranker
 from .semantic_service import SemanticCallService
@@ -305,14 +311,6 @@ def build_direct_scrape_service(
         corpus_service,
         adapter_factory=adapter_factory,
     )
-
-
-class ProductionBoundedExtractionStage(BoundedExtractionStage):
-    """Production bounded extraction with explicit Firecrawl composition."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        kwargs.setdefault("scrape_adapter", BoundedFirecrawlSearchAdapter())
-        super().__init__(*args, **kwargs)
 
 
 def build_production_orchestrator(

@@ -41,7 +41,7 @@ class CheckpointResearchOrchestrator(ResearchOrchestrator):
 
             acquisition_stage_cls = BoundedAcquisitionStage
         if extraction_stage_cls is None:
-            from .orchestration.composition import ProductionBoundedExtractionStage
+            from .production_topology import ProductionBoundedExtractionStage
 
             extraction_stage_cls = ProductionBoundedExtractionStage
         return super().build(

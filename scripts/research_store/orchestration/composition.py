@@ -1,10 +1,10 @@
-"""Temporary compatibility facade for the canonical production composition root."""
+"""Temporary compatibility facade for canonical production composition."""
 
 from ..composition import (
-    ProductionBoundedExtractionStage,
     build_production_orchestrator,
     build_production_resumable_orchestrator,
 )
+from ..production_topology import ProductionBoundedExtractionStage
 
 __all__ = [
     "ProductionBoundedExtractionStage",
