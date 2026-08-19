@@ -11,11 +11,10 @@ import sys as _sys
 
 from .release import benchmark as _impl
 from .release.benchmark import *
-from .release.benchmark import (
-    _HAS_PSUTIL,
-    _HAS_PYNVML,
-    _annotated_source_quality,
-    _canonical_match,
-)
+
+_HAS_PSUTIL = _impl._HAS_PSUTIL
+_HAS_PYNVML = _impl._HAS_PYNVML
+_annotated_source_quality = _impl._annotated_source_quality
+_canonical_match = _impl._canonical_match
 
 _sys.modules[__name__] = _impl

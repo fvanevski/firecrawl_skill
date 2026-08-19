@@ -108,9 +108,12 @@ def _tree_imports_release(tree: ast.AST) -> bool:
         elif isinstance(node, ast.ImportFrom):
             if node.module and _module_mentions_release(node.module):
                 return True
-            if node.level > 0 and node.module is None:
-                if any(alias.name == "release" for alias in node.names):
-                    return True
+            if (
+                node.level > 0
+                and node.module is None
+                and any(alias.name == "release" for alias in node.names)
+            ):
+                return True
     return False
 
 

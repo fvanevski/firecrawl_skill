@@ -20,10 +20,11 @@ from .release.evidence import (
     ReleaseEvidenceManifest,
     ReleaseEvidenceVerifier,
     VerificationResult,
-    _manifest_from_dict,
-    _manifest_to_dict,
     compute_required_ci_jobs,
 )
+
+_manifest_from_dict = _impl._manifest_from_dict
+_manifest_to_dict = _impl._manifest_to_dict
 
 __all__ = [
     "MANIFEST_SCHEMA_VERSION",
