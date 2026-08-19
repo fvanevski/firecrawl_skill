@@ -139,8 +139,14 @@ def _forbidden_policy_calls(tree: ast.AST) -> list[tuple[str, int]]:
     return calls
 
 
-def _referenced_names(tree: ast.AST) -> set[str]:
-    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+def _bound_or_referenced_names(tree: ast.AST) -> set[str]:
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.asname or alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.update(alias.asname or alias.name for alias in node.names)
+    return names
 
 
 def test_build_uow_factory_preserves_exact_constructor_contract() -> None:
@@ -284,15 +290,14 @@ def test_only_explicit_facades_and_operator_wiring_import_composition_surfaces()
 
 def test_production_topology_is_a_leaf_wiring_primitive() -> None:
     path = _PACKAGE_ROOT / "production_topology.py"
-    source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(path))
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
     assert _composition_surface_imports(path) == []
     assert {
         "StoreConfig",
         "PostgresUnitOfWork",
         "CorpusService",
-    }.isdisjoint(_referenced_names(tree))
+    }.isdisjoint(_bound_or_referenced_names(tree))
     assert _forbidden_policy_calls(tree) == []
 
     classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
