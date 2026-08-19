@@ -54,6 +54,7 @@ jobs:
             -q \
             -p no:cacheprovider \
             scripts/test_release_invariant_contracts.py \
+            scripts/test_release_package_boundary.py \
             scripts/test_smoke_test.py \
             scripts/test_release_campaign_verifier.py \
             scripts/test_exact_head_ci_evidence.py \
@@ -168,6 +169,7 @@ jobs:
             scripts/test_terminal_decision_authority.py \
             scripts/test_release_benchmark.py \
             scripts/test_release_invariant_contracts.py \
+            scripts/test_release_package_boundary.py \
             scripts/test_release_campaign_verifier.py \
             scripts/test_exact_head_ci_evidence.py \
             scripts/test_smoke_test.py \
@@ -294,6 +296,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.candidate-sha || github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
 
       - name: Verify checked-out Pyrefly candidate
         shell: bash
@@ -324,6 +327,24 @@ jobs:
       - name: Run Pyrefly
         run: pyrefly check --output-format=github
 
+      - name: Run Pyrefly on actual changed Python scope
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t changed_python < <(
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.py'
+          )
+          if ((${#changed_python[@]} == 0)); then
+            echo "No changed Python paths."
+            exit 0
+          fi
+          printf 'Pyrefly changed path: %s\n' "${changed_python[@]}"
+          pyrefly check "${changed_python[@]}" --output-format=github
+
       - name: Verify repository-root import resolution
         run: |
           pyrefly check \
@@ -331,7 +352,7 @@ jobs:
             scripts/fixtures/model_gateway.py \
             --output-format=github
 
-      - name: Verify explicit changed-scope Pyrefly enforcement
+      - name: Verify Pyrefly explicit-file diagnostic behavior
         shell: bash
         run: |
           set -euo pipefail
