@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-
 from research_store import composition, container, index_admin, store_runtime
 from research_store.config import StoreConfig
 from research_store.postgres import PostgresUnitOfWork
