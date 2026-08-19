@@ -897,7 +897,6 @@ class WorkflowBenchmarkRunner:
     def _build_recommendation(
         self, comparison: WorkflowComparison
     ) -> ReleaseRecommendation:
-        supported: list[str] = []
         withdrawn: list[str] = []
         conditions: list[str] = []
         limitations: list[str] = []
@@ -1042,7 +1041,11 @@ def run_benchmark(
     run_transitions: list[dict[str, Any]] | None = None,
     known_limitations: tuple[str, ...] = (),
 ) -> WorkflowBenchmarkResult:
-    loader = dataset if isinstance(dataset, BenchmarkDatasetLoader) else BenchmarkDatasetLoader(dataset)
+    loader = (
+        dataset
+        if isinstance(dataset, BenchmarkDatasetLoader)
+        else BenchmarkDatasetLoader(dataset)
+    )
     modes = workflow_modes or loader.dataset.workflow_modes
     config = WorkflowBenchmarkConfig(
         workflow_modes=modes,
