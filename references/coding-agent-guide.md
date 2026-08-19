@@ -245,7 +245,7 @@ Run:
 ruff check .
 ruff format --check .
 env PYTHONDONTWRITEBYTECODE=1 \
-  pytest -q -p no:cacheprovider scripts/
+  pytest -q -p no:cacheprovider tests/
 ```
 
 Integration tests must target an explicitly disposable PostgreSQL database and the exact configured Qdrant and Valkey fixtures. Live validation must remain operation-capped and record exact candidate SHA.
