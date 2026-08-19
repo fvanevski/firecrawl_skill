@@ -250,12 +250,14 @@ def test_package_configuration_builds_and_runs_without_repository_path(
         "firecrawl_skill/_data/budget-policy-v1.json",
         "firecrawl_skill/research_store/__init__.py",
         "firecrawl_skill/research_store/postgres.py",
+        "firecrawl_skill/research_store/production_topology.py",
         "firecrawl_skill/research_store/acquisition/__init__.py",
         "firecrawl_skill/research_store/acquisition/authority.py",
         "firecrawl_skill/research_store/acquisition/models.py",
         "firecrawl_skill/research_store/acquisition/ports.py",
         "firecrawl_skill/research_store/acquisition/service.py",
         "firecrawl_skill/research_store/acquisition/direct_scrape.py",
+        "firecrawl_skill/research_store/acquisition/direct_scrape_application.py",
         "firecrawl_skill/research_store/acquisition/adapters/__init__.py",
         "firecrawl_skill/research_store/acquisition/adapters/bounded_firecrawl.py",
         "firecrawl_skill/research_store/acquisition/adapters/firecrawl_search.py",
@@ -296,6 +298,9 @@ def test_package_configuration_builds_and_runs_without_repository_path(
                 canonical_postgres = importlib.import_module(
                     "firecrawl_skill.research_store.postgres"
                 )
+                canonical_production_topology = importlib.import_module(
+                    "firecrawl_skill.research_store.production_topology"
+                )
                 canonical_acquisition = importlib.import_module(
                     "firecrawl_skill.research_store.acquisition"
                 )
@@ -304,6 +309,9 @@ def test_package_configuration_builds_and_runs_without_repository_path(
                 )
                 canonical_direct_scrape = importlib.import_module(
                     "firecrawl_skill.research_store.acquisition.direct_scrape"
+                )
+                canonical_direct_scrape_application = importlib.import_module(
+                    "firecrawl_skill.research_store.acquisition.direct_scrape_application"
                 )
                 canonical_bounded_adapter = importlib.import_module(
                     "firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl"
@@ -352,7 +360,11 @@ def test_package_configuration_builds_and_runs_without_repository_path(
                 assert canonical_acquisition_service.__name__ == (
                     "firecrawl_skill.research_store.acquisition.service"
                 )
-                assert canonical_direct_scrape.DirectScrapeService
+                assert (
+                    canonical_direct_scrape.DirectScrapeService
+                    is canonical_direct_scrape_application.DirectScrapeService
+                )
+                assert canonical_production_topology.ProductionBoundedExtractionStage
                 assert canonical_bounded_adapter.BoundedFirecrawlSearchAdapter
                 assert canonical_search_adapter.MetadataOnlyFirecrawlSearchAdapter
                 assert canonical_scrape_adapter.FirecrawlDirectScrapeAdapter
