@@ -203,7 +203,10 @@ def test_dedicated_workflow_runs_contract_and_postgres_integration_tests():
         SCRIPTS.parent / ".github" / "workflows" / "index-checkpoint.yml"
     )
     assert "tests/contract/test_asset_promotion_contract.py" in workflow
-    assert "tests/unit/test_asset_promotion_integration.py" in workflow
+    assert "tests/integration/test_asset_promotion_integration.py" in workflow
+    assert "tests/integration/test_asset_promotion_reopen_concurrency.py" in workflow
+    assert "tests/integration/test_asset_promotion_migration_compat.py" in workflow
+    assert "tests/unit/test_asset_promotion_integration.py" not in workflow
 
 
 def test_reference_documents_authority_stages_reopen_and_compatibility():

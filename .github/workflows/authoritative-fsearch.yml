@@ -84,7 +84,7 @@ jobs:
             tests/unit/test_issue_213_search_empty_telemetry.py \
             tests/unit/test_candidate_ranking.py \
             tests/integration/test_issue_215_authoritative_fsearch.py \
-            tests/unit/test_issue_215_completion_budget.py \
+            tests/integration/test_issue_215_completion_budget.py \
             tests/integration/test_issue_215_migration_contract.py
           python -m pytest \
             -q \
