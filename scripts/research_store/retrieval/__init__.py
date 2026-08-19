@@ -1,6 +1,8 @@
-"""Compatibility facade for the canonical retrieval capability package."""
+"""Retrieval application capability boundary."""
 
-from .retrieval_core import (
+from urllib.request import Request, urlopen
+
+from .ranking import (
     CohereCompatibleReranker,
     pack_context,
     reciprocal_rank_fusion,
@@ -9,7 +11,9 @@ from .retrieval_core import (
 
 __all__ = [
     "CohereCompatibleReranker",
+    "Request",
     "pack_context",
     "reciprocal_rank_fusion",
+    "urlopen",
     "validate_relation",
 ]

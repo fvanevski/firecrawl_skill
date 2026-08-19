@@ -1,0 +1,231 @@
+name: Retrieval projection slice exact-head review
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "pyproject.toml"
+      - "scripts/research_store/retrieval.py"
+      - "scripts/research_store/retrieval_core.py"
+      - "scripts/research_store/retrieval_service.py"
+      - "scripts/research_store/postgres_retrieval.py"
+      - "scripts/research_store/qdrant.py"
+      - "scripts/research_store/qdrant_authority.py"
+      - "scripts/research_store/projection_reconciliation.py"
+      - "scripts/research_store/indexing.py"
+      - "scripts/research_store/checkpoint_indexing_stage.py"
+      - "scripts/research_store/index_checkpoint_*.py"
+      - "scripts/research_store/retrieval/**"
+      - "scripts/test_issue_263_retrieval_projection_slice.py"
+      - "scripts/test_issue_263_package_boundary.py"
+      - "scripts/test_corpus_service_refactor.py"
+      - "references/retrieval-projection-boundary.md"
+      - "references/retrieval-projection-review-remediation.md"
+      - ".github/workflows/retrieval-projection-slice-review.yml"
+  workflow_dispatch:
+    inputs:
+      candidate-sha:
+        description: "Exact candidate commit SHA to validate"
+        required: true
+        type: string
+      base-sha:
+        description: "Exact base commit SHA for changed-scope validation"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate-sha }}
+  BASE_SHA: ${{ github.event.pull_request.base.sha || inputs.base-sha }}
+
+jobs:
+  exact-head-review:
+    name: Retrieval projection exact-head authorities
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify immutable review identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CANDIDATE_SHA" != ""
+          test "$BASE_SHA" != ""
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git cat-file -e "$BASE_SHA^{commit}"
+          TESTED_SHA=$(git rev-parse HEAD)
+          echo "tested_sha=$TESTED_SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "base_sha=$BASE_SHA"
+            echo "tested_sha=$TESTED_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check exact base-to-head diff
+        run: git diff --check "$BASE_SHA...$CANDIDATE_SHA"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-research-store.txt
+            requirements-typecheck.txt
+
+      - name: Install validation authorities
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements-research-store.txt \
+            -r requirements-typecheck.txt \
+            pytest \
+            ruff
+          ruff --version
+          pyrefly --version
+
+      - name: Determine exact changed Python scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t CHANGED_PY < <(
+            git diff --name-only --diff-filter=ACMR \
+              "$BASE_SHA...$CANDIDATE_SHA" -- '*.py'
+          )
+          printf '%s\n' "${CHANGED_PY[@]}" > "$RUNNER_TEMP/changed-python.txt"
+          cat "$RUNNER_TEMP/changed-python.txt"
+
+      - name: Ruff on exact changed Python scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t CHANGED_PY < "$RUNNER_TEMP/changed-python.txt"
+          if ((${#CHANGED_PY[@]})); then
+            ruff check "${CHANGED_PY[@]}"
+            ruff format --check --diff "${CHANGED_PY[@]}"
+          fi
+
+      - name: Pyrefly on exact changed Python scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t CHANGED_PY < "$RUNNER_TEMP/changed-python.txt"
+          if ((${#CHANGED_PY[@]})); then
+            pyrefly check "${CHANGED_PY[@]}"
+          fi
+
+      - name: Full-project Pyrefly
+        run: pyrefly check
+
+      - name: Start disposable PostgreSQL and Qdrant
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --name retrieval-pg -d \
+            -e POSTGRES_PASSWORD=postgres \
+            -p 5432:5432 postgres:16-alpine
+          docker run --name retrieval-qdrant -d \
+            -p 6333:6333 \
+            -e QDRANT__SERVICE__READ_ONLY_ACCESS=false \
+            qdrant/qdrant:v1.18.3-unprivileged
+
+          for attempt in $(seq 1 30); do
+            if PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres \
+              -c 'SELECT 1' >/dev/null 2>&1; then
+              break
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres \
+            -c 'CREATE DATABASE firecrawl_retrieval_projection_review_test;'
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:6333/readyz >/dev/null; then
+              break
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+
+      - name: Run focused retrieval and projection authorities
+        env:
+          RESEARCH_STORE_TEST_DATABASE_URL: >-
+            postgresql://postgres:postgres@127.0.0.1/firecrawl_retrieval_projection_review_test
+          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_retrieval_projection_review_test
+          QDRANT_URL: "http://127.0.0.1:6333"
+          RESEARCH_STORE_TEST_QDRANT_URL: "http://127.0.0.1:6333"
+          RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET: "http://127.0.0.1:6333"
+        run: |
+          python -m pytest \
+            -q \
+            -ra \
+            -p no:cacheprovider \
+            scripts/test_issue_263_retrieval_projection_slice.py \
+            scripts/test_issue_263_package_boundary.py \
+            scripts/test_corpus_service_refactor.py \
+            scripts/test_preflight.py::test_production_reranker_adapter_consumes_relevance_score \
+            scripts/test_qdrant_authority.py \
+            scripts/test_qdrant_reconciliation_contract.py \
+            scripts/test_qdrant_reconciliation_integration.py \
+            scripts/test_arc17_qdrant_protection.py \
+            scripts/test_index_census.py \
+            scripts/test_index_drain.py \
+            scripts/test_index_checkpoint_contract.py \
+            scripts/test_index_checkpoint_review_regressions.py \
+            scripts/test_index_checkpoint_terminal_integration.py \
+            scripts/test_retrieval_benchmark.py \
+            scripts/test_evidence_packet.py \
+            scripts/test_postgres_corpus_repositories.py
+
+      - name: Write exact-head review evidence
+        env:
+          TESTED_SHA: ${{ steps.identity.outputs.tested_sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          evidence = {
+              "schema_version": "retrieval-projection-exact-head-review-v1",
+              "status": "passed",
+              "base_sha": os.environ["BASE_SHA"],
+              "candidate_sha": os.environ["CANDIDATE_SHA"],
+              "tested_sha": os.environ["TESTED_SHA"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "authorities": [
+                  "ruff-changed-scope",
+                  "ruff-format-changed-scope",
+                  "pyrefly-changed-scope",
+                  "pyrefly-full-project",
+                  "pytest-retrieval-projection-focused-and-contract",
+                  "wheel-canonical-and-legacy-import-identity",
+              ],
+          }
+          Path("retrieval-projection-review-evidence.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload exact-head review evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-projection-review-${{ steps.identity.outputs.tested_sha }}
+          path: retrieval-projection-review-evidence.json
+          if-no-files-found: error
+          retention-days: 90

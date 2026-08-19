@@ -64,18 +64,19 @@ def test_corpus_types_live_in_canonical_slice_with_bounded_service_facade() -> N
 
 def test_retrieval_behavior_is_extracted_from_canonical_corpus_implementation() -> None:
     corpus_type = corpus_service.CorpusService
+    retrieval_path = _STORE / "retrieval" / "service.py"
     assert issubclass(corpus_type, retrieval_service.RetrievalService)
     assert _RETRIEVAL_METHODS.isdisjoint(
         _class_method_names(_STORE / "corpus_service.py", "CorpusService")
     )
     assert _RETRIEVAL_METHODS.issubset(
-        _class_method_names(_STORE / "retrieval_service.py", "RetrievalService")
+        _class_method_names(retrieval_path, "RetrievalService")
     )
-    assert corpus_type.search_assets.__module__.endswith(".retrieval_service")
-    assert corpus_type.build_evidence_packet.__module__.endswith(".retrieval_service")
+    assert corpus_type.search_assets.__module__.endswith(".retrieval.service")
+    assert corpus_type.build_evidence_packet.__module__.endswith(".retrieval.service")
 
     corpus_helpers = _function_names(_STORE / "corpus_service.py")
-    retrieval_helpers = _function_names(_STORE / "retrieval_service.py")
+    retrieval_helpers = _function_names(retrieval_path)
     assert {"_semantic_candidate", "_qdrant_filter"}.isdisjoint(corpus_helpers)
     assert {"_semantic_candidate", "_qdrant_filter"}.issubset(retrieval_helpers)
 
