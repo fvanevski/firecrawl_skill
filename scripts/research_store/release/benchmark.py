@@ -1266,6 +1266,8 @@ class MetricEngine:
             except Exception:  # noqa: BLE001, S110
                 pass
             return result
+        if not isinstance(rows, (list, tuple)):
+            return result
         counts: dict[str, int] = {}
         for row in rows:
             counts[row[5]] = counts.get(row[5], 0) + 1

@@ -994,6 +994,7 @@ class TestStrictModeRejection:
             10,
             3,
             7,
+            1,
             50.0,
             48,
             2.5,

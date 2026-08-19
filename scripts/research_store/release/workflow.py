@@ -689,27 +689,36 @@ class WorkflowBenchmarkRunner:
         workflow_mode: str,
         objective: BenchmarkObjective,
     ) -> QualityMeasurement:
+        """Simulate quality metrics for a workflow run.
+
+        Produces deterministic results based on workflow mode. Agent-led
+        and autonomous-local modes produce higher quality than legacy.
+
+        PLACEHOLDER: These base values are UNVERIFIED simulation constants.
+        They must be replaced with measured baselines before the release
+        gate (see PLACEHOLDER annotation on WorkflowBenchmarkRunner).
+        """
         if workflow_mode == "agent_led":
-            base_recall = 0.75
-            base_source_quality = 0.80
-            base_coverage = 0.70
-            base_unsupported = 0.08
-            base_citation = 0.88
-            base_report = 0.78
+            base_recall = 0.75  # PLACEHOLDER: unverified
+            base_source_quality = 0.80  # PLACEHOLDER: unverified
+            base_coverage = 0.70  # PLACEHOLDER: unverified
+            base_unsupported = 0.08  # PLACEHOLDER: unverified
+            base_citation = 0.88  # PLACEHOLDER: unverified
+            base_report = 0.78  # PLACEHOLDER: unverified
         elif workflow_mode == "autonomous_local":
-            base_recall = 0.70
-            base_source_quality = 0.75
-            base_coverage = 0.65
-            base_unsupported = 0.10
-            base_citation = 0.85
-            base_report = 0.72
+            base_recall = 0.70  # PLACEHOLDER: unverified
+            base_source_quality = 0.75  # PLACEHOLDER: unverified
+            base_coverage = 0.65  # PLACEHOLDER: unverified
+            base_unsupported = 0.10  # PLACEHOLDER: unverified
+            base_citation = 0.85  # PLACEHOLDER: unverified
+            base_report = 0.72  # PLACEHOLDER: unverified
         elif workflow_mode == "deterministic_debug":
-            base_recall = 0.30
-            base_source_quality = 0.40
-            base_coverage = 0.20
-            base_unsupported = 0.30
-            base_citation = 0.50
-            base_report = 0.40
+            base_recall = 0.30  # PLACEHOLDER: unverified
+            base_source_quality = 0.40  # PLACEHOLDER: unverified
+            base_coverage = 0.20  # PLACEHOLDER: unverified
+            base_unsupported = 0.30  # PLACEHOLDER: unverified
+            base_citation = 0.50  # PLACEHOLDER: unverified
+            base_report = 0.40  # PLACEHOLDER: unverified
         else:
             raise RuntimeError(
                 f"Unknown benchmark mode '{workflow_mode}'. "
@@ -732,30 +741,40 @@ class WorkflowBenchmarkRunner:
         workflow_mode: str,
         objective: BenchmarkObjective,
     ) -> PerformanceMeasurement:
+        """Simulate performance metrics for a workflow run.
+
+        Produces deterministic results based on workflow mode. Legacy
+        is faster but less efficient. Agent-led and autonomous-local
+        use more semantic calls.
+
+        PLACEHOLDER: These base values are UNVERIFIED simulation constants.
+        They must be replaced with measured baselines before the release
+        gate (see PLACEHOLDER annotation on WorkflowBenchmarkRunner).
+        """
         if workflow_mode == "agent_led":
-            base_latency = 15000.0
-            base_tokens = 15000
-            base_semantic = 8
-            base_cache = 0.3
-            base_throughput = 50.0
-            base_gpu = 4096.0
-            base_cpu = 60.0
+            base_latency = 15000.0  # PLACEHOLDER: unverified
+            base_tokens = 15000  # PLACEHOLDER: unverified
+            base_semantic = 8  # PLACEHOLDER: unverified
+            base_cache = 0.3  # PLACEHOLDER: unverified
+            base_throughput = 50.0  # PLACEHOLDER: unverified
+            base_gpu = 4096.0  # PLACEHOLDER: unverified
+            base_cpu = 60.0  # PLACEHOLDER: unverified
         elif workflow_mode == "autonomous_local":
-            base_latency = 20000.0
-            base_tokens = 20000
-            base_semantic = 12
-            base_cache = 0.25
-            base_throughput = 30.0
-            base_gpu = 8192.0
-            base_cpu = 70.0
+            base_latency = 20000.0  # PLACEHOLDER: unverified
+            base_tokens = 20000  # PLACEHOLDER: unverified
+            base_semantic = 12  # PLACEHOLDER: unverified
+            base_cache = 0.25  # PLACEHOLDER: unverified
+            base_throughput = 30.0  # PLACEHOLDER: unverified
+            base_gpu = 8192.0  # PLACEHOLDER: unverified
+            base_cpu = 70.0  # PLACEHOLDER: unverified
         elif workflow_mode == "deterministic_debug":
-            base_latency = 2000.0
-            base_tokens = 1000
-            base_semantic = 0
-            base_cache = 0.0
-            base_throughput = 200.0
-            base_gpu = 0.0
-            base_cpu = 15.0
+            base_latency = 2000.0  # PLACEHOLDER: unverified
+            base_tokens = 1000  # PLACEHOLDER: unverified
+            base_semantic = 0  # PLACEHOLDER: unverified
+            base_cache = 0.0  # PLACEHOLDER: unverified
+            base_throughput = 200.0  # PLACEHOLDER: unverified
+            base_gpu = 0.0  # PLACEHOLDER: unverified
+            base_cpu = 15.0  # PLACEHOLDER: unverified
         else:
             raise RuntimeError(
                 f"Unknown benchmark mode '{workflow_mode}'. "

@@ -134,13 +134,13 @@ class TestManifestGeneration:
             (repo / ".github" / "workflows").mkdir()
             (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
             (repo / "scripts").mkdir()
-            (repo / "scripts" / "research_store").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
-                "# benchmark"
-            )
-            (repo / "scripts" / "research_store" / "workflow_benchmark.py").write_text(
-                "# workflow"
-            )
+            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (
+                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+            ).write_text("# benchmark")
+            (
+                repo / "scripts" / "research_store" / "release" / "workflow.py"
+            ).write_text("# workflow")
             (repo / "tests").mkdir(parents=True)
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
@@ -171,7 +171,7 @@ class TestManifestGeneration:
 
             artifact_names = {a.name for a in manifest.artifacts}
             assert "ci.yml" in artifact_names
-            assert "release_benchmark.py" in artifact_names
+            assert "release-benchmark.py" in artifact_names
 
     def test_generate_excludes_untracked_files(self):
         """Untracked files (e.g. recovery-report.txt) are excluded from artifacts."""
@@ -183,13 +183,13 @@ class TestManifestGeneration:
             (repo / ".github" / "workflows").mkdir()
             (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
             (repo / "scripts").mkdir()
-            (repo / "scripts" / "research_store").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
-                "# benchmark"
-            )
-            (repo / "scripts" / "research_store" / "workflow_benchmark.py").write_text(
-                "# workflow"
-            )
+            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (
+                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+            ).write_text("# benchmark")
+            (
+                repo / "scripts" / "research_store" / "release" / "workflow.py"
+            ).write_text("# workflow")
             (repo / "tests").mkdir(parents=True)
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
@@ -224,7 +224,7 @@ class TestManifestGeneration:
             artifact_names = {a.name for a in manifest.artifacts}
             # Tracked files are included
             assert "ci.yml" in artifact_names
-            assert "release_benchmark.py" in artifact_names
+            assert "release-benchmark.py" in artifact_names
             # Untracked file is excluded
             assert "recovery-report.txt" not in artifact_names
 
@@ -820,10 +820,10 @@ class TestVerification:
                 repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
-            (repo / "scripts" / "research_store").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
-                "# benchmark"
-            )
+            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (
+                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+            ).write_text("# benchmark")
             (repo / "recovery-report.txt").write_text("recovery")
             subprocess.run(
                 ["git", "add", "."], cwd=repo, capture_output=True, check=True
@@ -865,11 +865,11 @@ class TestVerification:
                     path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
-                    name="release_benchmark.py",
+                    name="release-benchmark.py",
                     sha256=_file_sha256(
-                        repo / "scripts" / "research_store" / "release_benchmark.py"
+                        repo / "scripts" / "research_store" / "release" / "benchmark.py"
                     ),
-                    path="scripts/research_store/release_benchmark.py",
+                    path="scripts/research_store/release/benchmark.py",
                 ),
                 ArtifactReference(
                     name="recovery-report.txt",
@@ -1744,13 +1744,13 @@ class TestIntegration:
             (repo / ".github" / "workflows").mkdir()
             (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
             (repo / "scripts").mkdir()
-            (repo / "scripts" / "research_store").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
-                "# benchmark"
-            )
-            (repo / "scripts" / "research_store" / "workflow_benchmark.py").write_text(
-                "# workflow"
-            )
+            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (
+                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+            ).write_text("# benchmark")
+            (
+                repo / "scripts" / "research_store" / "release" / "workflow.py"
+            ).write_text("# workflow")
             (repo / "tests").mkdir(parents=True)
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
@@ -1858,13 +1858,13 @@ class TestIntegration:
             (repo / ".github" / "workflows").mkdir()
             (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
             (repo / "scripts").mkdir()
-            (repo / "scripts" / "research_store").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
-                "# benchmark"
-            )
-            (repo / "scripts" / "research_store" / "workflow_benchmark.py").write_text(
-                "# workflow"
-            )
+            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (
+                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+            ).write_text("# benchmark")
+            (
+                repo / "scripts" / "research_store" / "release" / "workflow.py"
+            ).write_text("# workflow")
             (repo / "tests").mkdir(parents=True)
             (repo / "tests" / "fixtures").mkdir(parents=True)
             (repo / "tests" / "fixtures" / "benchmark").mkdir(parents=True)
@@ -1988,10 +1988,10 @@ class TestIntegration:
                 repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
-            (repo / "scripts" / "research_store").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
-                "# benchmark"
-            )
+            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (
+                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+            ).write_text("# benchmark")
             (repo / "recovery-report.txt").write_text("tracked recovery")
             # Commit EVERYTHING including the recovery file
             subprocess.run(
@@ -2035,11 +2035,11 @@ class TestIntegration:
                     path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
-                    name="release_benchmark.py",
+                    name="release-benchmark.py",
                     sha256=_file_sha256(
-                        repo / "scripts" / "research_store" / "release_benchmark.py"
+                        repo / "scripts" / "research_store" / "release" / "benchmark.py"
                     ),
-                    path="scripts/research_store/release_benchmark.py",
+                    path="scripts/research_store/release/benchmark.py",
                 ),
                 # Deliberately omit recovery-report.txt.
             )
@@ -2067,10 +2067,10 @@ class TestIntegration:
                 repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
-            (repo / "scripts" / "research_store").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
-                "# benchmark"
-            )
+            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (
+                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+            ).write_text("# benchmark")
             (repo / "recovery-report.txt").write_text("tracked recovery")
             # Commit EVERYTHING
             subprocess.run(
@@ -2113,11 +2113,11 @@ class TestIntegration:
                     path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
-                    name="release_benchmark.py",
+                    name="release-benchmark.py",
                     sha256=_file_sha256(
-                        repo / "scripts" / "research_store" / "release_benchmark.py"
+                        repo / "scripts" / "research_store" / "release" / "benchmark.py"
                     ),
-                    path="scripts/research_store/release_benchmark.py",
+                    path="scripts/research_store/release/benchmark.py",
                 ),
                 ArtifactReference(
                     name="recovery-report.txt",
@@ -2178,10 +2178,10 @@ class TestIntegration:
                 repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
-            (repo / "scripts" / "research_store").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release_benchmark.py").write_text(
-                "# benchmark"
-            )
+            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (
+                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+            ).write_text("# benchmark")
             (repo / "scripts" / "research_store" / "recovery_utils.py").write_text(
                 "# unrelated recovery helper"
             )
@@ -2280,11 +2280,11 @@ class TestIntegration:
                     path="tests/fixtures/benchmark/benchmark-v2.json",
                 ),
                 ArtifactReference(
-                    name="release_benchmark.py",
+                    name="release-benchmark.py",
                     sha256=_file_sha256(
-                        repo / "scripts" / "research_store" / "release_benchmark.py"
+                        repo / "scripts" / "research_store" / "release" / "benchmark.py"
                     ),
-                    path="scripts/research_store/release_benchmark.py",
+                    path="scripts/research_store/release/benchmark.py",
                 ),
             )
 
