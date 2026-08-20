@@ -24,16 +24,8 @@ packages = [
   "firecrawl_skill.research_store.retrieval.projection",
   "firecrawl_skill.research_domain",
 ]
-py-modules = [
-  "budget_policy",
-  "candidate_ranking",
-  "classifier",
-  "drain_index_jobs",
-  "model_gateway",
-]
 
 [tool.setuptools.package-dir]
-"" = "scripts"
 firecrawl_skill = "src/firecrawl_skill"
 "firecrawl_skill._data" = "references"
 
@@ -49,10 +41,9 @@ firecrawl_skill = "src/firecrawl_skill"
 [tool.pyrefly]
 # Pyrefly is the repository's authoritative static type checker. Existing debt
 # is isolated in one reviewed baseline; normal validation must never update it.
+# Operator Python under scripts/ remains checked even though scripts/ is no
+# longer part of the installed package boundary.
 project-includes = ["scripts/**/*.py", "src/**/*.py"]
-# Runtime/contract behavior remains pytest authority. Excluding the historical
-# test corpus keeps the baseline focused on maintained application/tooling code;
-# local changed-scope checks still type-check an explicitly changed test file.
 project-excludes = ["scripts/test_*.py", "scripts/**/test_*.py"]
 search-path = ["scripts", "src", "."]
 python-platform = "linux"

@@ -1,4 +1,4 @@
-"""Canonical explicit-export serialization and atomic file writes."""
+"""Canonical JSON serialization and atomic explicit-export file writes."""
 
 from __future__ import annotations
 
@@ -9,7 +9,17 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .service import json_default
+
+def json_default(value: Any) -> str:
+    """Serialize values used by operator/export JSON without hidden state."""
+    if hasattr(value, "isoformat"):
+        return str(value.isoformat())
+    return str(value)
+
+
+def dumps(value: Any) -> str:
+    """Render the historical human-readable JSON form from the canonical owner."""
+    return json.dumps(value, indent=2, default=json_default)
 
 
 def canonical_export_json(payload: Any) -> str:
@@ -53,3 +63,6 @@ def export_json(
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+__all__ = ["canonical_export_json", "dumps", "export_json", "json_default"]
