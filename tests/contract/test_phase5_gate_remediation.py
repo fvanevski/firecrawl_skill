@@ -20,11 +20,6 @@ FSEARCH_SMART = SCRIPTS / "fsearch_smart"
 FINAL_TOPOLOGY_TEST = ROOT / "tests" / "contract" / "test_issue_269_final_topology.py"
 METRICS_TOOL = ROOT / "tools" / "phase5_architecture_metrics.py"
 BASELINE = ROOT / "references" / "architecture-baseline.json"
-FSEARCH_REMOVED_OWNERS = (
-    "firecrawl_skill.research_store.acquisition_authority",
-    "firecrawl_skill.research_store.container",
-    "firecrawl_skill.research_store.orchestration.composition",
-)
 
 
 def _is_extensionless_python(path: Path) -> bool:
@@ -104,7 +99,7 @@ def test_fsearch_smart_uses_final_phase5_owners() -> None:
     assert "require_authoritative_acquisition" in source
     assert "build_run_service" in source
     assert "build_production_resumable_orchestrator" in source
-    for removed in FSEARCH_REMOVED_OWNERS:
+    for removed in _final_topology_forbidden_modules():
         assert removed not in source
 
 
