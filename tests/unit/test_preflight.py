@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-import firecrawl_skill.research_store.retrieval.ranking as retrieval_module
+import firecrawl_skill.research_store.retrieval as retrieval_module
 from firecrawl_skill.model_gateway import StructuredResult
 from firecrawl_skill.research_store.release import preflight
 from firecrawl_skill.research_store.retrieval.ranking import CohereCompatibleReranker
