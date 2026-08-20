@@ -113,18 +113,38 @@ def _matches_forbidden_module(name: str) -> bool:
     return any(name == item or name.startswith(item + ".") for item in FORBIDDEN_MODULES)
 
 
+def _is_script_fixture(path: Path) -> bool:
+    try:
+        relative = path.relative_to(SCRIPTS)
+    except ValueError:
+        return False
+    return bool(relative.parts and relative.parts[0] == "fixtures")
+
+
 def _python_files() -> list[Path]:
     forbidden = {path.resolve() for path in FORBIDDEN_PATHS}
-    files = [*SRC.rglob("*.py"), *(ROOT / "tests").rglob("*.py")]
+    files = [
+        *SRC.rglob("*.py"),
+        *(ROOT / "tests").rglob("*.py"),
+        *SCRIPTS.rglob("*.py"),
+    ]
     return sorted(
         path
         for path in files
-        if path.resolve() != SELF and path.resolve() not in forbidden
+        if path.resolve() != SELF
+        and path.resolve() not in forbidden
+        and not _is_script_fixture(path)
     )
 
 
 def _absolute_imported_modules(tree: ast.AST) -> list[str]:
-    """Return absolute imports that can resolve to legacy module identities."""
+    """Return absolute imports that can resolve to legacy module identities.
+
+    ``ast.ImportFrom.module`` omits leading dots, so a relative canonical import
+    such as ``from ..budget_policy`` appears as module ``budget_policy`` with a
+    nonzero ``level``. Only level-zero imports are eligible to resolve to the
+    removed top-level script module identity.
+    """
     modules: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -147,7 +167,7 @@ def test_obsolete_compatibility_paths_are_physically_absent() -> None:
     assert remaining == [], f"obsolete compatibility paths remain: {remaining}"
 
 
-def test_source_and_tests_import_only_final_owners() -> None:
+def test_source_tests_and_operator_scripts_import_only_final_owners() -> None:
     violations: list[str] = []
     for path in _python_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -171,6 +191,15 @@ def test_dynamic_patch_and_import_targets_use_final_owners() -> None:
     )
 
 
+def test_scripts_contains_no_pytest_test_modules() -> None:
+    test_modules = sorted(
+        str(path.relative_to(ROOT))
+        for path in SCRIPTS.rglob("test_*.py")
+        if not _is_script_fixture(path)
+    )
+    assert test_modules == [], f"production tests remain under scripts/: {test_modules}"
+
+
 def test_setuptools_has_no_scripts_production_module_root() -> None:
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     setuptools = config["tool"]["setuptools"]
@@ -190,6 +219,21 @@ def test_drain_script_is_operator_launcher_not_implementation_owner() -> None:
     ]
     assert definitions == []
     assert "firecrawl_skill.research_store.retrieval.projection.drain" in source
+
+
+def test_workflows_do_not_execute_removed_python_modules() -> None:
+    violations: list[str] = []
+    workflow_modules = tuple(
+        module for module in FORBIDDEN_MODULES if module.startswith("firecrawl_skill.")
+    )
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        source = path.read_text(encoding="utf-8")
+        for module in workflow_modules:
+            if module in source:
+                violations.append(f"{path.relative_to(ROOT)} references {module}")
+    assert violations == [], "workflow legacy module targets remain:\n" + "\n".join(
+        violations
+    )
 
 
 def test_ci_typechecks_canonical_model_gateway() -> None:
