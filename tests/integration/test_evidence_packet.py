@@ -24,7 +24,7 @@ from budget_policy import DEFAULT_POLICY, ResourceCaps
 from research_domain.models import IndependenceStatus
 from research_store.evidence import EvidenceService
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 INTEGRATION_MARK = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -253,17 +253,20 @@ def test_evidence_packet_persistence_and_immutability(
 
     # Export them back
     exported1 = svc.export_packet(run_id, 1)
+    assert exported1 is not None
     assert exported1["packet_revision"] == 1
     assert exported1["coverage_revision"] == 1
     assert len(exported1["payload"]["passages"]) == 1
 
     exported2 = svc.export_packet(run_id, 2)
+    assert exported2 is not None
     assert exported2["packet_revision"] == 2
     assert exported2["coverage_revision"] == 2
     assert len(exported2["payload"]["passages"]) == 2
 
     # Export latest (should be 2)
     exported_latest = svc.export_packet(run_id)
+    assert exported_latest is not None
     assert exported_latest["packet_revision"] == 2
 
 

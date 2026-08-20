@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any, cast
 
 # Ensure our local firecrawl scripts directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -165,7 +166,7 @@ def test_schema_robustness_definitions():
         assert "required" in schema
 
         # Verify defensive "null" typing is used to prevent extraction hallucination
-        properties = schema["properties"]
+        properties = cast(dict[str, Any], schema["properties"])
         for prop_def in properties.values():
             prop_type = prop_def.get("type")
             # If it has a type field, it should allow null (as a list of types) or be an array

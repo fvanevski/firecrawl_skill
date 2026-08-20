@@ -31,9 +31,9 @@ def _status_uow(execution_mode: str = "autonomous_local"):
 class _SemanticRecorder:
     def __init__(self) -> None:
         self.started_schema = None
-        self.finished_artifacts = None
+        self.finished_artifacts: list | None = None
         self.finished_status = None
-        self.finished_provenance = None
+        self.finished_provenance: dict | None = None
         self.host_artifact_supplier = None
 
     def uow_factory(self):
@@ -330,7 +330,9 @@ def test_citation_model_supplies_verdicts_but_persisted_artifact_has_exact_ids(
     verdict_item = observed_model_schema["properties"]["validation_results"]["items"]
     assert set(verdict_item["properties"]) == {"status", "issue"}
     assert service.finished_status == "complete"
+    assert service.finished_provenance is not None
     assert service.finished_provenance["citation_identity_binding"] == "deterministic"
+    assert service.finished_artifacts is not None
     persisted = service.finished_artifacts[-1]["payload"]
     assert persisted == fixture
     assert persisted["validation_results"][0]["section_id"] == "section-1"

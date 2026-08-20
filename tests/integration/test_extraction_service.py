@@ -32,7 +32,7 @@ from research_store.extraction_service import (
     ExtractionService,
 )
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 def _integration():
@@ -506,7 +506,9 @@ def sample_run():
                 "{}",
             ),
         )
-        db_run_id = cur.fetchone()[0]
+        db_run_id = cur.fetchone()
+        assert db_run_id is not None
+        db_run_id = db_run_id[0]
 
     return db_run_id
 
@@ -884,7 +886,9 @@ def test_migration_fresh_database():
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT to_regclass('extraction_attempts')")
-        assert cur.fetchone()[0] == "extraction_attempts"
+        row0 = cur.fetchone()
+        assert row0 is not None
+        assert row0[0] == "extraction_attempts"
 
         cur.execute(
             """SELECT column_name FROM information_schema.columns
@@ -921,7 +925,9 @@ def test_migration_creates_current_clean_baseline():
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT to_regclass('extraction_attempts')")
-        assert cur.fetchone()[0] == "extraction_attempts"
+        row0 = cur.fetchone()
+        assert row0 is not None
+        assert row0[0] == "extraction_attempts"
 
 
 @_integration()
@@ -943,16 +949,22 @@ def test_current_head_migration_is_idempotent():
             ("https://example.com/test",),
         )
         cur.execute("SELECT COUNT(*) FROM sources")
-        before = cur.fetchone()[0]
+        before = cur.fetchone()
+        assert before is not None
+        before = before[0]
 
     version = migrate(TEST_DSN, "head")
     assert version == 38
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM sources")
-        assert cur.fetchone()[0] == before
+        row0 = cur.fetchone()
+        assert row0 is not None
+        assert row0[0] == before
         cur.execute("SELECT to_regclass('extraction_attempts')")
-        assert cur.fetchone()[0] == "extraction_attempts"
+        row1 = cur.fetchone()
+        assert row1 is not None
+        assert row1[0] == "extraction_attempts"
 
 
 # -----------------------------------------------------------------------

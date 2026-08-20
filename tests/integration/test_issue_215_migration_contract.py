@@ -21,7 +21,7 @@ from research_store.config import StoreConfig
 from research_store.container import build_run_service
 from research_store.postgres import connect, migrate
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -78,8 +78,10 @@ def test_migration_adds_relational_append_only_policy_without_inferred_history(
                 "corpus_budget_checks",
                 "budget_override_justifications",
             ):
-                cursor.execute(f"SELECT count(*) FROM {table}")
-                assert cursor.fetchone()[0] == 0
+                cursor.execute("SELECT count(*) FROM " + table)
+                row0 = cursor.fetchone()
+                assert row0 is not None
+                assert row0[0] == 0
 
             cursor.execute(
                 """SELECT conname

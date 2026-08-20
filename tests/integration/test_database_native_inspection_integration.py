@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -20,22 +21,22 @@ from research_store.inspection_contract import (
 from research_store.inspection_service import InspectionService
 from research_store.postgres import connect
 
-DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not DSN, reason="disposable PostgreSQL is not configured"
 )
 
 
 def _config(tmp_path: Path) -> StoreConfig:
-    values = StoreConfig.from_env().__dict__ | {
+    values: dict[str, Any] = StoreConfig.from_env().__dict__ | {
         "database_url": DSN,
         "blob_root": tmp_path,
     }
     return StoreConfig(**values)
 
 
-def _insert_fixture(tmp_path: Path) -> dict[str, object]:
-    ids = {
+def _insert_fixture(tmp_path: Path) -> dict[str, Any]:
+    ids: dict[str, Any] = {
         "run": uuid4(),
         "run2": uuid4(),
         "responses": [uuid4(), uuid4()],
@@ -301,7 +302,7 @@ def _insert_fixture(tmp_path: Path) -> dict[str, object]:
 
 def test_database_native_acceptance_paths(tmp_path):
     ids = _insert_fixture(tmp_path)
-    calls = []
+    calls: list[tuple[Any, Any, Any]] = []
 
     class Direct:
         def execute(self, run_id, requests, *, idempotency_key=None):

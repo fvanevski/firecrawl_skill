@@ -14,6 +14,7 @@ import sys
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -29,9 +30,12 @@ from research_store.index_checkpoint_models import _membership_digest
 from research_store.postgres import connect
 from research_store.qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
 from research_store.reconciliation import reconcile_run
-from test_research_store_integration import prepared_database  # noqa: F401
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+from tests.integration.test_research_store_integration import (
+    prepared_database,  # noqa: F401
+)
+
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 TEST_QDRANT_URL = os.environ.get("RESEARCH_STORE_TEST_QDRANT_URL")
 TEST_QDRANT_ALLOW_RESET = os.environ.get("RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET")
 pytestmark = [
@@ -79,21 +83,27 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
                  VALUES(%s,%s,'indexing','autonomous_local',0) RETURNING id""",
             ("Issue 222 reconciliation integration", external_run_id),
         )
-        run_id = UUID(str(cur.fetchone()[0]))
+        run_id = cur.fetchone()
+        assert run_id is not None
+        run_id = run_id[0]
         url = f"https://reconcile-{token}.example/test"
         cur.execute(
             """INSERT INTO sources(canonical_url,registered_domain)
                VALUES(%s,%s) RETURNING id""",
             (url, f"reconcile-{token}.example"),
         )
-        source_id = UUID(str(cur.fetchone()[0]))
+        source_id = cur.fetchone()
+        assert source_id is not None
+        source_id = source_id[0]
         cur.execute(
             """INSERT INTO asset_snapshots(
                    source_id,requested_url,retrieved_at,content_sha256)
                  VALUES(%s,%s,now(),%s) RETURNING id""",
             (source_id, url, _sha(f"snapshot-{token}")),
         )
-        snapshot_id = UUID(str(cur.fetchone()[0]))
+        snapshot_id = cur.fetchone()
+        assert snapshot_id is not None
+        snapshot_id = snapshot_id[0]
         cur.execute(
             """INSERT INTO documents(
                    snapshot_id,normalized_text,parser_name,parser_version,
@@ -107,7 +117,9 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
                 _sha(f"document-{token}"),
             ),
         )
-        document_id = UUID(str(cur.fetchone()[0]))
+        document_id = cur.fetchone()
+        assert document_id is not None
+        document_id = document_id[0]
         rows = [
             (
                 document_id,
@@ -139,7 +151,9 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
                  WHERE run_id=%s AND snapshot_id=%s AND role='acquired'""",
             (run_id, snapshot_id),
         )
-        subject_id = UUID(str(cur.fetchone()[0]))
+        subject_id = cur.fetchone()
+        assert subject_id is not None
+        subject_id = subject_id[0]
         cur.execute(
             """UPDATE run_asset_promotion_subjects
                    SET current_stage='evidence_eligible',reason_code='test_evidence'
@@ -170,7 +184,9 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
                  RETURNING id""",
             (run_id, membership_sha, count),
         )
-        seal_id = UUID(str(cur.fetchone()[0]))
+        seal_id = cur.fetchone()
+        assert seal_id is not None
+        seal_id = seal_id[0]
         cur.execute(
             """INSERT INTO run_asset_membership_members(
                    seal_id,run_id,subject_id,snapshot_id,role,ordinal,
@@ -230,7 +246,9 @@ def _seed_reconciliation_run(tmp_path: Path, *, count: int = 3):
                 count,
             ),
         )
-        checkpoint_id = UUID(str(cur.fetchone()[0]))
+        checkpoint_id = cur.fetchone()
+        assert checkpoint_id is not None
+        checkpoint_id = checkpoint_id[0]
         cur.execute(
             """SELECT c.id,d.snapshot_id,d.id,s.id,s.registered_domain,d.published_at
                  FROM chunks c JOIN documents d ON d.id=c.document_id
@@ -363,7 +381,7 @@ def test_reconcile_missing_and_orphaned_points(tmp_path):
 def test_reconcile_detects_real_payload_drift_without_membership_gap(tmp_path):
     seed = _seed_reconciliation_run(tmp_path, count=2)
     try:
-        point = dict(seed["points"][0])
+        point: dict[str, Any] = dict(seed["points"][0])
         point["payload"] = dict(point["payload"])
         point["payload"]["source_id"] = str(uuid4())
         seed["index"].upsert([point])

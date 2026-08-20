@@ -35,6 +35,7 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -52,7 +53,7 @@ from research_store.domain import SearchAdapterResult, utcnow
 from research_store.parsing import parse_raw_search_response
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 # ---------------------------------------------------------------------------
 # Session-scoped DB fixture
@@ -325,7 +326,7 @@ class TestAuthoritativeAcquisitionPersistence:
         service = build_acquisition_service(config, search_adapter=adapter)
 
         with pytest.raises(TypeError):
-            service.execute_search(
+            cast(Any, service.execute_search)(
                 run_id,
                 "removed scratch arguments",
                 scratch_dir=tmp_path / "removed",

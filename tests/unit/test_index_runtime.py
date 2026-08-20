@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from threading import Event
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -89,7 +90,7 @@ class FakeIndex:
         self.calls.append(("delete", self.collection, ids))
 
 
-def _state():
+def _state() -> dict[str, Any]:
     chunk_id, job_id, manifest_id = uuid4(), uuid4(), uuid4()
     return {
         "jobs": [
@@ -140,7 +141,7 @@ def test_worker_claims_each_lease_only_when_processing_starts():
     def embedder(_text):
         return [0.1, 0.2, 0.3]
 
-    embedder.fingerprint = "configured-fingerprint"
+    cast(Any, embedder).fingerprint = "configured-fingerprint"
 
     result = IndexWorker(
         lambda: FakeUow(state), FakeIndex(calls), embedder, worker_id="w-sequential"
@@ -183,7 +184,7 @@ class FakeRedis:
     def pipeline(self):
         return self
 
-    def lpush(self, *args):
+    def lpush(self, *args) -> Any:
         self.calls.append(("lpush", args))
 
     def expire(self, *args):
@@ -192,7 +193,7 @@ class FakeRedis:
     def execute(self):
         self.calls.append(("execute",))
 
-    def blpop(self, *args, **kwargs):
+    def blpop(self, *args, **kwargs) -> Any:
         self.calls.append(("blpop", args, kwargs))
 
 
@@ -215,12 +216,12 @@ def test_valkey_round_trip_returns_exact_token_and_discards_only_that_token():
             super().__init__()
             self.items = []
 
-        def lpush(self, key, value):
-            self.items.insert(0, str(value).encode())
+        def lpush(self, *args):
+            self.items.insert(0, str(args[1]).encode())
             return len(self.items)
 
-        def blpop(self, key, timeout):
-            return (key, self.items.pop()) if self.items else None
+        def blpop(self, *args, **kwargs):
+            return (args[0], self.items.pop()) if self.items else None
 
         def delete(self, key):
             count = int(bool(self.items))
@@ -503,7 +504,7 @@ def _make_uow(state):
 
 
 def _fake_qdrant(state):
-    calls = []
+    calls: list[Any] = []
 
     class Q:
         def for_collection(self, collection, dimension=None, distance=None):
@@ -545,7 +546,7 @@ def test_partial_batch_failure_does_not_falsely_complete_others():
             raise ValueError("embedding failed for first chunk")
         return [0.1, 0.2, 0.3]
 
-    embedder_failing.fingerprint = "fp"
+    cast(Any, embedder_failing).fingerprint = "fp"
     qdrant, _calls = _fake_qdrant(state)
 
     worker = IndexWorker(
@@ -614,7 +615,7 @@ def test_microbatch_resolves_all_manifests_in_fingerprint_group():
 
     qdrant, _calls = _fake_qdrant(state)
     embedder = lambda _text: [0.1, 0.2, 0.3]
-    embedder.fingerprint = "fp"
+    cast(Any, embedder).fingerprint = "fp"
     result = IndexWorker(lambda: Uow(), qdrant, embedder).run_batch(2)
 
     assert manifest_filters == [None]
@@ -636,7 +637,7 @@ def test_unexpected_microbatch_error_is_persisted_without_worker_exit(monkeypatc
     ]
     qdrant, _calls = _fake_qdrant(state)
     embedder = lambda _text: [0.1, 0.2, 0.3]
-    embedder.fingerprint = "fp"
+    cast(Any, embedder).fingerprint = "fp"
     worker = IndexWorker(lambda: _make_uow(state), qdrant, embedder)
     monkeypatch.setattr(
         worker,
@@ -794,7 +795,7 @@ def test_dimension_mismatch_fails_individual_job():
     def embedder(text):
         return [0.1, 0.2, 0.3]
 
-    embedder.fingerprint = "fp"
+    cast(Any, embedder).fingerprint = "fp"
     qdrant, _calls = _fake_qdrant(state)
 
     worker = IndexWorker(
@@ -1328,7 +1329,7 @@ def test_ensure_schema_new_collection():
         def _request(self, method, path, payload=None):
             call_log.append((method, path))
             if method == "GET" and "/collections/new" in path:
-                raise HTTPError("http://qdrant", 404, "not found", {}, None)
+                raise HTTPError("http://qdrant", 404, "not found", cast(Any, {}), None)
             if method == "PUT" and "/collections/new" in path:
                 return {"result": {"status": "ok"}}
             return {"result": {"status": "ok"}}
@@ -1524,6 +1525,7 @@ def test_upsert_uses_dense_only_vectors():
     upsert_req = [r for r in call_log if r[0] == "PUT" and "/points" in r[1]]
     assert len(upsert_req) == 1
     payload = upsert_req[0][2]
+    assert payload is not None
     # The payload must contain "points" with dense vectors only.
     for point in payload["points"]:
         vec = point.get("vector", {})
@@ -1547,6 +1549,7 @@ def test_search_uses_dense_only_query():
     search_req = [r for r in call_log if r[0] == "POST" and "/query" in r[1]]
     assert len(search_req) == 1
     payload = search_req[0][2]
+    assert payload is not None
     assert payload.get("using") == "dense"
     # No sparse_vectors key in the query payload.
     assert "sparse_vectors" not in payload

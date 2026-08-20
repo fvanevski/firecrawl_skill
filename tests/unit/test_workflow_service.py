@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from research_store.completion_provenance import CompletionProvenanceError
-from research_store.run_service import PERMITTED_TRANSITIONS, RunStatus
+from research_store.invocation_service import InvocationService
+from research_store.run_service import (
+    PERMITTED_TRANSITIONS,
+    ResearchRunService,
+    RunStatus,
+)
 from research_store.workflow_service import (
     RunIndexProgress,
     WorkflowBoundaryError,
@@ -171,7 +177,10 @@ class WorkflowServiceHarness(WorkflowOperationService):
     def __init__(self, state="created", progress=None):
         self.fake_run_service = FakeRunService(state)
         self.fake_invocation_service = FakeInvocationService(self.fake_run_service)
-        super().__init__(self.fake_run_service, self.fake_invocation_service)
+        super().__init__(
+            cast(ResearchRunService, self.fake_run_service),
+            cast(InvocationService, self.fake_invocation_service),
+        )
         self.progress = progress or RunIndexProgress(
             assets=1, chunks=1, pending=0, running=0, failed=0, dead=0, complete=1
         )

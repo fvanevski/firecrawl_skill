@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -333,7 +334,7 @@ def test_add_stage_output_succeeds_for_known_assessment():
 def test_add_stage_output_rejects_invalid_evidence_references():
     assessments = {}
     uow = _make_audit_uow(assessments=assessments)
-    uow.valid_evidence_refs = {"11111111-1111-1111-1111-111111111111"}
+    cast(Any, uow).valid_evidence_refs = {"11111111-1111-1111-1111-111111111111"}
     svc = AuditService(lambda: uow)
     run_id = uuid4()
     aid = svc.create_assessment(
@@ -390,6 +391,7 @@ def test_audit_sanitizes_secrets():
         model_fingerprint="fp-test",
     )
     saved_assessment = uow.get_audit_assessment(aid)
+    assert saved_assessment is not None
     assert saved_assessment["audit_packet_manifest"]["api_key"] == "[REDACTED]"
     assert "[REDACTED]" in saved_assessment["audit_packet_manifest"]["header"]
 
@@ -599,7 +601,7 @@ def test_audit_staleness_parser():
 # Integration tests (require PostgreSQL)
 # ---------------------------------------------------------------------------
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 INTEGRATION_MARK = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -996,7 +998,9 @@ if TEST_DSN:
                       AND indexname = 'uk_audit_assessments_completed_identity'
                 )"""
             )
-            column_exists, index_exists = cur.fetchone()
+            row = cur.fetchone()
+            assert row is not None
+            column_exists, index_exists = row
         return {
             "version": version,
             "column_exists": column_exists,

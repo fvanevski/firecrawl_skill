@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -23,6 +24,8 @@ try:
     import psycopg
 except ImportError:
     psycopg = None  # type: ignore[assignment, misc]
+
+_DB_CONNECT_ERROR = psycopg.OperationalError if psycopg is not None else RuntimeError
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -166,7 +169,7 @@ class TestMetricEngine:
         except RuntimeError as exc:
             assert psycopg is None
             assert "psycopg is required" in str(exc)
-        except psycopg.OperationalError as exc:
+        except _DB_CONNECT_ERROR as exc:
             assert psycopg is not None
             assert isinstance(exc, psycopg.OperationalError)
         finally:
@@ -339,9 +342,11 @@ class TestSimulationMode:
         assert set(quality_by_mode.keys()) == set(RELEASE_MODES)
 
         # deterministic_debug has the lowest recall, agent_led the highest
-        debug_recall = quality_by_mode["deterministic_debug"].candidate_recall
-        agent_recall = quality_by_mode["agent_led"].candidate_recall
-        local_recall = quality_by_mode["autonomous_local"].candidate_recall
+        debug_recall = cast(
+            float, quality_by_mode["deterministic_debug"].candidate_recall
+        )
+        agent_recall = cast(float, quality_by_mode["agent_led"].candidate_recall)
+        local_recall = cast(float, quality_by_mode["autonomous_local"].candidate_recall)
 
         assert debug_recall < local_recall < agent_recall
         # Verify they are genuinely distinct (not all equal)
@@ -360,7 +365,7 @@ class TestSimulationMode:
         assert result is not None
         for r in result.comparison.results:
             if r.workflow_mode == "deterministic_debug":
-                assert r.quality.candidate_recall < 0.5
+                assert cast(float, r.quality.candidate_recall) < 0.5
 
     def test_agent_led_has_highest_quality(self):
         """agent_led mode has the highest quality in simulation."""
@@ -373,7 +378,7 @@ class TestSimulationMode:
         assert result is not None
         for r in result.comparison.results:
             if r.workflow_mode == "agent_led":
-                assert r.quality.candidate_recall >= 0.5
+                assert cast(float, r.quality.candidate_recall) >= 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -932,7 +937,7 @@ class TestAuthoritativeCandidateRecall:
         assert result.comparison is not None
         for r in result.comparison.results:
             # In simulation, recall is mode-dependent
-            assert 0.0 <= r.quality.candidate_recall <= 1.0
+            assert 0.0 <= cast(float, r.quality.candidate_recall) <= 1.0
 
     def test_distractor_heavy_retrieval(self):
         """Distractor-heavy retrieval should not produce artificially high recall."""
@@ -996,8 +1001,8 @@ class TestAuthoritativeCandidateRecall:
         assert result is not None
         for r in result.comparison.results:
             # Source quality should be penalized by distractors
-            assert r.quality.source_quality_score >= 0.0
-            assert r.quality.source_quality_score <= 1.0
+            assert cast(float, r.quality.source_quality_score) >= 0.0
+            assert cast(float, r.quality.source_quality_score) <= 1.0
 
     def test_no_ground_truth_fails_strict(self):
         """Without ground truth in strict mode, recall should fail."""
@@ -1093,7 +1098,7 @@ class TestAuthoritativeReportQuality:
             citation_accuracy=0.5,
             report_quality_score=0.5,
         )
-        assert 0.0 <= qm.report_quality_score <= 1.0
+        assert 0.0 <= cast(float, qm.report_quality_score) <= 1.0
 
 
 class TestSchemaVersionV2:
@@ -1219,7 +1224,9 @@ class TestHeuristicsRemoved:
             config=ReleaseBenchmarkConfig(strict=True),
         )
         # The engine accepts strict config; actual RuntimeError requires DB
-        assert engine.config.strict is True
+        cfg = engine.config
+        assert cfg is not None
+        assert cfg.strict is True
 
 
 class TestMetricProvenance:

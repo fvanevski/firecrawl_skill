@@ -7,7 +7,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -95,7 +95,7 @@ def _sequence_runner(
     calls: list[list[str]] = []
 
     def runner(argv: object) -> subprocess.CompletedProcess[str]:
-        calls.append(list(argv))
+        calls.append(list(cast(Any, argv)))
         return responses[len(calls) - 1]
 
     return runner, calls
@@ -435,7 +435,7 @@ def test_required_census_cannot_fall_back_to_claimed_count() -> None:
 
     def runner(argv: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
-            list(argv),
+            list(cast(Any, argv)),
             0,
             '{"claimed": 0, "failed": 0, "lease_lost": 0}',
             "",
@@ -616,18 +616,18 @@ def test_run_scoped_runner_seals_postgresql_membership_once(
     package = ModuleType("research_store")
     package.__path__ = []
     config_module = ModuleType("research_store.config")
-    config_module.StoreConfig = StoreConfig
+    cast(Any, config_module).StoreConfig = StoreConfig
     container_module = ModuleType("research_store.container")
-    container_module.build_run_service = lambda _config: SimpleNamespace(
+    cast(Any, container_module).build_run_service = lambda _config: SimpleNamespace(
         status=lambda **kwargs: (
             SimpleNamespace(id=run_id, state="indexing")
             if kwargs == {"external_id": "fr_test"}
             else pytest.fail(f"unexpected status lookup: {kwargs}")
         )
     )
-    container_module.build_service = lambda _config: corpus_service
+    cast(Any, container_module).build_service = lambda _config: corpus_service
     indexing_module = ModuleType("research_store.indexing")
-    indexing_module.IndexWorker = IndexWorker
+    cast(Any, indexing_module).IndexWorker = IndexWorker
     monkeypatch.setitem(sys.modules, "research_store", package)
     monkeypatch.setitem(sys.modules, "research_store.config", config_module)
     monkeypatch.setitem(sys.modules, "research_store.container", container_module)
@@ -656,7 +656,7 @@ def test_run_scoped_runner_seals_postgresql_membership_once(
             cancel_state["value"] = True
             return super().fetchall()
 
-    class CancellingConnection:
+    class CancellingConnection(Connection):
         def cursor(self) -> CancellingCursor:
             return CancellingCursor()
 

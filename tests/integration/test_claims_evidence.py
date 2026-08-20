@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -383,7 +385,7 @@ def test_domain_model_claim_record_rejects_empty_statement():
             semantic_status="supported",
             uncertainty=None,
             evidence_packet_revision=1,
-            created_at="2025-01-01T00:00:00+00:00",
+            created_at=cast(datetime, "2025-01-01T00:00:00+00:00"),
         )
 
 
@@ -399,7 +401,7 @@ def test_domain_model_claim_record_rejects_invalid_status():
             semantic_status="bogus",
             uncertainty=None,
             evidence_packet_revision=1,
-            created_at="2025-01-01T00:00:00+00:00",
+            created_at=cast(datetime, "2025-01-01T00:00:00+00:00"),
         )
 
 
@@ -416,7 +418,7 @@ def test_domain_model_evidence_link_rejects_invalid_relationship():
             source_url="",
             relationship="bogus",
             confidence=1.0,
-            created_at="2025-01-01T00:00:00+00:00",
+            created_at=cast(datetime, "2025-01-01T00:00:00+00:00"),
         )
 
 
@@ -433,7 +435,7 @@ def test_domain_model_evidence_link_rejects_out_of_range_confidence():
             source_url="",
             relationship="supports",
             confidence=1.5,
-            created_at="2025-01-01T00:00:00+00:00",
+            created_at=cast(datetime, "2025-01-01T00:00:00+00:00"),
         )
 
 
@@ -445,7 +447,7 @@ def test_domain_model_evidence_link_rejects_out_of_range_confidence():
 # conftest.py is on sys.path via the SCRIPTS setup.
 from conftest import ensure_passage_and_snapshot_exist, ensure_run_exists
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 INTEGRATION_MARK = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )

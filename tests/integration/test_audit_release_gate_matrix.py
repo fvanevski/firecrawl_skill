@@ -119,7 +119,7 @@ def test_concurrent_bounded_executions_on_independent_instances_do_not_interfere
 
     import pytest
 
-    test_dsn = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+    test_dsn = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
     if not test_dsn:
         pytest.skip(
             "requires RESEARCH_STORE_TEST_DATABASE_URL for service construction"

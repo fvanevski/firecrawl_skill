@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
@@ -31,7 +32,7 @@ from research_store.domain import IngestRequest
 from research_store.ingestion_batch_semantics import _finish_ingestion_batch
 from research_store.postgres import PostgresUnitOfWork, connect, migrate
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 requires_db = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -158,7 +159,9 @@ def test_v43_finalization_fails_closed_without_extraction_terminal_evidence(
             "SELECT status,sealed_at,completed_at FROM ingestion_batches WHERE id=%s",
             (batch_id,),
         )
-        batch_status, sealed_at, completed_at = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        batch_status, sealed_at, completed_at = row
     assert batch_status == "running"
     assert sealed_at is None
     assert completed_at is None
@@ -479,7 +482,9 @@ def test_reused_snapshot_keeps_original_provenance_and_batch_uses_current_attemp
             "SELECT extraction_attempt_id FROM asset_snapshots WHERE id=%s",
             (first_snapshot,),
         )
-        snapshot_attempt = cursor.fetchone()[0]
+        snapshot_attempt = cursor.fetchone()
+        assert snapshot_attempt is not None
+        snapshot_attempt = snapshot_attempt[0]
     assert UUID(str(snapshot_attempt)) == first_attempt
 
 
@@ -580,6 +585,7 @@ def test_bounded_wave_persists_success_failed_and_cancelled_preflight_members(
         context,
     )
     assert result.error is None
+    assert result.details is not None
     summary = result.details["outcome_summary"]
     assert summary["member_count"] == 3
     assert summary["succeeded"] == 1
@@ -838,7 +844,7 @@ def test_complete_attempt_rejects_divergent_succeeded_replay(tmp_path: Path):
     assert after_same["backend_status"] == "complete"
 
     # --- Divergent replays must all raise RuntimeError ---
-    divergences = [
+    divergences: list[tuple[str, dict[str, Any]]] = [
         ("different raw blob", {"raw_blob": extraction.store_raw_blob(b"different")}),
         (
             "different normalized blob",

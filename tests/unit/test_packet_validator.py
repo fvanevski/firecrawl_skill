@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -1225,7 +1226,7 @@ class TestValidationResult:
             warnings=(
                 ValidationFinding(
                     code="TEST_WARNING",
-                    severity=ValidationSeverity.WARNING,
+                    severity=cast(ValidationSeverity, ValidationSeverity.WARNING),
                     message="test warning",
                 ),
             ),
@@ -1260,7 +1261,7 @@ class TestValidationResult:
             warnings=(
                 ValidationFinding(
                     code="TEST",
-                    severity=ValidationSeverity.WARNING,
+                    severity=cast(ValidationSeverity, ValidationSeverity.WARNING),
                     message="test",
                 ),
             ),
@@ -1275,7 +1276,7 @@ class TestValidationResult:
             errors=(
                 ValidationFinding(
                     code="TEST",
-                    severity=ValidationSeverity.ERROR,
+                    severity=cast(ValidationSeverity, ValidationSeverity.ERROR),
                     message="test",
                 ),
             ),

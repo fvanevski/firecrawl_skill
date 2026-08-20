@@ -37,7 +37,7 @@ sys.path.insert(0, str(SCRIPTS))
 ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -73,6 +73,7 @@ def telemetry_database():
             "to_regclass('endpoint_usage_records')"
         )
         row = cursor.fetchone()
+        assert row is not None
         assert row[0] is not None, "run_performance_telemetry table missing"
         assert row[1] is not None, "run_cache_events table missing"
         assert row[2] is not None, "run_embedding_throughput table missing"

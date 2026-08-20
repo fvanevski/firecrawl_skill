@@ -17,7 +17,7 @@ from research_store.container import build_run_service
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 from research_store.url import canonicalize_candidate_url, redact_sensitive_url
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 @pytest.fixture(scope="session")
@@ -262,4 +262,6 @@ def test_candidate_identity_separate_from_sources_integration(
         cur.execute(
             "SELECT count(*) FROM sources WHERE canonical_url='https://unscraped-candidate.com'"
         )
-        assert cur.fetchone()[0] == 0
+        row0 = cur.fetchone()
+        assert row0 is not None
+        assert row0[0] == 0

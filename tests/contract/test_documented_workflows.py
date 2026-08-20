@@ -8,9 +8,12 @@ import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
+from research_store.invocation_service import InvocationService
+from research_store.run_service import ResearchRunService
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 SKILL_ROOT = SCRIPTS.parent
@@ -114,7 +117,7 @@ def test_worker_once_processes_exactly_one_batch() -> None:
             "lease_lost": 0,
         }
 
-    worker.run_batch = run_batch
+    cast(Any, worker).run_batch = run_batch
     result = worker.run_forever(
         batch_size=64,
         once=True,
@@ -223,10 +226,13 @@ def test_workflow_rejects_finish_and_direct_followup_during_indexing() -> None:
 
     run_id = UUID(int=1)
     service = WorkflowOperationService.__new__(WorkflowOperationService)
-    service.run_service = SimpleNamespace(
-        status=lambda **_kwargs: SimpleNamespace(id=run_id, state="indexing")
+    service.run_service = cast(
+        ResearchRunService,
+        SimpleNamespace(
+            status=lambda **_kwargs: SimpleNamespace(id=run_id, state="indexing")
+        ),
     )
-    service.invocation_service = SimpleNamespace()
+    service.invocation_service = cast(InvocationService, SimpleNamespace())
     progress_calls = 0
 
     def incomplete_progress(_run_id):
@@ -242,7 +248,7 @@ def test_workflow_rejects_finish_and_direct_followup_during_indexing() -> None:
             complete=1,
         )
 
-    service.index_progress = incomplete_progress
+    cast(Any, service).index_progress = incomplete_progress
 
     with pytest.raises(
         WorkflowBoundaryError,

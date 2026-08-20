@@ -18,7 +18,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -258,7 +258,7 @@ class TestHandoffPayloadSchema:
         with pytest.raises(
             AttributeError
         ):  # frozen dataclass raises FrozenInstanceError (AttributeError subclass)
-            payload.run_id = uuid4()
+            cast(Any, payload).run_id = uuid4()
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +365,7 @@ class TestTokenBounds:
     def test_token_limits_bounded(self):
         """Token limit values are positive integers."""
         payload = _make_handoff_payload()
+        assert payload.token_limits is not None
         for value in payload.token_limits.values():
             assert isinstance(value, int)
             assert value > 0

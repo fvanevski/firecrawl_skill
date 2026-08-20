@@ -7,6 +7,7 @@ import os
 import threading
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -14,9 +15,10 @@ from research_store.config import StoreConfig
 from research_store.container import build_run_service
 from research_store.lifecycle_guard import GuardedResearchRunService
 from research_store.postgres import connect, migrate
-from test_completion_provenance_integration import _ready
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+from tests.integration.test_completion_provenance_integration import _ready
+
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -107,6 +109,7 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
     terminal_guard_config: StoreConfig,
 ):
     runs, status, _provenance, workflow = _ready(terminal_guard_config)
+    assert status.external_id is not None
     finished = workflow.finish_run(status.external_id, outcome="satisfied")
     assert finished.state == "completed"
 
@@ -248,6 +251,7 @@ def test_reopen_is_the_only_path_that_reenables_provenance_writes(
     terminal_guard_config: StoreConfig,
 ):
     runs, status, _provenance, workflow = _ready(terminal_guard_config)
+    assert status.external_id is not None
     finished = workflow.finish_run(status.external_id, outcome="satisfied")
     assert finished.state == "completed"
     packet = _packet_record(status.id)
@@ -306,6 +310,7 @@ def test_writer_waits_for_terminal_commit_then_rejects(
 
     def complete():
         try:
+            assert status.external_id is not None
             result["completion"] = workflow.finish_run(
                 status.external_id,
                 outcome="satisfied",
@@ -340,7 +345,7 @@ def test_writer_waits_for_terminal_commit_then_rejects(
     assert not completion_thread.is_alive()
     assert not writer_thread.is_alive()
     assert "completion_error" not in result
-    assert result["completion"].state == "completed"
+    assert cast(Any, result["completion"]).state == "completed"
     assert _TERMINAL_GUARD in str(result.get("writer_error", ""))
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
@@ -348,7 +353,9 @@ def test_writer_waits_for_terminal_commit_then_rejects(
             "SELECT max(packet_revision) FROM evidence_packets WHERE run_id=%s",
             (status.id,),
         )
-        assert int(cursor.fetchone()[0]) == int(packet[2])
+        row = cursor.fetchone()
+        assert row is not None
+        assert int(row[0]) == int(packet[2])
 
 
 def test_update_writer_waits_for_fully_locked_terminal_snapshot_then_rejects(
@@ -385,6 +392,7 @@ def test_update_writer_waits_for_fully_locked_terminal_snapshot_then_rejects(
 
     def complete():
         try:
+            assert status.external_id is not None
             result["completion"] = workflow.finish_run(
                 status.external_id,
                 outcome="satisfied",
@@ -422,7 +430,7 @@ def test_update_writer_waits_for_fully_locked_terminal_snapshot_then_rejects(
     assert not completion_thread.is_alive()
     assert not writer_thread.is_alive()
     assert "completion_error" not in result
-    assert result["completion"].state == "completed"
+    assert cast(Any, result["completion"]).state == "completed"
     assert _TERMINAL_GUARD in str(result.get("writer_error", ""))
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
@@ -431,7 +439,9 @@ def test_update_writer_waits_for_fully_locked_terminal_snapshot_then_rejects(
                 WHERE run_id=%s AND stage_name='draft'""",
             (status.id,),
         )
-        assert int(cursor.fetchone()[0]) == original_attempts
+        row = cursor.fetchone()
+        assert row is not None
+        assert int(row[0]) == original_attempts
 
 
 def test_writer_that_commits_first_forces_terminal_revalidation_to_fail(
@@ -464,6 +474,7 @@ def test_writer_that_commits_first_forces_terminal_revalidation_to_fail(
         def complete():
             completion_started.set()
             try:
+                assert status.external_id is not None
                 result["completion"] = workflow.finish_run(
                     status.external_id,
                     outcome="satisfied",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
@@ -151,7 +152,7 @@ def _make_service(
     # Pre-populate the packet store so the validation stage can find the
     # current packet revision.
     run_id_str = str(packet.get("run_id", "00000000-0000-0000-0000-000000000401"))
-    _packet_store[run_id_str] = packet.get("coverage_revision", 1)
+    _packet_store[run_id_str] = cast(int, packet.get("coverage_revision", 1))
 
     mock_semantic = MagicMock()
     mock_semantic.uow_factory = mock_uow_factory
@@ -225,7 +226,7 @@ def test_get_schema_returns_copy():
 def test_validate_packet_none_raises():
     service, _, _, _ = _make_service()
     with pytest.raises(ReportServiceError, match="EvidencePacket is None"):
-        service._validate_packet(None)
+        service._validate_packet(cast(dict[str, Any], None))
 
 
 def test_validate_packet_wrong_version_raises():
@@ -1081,7 +1082,7 @@ def test_citation_pass_stage_reads_draft_from_synthesis_stages():
             }
         )
 
-    captured_user_prompt = None
+    captured_user_prompt: str | None = None
 
     def capture_call(*args, **kwargs):
         nonlocal captured_user_prompt
@@ -1112,6 +1113,7 @@ def test_citation_pass_stage_reads_draft_from_synthesis_stages():
 
     import json
 
+    assert captured_user_prompt is not None
     prompt_data = json.loads(captured_user_prompt)
     # The draft_sections in the prompt must come from the draft artifact in
     # synthesis_stages, not from the EvidencePacket.
@@ -1180,7 +1182,7 @@ def test_citation_pass_repairs_sections_with_non_authoritative_relationship():
             }
         )
 
-    captured_prompt = None
+    captured_prompt: dict[str, Any] | None = None
 
     def capture_call(*args, **kwargs):
         nonlocal captured_prompt
@@ -1217,6 +1219,7 @@ def test_citation_pass_repairs_sections_with_non_authoritative_relationship():
             model_name="test-model",
         )
 
+    assert captured_prompt is not None
     assert [s["section_id"] for s in captured_prompt["draft_sections"]] == ["supported"]
     repaired = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "draft")[
         "artifact"
@@ -1299,7 +1302,7 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
         }
     )
 
-    captured_user_prompt = None
+    captured_user_prompt: str | None = None
 
     def capture_call(*args, **kwargs):
         nonlocal captured_user_prompt
@@ -1327,6 +1330,7 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
 
     import json
 
+    assert captured_user_prompt is not None
     prompt_data = json.loads(captured_user_prompt)
     # The outline_sections in the prompt must come from the outline artifact
     # in synthesis_stages, not from the EvidencePacket.

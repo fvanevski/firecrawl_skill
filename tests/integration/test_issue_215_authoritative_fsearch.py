@@ -26,7 +26,7 @@ from research_store.fsearch_policy_service import (
 from research_store.fsearch_service import FSearchRequest
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 class _StaticSearchAdapter:
@@ -254,12 +254,16 @@ def test_soft_override_is_exact_auditable_and_reusable_on_identical_retry(policy
             "SELECT count(*) FROM budget_override_justifications WHERE run_id=%s",
             (status.id,),
         )
-        assert cursor.fetchone()[0] == 1
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 1
         cursor.execute(
             "SELECT count(*) FROM candidate_rankings WHERE run_id=%s",
             (status.id,),
         )
-        assert cursor.fetchone()[0] == 8
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == 8
 
 
 def test_changed_candidate_scope_does_not_reuse_prior_override(policy_store):

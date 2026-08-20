@@ -24,7 +24,7 @@ from qdrant_test_support import delete_alias, require_disposable_qdrant_url
 from research_store.config import StoreConfig
 from research_store.qdrant import QdrantIndex
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 TEST_QDRANT_URL = os.environ.get("RESEARCH_STORE_TEST_QDRANT_URL")
 TEST_QDRANT_ALLOW_RESET = os.environ.get("RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET")
 HOST_ALIAS = os.environ.get("QDRANT_ALIAS", "research_chunks_active")

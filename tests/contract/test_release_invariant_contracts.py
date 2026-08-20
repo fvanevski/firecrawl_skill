@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Any, cast
 from unittest import mock
 from uuid import UUID, uuid4
 
@@ -658,7 +659,7 @@ def _campaign_result(*, outcome: str, conditions=()) -> ReleaseBenchmarkResult:
         schema_version="release-recommendation-v1",
         outcome=outcome,
         dataset_version="release-invariants-v1",
-        comparison=None,
+        comparison=cast(WorkflowComparison, None),
         supported_claims=() if outcome != "go" else ("measured",),
         withdrawn_claims=(),
         known_limitations=(),
@@ -917,10 +918,7 @@ def test_reproducibility_accepts_matching_not_applicable_token_metrics():
         run_id = uuid4()
         performance = _performance()
         performance = PerformanceMeasurement(
-            **{
-                **performance.__dict__,
-                "total_tokens": 0,
-            }
+            **cast(dict[str, Any], {**performance.__dict__, "total_tokens": 0})
         )
         base_metrics = _performance_metrics(run_id)
         performance_metrics = (
@@ -1327,7 +1325,7 @@ def test_strict_policy_converts_unavailable_cpu_observation_to_no_go():
         status=MetricStatus.UNAVAILABLE,
     )
     performance = PerformanceMeasurement(
-        **{**_performance().__dict__, "cpu_percent": None}
+        **cast(dict[str, Any], {**_performance().__dict__, "cpu_percent": None})
     )
 
     recommendation = _recommend(

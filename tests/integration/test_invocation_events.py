@@ -49,7 +49,7 @@ from research_store.postgres import PostgresUnitOfWork
 
 
 def _database_url():
-    url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+    url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
     if not url:
         pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
     return url

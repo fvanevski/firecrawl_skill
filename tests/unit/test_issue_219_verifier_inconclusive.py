@@ -7,7 +7,7 @@ import json
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Self
+from typing import Any, Self, cast
 from uuid import UUID
 
 from research_store import cli as store_cli
@@ -225,7 +225,7 @@ def test_cli_exit_codes_are_stable_and_json_status_is_authoritative(
         )
         return_code = store_cli.main(["run-verify", EXTERNAL_RUN_ID, *extra])
         payload = json.loads(capsys.readouterr().out)
-        return return_code, payload
+        return cast(int, return_code), cast(dict[str, Any], payload)
 
     return_code, payload = run("inconclusive")
     assert return_code == 1

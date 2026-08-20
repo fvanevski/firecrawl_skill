@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -30,7 +31,7 @@ from research_store.postgres_semantic_state import (
     PostgresSynthesisStageRepository,
 )
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 INTEGRATION = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -97,7 +98,7 @@ def test_final_roles_have_canonical_connection_bound_owners(monkeypatch):
             repository = getattr(uow, role)
             bound_operation = getattr(repository, operation)
             assert callable(bound_operation)
-            assert isinstance(bound_operation.__self__, repository_type)
+            assert isinstance(cast(Any, bound_operation).__self__, repository_type)
             assert repository.connection_identity == id(fake_connection)
             for lifecycle in (
                 "connection",
@@ -111,9 +112,11 @@ def test_final_roles_have_canonical_connection_bound_owners(monkeypatch):
                 assert not hasattr(repository, lifecycle)
 
         assert isinstance(
-            uow.record_semantic_call.__self__, PostgresSemanticCallRepository
+            cast(Any, uow.record_semantic_call).__self__, PostgresSemanticCallRepository
         )
-        assert isinstance(uow.upsert_claim.__self__, PostgresClaimEvidenceRepository)
+        assert isinstance(
+            cast(Any, uow.upsert_claim).__self__, PostgresClaimEvidenceRepository
+        )
         legacy_semantic = uow.runs.record_semantic_call
         assert legacy_semantic.__self__ is uow
         assert isinstance(
@@ -208,11 +211,15 @@ def test_final_repositories_share_one_outer_rollback():
             "SELECT count(*) FROM research_claims WHERE run_id=%s AND claim_id=%s",
             (run_id, claim_id),
         )
-        assert cursor.fetchone()[0] == 0
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 0
         cursor.execute(
             "SELECT count(*) FROM semantic_cache WHERE key_hash=%s", (key_hash,)
         )
-        assert cursor.fetchone()[0] == 0
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == 0
 
 
 @INTEGRATION
@@ -241,14 +248,20 @@ def test_final_repositories_share_uow_savepoint_behavior():
     assert key_hash is not None
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("SELECT count(*) FROM research_runs WHERE id=%s", (run_id,))
-        assert cursor.fetchone()[0] == 1
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 1
         cursor.execute(
             "SELECT count(*) FROM research_claims WHERE run_id=%s AND claim_id=%s",
             (run_id, claim_id),
         )
-        assert cursor.fetchone()[0] == 0
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == 0
         cursor.execute(
             "SELECT count(*) FROM semantic_cache WHERE key_hash=%s", (key_hash,)
         )
-        assert cursor.fetchone()[0] == 0
+        row1 = cursor.fetchone()
+        assert row1 is not None
+        assert row1[0] == 0
         cursor.execute("DELETE FROM research_runs WHERE id=%s", (run_id,))

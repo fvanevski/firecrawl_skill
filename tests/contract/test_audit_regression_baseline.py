@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Self
+from typing import Any, Self, cast
 from uuid import UUID
 
 import drain_index_jobs as drain_module
@@ -20,7 +20,9 @@ from research_store.acquisition_authority import (
     require_authoritative_acquisition,
 )
 from research_store.blob import ContentAddressedBlobStore
+from research_store.config import StoreConfig
 from research_store.indexing import IndexWorker
+from research_store.invocation_service import InvocationService
 from research_store.parsing_legacy import parse_raw_search_response
 from research_store.postgres import PostgresUnitOfWork
 from research_store.run_service import ResearchRunService
@@ -516,8 +518,11 @@ def test_rc_01_exact_index_job_census_preserves_sealed_membership() -> None:
     assert census["complete"] == AUDITED_COMPLETE
     assert census["claimable"] == 0
     assert census["running_live"] == AUDITED_RUNNING_LIVE
-    assert all(isinstance(census[name], int) and census[name] >= 0 for name in classes)
-    assert sum(census[name] for name in classes) == census["expected"]
+    assert all(
+        isinstance(census[name], int) and cast(int, census[name]) >= 0
+        for name in classes
+    )
+    assert sum(cast(int, census[name]) for name in classes) == census["expected"]
     assert repository.claim_options is not None
 
 
@@ -570,7 +575,7 @@ def test_rc_04_direct_acquisition_obeys_lifecycle_boundaries(
         AcquisitionPreflightError,
         lambda: require_authoritative_acquisition(
             run_id=run_id,
-            config=config,
+            config=cast(StoreConfig | None, config),
             connect_factory=lambda _database_url: connection,
             expected_heads_factory=lambda: frozenset({"audit-head"}),
         ),
@@ -580,8 +585,8 @@ def test_rc_04_direct_acquisition_obeys_lifecycle_boundaries(
     direct_run_service = _LifecycleRunService(run_id, external_run_id)
     direct_invocations = _LifecycleInvocationService()
     direct_service = WorkflowOperationService(
-        direct_run_service,
-        direct_invocations,
+        cast(ResearchRunService, direct_run_service),
+        cast(InvocationService, direct_invocations),
     )
     _assert_rejected(
         WorkflowBoundaryError,
@@ -599,17 +604,20 @@ def test_rc_04_direct_acquisition_obeys_lifecycle_boundaries(
 
     finish_run_service = _LifecycleRunService(run_id, external_run_id)
     finish_service = WorkflowOperationService(
-        finish_run_service,
-        _LifecycleInvocationService(),
+        cast(ResearchRunService, finish_run_service),
+        cast(InvocationService, _LifecycleInvocationService()),
     )
-    finish_service.index_progress = lambda _run_id: RunIndexProgress(
-        assets=0,
-        chunks=0,
-        pending=0,
-        running=0,
-        failed=0,
-        dead=0,
-        complete=0,
+    finish_service.index_progress = cast(
+        Any,
+        lambda _run_id: RunIndexProgress(
+            assets=0,
+            chunks=0,
+            pending=0,
+            running=0,
+            failed=0,
+            dead=0,
+            complete=0,
+        ),
     )
     _assert_rejected(
         WorkflowBoundaryError,
@@ -656,7 +664,7 @@ def test_rc_09_stage_execution_does_not_write_provider_response() -> None:
 
     run_service = _ProviderResponseRecordingRunService()
     orchestrator = object.__new__(CheckpointResearchOrchestrator)
-    orchestrator.run_service = run_service
+    orchestrator.run_service = cast(ResearchRunService, run_service)
     orchestrator._stages = {"planning": _SuccessfulStage()}
 
     result = orchestrator._execute_stage(

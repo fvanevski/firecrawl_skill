@@ -7,6 +7,9 @@ PostgreSQL.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import datetime
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -90,7 +93,7 @@ class MemoryCoverageRepository:
                     "text": item.get("text", ""),
                 },
                 idempotency_key=idempotency_key,
-                created_at=None,
+                created_at=cast(datetime, None),
             )
             # Store per-item events keyed by (run_id, item_id) for rebuild_projection
             self.events[(run_id_str, str(iid))] = event
@@ -121,7 +124,7 @@ class MemoryCoverageRepository:
         idempotency_key=None,
     ):
         payload = payload or {}
-        key = (str(run_id), idempotency_key)
+        key = (str(run_id), cast(str, idempotency_key))
 
         # Idempotency check
         if key in self.events:
@@ -172,15 +175,15 @@ class MemoryCoverageRepository:
             source_event_id=source_event_id,
             source_invocation_id=source_invocation_id,
             payload=payload,
-            idempotency_key=idempotency_key,
-            created_at=None,
+            idempotency_key=cast(str, idempotency_key),
+            created_at=cast(datetime, None),
         )
         self.events[key] = event
         self.revisions[str(run_id)] = new_revision
         return event.to_dict()
 
     def rebuild_projection(self, run_id, idempotency_key, source_event_id=None):
-        items = {}
+        items: dict[str, dict[str, Any]] = {}
         events = [e for k, e in self.events.items() if k[0] == str(run_id)]
         events.sort(key=lambda e: (e.coverage_revision, str(e.id)))
 
@@ -319,7 +322,7 @@ class MemoryCoverageRepository:
             ledger=ledger,
             content_sha256=content_sha256,
             triggering_event_id=triggering_event_id,
-            created_at=None,
+            created_at=cast(datetime, None),
         )
         self.snapshots[key] = snap
         self.revisions[str(run_id)] = max(
@@ -440,7 +443,7 @@ class TestCoverageItemCreation:
     def test_rejects_missing_run_id(self):
         _, service = coverage_fixture()
         with pytest.raises(CoverageError, match="run_id is required"):
-            service.create_items_from_spec(None, {"questions": []})
+            service.create_items_from_spec(cast(UUID, None), {"questions": []})
 
     def test_idempotent_item_creation(self):
         _repo, service = coverage_fixture()
@@ -563,7 +566,7 @@ class TestEventApplication:
             source_invocation_id=None,
             payload={},
             idempotency_key="fake:concurrent",
-            created_at=None,
+            created_at=cast(datetime, None),
         )
         repo.events[(str(run_id), "fake:concurrent")] = fake_event
         repo.revisions[str(run_id)] = 2
@@ -606,13 +609,13 @@ class TestEventApplication:
     def test_rejects_missing_run_id(self):
         _, service = coverage_fixture()
         with pytest.raises(CoverageError, match="run_id is required"):
-            service.apply_event(None, "item_status_changed")
+            service.apply_event(cast(UUID, None), "item_status_changed")
 
     def test_rejects_missing_event_type(self):
         _repo, service = coverage_fixture()
         run_id = uuid4()
         with pytest.raises(CoverageError, match="event_type is required"):
-            service.apply_event(run_id, None)
+            service.apply_event(run_id, cast(str, None))
 
     def test_event_with_source_references(self):
         _repo, service = coverage_fixture()
@@ -922,7 +925,7 @@ class TestEventSerialization:
             source_invocation_id=None,
             payload={"confidence": 0.9},
             idempotency_key="test",
-            created_at=None,
+            created_at=cast(datetime, None),
         )
         d = event.to_dict()
         restored = CoverageEvent.from_mapping(d)
@@ -938,7 +941,7 @@ class TestEventSerialization:
             ledger={"items": [], "overall_status": "sufficient"},
             content_sha256="a" * 64,
             triggering_event_id=None,
-            created_at=None,
+            created_at=cast(datetime, None),
         )
         d = snap.to_dict()
         restored = CoverageSnapshot.from_mapping(d)
@@ -1183,7 +1186,7 @@ class TestInvalidInput:
         _, service = coverage_fixture()
         run_id = uuid4()
         with pytest.raises(CoverageError, match="spec is required"):
-            service.create_items_from_spec(run_id, None)
+            service.create_items_from_spec(run_id, cast(Mapping[str, Any], None))
 
     def test_empty_spec_dict(self):
         _repo, service = coverage_fixture()
@@ -1209,7 +1212,7 @@ class TestInvalidInput:
         _, service = coverage_fixture()
         spec = {"questions": [{"question_id": uuid4(), "text": "Q1"}]}
         with pytest.raises(CoverageError, match="run_id is required"):
-            service.create_items_from_spec(None, spec)
+            service.create_items_from_spec(cast(UUID, None), spec)
 
 
 class TestCoverageSummary:

@@ -40,7 +40,7 @@ from research_store.parsing import get_registry
 from research_store.postgres import PostgresUnitOfWork, connect
 from research_store.service import CorpusService
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 class _Runner:
@@ -193,10 +193,10 @@ class _OrchestrationService(DirectScrapeService):
         return Adapter()
 
     @contextmanager
-    def _claim_item(self, _context_value, _invocation_id, _item_key):
+    def _claim_item(self, context, invocation_id, item_key):
         yield None
 
-    def _resolve_existing_candidates(self, _run_id, requests):
+    def _resolve_existing_candidates(self, run_id, requests):
         return {
             index: {
                 "id": uuid4(),
@@ -209,23 +209,23 @@ class _OrchestrationService(DirectScrapeService):
 
     def _begin_or_resume(
         self,
-        _context_value,
-        _requests,
-        _candidates,
-        _idempotency_key,
-        _external_invocation_id,
-        _parent_invocation_id,
+        context,
+        requests,
+        candidates,
+        idempotency_key,
+        external_invocation_id,
+        parent_invocation_id,
     ):
         return self.invocation_id, {}, None
 
     def _load_resolved_targets(
         self,
-        _run_id,
+        run_id,
         invocation_id,
         requests,
         candidates,
         batch_key,
-        _retry_parent_attempt_ids,
+        retry_parent_attempt_ids,
     ):
         return tuple(
             _ResolvedTarget(
@@ -240,7 +240,7 @@ class _OrchestrationService(DirectScrapeService):
             for index, request in enumerate(requests)
         )
 
-    def _persist_success(self, _context_value, invocation_id, target, transport):
+    def _persist_success(self, context, invocation_id, target, transport):
         return DirectScrapeItemResult(
             index=target.index,
             item_key=target.item_key,
@@ -254,9 +254,7 @@ class _OrchestrationService(DirectScrapeService):
             raw_blob_sha256="a" * 64,
         )
 
-    def _persist_failure(
-        self, _context_value, invocation_id, target, transport, **_kwargs
-    ):
+    def _persist_failure(self, context, invocation_id, target, transport, **_kwargs):
         return DirectScrapeItemResult(
             index=target.index,
             item_key=target.item_key,
@@ -271,7 +269,7 @@ class _OrchestrationService(DirectScrapeService):
         )
 
     def _finalize_invocation(
-        self, _context_value, _invocation_id, _idempotency_key, status, items
+        self, context, invocation_id, idempotency_key, status, items
     ):
         self.finalized = (status, tuple(items))
 
@@ -302,7 +300,9 @@ def test_multi_url_partial_failure_is_explicit_and_ordered():
     assert [item.index for item in result.items] == [0, 1]
     assert [item.status for item in result.items] == ["succeeded", "failed"]
     assert result.items[1].error == "blocked"
-    assert service.finalized[0] == "partial"
+    finalized = service.finalized
+    assert finalized is not None
+    assert finalized[0] == "partial"
 
 
 def _integration() -> None:
@@ -416,14 +416,18 @@ def test_direct_scrape_rejects_stale_revision_after_transport(tmp_path: Path):
             """SELECT count(*) FROM extraction_attempts WHERE run_id=%s""",
             (run_id,),
         )
-        assert cur.fetchone()[0] == 0
+        row0 = cur.fetchone()
+        assert row0 is not None
+        assert row0[0] == 0
         cur.execute(
             """SELECT count(*) FROM asset_snapshots s
             JOIN sources src ON src.id=s.source_id
             WHERE src.canonical_url=%s""",
             ("https://example.com/stale",),
         )
-        assert cur.fetchone()[0] == 0
+        row1 = cur.fetchone()
+        assert row1 is not None
+        assert row1[0] == 0
 
 
 def test_direct_scrape_postgres_url_json_partial_retry_and_recovery(tmp_path: Path):
@@ -536,19 +540,25 @@ def test_direct_scrape_postgres_url_json_partial_retry_and_recovery(tmp_path: Pa
             WHERE run_id=%s AND invocation_id=%s""",
             (run_id, resumed.invocation_id),
         )
-        assert cur.fetchone()[0] == 2
+        row0 = cur.fetchone()
+        assert row0 is not None
+        assert row0[0] == 2
         cur.execute(
             "SELECT output::text FROM research_invocations WHERE id=%s",
             (resumed.invocation_id,),
         )
-        invocation_output = cur.fetchone()[0]
+        invocation_output = cur.fetchone()
+        assert invocation_output is not None
+        invocation_output = invocation_output[0]
         assert "Authoritative body" not in invocation_output
         assert '"answer": 42' not in invocation_output
         cur.execute(
             """SELECT count(*) FROM research_run_assets WHERE run_id=%s""",
             (run_id,),
         )
-        assert cur.fetchone()[0] == 4
+        row1 = cur.fetchone()
+        assert row1 is not None
+        assert row1[0] == 4
         cur.execute(
             """SELECT count(*) FROM index_jobs j
             JOIN chunks c ON c.id=j.entity_id
@@ -558,7 +568,9 @@ def test_direct_scrape_postgres_url_json_partial_retry_and_recovery(tmp_path: Pa
             WHERE r.run_id=%s""",
             (run_id,),
         )
-        assert cur.fetchone()[0] >= 4
+        row2 = cur.fetchone()
+        assert row2 is not None
+        assert row2[0] >= 4
 
 
 def test_summary_is_a_canonical_format_and_mime_contract():
@@ -672,7 +684,9 @@ def test_concurrent_same_key_executes_provider_once(tmp_path: Path):
             WHERE run_id=%s AND candidate_id=%s""",
             (run_id, first_result.items[0].candidate_id),
         )
-        assert cur.fetchone()[0] == 1
+        row0 = cur.fetchone()
+        assert row0 is not None
+        assert row0[0] == 1
 
 
 def test_format_parser_identity_retry_lineage_and_transport_provenance(
@@ -729,6 +743,7 @@ def test_format_parser_identity_retry_lineage_and_transport_provenance(
                 (item.document_id,),
             )
             row = cur.fetchone()
+            assert row is not None
             assert parser_name in row[0]
             assert row[1]
             assert row[2] == mime_type
@@ -740,7 +755,9 @@ def test_format_parser_identity_retry_lineage_and_transport_provenance(
                   AND payload->>'extraction_attempt_id'=%s""",
                 (run_id, str(item.extraction_attempt_id)),
             )
-            event = cur.fetchone()[0]
+            event = cur.fetchone()
+            assert event is not None
+            event = event[0]
             assert event["provider_request_id"] == f"provider-{format_name}"
             assert event["format"] == format_name
             assert event["mime_type"] == mime_type
@@ -798,12 +815,16 @@ def test_format_parser_identity_retry_lineage_and_transport_provenance(
             "SELECT retry_parent_id FROM extraction_attempts WHERE id=%s",
             (retried.items[0].extraction_attempt_id,),
         )
-        assert cur.fetchone()[0] == failed.items[0].extraction_attempt_id
+        row0 = cur.fetchone()
+        assert row0 is not None
+        assert row0[0] == failed.items[0].extraction_attempt_id
         cur.execute(
             "SELECT parent_invocation_id FROM research_invocations WHERE id=%s",
             (retried.invocation_id,),
         )
-        assert cur.fetchone()[0] == failed.invocation_id
+        row1 = cur.fetchone()
+        assert row1 is not None
+        assert row1[0] == failed.invocation_id
 
 
 def test_failed_retry_preserves_attempt_and_invocation_lineage(tmp_path: Path):
@@ -885,12 +906,16 @@ def test_failed_retry_preserves_attempt_and_invocation_lineage(tmp_path: Path):
             "SELECT parent_invocation_id FROM research_invocations WHERE id=%s",
             (second.invocation_id,),
         )
-        assert cur.fetchone()[0] == first.invocation_id
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == first.invocation_id
         cur.execute(
             "SELECT parent_invocation_id FROM research_invocations WHERE id=%s",
             (third.invocation_id,),
         )
-        assert cur.fetchone()[0] == second.invocation_id
+        row0 = cur.fetchone()
+        assert row0 is not None
+        assert row0[0] == second.invocation_id
 
 
 def test_same_snapshot_bytes_do_not_collapse_parser_document_identity(

@@ -4,6 +4,7 @@ import sys
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -13,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from research_store.blob import ContentAddressedBlobStore
 from research_store.cli import parser as research_store_parser
+from research_store.config import StoreConfig
 from research_store.execution_policy import (
     ExecutionModeError,
     ExecutionModePolicy,
@@ -312,7 +314,7 @@ def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
         embedding_fingerprint="dummy_fingerprint",
     )
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repository,
         blob_store=None,
         index=WrongAliasIndex(),
@@ -383,7 +385,7 @@ def test_search_assets_intentional_lexical_mode():
         raise AssertionError("reranker should not be called")
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repository,
         blob_store=None,
         index=BrokenIndex(),
@@ -460,7 +462,7 @@ def test_search_assets_intentional_semantic_mode():
         return [0.1]
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repository,
         blob_store=None,
         index=WorkingIndex(),
@@ -527,7 +529,7 @@ def test_semantic_mode_with_alias_mismatch_is_failed():
         embedding_fingerprint="dummy_fingerprint",
     )
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repository,
         blob_store=None,
         index=WrongAliasIndex(),
@@ -601,7 +603,7 @@ def test_search_assets_with_run_id_persists_execution_and_events():
     )
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repository,
         blob_store=None,
         index=None,
@@ -690,7 +692,7 @@ def test_search_assets_hybrid_mode_with_qdrant_failure():
     )
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repository,
         blob_store=None,
         index=BrokenQdrant(),
@@ -759,7 +761,7 @@ def test_search_assets_cli_output_format():
     )
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repository,
         blob_store=None,
         index=None,
@@ -847,7 +849,7 @@ def test_retrieval_stage_trace_logging():
     )
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         FailingRepo,
         blob_store=None,
         index=None,
@@ -953,7 +955,7 @@ def test_get_retrieval_trace_api():
     )
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repo,
         blob_store=None,
         index=None,
@@ -1023,7 +1025,7 @@ def test_get_retrieval_trace_empty():
     )
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repo,
         blob_store=None,
         index=None,
@@ -1079,7 +1081,7 @@ def test_log_retrieval_batch_run_status_guard():
     )
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repo,
         blob_store=None,
         index=None,
@@ -1188,7 +1190,7 @@ def test_reranked_stage_events_with_fused_intermediate():
             ]
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repo,
         blob_store=None,
         index=MockIndex(),
@@ -1270,7 +1272,7 @@ def test_search_assets_empty_input_no_events_logged():
     )
 
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         Repo,
         blob_store=None,
         index=None,

@@ -14,6 +14,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
@@ -41,7 +42,7 @@ from research_store.provider_preflight import (
     ExtractionDeadlinePolicy,
 )
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 def _wrapped_result(
@@ -461,7 +462,7 @@ class TestProductionExtractionSeam:
         stage, _run_service, extraction, corpus = self._stage()
         good = "https://example.test/good"
         empty = "https://example.test/empty"
-        context = {
+        context: dict[str, Any] = {
             "raw_ingest_requests": [
                 {
                     "requested_url": good,

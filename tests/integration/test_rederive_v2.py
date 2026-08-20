@@ -47,7 +47,7 @@ ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
 
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +96,9 @@ def _insert_test_snapshot(conn, source_id, content_sha256, content_bytes):
                 len(content_bytes),
             ),
         )
-        return cur.fetchone()[0]
+        row0 = cur.fetchone()
+        assert row0 is not None
+        return row0[0]
 
 
 def _insert_test_source(conn, url):
@@ -107,7 +109,9 @@ def _insert_test_source(conn, url):
             VALUES (%s, %s) RETURNING id""",
             (url, "example.com"),
         )
-        return cur.fetchone()[0]
+        row0 = cur.fetchone()
+        assert row0 is not None
+        return row0[0]
 
 
 def _seed_corpus(service, url="https://example.com/test", content=None):
@@ -364,13 +368,17 @@ class TestMigration0026:
         """The document_derivations table exists after migration."""
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute("SELECT to_regclass('document_derivations')")
-            assert cur.fetchone()[0] is not None
+            row0 = cur.fetchone()
+            assert row0 is not None
+            assert row0[0] is not None
 
     def test_enum_exists(self):
         """The derivation_status enum exists."""
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute("SELECT enum_range(NULL::derivation_status)")
-            row = cur.fetchone()[0]
+            row = cur.fetchone()
+            assert row is not None
+            row = row[0]
             assert row is not None
             assert "pending" in row
             assert "active" in row
@@ -699,7 +707,6 @@ class TestDerivationServiceIntegration:
     def test_reindex_integration(self, service, derivation_service, tmp_path):
         """Active derivations correctly integrate with index selection."""
         from research_store.cli import _active_chunk_ids
-        from research_store.config import Config
 
         # Seed initial document
         result = _seed_corpus(service)
@@ -723,9 +730,9 @@ class TestDerivationServiceIntegration:
         derivation_service.activate_derivation(derivation_id)
 
         # Build config matching the active derivation
-        config = Config(
+        config = replace(
+            StoreConfig.from_env(),
             database_url=TEST_DSN,
-            physical_collection="test",
             embedding_model="test-model",
             embedding_revision="v1",
             embedding_dimension=384,
@@ -739,9 +746,9 @@ class TestDerivationServiceIntegration:
         assert len(active_chunks) > 0
 
         # Verify old config returns old chunks
-        old_config = Config(
+        old_config = replace(
+            StoreConfig.from_env(),
             database_url=TEST_DSN,
-            physical_collection="test",
             embedding_model="test-model",
             embedding_revision="v1",
             embedding_dimension=384,

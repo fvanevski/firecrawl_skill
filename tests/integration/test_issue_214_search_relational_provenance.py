@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
@@ -38,7 +38,7 @@ from research_store.search_provenance import (
 )
 from research_store.smart_orchestrator import ResumableResearchOrchestrator
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 @pytest.fixture(scope="session")
@@ -328,7 +328,7 @@ def test_production_provenance_orchestrator_links_three_smart_plan_queries(
 
     orchestrator = object.__new__(ProvenanceResumableResearchOrchestrator)
     orchestrator.run_service = run_service
-    orchestrator._acquisition = SimpleNamespace(acquisition_service=delegate)
+    cast(Any, orchestrator)._acquisition = SimpleNamespace(acquisition_service=delegate)
     orchestrator.acquisition_service = delegate
 
     def execute_parent_seam(
@@ -341,6 +341,7 @@ def test_production_provenance_orchestrator_links_three_smart_plan_queries(
         context=None,
     ):
         assert max_adaptive_cycles == 1
+        assert context is not None
         assert context["search_plan_id"] == str(plan_id)
         return [
             self.acquisition_service.execute_search(run_id, item["query"])
@@ -348,13 +349,14 @@ def test_production_provenance_orchestrator_links_three_smart_plan_queries(
         ]
 
     monkeypatch.setattr(ResumableResearchOrchestrator, "run", execute_parent_seam)
-    results = orchestrator.run(
+    _results = orchestrator.run(
         status.id,
         {"schema_version": "research-spec-v1"},
         {"queries": [{"query": text} for text in query_texts]},
         max_adaptive_cycles=1,
         context={"search_plan_id": str(plan_id)},
     )
+    results = cast(list[Any], _results)
 
     response_ids = [result.search_response_id for result in results]
     with run_service.uow_factory() as uow, uow.connection.cursor() as cur:

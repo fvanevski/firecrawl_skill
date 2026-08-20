@@ -8,6 +8,7 @@ import sys
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 from unittest import mock
 from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import UUID, uuid4
@@ -18,6 +19,7 @@ from psycopg import sql
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from research_store.acquisition.ports import SearchAdapter
 from research_store.acquisition_authority import (
     ACQUISITION_ENTRY_STATES,
     ACQUISITION_TABLE_PRIVILEGES,
@@ -43,7 +45,7 @@ from research_store.postgres import (
 from research_store.run_service import TERMINAL_STATES
 
 _SCHEMA_HEAD = "0042_authoritative_acquisition"
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 class _FakeCursor:
@@ -85,6 +87,7 @@ class _FakeCursor:
         if self.last_sql == "SHOW transaction_read_only":
             return ("on" if self.read_only else "off",)
         if "has_table_privilege" in self.last_sql:
+            assert self.last_params is not None
             table, privilege = self.last_params
             return ((table, privilege) not in self.denied_privileges,)
         if "FROM research_runs WHERE id=" in self.last_sql:
@@ -824,7 +827,7 @@ def test_commit_failure_never_returns_success_and_retry_recovers(
     failing_service = AcquisitionService(
         lambda: _CommitFailingUnitOfWork(base_factory()),
         blob_store=normal_service.blob_store,
-        search_adapter=adapter,
+        search_adapter=cast(SearchAdapter, adapter),
         config=config,
         authority_preflight=require_authoritative_acquisition,
     )
@@ -844,7 +847,9 @@ def test_commit_failure_never_returns_success_and_retry_recovers(
             "SELECT count(*) FROM search_responses WHERE idempotency_key=%s",
             (idempotency_key,),
         )
-        assert cursor.fetchone()[0] == 0
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 0
     assert adapter.call_count == 0
     assert not any(path.is_file() for path in config.blob_root.rglob("*"))
 
@@ -887,7 +892,9 @@ def test_restricted_role_fails_before_provider_execution(
     try:
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             cursor.execute("SELECT current_database()")
-            database_name = cursor.fetchone()[0]
+            database_name = cursor.fetchone()
+            assert database_name is not None
+            database_name = database_name[0]
             cursor.execute(
                 sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
                     sql.Identifier(role),
@@ -910,12 +917,17 @@ def test_restricted_role_fails_before_provider_execution(
                     sql.Identifier(role)
                 )
             )
+            _PRIVILEGE_SQL: dict[str, sql.SQL] = {
+                "SELECT": sql.SQL("SELECT"),
+                "INSERT": sql.SQL("INSERT"),
+                "UPDATE": sql.SQL("UPDATE"),
+            }
             for table, privileges in ACQUISITION_TABLE_PRIVILEGES.items():
                 granted = set(privileges)
                 if table == "research_events":
                     granted.discard("INSERT")
                 privilege_sql = sql.SQL(", ").join(
-                    sql.SQL(privilege) for privilege in sorted(granted)
+                    _PRIVILEGE_SQL[p] for p in sorted(granted)
                 )
                 cursor.execute(
                     sql.SQL("GRANT {} ON TABLE {} TO {}").format(

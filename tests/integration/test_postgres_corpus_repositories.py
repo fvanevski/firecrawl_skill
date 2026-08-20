@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -16,7 +17,7 @@ from research_store.postgres import PostgresUnitOfWork, migrate
 from research_store.postgres_corpus import PostgresCorpusRepository
 from research_store.postgres_derivations import PostgresDerivationRepository
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 class _FakeTransaction:
@@ -65,15 +66,19 @@ def test_corpus_and_derivation_methods_bind_to_canonical_repositories(monkeypatc
         assert isinstance(
             uow.snapshots.persist_ingest.__self__, PostgresCorpusRepository
         )
-        assert isinstance(uow.persist_ingest.__self__, PostgresCorpusRepository)
-        assert isinstance(uow.start_ingestion_batch.__self__, PostgresCorpusRepository)
+        assert isinstance(
+            cast(Any, uow.persist_ingest).__self__, PostgresCorpusRepository
+        )
+        assert isinstance(
+            cast(Any, uow.start_ingestion_batch).__self__, PostgresCorpusRepository
+        )
         assert isinstance(uow.derivations.create.__self__, PostgresDerivationRepository)
-        assert isinstance(uow.create.__self__, PostgresDerivationRepository)
+        assert isinstance(cast(Any, uow.create).__self__, PostgresDerivationRepository)
 
         canonical_repositories = (
             uow.sources.upsert_source.__self__,
-            uow.persist_ingest.__self__,
-            uow.start_ingestion_batch.__self__,
+            cast(Any, uow.persist_ingest).__self__,
+            cast(Any, uow.start_ingestion_batch).__self__,
             uow.derivations.create.__self__,
         )
         for repository in canonical_repositories:
@@ -124,7 +129,10 @@ def test_issue_217_batch_functions_are_repository_bound(monkeypatch):
 
         # #217 patches the UoW class after #255/#256 installation; the
         # instance compatibility facade must still win.
-        assert uow.start_ingestion_batch.__self__ is uow.persist_ingest.__self__
+        assert (
+            cast(Any, uow.start_ingestion_batch).__self__
+            is cast(Any, uow.persist_ingest).__self__
+        )
 
 
 @pytest.mark.skipif(
@@ -142,19 +150,24 @@ def test_derivation_repository_uses_uow_transaction_and_rolls_back():
 
     with PostgresUnitOfWork(TEST_DSN, "issue-256-test-index") as uow:
         assert uow.derivations.connection_identity == id(uow.connection)
+        assert uow.connection is not None
         with uow.connection.cursor() as cur:
             cur.execute(
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 (source_url,),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id, requested_url, retrieved_at, content_sha256
                 ) VALUES (%s, %s, now(), %s) RETURNING id""",
                 (source_id, source_url, snapshot_sha),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id, normalized_text, parser_name, parser_version,
@@ -169,7 +182,9 @@ def test_derivation_repository_uses_uow_transaction_and_rolls_back():
                     document_sha,
                 ),
             )
-            document_id = cur.fetchone()[0]
+            document_id = cur.fetchone()
+            assert document_id is not None
+            document_id = document_id[0]
 
         created = uow.derivations.create(
             document_id=document_id,

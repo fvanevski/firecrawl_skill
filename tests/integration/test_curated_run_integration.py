@@ -76,8 +76,8 @@ class _PausingDirectInvocationService(DirectInvocationService):
         self.locked = locked
         self.release = release
 
-    def _after_run_lock(self, run_id, state, revision):
-        del run_id, state, revision
+    def _after_run_lock(self, run_id, lifecycle_state, lifecycle_revision):
+        del run_id, lifecycle_state, lifecycle_revision
         self.locked.set()
         if not self.release.wait(5):
             raise TimeoutError("test did not release direct invocation lock")

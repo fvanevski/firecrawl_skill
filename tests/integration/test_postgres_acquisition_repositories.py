@@ -23,7 +23,7 @@ from research_store.postgres_acquisition import (
     PostgresSearchAcquisitionRepository,
 )
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 INTEGRATION = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -280,16 +280,24 @@ def test_acquisition_repository_writes_share_one_outer_rollback(tmp_path):
             ("search_responses", response_id),
             ("extraction_attempts", attempt_id),
         ):
-            cursor.execute(f"SELECT count(*) FROM {table} WHERE id=%s", (identifier,))
-            assert cursor.fetchone()[0] == 0
+            cursor.execute(
+                "SELECT count(*) FROM " + table + " WHERE id=%s", (identifier,)
+            )
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] == 0
         cursor.execute(
             "SELECT count(*) FROM search_candidates WHERE run_id=%s", (run_id,)
         )
-        assert cursor.fetchone()[0] == 0
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == 0
         cursor.execute(
             "SELECT count(*) FROM candidate_rankings WHERE run_id=%s", (run_id,)
         )
-        assert cursor.fetchone()[0] == 0
+        row1 = cursor.fetchone()
+        assert row1 is not None
+        assert row1[0] == 0
 
 
 @INTEGRATION

@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -64,7 +65,7 @@ class FakeConnection:
 
 
 def config(tmp_path: Path) -> StoreConfig:
-    values = StoreConfig.from_env().__dict__ | {
+    values: dict[str, Any] = StoreConfig.from_env().__dict__ | {
         "database_url": "postgresql://test/test",
         "blob_root": tmp_path,
     }

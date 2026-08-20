@@ -15,7 +15,7 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 def _source_and_imports(path: Path) -> tuple[str, set[str]]:
@@ -147,7 +147,9 @@ def test_resume_strategy_order_packet_revision_and_branch_cap():
     second_proposal = uuid4()
 
     with pg.PostgresUnitOfWork(TEST_DSN, "issue261-review") as uow:
-        with uow.connection.cursor() as cur:
+        connection = uow.connection
+        assert connection is not None
+        with connection.cursor() as cur:
             cur.execute(
                 """INSERT INTO research_runs (
                     id, objective, query_plan, skill_version, llm_model,

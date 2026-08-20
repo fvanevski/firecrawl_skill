@@ -7,6 +7,7 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -18,10 +19,11 @@ from research_store.blob import ContentAddressedBlobStore
 from research_store.config import StoreConfig
 from research_store.container import build_run_service
 from research_store.parsing import parse_raw_search_response
+from research_store.ports import SearchResponseRepository
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 from research_store.replay import SearchResponseReplayReader
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 @pytest.fixture(scope="session")
@@ -104,6 +106,7 @@ def test_parse_raw_search_response_parse_error():
     status, count, _summary, err = parse_raw_search_response(raw)
     assert status == "parse_error"
     assert count == 0
+    assert err is not None
     assert "Failed to parse search response as JSON" in err
 
 
@@ -134,7 +137,9 @@ def test_replay_reader_integrity_and_missing_blob(tmp_path):
                 "idempotency_key": "key-1",
             }
 
-    reader = SearchResponseReplayReader(MockRepo(), blob_store)
+    reader = SearchResponseReplayReader(
+        cast(SearchResponseRepository, MockRepo()), blob_store
+    )
     resp_id = uuid4()
     replay = reader.replay_search_response(resp_id)
 
@@ -145,7 +150,9 @@ def test_replay_reader_integrity_and_missing_blob(tmp_path):
 
     # Missing blob test
     missing_store = ContentAddressedBlobStore(tmp_path / "empty_blobs")
-    missing_reader = SearchResponseReplayReader(MockRepo(), missing_store)
+    missing_reader = SearchResponseReplayReader(
+        cast(SearchResponseRepository, MockRepo()), missing_store
+    )
     with pytest.raises(FileNotFoundError, match="not found in blob store"):
         missing_reader.replay_search_response(resp_id)
 

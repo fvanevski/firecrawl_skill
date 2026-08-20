@@ -36,7 +36,8 @@ from __future__ import annotations
 import sys
 import unittest
 from dataclasses import dataclass, field
-from typing import Any
+from datetime import datetime
+from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
@@ -49,10 +50,12 @@ from research_domain.models import (
     TerminalDecision,
     TerminalDecisionOutcome,
 )
+from research_store.config import StoreConfig
 from research_store.orchestrator import (
     OrchestratorConfig,
     ResearchOrchestrator,
 )
+from research_store.run_service import ResearchRunService
 from research_store.terminal_decision_service import (
     DuplicateTerminalDecisionError,
     TerminalDecisionError,
@@ -219,7 +222,7 @@ def _make_decision(
         no_progress_signals=(),
         unresolved_gap="test gap",
         policy_version=TerminalDecision.POLICY_VERSION,
-        created_at=None,
+        created_at=cast(datetime, None),
     )
 
 
@@ -268,11 +271,11 @@ class TestPolicyEvaluation(unittest.TestCase):
         run_svc = MockRunService(initial_state="created", revision=0)
 
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
+            run_service=cast(ResearchRunService, run_svc),
             coverage_service=MagicMock(),
             strategy_service=MagicMock(),
             acquisition_service=MagicMock(),
-            config=MockConfig(),
+            config=cast(StoreConfig, MockConfig()),
             orchestrator_config=OrchestratorConfig(),
         )
 
@@ -302,11 +305,11 @@ class TestPolicyEvaluation(unittest.TestCase):
         run_svc = MockRunService(initial_state="created", revision=0)
 
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
+            run_service=cast(ResearchRunService, run_svc),
             coverage_service=MagicMock(),
             strategy_service=MagicMock(),
             acquisition_service=MagicMock(),
-            config=MockConfig(),
+            config=cast(StoreConfig, MockConfig()),
             orchestrator_config=OrchestratorConfig(),
         )
 
@@ -585,11 +588,11 @@ class TestEndToEndOrchestrator(unittest.TestCase):
         run_svc = MockRunService(initial_state="acquiring", revision=5)
 
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
+            run_service=cast(ResearchRunService, run_svc),
             coverage_service=MagicMock(),
             strategy_service=MagicMock(),
             acquisition_service=MagicMock(),
-            config=MockConfig(),
+            config=cast(StoreConfig, MockConfig()),
             orchestrator_config=OrchestratorConfig(),
         )
 

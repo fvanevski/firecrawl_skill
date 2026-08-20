@@ -17,7 +17,9 @@ import os
 import sys
 from hashlib import sha256
 from pathlib import Path
+from typing import Any, cast
 from unittest import mock
+from uuid import UUID
 
 import pytest
 
@@ -588,7 +590,7 @@ class TestStrictCampaignIntegration:
         The campaign completes with NO_GO recommendation because quality
         thresholds are not met — this is the correct fail-closed behavior.
         """
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
 
@@ -691,7 +693,7 @@ class TestStrictCampaignIntegration:
 
     def test_cli_dry_run_returns_zero(self):
         """--dry-run validates config and exits 0."""
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         with mock.patch(
@@ -713,7 +715,7 @@ class TestStrictCampaignIntegration:
 
     def test_cli_missing_dataset_returns_one(self):
         """Missing dataset causes exit 1."""
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         rc = main(
@@ -731,7 +733,7 @@ class TestStrictCampaignIntegration:
 
     def test_cli_invalid_tolerance_returns_one(self):
         """Tolerance outside [0, 1] causes exit 1."""
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         rc = main(
@@ -754,7 +756,7 @@ class TestStrictCampaignIntegration:
         tmp_path: Path,
     ):
         """A stale worker or missing active alias fails preflight deterministically."""
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
 
@@ -836,7 +838,7 @@ class TestStrictCampaignIntegration:
 
     def test_preflight_fails_without_dataset(self):
         """Preflight fails when benchmark dataset is missing."""
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         from research_store.strict_benchmark import _preflight_check
@@ -855,7 +857,7 @@ class TestStrictCampaignIntegration:
 
     def test_preflight_qdrant_is_mandatory(self):
         """Strict campaign preflight rejects unreachable Qdrant."""
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         from research_store.strict_benchmark import _preflight_check
@@ -874,7 +876,7 @@ class TestStrictCampaignIntegration:
 
     def test_preflight_dry_run_aborts_before_campaign(self):
         """Dry-run mode validates config and preflight but does not execute campaigns."""
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         with mock.patch(
@@ -1261,14 +1263,14 @@ class TestStrictMetricCompleteness:
         comparison = WorkflowComparison(
             schema_version="workflow-comparison-v1",
             dataset_version="benchmark-v2",
-            results=[
+            results=(
                 WorkflowRunResult(
                     schema_version="workflow-run-result-v1",
                     workflow_mode="deterministic_debug",
                     quality=quality,
                     performance=performance,
                     integrity_checks=(),
-                    run_id="fr_bench_test",
+                    run_id=cast(UUID | None, "fr_bench_test"),
                     errors=(),
                     quality_metrics=(
                         QualityMetric(
@@ -1434,12 +1436,12 @@ class TestStrictMetricCompleteness:
                     quality=quality,
                     performance=performance,
                     integrity_checks=(),
-                    run_id="fr_bench_test_2",
+                    run_id=cast(UUID | None, "fr_bench_test_2"),
                     errors=(),
                     quality_metrics=(),
                     performance_metrics=(),
                 ),
-            ],
+            ),
             quality_vs_baseline={},
             performance_vs_baseline={},
             integrity_regression=False,
@@ -1490,6 +1492,7 @@ class TestStrictMetricCompleteness:
 
         for mode, mode_results_list in mode_results.items():
             for result in mode_results_list:
+                assert result.quality.candidate_recall is not None
                 if result.quality.candidate_recall < thresholds["min_candidate_recall"]:
                     withdrawn.append(
                         f"candidate_recall >= {thresholds['min_candidate_recall']} — "
@@ -1507,8 +1510,13 @@ class TestStrictMetricCompleteness:
         if strict:
             for mode, mode_results_list in mode_results.items():
                 for result in mode_results_list:
-                    observed_quality = {qm.name for qm in result.quality_metrics}
-                    observed_perf = {pm.name for pm in result.performance_metrics}
+                    observed_quality = {
+                        qm.name for qm in cast(tuple[Any, ...], result.quality_metrics)
+                    }
+                    observed_perf = {
+                        pm.name
+                        for pm in cast(tuple[Any, ...], result.performance_metrics)
+                    }
 
                     missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
                     if missing_quality:
@@ -1517,7 +1525,7 @@ class TestStrictMetricCompleteness:
                             f"{mode} cannot satisfy release policy"
                         )
 
-                    for qm in result.quality_metrics:
+                    for qm in cast(tuple[Any, ...], result.quality_metrics):
                         if (
                             qm.name in MANDATORY_QUALITY_METRICS
                             and qm.status != MS.MEASURED
@@ -1534,7 +1542,7 @@ class TestStrictMetricCompleteness:
                             f"{mode} cannot satisfy release policy"
                         )
 
-                    for pm in result.performance_metrics:
+                    for pm in cast(tuple[Any, ...], result.performance_metrics):
                         if (
                             pm.name in MANDATORY_PERFORMANCE_METRICS
                             and pm.status != MS.MEASURED
@@ -1668,14 +1676,14 @@ class TestStrictMetricCompleteness:
         comparison = WorkflowComparison(
             schema_version="workflow-comparison-v1",
             dataset_version="benchmark-v2",
-            results=[
+            results=(
                 WorkflowRunResult(
                     schema_version="workflow-run-result-v1",
                     workflow_mode="deterministic_debug",
                     quality=quality,
                     performance=performance,
                     integrity_checks=(),
-                    run_id="fr_bench_test",
+                    run_id=cast(UUID | None, "fr_bench_test"),
                     errors=(),
                     quality_metrics=quality_metrics,
                     performance_metrics=perf_metrics,
@@ -1686,12 +1694,12 @@ class TestStrictMetricCompleteness:
                     quality=quality,
                     performance=performance,
                     integrity_checks=(),
-                    run_id="fr_bench_test_2",
+                    run_id=cast(UUID | None, "fr_bench_test_2"),
                     errors=(),
                     quality_metrics=quality_metrics,
                     performance_metrics=perf_metrics,
                 ),
-            ],
+            ),
             quality_vs_baseline={},
             performance_vs_baseline={},
             integrity_regression=False,
@@ -1713,6 +1721,7 @@ class TestStrictMetricCompleteness:
 
         for mode, mode_results_list in mode_results.items():
             for result in mode_results_list:
+                assert result.quality.candidate_recall is not None
                 if result.quality.candidate_recall < thresholds["min_candidate_recall"]:
                     withdrawn.append(
                         f"candidate_recall >= {thresholds['min_candidate_recall']} — "
@@ -1726,8 +1735,13 @@ class TestStrictMetricCompleteness:
         if strict:
             for mode, mode_results_list in mode_results.items():
                 for result in mode_results_list:
-                    observed_quality = {qm.name for qm in result.quality_metrics}
-                    observed_perf = {pm.name for pm in result.performance_metrics}
+                    observed_quality = {
+                        qm.name for qm in cast(tuple[Any, ...], result.quality_metrics)
+                    }
+                    observed_perf = {
+                        pm.name
+                        for pm in cast(tuple[Any, ...], result.performance_metrics)
+                    }
 
                     missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
                     if missing_quality:
@@ -1736,7 +1750,7 @@ class TestStrictMetricCompleteness:
                             f"{mode} cannot satisfy release policy"
                         )
 
-                    for qm in result.quality_metrics:
+                    for qm in cast(tuple[Any, ...], result.quality_metrics):
                         if (
                             qm.name in MANDATORY_QUALITY_METRICS
                             and qm.status != MetricStatus.MEASURED
@@ -1753,7 +1767,7 @@ class TestStrictMetricCompleteness:
                             f"{mode} cannot satisfy release policy"
                         )
 
-                    for pm in result.performance_metrics:
+                    for pm in cast(tuple[Any, ...], result.performance_metrics):
                         if (
                             pm.name in MANDATORY_PERFORMANCE_METRICS
                             and pm.status != MetricStatus.MEASURED
@@ -1794,14 +1808,14 @@ class TestStrictMetricCompletenessMissing:
         comparison = WorkflowComparison(
             schema_version="workflow-comparison-v1",
             dataset_version="benchmark-v2",
-            results=[
+            results=(
                 WorkflowRunResult(
                     schema_version="workflow-run-result-v1",
                     workflow_mode="agent_led",
                     quality=quality,
                     performance=performance,
                     integrity_checks=(),
-                    run_id="fr_bench_test",
+                    run_id=cast(UUID | None, "fr_bench_test"),
                     errors=(),
                     quality_metrics=(),
                     performance_metrics=(),
@@ -1812,12 +1826,12 @@ class TestStrictMetricCompletenessMissing:
                     quality=quality,
                     performance=performance,
                     integrity_checks=(),
-                    run_id="fr_bench_test_2",
+                    run_id=cast(UUID | None, "fr_bench_test_2"),
                     errors=(),
                     quality_metrics=(),
                     performance_metrics=(),
                 ),
-            ],
+            ),
             quality_vs_baseline={},
             performance_vs_baseline={},
             integrity_regression=False,
@@ -1835,8 +1849,13 @@ class TestStrictMetricCompletenessMissing:
         if strict:
             for mode, mode_results_list in mode_results.items():
                 for result in mode_results_list:
-                    observed_quality = {qm.name for qm in result.quality_metrics}
-                    observed_perf = {pm.name for pm in result.performance_metrics}
+                    observed_quality = {
+                        qm.name for qm in cast(tuple[Any, ...], result.quality_metrics)
+                    }
+                    observed_perf = {
+                        pm.name
+                        for pm in cast(tuple[Any, ...], result.performance_metrics)
+                    }
 
                     missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
                     if missing_quality:
@@ -1845,7 +1864,7 @@ class TestStrictMetricCompletenessMissing:
                             f"{mode} cannot satisfy release policy"
                         )
 
-                    for qm in result.quality_metrics:
+                    for qm in cast(tuple[Any, ...], result.quality_metrics):
                         if (
                             qm.name in MANDATORY_QUALITY_METRICS
                             and qm.status != MetricStatus.MEASURED
@@ -1862,7 +1881,7 @@ class TestStrictMetricCompletenessMissing:
                             f"{mode} cannot satisfy release policy"
                         )
 
-                    for pm in result.performance_metrics:
+                    for pm in cast(tuple[Any, ...], result.performance_metrics):
                         if (
                             pm.name in MANDATORY_PERFORMANCE_METRICS
                             and pm.status != MetricStatus.MEASURED
@@ -1895,14 +1914,14 @@ class TestStrictMetricCompletenessMissing:
         comparison = WorkflowComparison(
             schema_version="workflow-comparison-v1",
             dataset_version="benchmark-v2",
-            results=[
+            results=(
                 WorkflowRunResult(
                     schema_version="workflow-run-result-v1",
                     workflow_mode="agent_led",
                     quality=quality,
                     performance=performance,
                     integrity_checks=(),
-                    run_id="fr_bench_test",
+                    run_id=cast(UUID | None, "fr_bench_test"),
                     errors=(),
                     quality_metrics=(),
                     performance_metrics=(),
@@ -1913,12 +1932,12 @@ class TestStrictMetricCompletenessMissing:
                     quality=quality,
                     performance=performance,
                     integrity_checks=(),
-                    run_id="fr_bench_test_2",
+                    run_id=cast(UUID | None, "fr_bench_test_2"),
                     errors=(),
                     quality_metrics=(),
                     performance_metrics=(),
                 ),
-            ],
+            ),
             quality_vs_baseline={},
             performance_vs_baseline={},
             integrity_regression=False,
@@ -1935,8 +1954,13 @@ class TestStrictMetricCompletenessMissing:
         if strict:
             for mode, mode_results_list in mode_results.items():
                 for result in mode_results_list:
-                    observed_quality = {qm.name for qm in result.quality_metrics}
-                    observed_perf = {pm.name for pm in result.performance_metrics}
+                    observed_quality = {
+                        qm.name for qm in cast(tuple[Any, ...], result.quality_metrics)
+                    }
+                    observed_perf = {
+                        pm.name
+                        for pm in cast(tuple[Any, ...], result.performance_metrics)
+                    }
 
                     missing_quality = MANDATORY_QUALITY_METRICS - observed_quality
                     if missing_quality:
@@ -1945,7 +1969,7 @@ class TestStrictMetricCompletenessMissing:
                             f"{mode} cannot satisfy release policy"
                         )
 
-                    for qm in result.quality_metrics:
+                    for qm in cast(tuple[Any, ...], result.quality_metrics):
                         if (
                             qm.name in MANDATORY_QUALITY_METRICS
                             and qm.status != MetricStatus.MEASURED
@@ -1962,7 +1986,7 @@ class TestStrictMetricCompletenessMissing:
                             f"{mode} cannot satisfy release policy"
                         )
 
-                    for pm in result.performance_metrics:
+                    for pm in cast(tuple[Any, ...], result.performance_metrics):
                         if (
                             pm.name in MANDATORY_PERFORMANCE_METRICS
                             and pm.status != MetricStatus.MEASURED
@@ -1998,7 +2022,7 @@ class TestStatusSerialization:
         performance_metrics arrays with correct status fields. The DB is empty,
         so mandatory metrics will be null with incomplete/unavailable status.
         """
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
 
@@ -2217,7 +2241,7 @@ class TestCacheRegressionPR157:
         from research_store.release_benchmark import RELEASE_CACHE_STAGES
         from research_store.strict_benchmark import main
 
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
 
@@ -2312,7 +2336,9 @@ class TestCacheRegressionPR157:
                              AND stage = ANY(%s)""",
                         (run_id, list(RELEASE_CACHE_STAGES)),
                     )
-                    lookups, hits, event_ids = cur.fetchone()
+                    row = cur.fetchone()
+                    assert row is not None
+                    lookups, hits, event_ids = row
 
                 lookups = int(lookups or 0)
                 hits = int(hits or 0)
@@ -2362,7 +2388,7 @@ class TestStrictCampaignCacheRejection:
 
         from research_store.postgres import connect, migrate
 
-        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
 

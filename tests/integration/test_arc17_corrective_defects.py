@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 from copy import deepcopy
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
@@ -272,7 +273,7 @@ class TestDeterministicModelIdentity:
         """
         import os
 
-        dsn = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+        dsn = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not dsn:
             pytest.skip("requires RESEARCH_STORE_TEST_DATABASE_URL")
 
@@ -433,7 +434,7 @@ class TestCitationStageAcceptance:
 
     def test_unresolved_validation_fails_closed(self):
         """A citation artifact with unresolved validation must raise."""
-        draft_citations = {("s1", "c1", ("p1",))}
+        draft_citations: set[tuple[str, str, tuple[str, ...]]] = {("s1", "c1", ("p1",))}
         bad_payload = {
             "pass_status": "passed",
             "validation_results": [
@@ -454,7 +455,7 @@ class TestCitationStageAcceptance:
 
     def test_wrong_citation_tuple_fails(self):
         """A validation result that doesn't match draft citations must fail."""
-        draft_citations = {("s1", "c1", ("p1",))}
+        draft_citations: set[tuple[str, str, tuple[str, ...]]] = {("s1", "c1", ("p1",))}
         bad_payload = {
             "pass_status": "passed",
             "validation_results": [
@@ -475,7 +476,7 @@ class TestCitationStageAcceptance:
 
     def test_valid_exact_coverage_passes(self):
         """A perfectly matching citation artifact must pass validation."""
-        draft_citations = {("s1", "c1", ("p1",))}
+        draft_citations: set[tuple[str, str, tuple[str, ...]]] = {("s1", "c1", ("p1",))}
         good_payload = {
             "pass_status": "passed",
             "validation_results": [
@@ -875,7 +876,7 @@ class TestEnvironmentManifestSecretStripping:
 # Defect 2 — PostgreSQL-backed citation durability
 # ---------------------------------------------------------------------------
 
-_PG_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+_PG_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 _pg_skip = pytest.mark.skipif(
     not _PG_DSN, reason="requires RESEARCH_STORE_TEST_DATABASE_URL"
 )
@@ -1390,7 +1391,7 @@ def test_autonomous_none_rejected_then_canonical_accepted():
 
     original_request = model_gateway._request_json
     try:
-        model_gateway._request_json = fake_request
+        model_gateway._request_json = cast(Any, fake_request)
         model_gateway.probe_local = lambda *_a, **_k: {"status": "available"}
 
         semantic = SemanticCallService(runs.uow_factory)
@@ -1511,6 +1512,7 @@ def test_autonomous_none_rejected_then_canonical_accepted():
         assert provenance.citation_artifact_sha256 == expected_hash
 
     # 5. Terminal completion.
+    assert status.external_id is not None
     finished = workflow.finish_run(status.external_id, outcome="satisfied")
     assert finished.state == "completed"
 
@@ -1521,6 +1523,7 @@ def test_autonomous_none_rejected_then_canonical_accepted():
             (str(run_id),),
         )
         row = cur.fetchone()
+        assert row is not None
         assert row[0] == "completed"
         assert row[1] is True
 
@@ -1733,6 +1736,7 @@ def test_deterministic_prompt_version_matches_stage_and_call():
             )
 
         # --- Exercise terminal boundary: finish_run ---
+        assert status.external_id is not None
         finished = workflow.finish_run(status.external_id, outcome="satisfied")
         assert finished.state == "completed"
 
@@ -1743,6 +1747,7 @@ def test_deterministic_prompt_version_matches_stage_and_call():
                 (str(run_id),),
             )
             row = cur.fetchone()
+            assert row is not None
             assert row[0] == "completed"
             assert row[1] is True
     finally:
@@ -1959,6 +1964,7 @@ def test_prompt_version_divergence_fails_terminal_completion():
         with pytest.raises(
             WorkflowBoundaryError, match="prompt version does not match"
         ):
+            assert status.external_id is not None
             workflow.finish_run(status.external_id, outcome="satisfied")
 
         # --- Post-failure readback: run must NOT be completed ---
@@ -2370,7 +2376,7 @@ def test_wrong_citation_tuples_still_fail():
         "unsupported_claims": [],
         "entailment_mismatches": [],
     }
-    draft_citations = {
+    draft_citations: set[tuple[str, str, tuple[str, ...]]] = {
         (
             "s1",
             "00000000-0000-0000-0000-000000000102",
@@ -2409,7 +2415,7 @@ def test_noncanonical_none_rejected_at_terminal():
         "unsupported_claims": [],
         "entailment_mismatches": [],
     }
-    draft_citations = {
+    draft_citations: set[tuple[str, str, tuple[str, ...]]] = {
         (
             "s1",
             "00000000-0000-0000-0000-000000000102",

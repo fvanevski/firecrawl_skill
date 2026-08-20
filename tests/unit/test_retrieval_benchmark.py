@@ -870,7 +870,11 @@ class TestRunBenchmark:
     def test_run_benchmark_deterministic(self, ground_truth, config):
         r1 = run_benchmark(ground_truth, config)
         r2 = run_benchmark(ground_truth, config)
+        assert r1.lexical_recall is not None
+        assert r2.lexical_recall is not None
         assert r1.lexical_recall.recall == r2.lexical_recall.recall
+        assert r1.dense_recall is not None
+        assert r2.dense_recall is not None
         assert r1.dense_recall.recall == r2.dense_recall.recall
 
 
@@ -1245,8 +1249,14 @@ class TestEndToEnd:
         """Multiple runs produce identical recall values."""
         r1 = run_benchmark(ground_truth, config)
         r2 = run_benchmark(ground_truth, config)
+        assert r1.lexical_recall is not None
+        assert r2.lexical_recall is not None
         assert r1.lexical_recall.recall == r2.lexical_recall.recall
+        assert r1.dense_recall is not None
+        assert r2.dense_recall is not None
         assert r1.dense_recall.recall == r2.dense_recall.recall
+        assert r1.fused_recall is not None
+        assert r2.fused_recall is not None
         assert r1.fused_recall.recall == r2.fused_recall.recall
 
     def test_benchmark_configurable_thresholds(self, ground_truth):

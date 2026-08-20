@@ -21,7 +21,7 @@ from research_store.domain import IngestRequest
 from research_store.index_checkpoint_service import IndexCheckpointService
 from research_store.postgres import connect, migrate
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -162,7 +162,9 @@ def test_checkpoint_restart_reuses_exact_membership_and_records_observations(
                 WHERE checkpoint_id=%s""",
             (first.id,),
         )
-        observation_count, minimum, maximum = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        observation_count, minimum, maximum = row
     assert observation_count >= 3
     assert minimum == maximum == len(first.entity_ids)
 
@@ -306,7 +308,9 @@ def test_concurrent_finalization_has_one_transition_and_idempotent_replay(
                   AND idempotency_key=%s""",
             (status.id, f"checkpoint:{status.id}:finalize"),
         )
-        assert cursor.fetchone()[0] == 1
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 1
 
 
 def test_terminal_transition_requires_decision_and_public_command_is_atomic(
@@ -371,7 +375,9 @@ def test_terminal_transition_requires_decision_and_public_command_is_atomic(
                 WHERE run_id=%s AND idempotency_key=%s""",
             (status.id, f"terminal:{status.id}:guarded"),
         )
-        count, reason_code, schema_version = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        count, reason_code, schema_version = row
         assert (count, reason_code, schema_version) == (
             1,
             "integration_test_failure",

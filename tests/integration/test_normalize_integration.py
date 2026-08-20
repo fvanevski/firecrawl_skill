@@ -24,7 +24,7 @@ sys.path.insert(0, str(SCRIPTS))
 from research_store.config import StoreConfig
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -46,7 +46,7 @@ def service(normalize_database):
     from research_store.container import build_service
 
     config = StoreConfig.from_env()
-    config = config.replace(database_url=TEST_DSN)
+    config = dataclasses.replace(config, database_url=TEST_DSN)
     return build_service(config)
 
 
@@ -84,7 +84,7 @@ class TestNormalizeCLI:
 
         # Run normalize
         args = parser().parse_args(["normalize", "--document", str(doc_uuid)])
-        config = StoreConfig.from_env().replace(database_url=TEST_DSN)
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         rc = _cmd_normalize(config, args)
         assert rc == 0
 
@@ -94,7 +94,9 @@ class TestNormalizeCLI:
                 "SELECT COUNT(*) FROM normalized_blocks WHERE document_id = %s",
                 (str(doc_uuid),),
             )
-            count = cur.fetchone()[0]
+            count = cur.fetchone()
+            assert count is not None
+            count = count[0]
             assert count > 0, "Expected normalized blocks to be persisted"
 
         # Verify transformation records were persisted
@@ -105,7 +107,9 @@ class TestNormalizeCLI:
                    WHERE nb.document_id = %s""",
                 (str(doc_uuid),),
             )
-            count = cur.fetchone()[0]
+            count = cur.fetchone()
+            assert count is not None
+            count = count[0]
             assert count > 0, "Expected transformation records to be persisted"
 
     def test_normalize_idempotent(self, service):
@@ -126,7 +130,7 @@ class TestNormalizeCLI:
 
         # Run normalize twice
         args = parser().parse_args(["normalize", "--document", str(doc_uuid)])
-        config = StoreConfig.from_env().replace(database_url=TEST_DSN)
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
 
         rc1 = _cmd_normalize(config, args)
         rc2 = _cmd_normalize(config, args)
@@ -139,7 +143,9 @@ class TestNormalizeCLI:
                 "SELECT COUNT(*) FROM normalized_blocks WHERE document_id = %s",
                 (str(doc_uuid),),
             )
-            count = cur.fetchone()[0]
+            count = cur.fetchone()
+            assert count is not None
+            count = count[0]
             # Should be exactly one row per source block, not double
             assert count > 0
 
@@ -150,7 +156,7 @@ class TestNormalizeCLI:
 
         fake_uuid = uuid4()
         args = parser().parse_args(["normalize", "--document", str(fake_uuid)])
-        config = StoreConfig.from_env().replace(database_url=TEST_DSN)
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         rc = _cmd_normalize(config, args)
         assert rc == 0
 
@@ -160,6 +166,6 @@ class TestNormalizeCLI:
         from research_store.config import StoreConfig
 
         args = parser().parse_args(["normalize"])
-        config = StoreConfig.from_env().replace(database_url=TEST_DSN)
+        config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         rc = _cmd_normalize(config, args)
         assert rc == 1

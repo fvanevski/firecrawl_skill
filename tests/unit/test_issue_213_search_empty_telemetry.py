@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
-from research_store.acquisition_service import AcquisitionResult
+from research_store.acquisition.authority import AuthoritativeAcquisitionContext
+from research_store.acquisition_service import AcquisitionResult, AcquisitionService
+from research_store.config import StoreConfig
 from research_store.fsearch_service import (
     FSearchError,
     FSearchRequest,
@@ -52,14 +56,19 @@ def _service(status: str) -> tuple[FSearchService, _InvocationService]:
     run_id = uuid4()
     invocations = _InvocationService()
     service = FSearchService(
-        SimpleNamespace(),
+        cast(StoreConfig, SimpleNamespace()),
         SimpleNamespace(status=lambda **_kwargs: SimpleNamespace(id=run_id)),
         invocations,
-        acquisition_factory=lambda: _AcquisitionService(status),
+        acquisition_factory=cast(
+            Callable[[], AcquisitionService], lambda: _AcquisitionService(status)
+        ),
         direct_scrape_factory=lambda: pytest.fail(
             "empty or failed search must not construct direct scraping"
         ),
-        preflight=lambda **_kwargs: SimpleNamespace(run_id=run_id),
+        preflight=cast(
+            Callable[..., AuthoritativeAcquisitionContext],
+            lambda **_kwargs: SimpleNamespace(run_id=run_id),
+        ),
         classify_target=lambda *_args: ("other", False),
         profiles={"news_article": {"target_schema": {"type": "object"}}},
     )

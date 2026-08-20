@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -366,7 +367,7 @@ def test_trigger_audit_only_schedules_partial_assessment(monkeypatch) -> None:
     from research_store.run_service import ResearchRunService
 
     run_uuid = UUID(int=2)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class AuditService:
         def schedule_assessment(self, *args, **kwargs):

@@ -6,17 +6,21 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
+from psycopg import sql
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.acquisition_service import AcquisitionResult
+from research_store.acquisition_authority import AuthoritativeAcquisitionContext
+from research_store.acquisition_service import AcquisitionResult, AcquisitionService
 from research_store.config import StoreConfig
 from research_store.direct_scrape_service import DirectScrapePersistenceError
 from research_store.domain import SearchAdapterResult, utcnow
@@ -32,7 +36,7 @@ from research_store.fsearch_service import (
 )
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -143,21 +147,29 @@ def test_commit_revalidates_preflight_revision_before_persisting(tmp_path):
         cursor.execute(
             "SELECT count(*) FROM search_responses WHERE run_id=%s", (run.id,)
         )
-        assert cursor.fetchone()[0] == 0
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 0
         cursor.execute(
             "SELECT count(*) FROM search_candidates WHERE run_id=%s", (run.id,)
         )
-        assert cursor.fetchone()[0] == 0
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == 0
         cursor.execute(
             "SELECT count(*) FROM research_events WHERE run_id=%s AND event_type='acquisition.search_executed'",
             (run.id,),
         )
-        assert cursor.fetchone()[0] == 0
+        row1 = cursor.fetchone()
+        assert row1 is not None
+        assert row1[0] == 0
         cursor.execute(
             "SELECT count(*) FROM research_invocations WHERE run_id=%s AND operation='direct_scrape'",
             (run.id,),
         )
-        assert cursor.fetchone()[0] == 0
+        row2 = cursor.fetchone()
+        assert row2 is not None
+        assert row2[0] == 0
     assert run_service.status(run_id=run.id).state == "extracting"
 
 
@@ -293,7 +305,9 @@ def test_retry_after_outer_completion_crash_replays_committed_search(tmp_path):
             "SELECT status FROM research_invocations WHERE external_invocation_id=%s",
             (invocation_id,),
         )
-        assert cursor.fetchone()[0] == "complete"
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == "complete"
 
 
 def test_fsearch_uses_stable_candidate_id_not_occurrence_id():
@@ -348,15 +362,19 @@ def test_fsearch_uses_stable_candidate_id_not_occurrence_id():
         complete=lambda *_args, **_kwargs: None,
     )
     service = FSearchService(
-        SimpleNamespace(),
+        cast(StoreConfig, SimpleNamespace()),
         SimpleNamespace(status=lambda **_kwargs: SimpleNamespace(id=run_id)),
         invocations,
-        acquisition_factory=lambda: SimpleNamespace(
-            execute_search=lambda *_args, **_kwargs: acquisition
+        acquisition_factory=cast(
+            Callable[[], AcquisitionService],
+            lambda: SimpleNamespace(
+                execute_search=lambda *_args, **_kwargs: acquisition
+            ),
         ),
         direct_scrape_factory=Direct,
-        preflight=lambda **_kwargs: SimpleNamespace(
-            run_id=run_id, lifecycle_revision=0
+        preflight=cast(
+            Callable[..., AuthoritativeAcquisitionContext],
+            lambda **_kwargs: SimpleNamespace(run_id=run_id, lifecycle_revision=0),
         ),
         classify_target=lambda *_args: ("other", False),
         profiles={},
@@ -573,15 +591,23 @@ raise SystemExit(2)
             "documents": 1,
         }
         for table, minimum in expected.items():
-            cursor.execute(f"SELECT count(*) FROM {table}")
-            assert cursor.fetchone()[0] >= minimum, table
+            cursor.execute(
+                sql.SQL("SELECT count(*) FROM ").format(sql.Identifier(table))
+            )
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] >= minimum, table
         cursor.execute("SELECT count(*) FROM index_jobs")
-        assert cursor.fetchone()[0] > 0
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] > 0
         cursor.execute(
             "SELECT candidate_id FROM extraction_attempts WHERE run_id=%s",
             (run.id,),
         )
-        extracted_candidate = cursor.fetchone()[0]
+        extracted_candidate = cursor.fetchone()
+        assert extracted_candidate is not None
+        extracted_candidate = extracted_candidate[0]
         assert (
             str(extracted_candidate)
             == payload["extraction_outcomes"][0]["candidate_id"]

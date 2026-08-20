@@ -79,7 +79,7 @@ from research_store.quality_service import QualityService
 ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain" / "extraction_e2e"
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 def _integration():
@@ -1982,7 +1982,9 @@ def sample_run():
                 "{}",
             ),
         )
-        db_run_id = cur.fetchone()[0]
+        db_run_id = cur.fetchone()
+        assert db_run_id is not None
+        db_run_id = db_run_id[0]
 
     return db_run_id
 
@@ -2028,7 +2030,9 @@ def sample_candidate(sample_run):
             "SELECT run_id FROM search_candidates WHERE id=%s",
             (str(candidate_id),),
         )
-        persisted_run_id = cur.fetchone()[0]
+        persisted_run_id = cur.fetchone()
+        assert persisted_run_id is not None
+        persisted_run_id = persisted_run_id[0]
         assert UUID(str(persisted_run_id)) == run_id
 
     return candidate_id

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 from completion_provenance_test_support import seed_authoritative_completion_provenance
+from psycopg import sql
 from research_store.config import StoreConfig
 from research_store.container import (
     build_run_service,
@@ -20,7 +21,7 @@ from research_store.domain import IngestRequest
 from research_store.postgres import connect, migrate
 from research_store.workflow_service import WorkflowBoundaryError
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -111,6 +112,7 @@ def _ready(config: StoreConfig):
     _corpus, runs, status = _seed_indexing_run(config)
     _mark_run_index_complete(status.id)
     workflow = build_workflow_operation_service(config)
+    assert status.external_id is not None
     workflow._finalize_indexing(
         status.external_id,
         f"completion-test:{status.id}:finalize-indexing",
@@ -126,6 +128,7 @@ def test_completed_run_derives_and_persists_exact_authoritative_provenance(
 ):
     _runs, status, provenance, workflow = _ready(completion_config)
 
+    assert status.external_id is not None
     finished = workflow.finish_run(status.external_id, outcome="satisfied")
     assert finished.state == "completed"
 
@@ -145,7 +148,9 @@ def test_completed_run_derives_and_persists_exact_authoritative_provenance(
                 WHERE run_id=%s AND next_state='completed'""",
             (status.id,),
         )
-        completion = cursor.fetchone()[0]["completion"]
+        completion = cursor.fetchone()
+        assert completion is not None
+        completion = completion[0]
         audit = completion["completion_provenance"]
         assert audit["schema_version"] == "completion-provenance-v1"
         assert audit["source_membership_sha256"] == provenance.source_manifest_sha256
@@ -159,6 +164,7 @@ def test_caller_hashes_are_optional_assertions_not_authority(
     completion_config: StoreConfig,
 ):
     _runs, status, provenance, workflow = _ready(completion_config)
+    assert status.external_id is not None
     finished = workflow.finish_run(
         status.external_id,
         outcome="satisfied",
@@ -183,6 +189,7 @@ def test_completion_rejects_malformed_or_mismatched_digest_assertions(
     _runs, status, _provenance, workflow = _ready(completion_config)
     kwargs = {field: value}
     with pytest.raises(WorkflowBoundaryError, match=pattern):
+        assert status.external_id is not None
         workflow.finish_run(status.external_id, outcome="satisfied", **kwargs)
 
 
@@ -199,11 +206,14 @@ def test_completion_rejects_missing_immutable_synthesis_provenance(
     _runs, status, _provenance, workflow = _ready(completion_config)
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            f"UPDATE synthesis_stages SET {column}=NULL "
-            "WHERE run_id=%s AND stage_name='draft'",
+            sql.SQL(
+                "UPDATE synthesis_stages SET {} = NULL "
+                "WHERE run_id=%s AND stage_name='draft'"
+            ).format(sql.Identifier(column)),
             (status.id,),
         )
     with pytest.raises(WorkflowBoundaryError, match=pattern):
+        assert status.external_id is not None
         workflow.finish_run(status.external_id, outcome="satisfied")
 
 
@@ -221,6 +231,7 @@ def test_completion_rejects_external_authority_even_when_label_is_omitted(
             (status.id,),
         )
     with pytest.raises(WorkflowBoundaryError, match="not authoritative"):
+        assert status.external_id is not None
         workflow.finish_run(status.external_id, outcome="satisfied")
 
 
@@ -234,7 +245,9 @@ def test_completion_rejects_stale_validation_after_new_evidence_packet(
             "WHERE run_id=%s AND packet_revision=%s",
             (status.id, provenance.evidence_packet_revision),
         )
-        payload, spec_id, coverage_revision = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        payload, spec_id, coverage_revision = row
         cursor.execute(
             """INSERT INTO evidence_packets(
                    id,run_id,research_spec_id,coverage_revision,packet_revision,payload)
@@ -252,6 +265,7 @@ def test_completion_rejects_stale_validation_after_new_evidence_packet(
         WorkflowBoundaryError,
         match="EvidencePacket claim does not match current persisted claim provenance",
     ):
+        assert status.external_id is not None
         workflow.finish_run(status.external_id, outcome="satisfied")
 
 
@@ -269,6 +283,7 @@ def test_completion_rejects_valid_but_incomplete_validation(
             (status.id,),
         )
     with pytest.raises(WorkflowBoundaryError, match="incomplete"):
+        assert status.external_id is not None
         workflow.finish_run(status.external_id, outcome="satisfied")
 
 
@@ -282,7 +297,9 @@ def test_completion_rejects_packet_without_required_evidence_links(
             "WHERE run_id=%s AND packet_revision=%s",
             (status.id, provenance.evidence_packet_revision),
         )
-        payload = cursor.fetchone()[0]
+        payload = cursor.fetchone()
+        assert payload is not None
+        payload = payload[0]
         payload["claim_evidence_bindings"] = []
         cursor.execute(
             "UPDATE evidence_packets SET payload=%s::jsonb "
@@ -290,6 +307,7 @@ def test_completion_rejects_packet_without_required_evidence_links(
             (json.dumps(payload), status.id, provenance.evidence_packet_revision),
         )
     with pytest.raises(WorkflowBoundaryError, match="evidence links"):
+        assert status.external_id is not None
         workflow.finish_run(status.external_id, outcome="satisfied")
 
 
@@ -316,6 +334,7 @@ def test_terminal_transaction_revalidates_preflight_provenance(
 
     monkeypatch.setattr(workflow, "_transition", transition_with_mutation)
     with pytest.raises(Exception, match="revalidation|provenance changed|stale"):
+        assert status.external_id is not None
         workflow.finish_run(status.external_id, outcome="satisfied")
 
 
@@ -329,7 +348,9 @@ def test_completion_rejects_evidence_packet_membership_drift(
             "WHERE run_id=%s AND packet_revision=%s",
             (status.id, provenance.evidence_packet_revision),
         )
-        payload = cursor.fetchone()[0]
+        payload = cursor.fetchone()
+        assert payload is not None
+        payload = payload[0]
         payload["passages"].append(
             {
                 "passage_id": str(uuid4()),
@@ -344,6 +365,7 @@ def test_completion_rejects_evidence_packet_membership_drift(
             (json.dumps(payload), status.id, provenance.evidence_packet_revision),
         )
     with pytest.raises(WorkflowBoundaryError, match="sealed source membership"):
+        assert status.external_id is not None
         workflow.finish_run(status.external_id, outcome="satisfied")
 
 
@@ -361,6 +383,7 @@ def test_completion_fails_closed_when_provenance_loader_errors(
         unavailable,
     )
     with pytest.raises(WorkflowBoundaryError, match=r"fails closed \(RuntimeError\)"):
+        assert status.external_id is not None
         workflow.finish_run(status.external_id, outcome="satisfied")
 
 
@@ -369,6 +392,7 @@ def test_failed_outcome_never_infers_authoritative_synthesis(
 ):
     _corpus, runs, status = _seed_indexing_run(completion_config)
     workflow = build_workflow_operation_service(completion_config)
+    assert status.external_id is not None
     failed = workflow.finish_run(
         status.external_id,
         outcome="infrastructure lag",
@@ -386,5 +410,7 @@ def test_failed_outcome_never_infers_authoritative_synthesis(
             "SELECT count(*) FROM synthesis_stages WHERE run_id=%s",
             (status.id,),
         )
-        assert cursor.fetchone()[0] == 0
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 0
     assert runs.status(run_id=status.id).state == "failed"

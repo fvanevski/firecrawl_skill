@@ -17,7 +17,7 @@ from research_store.blob import ContentAddressedBlobStore
 from research_store.postgres import PostgresUnitOfWork, connect, migrate
 from research_store.postgres_uow_core import REPOSITORY_ROLES, PostgresRepositoryView
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 INTEGRATION = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -204,11 +204,15 @@ def test_cross_repository_writes_share_one_outer_rollback(tmp_path):
     assert response_id is not None
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("SELECT count(*) FROM research_runs WHERE id = %s", (run_id,))
-        assert cursor.fetchone()[0] == 0
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 0
         cursor.execute(
             "SELECT count(*) FROM search_responses WHERE id = %s", (response_id,)
         )
-        assert cursor.fetchone()[0] == 0
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == 0
 
 
 @INTEGRATION
@@ -235,9 +239,13 @@ def test_savepoint_rollback_stays_inside_containing_uow(tmp_path):
     assert response_id is not None
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("SELECT count(*) FROM research_runs WHERE id = %s", (run_id,))
-        assert cursor.fetchone()[0] == 1
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 1
         cursor.execute(
             "SELECT count(*) FROM search_responses WHERE id = %s", (response_id,)
         )
-        assert cursor.fetchone()[0] == 0
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == 0
         cursor.execute("DELETE FROM research_runs WHERE id = %s", (run_id,))

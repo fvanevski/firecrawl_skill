@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from subprocess import CompletedProcess
 from types import SimpleNamespace
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,11 +16,18 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.acquisition_authority import AcquisitionPreflightError
-from research_store.acquisition_service import AcquisitionResult
+from research_store.acquisition_authority import (
+    AcquisitionPreflightError,
+    AuthoritativeAcquisitionContext,
+)
+from research_store.acquisition_service import (
+    AcquisitionResult,
+    AcquisitionService,
+)
 from research_store.config import StoreConfig
 from research_store.direct_scrape_service import (
     DirectScrapeBatchResult,
+    DirectScrapeItemResult,
     DirectScrapePersistenceError,
 )
 from research_store.domain import SearchAdapterResult, utcnow
@@ -32,7 +42,7 @@ from research_store.fsearch_service import (
 )
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 RUN_EXTERNAL_ID = "fr_" + "a" * 32
 
 
@@ -139,12 +149,14 @@ def _service(
         return direct
 
     service = FSearchService(
-        SimpleNamespace(),
+        cast(StoreConfig, SimpleNamespace()),
         run_service,
         invocations,
-        acquisition_factory=acquisition_factory,
+        acquisition_factory=cast(Callable[[], AcquisitionService], acquisition_factory),
         direct_scrape_factory=direct_factory,
-        preflight=checked_preflight,
+        preflight=cast(
+            Callable[..., AuthoritativeAcquisitionContext], checked_preflight
+        ),
         classify_target=classifier or (lambda *_args: ("other", False)),
         profiles={"news_article": {"target_schema": {"type": "object"}}},
     )
@@ -183,7 +195,7 @@ def test_preflight_precedes_transport_and_selected_scrape_uses_candidate_ids(
         invocation_id=uuid4(),
         idempotency_key="direct",
         status="complete",
-        items=(item,),
+        items=cast(tuple[DirectScrapeItemResult, ...], (item,)),
     )
     service, events, _invocations, acquisition, direct = _service(
         _acquisition_result(candidates=candidates),
@@ -255,6 +267,7 @@ def test_search_failures_have_distinct_stages(status, expected_stage):
         service.execute(FSearchRequest("test query", RUN_EXTERNAL_ID))
 
     assert caught.value.stage == expected_stage
+    assert caught.value.result is not None
     assert caught.value.result.search_response_id is not None
 
 
@@ -283,13 +296,16 @@ def test_item_failures_distinguish_extraction_and_ingestion(error, expected_stag
         invocation_id=uuid4(),
         idempotency_key="direct",
         status="failed",
-        items=(
-            _ScrapeItem(
-                candidate_id=candidate_id,
-                status="failed",
-                error=error,
-                failure_class=(
-                    "parser" if expected_stage == "ingestion" else "network"
+        items=cast(
+            tuple[DirectScrapeItemResult, ...],
+            (
+                _ScrapeItem(
+                    candidate_id=candidate_id,
+                    status="failed",
+                    error=error,
+                    failure_class=(
+                        "parser" if expected_stage == "ingestion" else "network"
+                    ),
                 ),
             ),
         ),
@@ -311,6 +327,7 @@ def test_item_failures_distinguish_extraction_and_ingestion(error, expected_stag
         service.execute(FSearchRequest("test query", RUN_EXTERNAL_ID, scrape_limit=1))
 
     assert caught.value.stage == expected_stage
+    assert caught.value.result is not None
     assert caught.value.result.extraction_outcomes[0].failure_stage == expected_stage
 
 
@@ -344,7 +361,10 @@ def test_idempotency_keys_are_stable_and_scope_selected_extraction():
         invocation_id=uuid4(),
         idempotency_key="direct",
         status="complete",
-        items=(_ScrapeItem(candidate_id=candidate_id),),
+        items=cast(
+            tuple[DirectScrapeItemResult, ...],
+            (_ScrapeItem(candidate_id=candidate_id),),
+        ),
     )
     service, _events, _invocations, acquisition, direct = _service(
         _acquisition_result(
@@ -384,9 +404,9 @@ def test_metadata_search_adapter_uses_stdout_without_implicit_scrape():
             stderr=b"",
         )
 
-    result = MetadataOnlyFirecrawlSearchAdapter(runner=runner).search(
-        "test query", limit=7, sources="web,news", tbs="qdr:w"
-    )
+    result = MetadataOnlyFirecrawlSearchAdapter(
+        runner=cast(Callable[..., CompletedProcess], runner)
+    ).search("test query", limit=7, sources="web,news", tbs="qdr:w")
 
     assert result.http_status == 200
     assert calls[0][:3] == ["firecrawl", "search", "test query"]
@@ -410,7 +430,7 @@ def test_cli_json_output_is_bounded_authoritative_contract(capsys):
 
     code = main(
         ["test query", "--research-run-id", RUN_EXTERNAL_ID, "--json"],
-        service_factory=lambda: fake,
+        service_factory=cast(Callable[[], FSearchService], lambda: fake),
     )
 
     assert code == 0

@@ -22,6 +22,7 @@ All tests are unit tests using an in-memory repository — no PostgreSQL require
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -53,10 +54,12 @@ class MemoryStrategyRepository:
     """In-memory strategy-revision repository for unit tests."""
 
     def __init__(self):
-        self.proposals: dict[str, dict] = {}  # (run_id, proposal_id) -> mapping
-        self.decisions: dict[str, dict] = {}  # (run_id, decision_id) -> mapping
-        self.idempotency_proposals: dict[str, dict] = {}  # (run_id, idempotency_key)
-        self.idempotency_decisions: dict[str, dict] = {}
+        self.proposals: dict[
+            tuple[str, str], dict
+        ] = {}  # (run_id, proposal_id) -> mapping
+        self.decisions: dict[Any, dict] = {}  # (run_id, decision_id) -> mapping
+        self.idempotency_proposals: dict[Any, dict] = {}  # (run_id, idempotency_key)
+        self.idempotency_decisions: dict[Any, dict] = {}
         self._next_order_counters: dict[str, int] = {}  # run_id -> next revision_order
 
     # Context manager support

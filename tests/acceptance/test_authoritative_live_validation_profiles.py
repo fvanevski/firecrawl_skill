@@ -19,6 +19,7 @@ def validation_module():
         str(SCRIPTS / "live_validate.py"),
     )
     spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module

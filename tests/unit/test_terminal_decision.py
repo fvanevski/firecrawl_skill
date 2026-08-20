@@ -28,6 +28,7 @@ from __future__ import annotations
 import sys
 import unittest
 from dataclasses import dataclass
+from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
@@ -729,7 +730,7 @@ class TestTerminalDecisionModelValidation(unittest.TestCase):
             no_progress_signals=(),
             unresolved_gap="test gap",
             policy_version=TerminalDecision.POLICY_VERSION,
-            created_at=custom_time,
+            created_at=cast(Any, custom_time),
         )
         self.assertEqual(decision.created_at, custom_time)
 
@@ -971,7 +972,7 @@ class TestTerminalDecisionServiceBlocking(unittest.TestCase):
             no_progress_signals=(),
             unresolved_gap="insufficient coverage",
             policy_version=TerminalDecision.POLICY_VERSION,
-            created_at=None,
+            created_at=cast(Any, None),
         )
 
         with self.assertRaises(TerminalDecisionError):

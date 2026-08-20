@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -12,8 +13,17 @@ sys.path.insert(0, str(SCRIPTS))
 
 import smoke_test
 from research_domain.models import RecommendationOutcome
+from research_store.acquisition_service import AcquisitionService
+from research_store.assessment.coverage import CoverageService
+from research_store.config import StoreConfig
 from research_store.orchestrator import OrchestratorConfig, ResearchOrchestrator
-from research_store.release_benchmark import MetricStatus
+from research_store.release_benchmark import (
+    MetricStatus,
+    ReleaseBenchmarkResult,
+    ReproducibilityComparison,
+)
+from research_store.run_service import ResearchRunService
+from research_store.strategy_service import StrategyRevisionService
 
 
 def test_verify_candidate_checkout_requires_exact_clean_head(monkeypatch):
@@ -140,12 +150,24 @@ def test_gate_requires_lowercase_go_and_production_reproducibility():
     )
     comparison = SimpleNamespace(all_within_tolerance=True)
 
-    assert smoke_test.gate_passes(result_a, result_b, comparison)
+    assert smoke_test.gate_passes(
+        cast(ReleaseBenchmarkResult, result_a),
+        cast(ReleaseBenchmarkResult, result_b),
+        cast(ReproducibilityComparison, comparison),
+    )
     result_b.recommendation.outcome = "GO"
-    assert not smoke_test.gate_passes(result_a, result_b, comparison)
+    assert not smoke_test.gate_passes(
+        cast(ReleaseBenchmarkResult, result_a),
+        cast(ReleaseBenchmarkResult, result_b),
+        cast(ReproducibilityComparison, comparison),
+    )
     result_b.recommendation.outcome = RecommendationOutcome.GO.value
     comparison.all_within_tolerance = False
-    assert not smoke_test.gate_passes(result_a, result_b, comparison)
+    assert not smoke_test.gate_passes(
+        cast(ReleaseBenchmarkResult, result_a),
+        cast(ReleaseBenchmarkResult, result_b),
+        cast(ReproducibilityComparison, comparison),
+    )
 
 
 def test_longest_text_finds_nested_report_body():
@@ -173,11 +195,11 @@ def test_run_evidence_inspector_uses_current_semantic_calls_schema():
 def test_orchestrator_propagates_supplier_to_semantic_stages():
     supplier = object()
     orchestrator = ResearchOrchestrator(
-        run_service=object(),
-        coverage_service=object(),
-        strategy_service=object(),
-        acquisition_service=object(),
-        config=object(),
+        run_service=cast(ResearchRunService, object()),
+        coverage_service=cast(CoverageService, object()),
+        strategy_service=cast(StrategyRevisionService, object()),
+        acquisition_service=cast(AcquisitionService, object()),
+        config=cast(StoreConfig, object()),
         corpus_service=object(),
         evidence_service=object(),
         orchestrator_config=OrchestratorConfig(host_artifact_supplier=supplier),

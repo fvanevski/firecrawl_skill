@@ -22,7 +22,7 @@ import os
 import sys
 import unittest
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
@@ -34,6 +34,8 @@ if _SCRIPT_DIR not in sys.path:
 from budget_policy import conservative_research_spec
 from research_domain import serialize_model
 from research_domain.models import OverallCoverageStatus
+from research_store.assessment.coverage import CoverageService
+from research_store.config import StoreConfig
 from research_store.domain import BlobReference, IngestRequest
 from research_store.orchestrator import (
     STRATEGY_DECISION_FAIL,
@@ -57,6 +59,8 @@ from research_store.orchestrator import (
     _minimum_authoritative_source_target,
     decision_to_state,
 )
+from research_store.run_service import ResearchRunService
+from research_store.strategy_service import StrategyRevisionService
 
 # ===================================================================
 # In-memory fixtures
@@ -526,7 +530,9 @@ class TestPlanningStage(unittest.TestCase):
     def test_planning_creates_transition(self):
         run_svc = MockRunService(initial_state="created", revision=0)
         config = MockConfig()
-        stage = PlanningStage(run_svc, config)
+        stage = PlanningStage(
+            cast(ResearchRunService, run_svc), cast(StoreConfig, config)
+        )
 
         result = stage.execute(
             run_id=uuid4(),
@@ -543,7 +549,9 @@ class TestPlanningStage(unittest.TestCase):
     def test_planning_rejects_wrong_state(self):
         run_svc = MockRunService(initial_state="acquiring", revision=0)
         config = MockConfig()
-        stage = PlanningStage(run_svc, config)
+        stage = PlanningStage(
+            cast(ResearchRunService, run_svc), cast(StoreConfig, config)
+        )
 
         result = stage.execute(
             run_id=uuid4(),
@@ -559,7 +567,9 @@ class TestPlanningStage(unittest.TestCase):
     def test_planning_rejects_missing_spec(self):
         run_svc = MockRunService(initial_state="created", revision=0)
         config = MockConfig()
-        stage = PlanningStage(run_svc, config)
+        stage = PlanningStage(
+            cast(ResearchRunService, run_svc), cast(StoreConfig, config)
+        )
 
         result = stage.execute(
             run_id=uuid4(),
@@ -584,7 +594,9 @@ class TestCorpusReviewStage(unittest.TestCase):
     def test_creates_coverage_items(self):
         run_svc = MockRunService(initial_state="corpus_review", revision=1)
         coverage_svc = MockCoverageService(item_count=2)
-        stage = CorpusReviewStage(run_svc, coverage_svc)
+        stage = CorpusReviewStage(
+            cast(ResearchRunService, run_svc), cast(CoverageService, coverage_svc)
+        )
 
         result = stage.execute(
             run_id=uuid4(),
@@ -628,7 +640,11 @@ class TestAcquisitionStage(unittest.TestCase):
         acquisition_svc.execute_search.return_value = mock_result
 
         stage = AcquisitionStage(
-            run_svc, acquisition_svc, coverage_svc, strategy_svc, config
+            cast(ResearchRunService, run_svc),
+            acquisition_svc,
+            cast(CoverageService, coverage_svc),
+            cast(StrategyRevisionService, strategy_svc),
+            cast(StoreConfig, config),
         )
 
         result = stage.execute(
@@ -658,7 +674,11 @@ class TestAcquisitionStage(unittest.TestCase):
         acquisition_svc.execute_search.return_value = mock_result
 
         stage = AcquisitionStage(
-            run_svc, acquisition_svc, coverage_svc, strategy_svc, MockConfig()
+            cast(ResearchRunService, run_svc),
+            acquisition_svc,
+            cast(CoverageService, coverage_svc),
+            cast(StrategyRevisionService, strategy_svc),
+            cast(StoreConfig, MockConfig()),
         )
         coverage_item_id = uuid4()
         result = stage.execute(
@@ -705,7 +725,11 @@ class TestAcquisitionStage(unittest.TestCase):
         acquisition_svc.execute_search.return_value = mock_result
 
         stage = AcquisitionStage(
-            run_svc, acquisition_svc, coverage_svc, strategy_svc, config
+            cast(ResearchRunService, run_svc),
+            acquisition_svc,
+            cast(CoverageService, coverage_svc),
+            cast(StrategyRevisionService, strategy_svc),
+            cast(StoreConfig, config),
         )
 
         result = stage.execute(
@@ -737,7 +761,12 @@ class TestCoverageReviewStage(unittest.TestCase):
         strategy_svc = MockStrategyService()
         config = MockConfig()
 
-        stage = CoverageReviewStage(run_svc, coverage_svc, strategy_svc, config)
+        stage = CoverageReviewStage(
+            cast(ResearchRunService, run_svc),
+            cast(CoverageService, coverage_svc),
+            cast(StrategyRevisionService, strategy_svc),
+            cast(StoreConfig, config),
+        )
 
         result = stage.execute(
             run_id=uuid4(),
@@ -762,7 +791,12 @@ class TestCoverageReviewStage(unittest.TestCase):
         strategy_svc = MockStrategyService()
         config = MockConfig()
 
-        stage = CoverageReviewStage(run_svc, coverage_svc, strategy_svc, config)
+        stage = CoverageReviewStage(
+            cast(ResearchRunService, run_svc),
+            cast(CoverageService, coverage_svc),
+            cast(StrategyRevisionService, strategy_svc),
+            cast(StoreConfig, config),
+        )
 
         result = stage.execute(
             run_id=uuid4(),
@@ -795,7 +829,9 @@ class TestIndexingStage(unittest.TestCase):
     def test_indexing_fails_closed_without_vector_services(self):
         run_svc = MockRunService(initial_state="indexing", revision=2)
         config = MockConfig()
-        stage = IndexingStage(run_svc, config)
+        stage = IndexingStage(
+            cast(ResearchRunService, run_svc), cast(StoreConfig, config)
+        )
 
         result = stage.execute(
             run_id=uuid4(),
@@ -806,6 +842,7 @@ class TestIndexingStage(unittest.TestCase):
         )
 
         self.assertEqual(result.outcome, StageOutcome.TERMINAL)
+        assert result.error is not None
         self.assertIn("vector index and embedding services", result.error)
         self.assertEqual(run_svc._state, "indexing")
 
@@ -820,7 +857,7 @@ class TestTerminalStage(unittest.TestCase):
 
     def test_terminal_partial(self):
         run_svc = MockRunService(initial_state="validating", revision=3)
-        stage = TerminalStage(run_svc)
+        stage = TerminalStage(cast(ResearchRunService, run_svc))
 
         result = stage.execute(
             run_id=uuid4(),
@@ -838,7 +875,7 @@ class TestTerminalStage(unittest.TestCase):
 
     def test_terminal_failed(self):
         run_svc = MockRunService(initial_state="validating", revision=3)
-        stage = TerminalStage(run_svc)
+        stage = TerminalStage(cast(ResearchRunService, run_svc))
 
         result = stage.execute(
             run_id=uuid4(),
@@ -878,11 +915,11 @@ class TestResearchOrchestrator(unittest.TestCase):
         self.config = MockConfig()
 
         self.orchestrator = ResearchOrchestrator(
-            run_service=self.run_svc,
-            coverage_service=self.coverage_svc,
-            strategy_service=self.strategy_svc,
+            run_service=cast(ResearchRunService, self.run_svc),
+            coverage_service=cast(CoverageService, self.coverage_svc),
+            strategy_service=cast(StrategyRevisionService, self.strategy_svc),
             acquisition_service=self.acquisition_svc,
-            config=self.config,
+            config=cast(StoreConfig, self.config),
         )
 
     def test_run_from_external_id_creates_run(self):
@@ -920,11 +957,11 @@ class TestResearchOrchestrator(unittest.TestCase):
         config = MockConfig()
 
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=coverage_svc,
-            strategy_service=strategy_svc,
+            run_service=cast(ResearchRunService, run_svc),
+            coverage_service=cast(CoverageService, coverage_svc),
+            strategy_service=cast(StrategyRevisionService, strategy_svc),
             acquisition_service=acquisition_svc,
-            config=config,
+            config=cast(StoreConfig, config),
         )
 
         result = orchestrator.run_from_external_id(
@@ -964,11 +1001,11 @@ class TestResearchOrchestrator(unittest.TestCase):
         )
 
         self.orchestrator = ResearchOrchestrator(
-            run_service=self.run_svc,
-            coverage_service=self.coverage_svc,
-            strategy_service=self.strategy_svc,
+            run_service=cast(ResearchRunService, self.run_svc),
+            coverage_service=cast(CoverageService, self.coverage_svc),
+            strategy_service=cast(StrategyRevisionService, self.strategy_svc),
             acquisition_service=self.acquisition_svc,
-            config=self.config,
+            config=cast(StoreConfig, self.config),
         )
 
         spec = {
@@ -1005,11 +1042,11 @@ class TestResearchOrchestrator(unittest.TestCase):
         )
 
         self.orchestrator = ResearchOrchestrator(
-            run_service=self.run_svc,
-            coverage_service=self.coverage_svc,
-            strategy_service=self.strategy_svc,
+            run_service=cast(ResearchRunService, self.run_svc),
+            coverage_service=cast(CoverageService, self.coverage_svc),
+            strategy_service=cast(StrategyRevisionService, self.strategy_svc),
             acquisition_service=self.acquisition_svc,
-            config=self.config,
+            config=cast(StoreConfig, self.config),
         )
 
         spec = {
@@ -1046,11 +1083,11 @@ class TestResearchOrchestrator(unittest.TestCase):
         )
 
         self.orchestrator = ResearchOrchestrator(
-            run_service=self.run_svc,
-            coverage_service=self.coverage_svc,
-            strategy_service=self.strategy_svc,
+            run_service=cast(ResearchRunService, self.run_svc),
+            coverage_service=cast(CoverageService, self.coverage_svc),
+            strategy_service=cast(StrategyRevisionService, self.strategy_svc),
             acquisition_service=self.acquisition_svc,
-            config=self.config,
+            config=cast(StoreConfig, self.config),
         )
 
         spec = {
@@ -1113,11 +1150,11 @@ class TestResearchOrchestrator(unittest.TestCase):
         )
 
         self.orchestrator = ResearchOrchestrator(
-            run_service=self.run_svc,
-            coverage_service=self.coverage_svc,
-            strategy_service=self.strategy_svc,
+            run_service=cast(ResearchRunService, self.run_svc),
+            coverage_service=cast(CoverageService, self.coverage_svc),
+            strategy_service=cast(StrategyRevisionService, self.strategy_svc),
             acquisition_service=self.acquisition_svc,
-            config=self.config,
+            config=cast(StoreConfig, self.config),
         )
 
         spec = {
@@ -1163,7 +1200,12 @@ class TestResearchOrchestrator(unittest.TestCase):
         strategy_svc._authorize_outcome = "rejected"
         config = MockConfig()
 
-        stage = CoverageReviewStage(run_svc, coverage_svc, strategy_svc, config)
+        stage = CoverageReviewStage(
+            cast(ResearchRunService, run_svc),
+            cast(CoverageService, coverage_svc),
+            cast(StrategyRevisionService, strategy_svc),
+            cast(StoreConfig, config),
+        )
         result = stage.execute(
             run_id=uuid4(),
             run_revision=2,
@@ -1186,7 +1228,12 @@ class TestResearchOrchestrator(unittest.TestCase):
         strategy_svc = MockStrategyService()
         config = MockConfig()
 
-        stage = CoverageReviewStage(run_svc, coverage_svc, strategy_svc, config)
+        stage = CoverageReviewStage(
+            cast(ResearchRunService, run_svc),
+            cast(CoverageService, coverage_svc),
+            cast(StrategyRevisionService, strategy_svc),
+            cast(StoreConfig, config),
+        )
         # Pass stale coverage revision (0 < current 1)
         result = stage.execute(
             run_id=uuid4(),
@@ -1235,11 +1282,11 @@ class TestResearchOrchestrator(unittest.TestCase):
         config = MockConfig()
 
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=coverage_svc,
-            strategy_service=strategy_svc,
+            run_service=cast(ResearchRunService, run_svc),
+            coverage_service=cast(CoverageService, coverage_svc),
+            strategy_service=cast(StrategyRevisionService, strategy_svc),
             acquisition_service=acquisition_svc,
-            config=config,
+            config=cast(StoreConfig, config),
         )
 
         # First call creates the run
@@ -1746,11 +1793,11 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         config.max_adaptive_cycles = 1  # Budget exhausted after 1 wave
 
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=coverage_svc,
-            strategy_service=strategy_svc,
+            run_service=cast(ResearchRunService, run_svc),
+            coverage_service=cast(CoverageService, coverage_svc),
+            strategy_service=cast(StrategyRevisionService, strategy_svc),
             acquisition_service=acquisition_svc,
-            config=config,
+            config=cast(StoreConfig, config),
         )
 
         spec = {
@@ -1809,11 +1856,11 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         config.max_adaptive_cycles = 1
 
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=coverage_svc,
-            strategy_service=strategy_svc,
+            run_service=cast(ResearchRunService, run_svc),
+            coverage_service=cast(CoverageService, coverage_svc),
+            strategy_service=cast(StrategyRevisionService, strategy_svc),
             acquisition_service=acquisition_svc,
-            config=config,
+            config=cast(StoreConfig, config),
         )
 
         spec = {
@@ -1945,7 +1992,9 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
 
         config = MockConfig()
         stage = IndexingStage(
-            run_service=run_svc, config=config, corpus_service=corpus_svc
+            run_service=cast(ResearchRunService, run_svc),
+            config=cast(StoreConfig, config),
+            corpus_service=corpus_svc,
         )
 
         # Mock IndexWorker.run_batch to avoid real DB interactions
@@ -1993,6 +2042,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         )
         self.assertIn(ContextKeys.INDEX_BUILD_ID, ctx)
         self.assertEqual(ctx[ContextKeys.INDEX_FINGERPRINT], "test_embedder_v1")
+        assert result.details is not None
         self.assertEqual(
             result.details[ContextKeys.INDEX_FINGERPRINT], "test_embedder_v1"
         )
@@ -2005,8 +2055,8 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         corpus_svc.uow_factory = MagicMock()
 
         stage = IndexingStage(
-            run_service=run_svc,
-            config=MockConfig(),
+            run_service=cast(ResearchRunService, run_svc),
+            config=cast(StoreConfig, MockConfig()),
             corpus_service=corpus_svc,
         )
         with unittest.mock.patch(
@@ -2027,6 +2077,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
             )
 
         self.assertEqual(result.outcome, StageOutcome.TERMINAL)
+        assert result.error is not None
         self.assertIn("did not complete cleanly", result.error)
         self.assertEqual(run_svc._state, "indexing")
 
@@ -2038,10 +2089,10 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         config = MockConfig()
 
         stage = CoverageReviewStage(
-            run_service=run_svc,
-            coverage_service=coverage_svc,
-            strategy_service=strategy_svc,
-            config=config,
+            run_service=cast(ResearchRunService, run_svc),
+            coverage_service=cast(CoverageService, coverage_svc),
+            strategy_service=cast(StrategyRevisionService, strategy_svc),
+            config=cast(StoreConfig, config),
         )
 
         mock_item = MagicMock()
@@ -2105,11 +2156,11 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
         # Create orchestrator with a custom terminal config
         terminal_config = TerminalDecisionConfig(max_strategy_revisions=3)
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=coverage_svc,
-            strategy_service=strategy_svc,
+            run_service=cast(ResearchRunService, run_svc),
+            coverage_service=cast(CoverageService, coverage_svc),
+            strategy_service=cast(StrategyRevisionService, strategy_svc),
             acquisition_service=acquisition_svc,
-            config=config,
+            config=cast(StoreConfig, config),
             terminal_config=terminal_config,
         )
 
@@ -2131,11 +2182,11 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
 
         terminal_config = TerminalDecisionConfig(max_strategy_revisions=3)
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=coverage_svc,
-            strategy_service=strategy_svc,
+            run_service=cast(ResearchRunService, run_svc),
+            coverage_service=cast(CoverageService, coverage_svc),
+            strategy_service=cast(StrategyRevisionService, strategy_svc),
             acquisition_service=acquisition_svc,
-            config=config,
+            config=cast(StoreConfig, config),
             terminal_config=terminal_config,
         )
 
@@ -2150,6 +2201,7 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
 
         outcome = orchestrator._evaluate_terminal_decision(ctx, self.run_id, 1, 1)
         # Strategy revisions exceeded → REPEATED_EQUIVALENT_PROPOSALS → FAILED
+        assert outcome is not None
         self.assertEqual(outcome.outcome, TerminalDecisionOutcome.FAILED)
 
     def test_terminal_decision_sufficient_overrides_all(self):
@@ -2165,11 +2217,11 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
         acquisition_svc = MagicMock()
 
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=coverage_svc,
-            strategy_service=strategy_svc,
+            run_service=cast(ResearchRunService, run_svc),
+            coverage_service=cast(CoverageService, coverage_svc),
+            strategy_service=cast(StrategyRevisionService, strategy_svc),
             acquisition_service=acquisition_svc,
-            config=config,
+            config=cast(StoreConfig, config),
         )
 
         ctx = {
@@ -2181,6 +2233,7 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
 
         outcome = orchestrator._evaluate_terminal_decision(ctx, self.run_id, 1, 1)
         # Sufficient coverage always wins
+        assert outcome is not None
         self.assertEqual(outcome.outcome, TerminalDecisionOutcome.SUFFICIENT)
 
     def test_terminal_decision_blocked_by_unsatisfiable_source(self):
@@ -2196,11 +2249,11 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
         acquisition_svc = MagicMock()
 
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=coverage_svc,
-            strategy_service=strategy_svc,
+            run_service=cast(ResearchRunService, run_svc),
+            coverage_service=cast(CoverageService, coverage_svc),
+            strategy_service=cast(StrategyRevisionService, strategy_svc),
             acquisition_service=acquisition_svc,
-            config=config,
+            config=cast(StoreConfig, config),
         )
 
         ctx = {
@@ -2212,6 +2265,7 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
 
         outcome = orchestrator._evaluate_terminal_decision(ctx, self.run_id, 1, 1)
         # Unsatisfiable source → BLOCKED
+        assert outcome is not None
         self.assertEqual(outcome.outcome, TerminalDecisionOutcome.BLOCKED)
 
     def test_deterministic_idempotency_key_format(self):
@@ -2229,11 +2283,11 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
 
         terminal_config = TerminalDecisionConfig(max_strategy_revisions=3)
         orchestrator = ResearchOrchestrator(
-            run_service=run_svc,
-            coverage_service=coverage_svc,
-            strategy_service=strategy_svc,
+            run_service=cast(ResearchRunService, run_svc),
+            coverage_service=cast(CoverageService, coverage_svc),
+            strategy_service=cast(StrategyRevisionService, strategy_svc),
             acquisition_service=acquisition_svc,
-            config=config,
+            config=cast(StoreConfig, config),
             terminal_config=terminal_config,
         )
 
@@ -2250,6 +2304,7 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
         expected_key = f"terminal:{self.run_id}:r2:c4"
         self.assertEqual(expected_key, f"terminal:{self.run_id}:r2:c4")
         # Verify decision has correct outcome (REPEATED_EQUIVALENT_PROPOSALS → FAILED)
+        assert decision is not None
         self.assertEqual(decision.outcome, TerminalDecisionOutcome.FAILED)
         self.assertEqual(decision.run_revision, 2)
         self.assertEqual(decision.coverage_revision, 4)

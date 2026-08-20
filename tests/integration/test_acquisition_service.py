@@ -25,7 +25,7 @@ from research_store.container import (
 from research_store.domain import SearchAdapterResult, utcnow
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 @pytest.fixture(scope="session")

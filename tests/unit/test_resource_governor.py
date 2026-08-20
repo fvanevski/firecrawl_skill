@@ -211,10 +211,12 @@ class TestResourceGovernorHealth:
         # Unhealthy -> Healthy should increment restart_count.
         governor.set_health("generative", EndpointStatus.UNHEALTHY, error="crash")
         health1 = governor.get_health("generative")
+        assert health1 is not None
         assert health1.restart_count == 0
 
         governor.set_health("generative", EndpointStatus.HEALTHY)
         health2 = governor.get_health("generative")
+        assert health2 is not None
         assert health2.restart_count == 1
         assert health2.total_failures == 1
 
@@ -230,11 +232,13 @@ class TestResourceGovernorHealth:
         # First time degraded — degraded_since should be set.
         governor.set_health("generative", EndpointStatus.DEGRADED, error="slow")
         health = governor.get_health("generative")
+        assert health is not None
         assert health.degraded_since is not None
 
         # Second degraded call — degraded_since should persist.
         governor.set_health("generative", EndpointStatus.DEGRADED, error="still slow")
         health2 = governor.get_health("generative")
+        assert health2 is not None
         assert health2.degraded_since == health.degraded_since
 
     def test_health_persistence_via_store(self):
@@ -388,6 +392,7 @@ class TestResourceGovernorConcurrency:
         try:
             loop.run_until_complete(governor.acquire("generative"))
             health = governor.get_health("generative")
+            assert health is not None
             assert health.concurrent_requests == 1
             loop.run_until_complete(governor.release("generative"))
         finally:
@@ -407,6 +412,7 @@ class TestResourceGovernorConcurrency:
             loop.run_until_complete(governor.acquire("generative"))
             loop.run_until_complete(governor.release("generative"))
             health = governor.get_health("generative")
+            assert health is not None
             assert health.concurrent_requests == 0
         finally:
             loop.close()
@@ -659,7 +665,9 @@ class TestResourceGovernorRestart:
 
         # Simulate crash.
         governor.set_health("generative", EndpointStatus.UNHEALTHY, error="crash")
-        assert governor.get_health("generative").status == EndpointStatus.UNHEALTHY
+        h = governor.get_health("generative")
+        assert h is not None
+        assert h.status == EndpointStatus.UNHEALTHY
 
         # Simulate restart.
         governor.reset_health("generative")
@@ -668,6 +676,7 @@ class TestResourceGovernorRestart:
         # Should accept requests again.
         governor.acquire_sync("generative")
         health = governor.get_health("generative")
+        assert health is not None
         assert health.status == EndpointStatus.HEALTHY
         assert health.restart_count == 0  # Reset cleared the old count.
 
@@ -691,9 +700,13 @@ class TestResourceGovernorSyncAcquireRelease:
         governor.set_health("generative", EndpointStatus.HEALTHY)
 
         governor.acquire_sync("generative")
-        assert governor.get_health("generative").concurrent_requests == 1
+        h = governor.get_health("generative")
+        assert h is not None
+        assert h.concurrent_requests == 1
         governor.release_sync("generative")
-        assert governor.get_health("generative").concurrent_requests == 0
+        h = governor.get_health("generative")
+        assert h is not None
+        assert h.concurrent_requests == 0
 
     def test_sync_acquire_blocks_at_limit(self):
         config = EndpointConfig(
@@ -899,6 +912,7 @@ class TestHealthStoreIntegration:
 
         # Verify in-memory state is returned first.
         health = governor.get_health("generative")
+        assert health is not None
         assert health.status == EndpointStatus.HEALTHY
 
         # Reset in-memory state — now query_fn should be used.
@@ -911,9 +925,11 @@ class TestHealthStoreIntegration:
             status=EndpointStatus.DEGRADED,
         )
         health = governor.get_health("generative")
+        assert health is not None
         assert health.status == EndpointStatus.DEGRADED
         # After first query, it should be cached in-memory.
         health2 = governor.get_health("generative")
+        assert health2 is not None
         assert health2.status == EndpointStatus.DEGRADED
 
 

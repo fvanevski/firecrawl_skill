@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
+from typing import Any, cast
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 from research_store.report_artifact_service import (
@@ -90,7 +92,7 @@ def _make_valid_report(
     with_entailment_mismatch: bool = False,
 ) -> dict:
     """Build a valid report artifact for testing."""
-    report = {
+    report: dict[str, Any] = {
         "schema_version": "synthesis-citation-pass-v1",
         "run_id": str(_VALID_PACKET["run_id"]),
         "evidence_packet_revision": packet_revision,
@@ -537,14 +539,14 @@ def test_validation_finding_frozen():
     """ValidationFinding should be frozen (immutable)."""
     finding = ReportValidationFinding(
         code="TEST",
-        severity=ReportValidationSeverity.ERROR,
+        severity=cast(ReportValidationSeverity, ReportValidationSeverity.ERROR),
         message="test message",
         path="test/path",
         detail={"key": "value"},
     )
 
     with pytest.raises(FrozenInstanceError):
-        finding.code = "modified"
+        cast(Any, finding).code = "modified"
 
 
 def test_validation_severity_enum():
@@ -692,7 +694,7 @@ def test_validate_report_valid():
 
     service = ReportArtifactService(mock_uow_factory, evidence_service)
     report = _make_valid_report()
-    result = service.validate_report(_VALID_PACKET["run_id"], report)
+    result = service.validate_report(cast(UUID, _VALID_PACKET["run_id"]), report)
 
     assert result.is_valid is True
     assert result.stale_packet is False
@@ -711,7 +713,7 @@ def test_validate_report_stale_packet():
 
     service = ReportArtifactService(mock_uow_factory, evidence_service)
     report = _make_valid_report(packet_revision=1)
-    result = service.validate_report(_VALID_PACKET["run_id"], report)
+    result = service.validate_report(cast(UUID, _VALID_PACKET["run_id"]), report)
 
     assert result.is_valid is False
     assert result.stale_packet is True
@@ -728,7 +730,7 @@ def test_validate_report_packet_not_found():
     report = _make_valid_report()
 
     with pytest.raises(ReportArtifactError, match="EvidencePacket not found"):
-        service.validate_report(_VALID_PACKET["run_id"], report)
+        service.validate_report(cast(UUID, _VALID_PACKET["run_id"]), report)
 
 
 def test_persist_validation_result():
@@ -743,9 +745,11 @@ def test_persist_validation_result():
 
     service = ReportArtifactService(mock_uow_factory, evidence_service)
     report = _make_valid_report()
-    validation_result = service.validate_report(_VALID_PACKET["run_id"], report)
+    validation_result = service.validate_report(
+        cast(UUID, _VALID_PACKET["run_id"]), report
+    )
     record = service.persist_validation_result(
-        _VALID_PACKET["run_id"], report, validation_result
+        cast(UUID, _VALID_PACKET["run_id"]), report, validation_result
     )
 
     assert record["stage_name"] == "validation"
@@ -770,12 +774,14 @@ def test_get_report_returns_artifact():
 
     service = ReportArtifactService(mock_uow_factory, evidence_service)
     report = _make_valid_report()
-    validation_result = service.validate_report(_VALID_PACKET["run_id"], report)
+    validation_result = service.validate_report(
+        cast(UUID, _VALID_PACKET["run_id"]), report
+    )
     service.persist_validation_result(
-        _VALID_PACKET["run_id"], report, validation_result
+        cast(UUID, _VALID_PACKET["run_id"]), report, validation_result
     )
 
-    artifact = service.get_report(_VALID_PACKET["run_id"])
+    artifact = service.get_report(cast(UUID, _VALID_PACKET["run_id"]))
     assert artifact is not None
     assert artifact["report_hash"] == validation_result.report_hash
     assert artifact["validation_status"] == "valid"
@@ -787,7 +793,7 @@ def test_get_report_returns_none_when_not_found():
     evidence_service = _make_evidence_service(mock_uow_factory, packet_store)
 
     service = ReportArtifactService(mock_uow_factory, evidence_service)
-    result = service.get_report(_VALID_PACKET["run_id"])
+    result = service.get_report(cast(UUID, _VALID_PACKET["run_id"]))
     assert result is None
 
 

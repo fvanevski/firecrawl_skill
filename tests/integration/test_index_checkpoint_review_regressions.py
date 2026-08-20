@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Barrier
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -29,7 +30,7 @@ from research_store.terminal_decision_service import (
 )
 from research_store.workflow_service import WorkflowBoundaryError
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -269,7 +270,9 @@ def test_orphan_terminal_decision_cannot_commit(checkpoint_config: StoreConfig):
             "WHERE run_id=%s AND idempotency_key=%s",
             (status.id, key),
         )
-        assert cursor.fetchone()[0] == 0
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == 0
 
 
 def test_semantically_mismatched_terminal_command_rolls_back(
@@ -356,6 +359,7 @@ def test_guarded_terminal_command_persists_one_atomic_semantic_pair(
             (status.id, key),
         )
         row = cursor.fetchone()
+    assert row is not None
     assert row[0] == "review_structured_failure"
     assert row[1] == row[2]
     assert row[4] == row[3] + 1
@@ -418,9 +422,9 @@ def test_concurrent_identical_terminal_commands_reuse_one_atomic_pair(
                 key,
             ),
         )
-        decision_count, transition_count, decision_xid, transition_xid = (
-            cursor.fetchone()
-        )
+        row = cursor.fetchone()
+        assert row is not None
+        decision_count, transition_count, decision_xid, transition_xid = row
     assert (decision_count, transition_count) == (1, 1)
     assert decision_xid == transition_xid
 
@@ -452,7 +456,9 @@ def test_standalone_terminal_decision_service_fails_before_writing(
             "WHERE run_id=%s AND idempotency_key=%s",
             (status.id, key),
         )
-        assert cursor.fetchone()[0] == 0
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 0
 
 
 def test_public_resume_replays_completed_checkpoint_without_new_transition(
@@ -485,6 +491,7 @@ def test_public_resume_replays_completed_checkpoint_without_new_transition(
 
     monkeypatch.setenv("DATABASE_URL", TEST_DSN)
     monkeypatch.setenv("BLOB_ROOT", str(checkpoint_config.blob_root))
+    assert status.external_id is not None
     for _attempt in range(2):
         assert resume_checkpoint_main([status.external_id]) == 0
         payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -500,7 +507,9 @@ def test_public_resume_replays_completed_checkpoint_without_new_transition(
                   AND next_state='coverage_review'""",
             (status.id,),
         )
-        assert cursor.fetchone()[0] == 1
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 1
 
 
 def test_invalid_wrapper_operation_is_rejected_without_any_mutation(
@@ -525,10 +534,13 @@ def test_invalid_wrapper_operation_is_rejected_without_any_mutation(
                  (SELECT count(*) FROM research_invocations WHERE run_id=%s)""",
             (status.id, status.id),
         )
-        transition_count, invocation_count = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        transition_count, invocation_count = row
 
     workflow = build_workflow_operation_service(checkpoint_config)
     with pytest.raises(WorkflowBoundaryError, match="unsupported wrapper operation"):
+        assert status.external_id is not None
         workflow.begin_operation(
             status.external_id,
             f"fc_invalid_{uuid4().hex}",
@@ -542,7 +554,7 @@ def test_invalid_wrapper_operation_is_rejected_without_any_mutation(
             status.external_id,
             f"fc_invalid_input_{uuid4().hex}",
             "fsearch",
-            ["not", "an", "object"],
+            cast("dict[str, Any]", ["not", "an", "object"]),
         )
 
     current = runs.status(run_id=status.id)

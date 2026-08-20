@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 from unittest import mock
 from uuid import UUID
 
@@ -17,6 +19,7 @@ from research_store.direct_scrape_service import (
 )
 from research_store.fscrape_cli import main
 from research_store.fscrape_contract import FScrapeResult
+from research_store.fscrape_service import FScrapeService
 
 RUN_UUID = UUID("11111111-1111-4111-8111-111111111111")
 RUN_ID = f"fr_{RUN_UUID.hex}"
@@ -179,7 +182,7 @@ def test_schema_file_is_read_only_as_explicit_input(tmp_path: Path):
             str(schema_file),
             "--json",
         ],
-        service_factory=lambda: service,
+        service_factory=cast(Callable[[], FScrapeService], lambda: service),
     )
 
     assert code == 0
@@ -284,7 +287,7 @@ def test_cli_does_not_create_acquisition_artifacts_under_tmpdir(
             EXTERNAL_INVOCATION_ID,
             "--json",
         ],
-        service_factory=lambda: service,
+        service_factory=cast(Callable[[], FScrapeService], lambda: service),
     )
 
     assert code == 0
@@ -305,7 +308,7 @@ def test_partial_cli_result_is_authoritative_and_nonzero(capsys):
             RUN_ID,
             "--json",
         ],
-        service_factory=lambda: service,
+        service_factory=cast(Callable[[], FScrapeService], lambda: service),
     )
 
     assert code == 5

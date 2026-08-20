@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -9,6 +10,7 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from research_store import qdrant_authority
+from research_store.config import StoreConfig
 from research_store.qdrant_authority import evaluate_required_alias_state
 
 
@@ -111,7 +113,9 @@ def test_projection_preservation_requires_exact_point_count(monkeypatch, after_c
     )
 
     with pytest.raises(RuntimeError, match="point count changed during probe cleanup"):
-        qdrant_authority.require_configured_projection_preserved(object(), before)
+        qdrant_authority.require_configured_projection_preserved(
+            cast(StoreConfig, object()), before
+        )
 
 
 def test_projection_preservation_accepts_exact_point_count(monkeypatch):
@@ -123,6 +127,8 @@ def test_projection_preservation_accepts_exact_point_count(monkeypatch):
     )
 
     assert (
-        qdrant_authority.require_configured_projection_preserved(object(), before)
+        qdrant_authority.require_configured_projection_preserved(
+            cast(StoreConfig, object()), before
+        )
         == before
     )

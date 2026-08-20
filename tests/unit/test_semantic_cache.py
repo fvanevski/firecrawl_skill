@@ -12,6 +12,7 @@ Tests cover:
 from __future__ import annotations
 
 import time
+from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -102,7 +103,7 @@ _VALID_PACKET = {
 
 def _make_cache_service(
     ttl_seconds: int = 3600,
-) -> tuple[SemanticCacheService, MagicMock]:
+) -> tuple[SemanticCacheService, MagicMock, dict[str, dict]]:
     """Build a SemanticCacheService with a mocked UOW factory."""
     mock_uow = MagicMock()
     _cache_store: dict[str, dict] = {}
@@ -586,7 +587,7 @@ def test_insert_empty_artifact_returns_none():
         input_hash="test-input-hash",
         policy_version=_BASE_POLICY_VERSION,
         configuration=_BASE_CONFIG,
-        artifact=None,
+        artifact=cast(dict[str, Any], None),
         provenance=_BASE_PROVENANCE,
     )
     assert result is None
@@ -1303,7 +1304,7 @@ def test_revive_expired_entry():
     assert result is None
 
     # Re-insert with the same key should revive the expired entry.
-    new_artifact = dict(_BASE_ARTIFACT)
+    new_artifact: dict[str, Any] = dict(_BASE_ARTIFACT)
     new_artifact["revived"] = True
     entry2 = service.insert(
         stage="outline",

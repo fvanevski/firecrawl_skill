@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import cast
+from uuid import UUID
 
 import pytest
 
@@ -933,12 +935,12 @@ class TestWorkflowBenchmarkRunner:
         assert agent_results
 
         # Legacy should have lower recall
-        avg_base_recall = sum(r.quality.candidate_recall for r in base_results) / len(
-            base_results
-        )
-        avg_agent_recall = sum(r.quality.candidate_recall for r in agent_results) / len(
-            agent_results
-        )
+        avg_base_recall = sum(
+            cast(float, r.quality.candidate_recall) for r in base_results
+        ) / len(base_results)
+        avg_agent_recall = sum(
+            cast(float, r.quality.candidate_recall) for r in agent_results
+        ) / len(agent_results)
         assert avg_base_recall < avg_agent_recall
 
     def test_agent_led_lower_unsupported_claims(self):
@@ -951,12 +953,12 @@ class TestWorkflowBenchmarkRunner:
         result = runner.run()
 
         base_unsupported = sum(
-            r.quality.unsupported_claim_rate
+            cast(float, r.quality.unsupported_claim_rate)
             for r in result.comparison.results
             if r.workflow_mode == "autonomous_local"
         )
         agent_unsupported = sum(
-            r.quality.unsupported_claim_rate
+            cast(float, r.quality.unsupported_claim_rate)
             for r in result.comparison.results
             if r.workflow_mode == "agent_led"
         )
@@ -1427,15 +1429,15 @@ class TestDeterministicDebugMode:
         assert agent_results
 
         # deterministic_debug should have the lowest recall
-        avg_debug_recall = sum(r.quality.candidate_recall for r in debug_results) / len(
-            debug_results
-        )
-        avg_base_recall = sum(r.quality.candidate_recall for r in base_results) / len(
-            base_results
-        )
-        avg_agent_recall = sum(r.quality.candidate_recall for r in agent_results) / len(
-            agent_results
-        )
+        avg_debug_recall = sum(
+            cast(float, r.quality.candidate_recall) for r in debug_results
+        ) / len(debug_results)
+        avg_base_recall = sum(
+            cast(float, r.quality.candidate_recall) for r in base_results
+        ) / len(base_results)
+        avg_agent_recall = sum(
+            cast(float, r.quality.candidate_recall) for r in agent_results
+        ) / len(agent_results)
 
         assert avg_debug_recall < avg_base_recall < avg_agent_recall
 
@@ -1682,7 +1684,7 @@ class TestBenchmarkCLI:
 
         assert data["dataset_version"]
         # Verify the report text generation logic from cli.py
-        lines = []
+        lines: list[str] = []
         lines.append("=" * 60)
         lines.append("RELEASE BENCHMARK REPORT")
         lines.append("=" * 60)
@@ -1847,12 +1849,12 @@ class TestRealWorkflowExecutionMonkeypatch:
         quality = runner._compute_real_quality(MockResult(), objective)
 
         # Verify metrics are computed (not zero)
-        assert quality.candidate_recall > 0
-        assert quality.source_quality_score > 0
-        assert quality.coverage_completeness > 0
-        assert quality.unsupported_claim_rate >= 0
-        assert quality.citation_accuracy > 0
-        assert quality.report_quality_score > 0
+        assert cast(float, quality.candidate_recall) > 0
+        assert cast(float, quality.source_quality_score) > 0
+        assert cast(float, quality.coverage_completeness) > 0
+        assert cast(float, quality.unsupported_claim_rate) >= 0
+        assert cast(float, quality.citation_accuracy) > 0
+        assert cast(float, quality.report_quality_score) > 0
 
     def test_compute_real_performance_from_execution(self):
         """_compute_real_performance captures wall-clock latency."""
@@ -1880,7 +1882,7 @@ class TestRealWorkflowExecutionMonkeypatch:
 
         # Verify latency is captured (should be > 0)
         assert performance.total_latency_ms > 0
-        assert performance.total_tokens > 0
+        assert cast(float, performance.total_tokens) > 0
         assert performance.semantic_calls >= 0
 
     def test_dry_run_false_wires_real_execution(self, monkeypatch):
@@ -1909,7 +1911,7 @@ class TestRealWorkflowExecutionMonkeypatch:
                 quality=None,  # type: ignore
                 performance=None,  # type: ignore
                 integrity_checks=(),
-                run_id="test_run",
+                run_id=cast(UUID | None, "test_run"),
                 errors=(),
             )
 

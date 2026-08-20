@@ -2,11 +2,13 @@
 
 import json
 from copy import deepcopy
+from typing import cast
 from uuid import UUID
 
 import pytest
 from research_store.claim_binding_service import ClaimBindingService
-from research_store.semantic_service import HostArtifactResult
+from research_store.evidence import EvidenceService
+from research_store.semantic_service import HostArtifactResult, SemanticCallService
 
 
 class MockEvidenceService:
@@ -67,7 +69,10 @@ def mock_packet():
 def service(mock_packet):
     ev = MockEvidenceService(mock_packet)
     sem = MockSemanticCallService()
-    return ClaimBindingService(sem, ev)
+    return ClaimBindingService(
+        cast(SemanticCallService, sem),
+        cast(EvidenceService, ev),
+    )
 
 
 def test_evaluate_claims_success(service, mock_packet, monkeypatch):
@@ -419,7 +424,10 @@ def test_missing_packet_raises_value_error(mock_packet, monkeypatch):
         def finish_model_call(self, call_id, *args, **kwargs):
             return []
 
-    svc = ClaimBindingService(MockSemanticCallService(), NoneEvidenceService())
+    svc = ClaimBindingService(
+        cast(SemanticCallService, MockSemanticCallService()),
+        cast(EvidenceService, NoneEvidenceService()),
+    )
 
     with pytest.raises(ValueError, match="not found"):
         svc.evaluate_claims(

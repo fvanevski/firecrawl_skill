@@ -29,6 +29,7 @@ import sys
 import time
 from hashlib import sha256
 from pathlib import Path
+from typing import cast
 from unittest import mock
 from uuid import uuid4
 
@@ -48,6 +49,7 @@ from research_domain.models import (
     PerformanceMeasurement,
     QualityMeasurement,
     ReleaseRecommendation,
+    WorkflowComparison,
 )
 from research_store.release_benchmark import (
     CampaignRun,
@@ -138,7 +140,7 @@ def _make_result(
         schema_version="release-recommendation-v1",
         outcome=outcome,
         dataset_version="benchmark-v2",
-        comparison=None,
+        comparison=cast(WorkflowComparison, None),
         supported_claims=("quality thresholds met",),
         withdrawn_claims=(),
         known_limitations=("CPU latency",),
@@ -260,6 +262,7 @@ class TestDeterministicDebugNotInvoked:
             performance=perf,
             outcome="no_go",
         )
+        assert result.recommendation is not None
         assert result.recommendation.outcome == "no_go"
         # deterministic_debug is not a release-qualifying mode.
         assert result.recommendation.outcome != "go"
@@ -293,6 +296,7 @@ class TestMissingTokenUsage:
         )
 
         # The recommendation must be NO_GO because performance is incomplete.
+        assert result.recommendation is not None
         assert result.recommendation.outcome == "no_go"
         assert perf.semantic_calls < 8  # Not all calls reported
 
@@ -322,6 +326,7 @@ class TestEmbeddingBatchFailures:
             outcome="no_go",
         )
 
+        assert result.recommendation is not None
         assert result.recommendation.outcome == "no_go"
         assert perf.embedding_throughput is None
 
@@ -346,6 +351,7 @@ class TestRunErrorsForceNoGo:
             outcome="no_go",
         )
 
+        assert result.recommendation is not None
         assert result.recommendation.outcome == "no_go"
         assert len(result.runs[0].errors) == 2
 
@@ -560,7 +566,7 @@ class TestCitationValidationFailure:
         assert citation_accuracy == 0.5
         # A citation_accuracy of 0.5 is below the quality threshold.
         quality = _make_quality(citation_accuracy=0.5)
-        assert quality.citation_accuracy < 0.88  # Below expected threshold
+        assert cast(float, quality.citation_accuracy) < 0.88  # Below expected threshold
 
 
 # ---------------------------------------------------------------------------

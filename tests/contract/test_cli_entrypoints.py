@@ -20,6 +20,7 @@ def _parser_commands() -> set[str]:
         for action in root._actions
         if hasattr(action, "choices") and isinstance(action.choices, dict)
     )
+    assert subparser_action.choices is not None
     return set(subparser_action.choices)
 
 

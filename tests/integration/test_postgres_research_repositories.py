@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -20,7 +21,7 @@ from research_store.postgres_strategy import PostgresStrategyRevisionRepository
 from research_store.postgres_terminal import PostgresTerminalDecisionRepository
 from research_store.run_service import ResearchRunService, RunStateError
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 class _FakeTransaction:
@@ -72,22 +73,25 @@ def test_research_workflow_roles_bind_to_canonical_repositories(monkeypatch):
             assert not hasattr(role, "savepoint")
 
         assert isinstance(uow.runs.start_run.__self__, PostgresResearchRepository)
-        assert isinstance(uow.start_run.__self__, PostgresResearchRepository)
+        assert isinstance(cast(Any, uow.start_run).__self__, PostgresResearchRepository)
         assert isinstance(uow.coverage.apply_event.__self__, PostgresCoverageRepository)
-        assert isinstance(uow.apply_event.__self__, PostgresCoverageRepository)
+        assert isinstance(
+            cast(Any, uow.apply_event).__self__, PostgresCoverageRepository
+        )
         assert isinstance(
             uow.strategy_revisions.record_proposal.__self__,
             PostgresStrategyRevisionRepository,
         )
         assert isinstance(
-            uow.record_proposal.__self__, PostgresStrategyRevisionRepository
+            cast(Any, uow.record_proposal).__self__,
+            PostgresStrategyRevisionRepository,
         )
         assert isinstance(
             uow.terminal_decisions.record_terminal_decision.__self__,
             PostgresTerminalDecisionRepository,
         )
         assert isinstance(
-            uow.record_terminal_decision.__self__,
+            cast(Any, uow.record_terminal_decision).__self__,
             PostgresTerminalDecisionRepository,
         )
 
@@ -329,13 +333,16 @@ def test_terminal_decision_and_run_transition_are_one_transaction():
         status = uow.runs.get_run_status(run_id=run_id)
         assert status["state"] == "planning"
         assert status["lifecycle_revision"] == 1
+        assert uow.connection is not None
         with uow.connection.cursor() as cur:
             cur.execute(
                 """SELECT COUNT(*) FROM terminal_decisions
                 WHERE run_id=%s AND idempotency_key=%s""",
                 (run_id, rolled_back_key),
             )
-            assert cur.fetchone()[0] == 0
+            row0 = cur.fetchone()
+            assert row0 is not None
+            assert row0[0] == 0
 
     committed_key = f"terminal-valid:{suffix}"
     committed_decision = uuid4()
@@ -362,6 +369,7 @@ def test_terminal_decision_and_run_transition_are_one_transaction():
         status = uow.runs.get_run_status(run_id=run_id)
         assert status["state"] == "failed"
         assert status["lifecycle_revision"] == 2
+        assert uow.connection is not None
         with uow.connection.cursor() as cur:
             cur.execute(
                 """SELECT decision_id, run_revision, coverage_revision, outcome
@@ -447,6 +455,7 @@ def test_concurrent_coverage_events_serialize_revision_allocation():
         assert replay["coverage_revision"] == first["coverage_revision"]
         assert uow.coverage.get_current_revision(run_id) == 3
 
+        assert uow.connection is not None
         with uow.connection.cursor() as cur:
             cur.execute(
                 """SELECT coverage_revision, prior_coverage_revision
@@ -582,7 +591,7 @@ def test_concurrent_strategy_writers_serialize_shared_revision_order():
 
     with (
         PostgresUnitOfWork(TEST_DSN, "issue-257-test-index") as uow,
-        uow.connection.cursor() as cur,
+        cast(Any, uow.connection).cursor() as cur,
     ):
         cur.execute(
             """SELECT row_type, revision_order, idempotency_key

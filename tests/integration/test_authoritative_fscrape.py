@@ -6,6 +6,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 from types import MethodType, SimpleNamespace
+from typing import Any, cast
 from unittest import mock
 from uuid import UUID, uuid4
 
@@ -44,7 +45,7 @@ RUN_ID = f"fr_{RUN_UUID.hex}"
 INVOCATION_UUID = UUID("22222222-2222-4222-8222-222222222222")
 EXTERNAL_INVOCATION_ID = "fc_33333333333343338333333333333333"
 OTHER_EXTERNAL_INVOCATION_ID = "fc_44444444444444448444444444444444"
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
 def _item(
@@ -122,7 +123,7 @@ class _Cursor:
     def __init__(self, index_rows, authoritative_external_id):
         self.index_rows = index_rows
         self.authoritative_external_id = authoritative_external_id
-        self.sql = None
+        self.sql = ""
         self.params = None
 
     def __enter__(self):
@@ -222,7 +223,7 @@ def test_each_supported_format_delegates_to_direct_service(
     mime_type,
 ):
     direct = _RecordingDirectService()
-    service = FScrapeService(direct, _RunService())
+    service = FScrapeService(cast(DirectScrapeService, direct), _RunService())
 
     result = service.execute(
         FScrapeRequest(
@@ -253,7 +254,7 @@ def test_structured_request_is_json_with_schema_provenance():
     }
     direct = _RecordingDirectService()
 
-    FScrapeService(direct, _RunService()).execute(
+    FScrapeService(cast(DirectScrapeService, direct), _RunService()).execute(
         FScrapeRequest(
             urls=("https://example.com/structured",),
             research_run_id=RUN_ID,
@@ -353,7 +354,7 @@ def test_multi_url_partial_result_preserves_item_failures_and_stable_ids():
         index_rows=((job_id, chunk_id),),
     )
 
-    result = FScrapeService(direct, _RunService()).execute(
+    result = FScrapeService(cast(DirectScrapeService, direct), _RunService()).execute(
         FScrapeRequest(
             urls=("https://example.com/0", "https://example.com/1"),
             research_run_id=RUN_ID,
@@ -377,7 +378,9 @@ def test_multi_url_partial_result_preserves_item_failures_and_stable_ids():
 
 def test_nonexistent_external_run_fails_before_direct_service():
     direct = _RecordingDirectService()
-    service = FScrapeService(direct, _RunService(error=KeyError(RUN_ID)))
+    service = FScrapeService(
+        cast(DirectScrapeService, direct), _RunService(error=KeyError(RUN_ID))
+    )
 
     with pytest.raises(FScrapeError, match="research run does not exist") as error:
         service.execute(
@@ -403,7 +406,7 @@ def test_missing_committed_index_job_fails_closed():
         DirectScrapePersistenceError,
         match="without index jobs",
     ) as error:
-        FScrapeService(direct, _RunService()).execute(
+        FScrapeService(cast(DirectScrapeService, direct), _RunService()).execute(
             FScrapeRequest(
                 urls=("https://example.com/0",),
                 research_run_id=RUN_ID,
@@ -419,7 +422,7 @@ def test_result_uses_committed_external_identity_on_explicit_key_replay():
         authoritative_external_id=EXTERNAL_INVOCATION_ID,
     )
 
-    result = FScrapeService(direct, _RunService()).execute(
+    result = FScrapeService(cast(DirectScrapeService, direct), _RunService()).execute(
         FScrapeRequest(
             urls=("https://example.com/replay",),
             research_run_id=RUN_ID,
@@ -440,7 +443,7 @@ def test_missing_authoritative_external_identity_fails_closed():
         DirectScrapePersistenceError,
         match="has no external identity",
     ):
-        FScrapeService(direct, _RunService()).execute(
+        FScrapeService(cast(DirectScrapeService, direct), _RunService()).execute(
             FScrapeRequest(
                 urls=("https://example.com/missing-identity",),
                 research_run_id=RUN_ID,
@@ -451,7 +454,7 @@ def test_missing_authoritative_external_identity_fails_closed():
 
 def test_default_idempotency_is_invocation_scoped_and_explicit_key_is_preserved():
     direct = _RecordingDirectService()
-    service = FScrapeService(direct, _RunService())
+    service = FScrapeService(cast(DirectScrapeService, direct), _RunService())
     base = {
         "urls": ("https://example.com/replay",),
         "research_run_id": RUN_ID,
@@ -582,7 +585,7 @@ def test_postgres_wrapper_persists_structured_outcomes_and_replays_identity(
             (result.batch.invocation_id, result.batch.run_id),
         )
         assert cur.fetchone() == (invocation_external_id, "partial")
-        attempts = []
+        attempts: list[Any] = []
         for item in result.batch.items:
             cur.execute(
                 """SELECT exit_status,failure_class,raw_blob_sha256,
@@ -595,7 +598,9 @@ def test_postgres_wrapper_persists_structured_outcomes_and_replays_identity(
             "SELECT count(*) FROM research_invocations WHERE run_id=%s",
             (result.batch.run_id,),
         )
-        assert cur.fetchone()[0] == 1
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 1
 
     assert attempts[0][0:2] == ("succeeded", "none")
     assert attempts[0][2] is not None

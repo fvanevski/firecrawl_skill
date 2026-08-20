@@ -15,9 +15,11 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
+from psycopg import sql
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -49,7 +51,7 @@ VALID = (
 )
 
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -90,9 +92,13 @@ def prepared_database():
             to_regclass('search_candidates'),to_regclass('candidate_occurrences'),
             to_regclass('research_invocations')"""
         )
-        assert all(cursor.fetchone())
+        row = cursor.fetchone()
+        assert row is not None
+        assert all(row)
         cursor.execute("SELECT version_num FROM alembic_version")
-        assert cursor.fetchone()[0] == "0044_terminal_provenance_guard"
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == "0044_terminal_provenance_guard"
 
 
 def test_wrapper_workflow_runs_entirely_from_postgresql(service):
@@ -192,7 +198,9 @@ def test_wrapper_workflow_runs_entirely_from_postgresql(service):
                  AND status='complete'""",
             (created.id, external_invocation_id),
         )
-        assert cursor.fetchone()[0] == 1
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == 1
 
 
 def test_workflow_repository_records_are_idempotent_and_referential(service):
@@ -409,25 +417,33 @@ def test_phase1_gate_run_spec_and_transactional_rejection(service):
             "SELECT research_spec_id FROM research_runs WHERE id=%s",
             (agent_run.id,),
         )
-        assert cursor.fetchone()[0] == second_spec_id
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == second_spec_id
         cursor.execute(
             """SELECT validation_status FROM semantic_artifacts
             WHERE id=%s""",
             (UUID(proposal.provenance["semantic_artifact_id"]),),
         )
-        assert cursor.fetchone()[0] == "valid"
+        row1 = cursor.fetchone()
+        assert row1 is not None
+        assert row1[0] == "valid"
         cursor.execute(
             """SELECT count(*) FROM research_run_transitions
             WHERE run_id=%s""",
             (agent_run.id,),
         )
-        assert cursor.fetchone()[0] == 0
+        row2 = cursor.fetchone()
+        assert row2 is not None
+        assert row2[0] == 0
         cursor.execute(
             """SELECT count(*) FROM research_events
             WHERE run_id=%s AND event_type NOT IN ('run.created', 'run_started')""",
             (agent_run.id,),
         )
-        assert cursor.fetchone()[0] == 0
+        row3 = cursor.fetchone()
+        assert row3 is not None
+        assert row3[0] == 0
     assert first_spec_id != second_spec_id
 
 
@@ -578,7 +594,10 @@ def test_transition_and_event_ledgers_are_append_only(service):
     ):
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
             with pytest.raises(Exception) as error:
-                cursor.execute(f"DELETE FROM {table} WHERE id=%s", (row_id,))
+                cursor.execute(
+                    sql.SQL("DELETE FROM {} WHERE id=%s").format(sql.Identifier(table)),
+                    (row_id,),
+                )
             assert "append-only" in str(error.value)
 
 
@@ -667,7 +686,9 @@ def test_research_run_service_records_exactly_one_event_per_transition(service):
             WHERE run_id=%s AND event_type NOT IN ('run.created', 'run_started')""",
             (created.id,),
         )
-        assert cursor.fetchone()[0] == len(commands) + 1
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == len(commands) + 1
 
 
 def test_research_run_service_idempotent_retry_and_conflicting_reuse(service):
@@ -818,7 +839,9 @@ def test_reopen_increments_revision_and_invalidates_semantic_artifacts(service):
             FROM semantic_artifacts WHERE id=%s""",
             (artifact_id,),
         )
-        validation_status, errors = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        validation_status, errors = row
         assert validation_status == "invalid"
         assert errors[-1]["code"] == "stale_after_reopen"
         assert errors[-1]["invalidated_by_revision"] == 3
@@ -948,7 +971,9 @@ def test_explicit_mode_change_records_approval_and_invalidates_prior_authority(s
             FROM research_events WHERE id=%s""",
             (changed.event_id,),
         )
-        actor_type, actor_identifier, payload, run_revision = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        actor_type, actor_identifier, payload, run_revision = row
         assert actor_type == "operator"
         assert actor_identifier == "operator-b"
         assert payload["requested_by"] == "operator-a"
@@ -961,7 +986,9 @@ def test_explicit_mode_change_records_approval_and_invalidates_prior_authority(s
             FROM semantic_artifacts WHERE id=%s""",
             (UUID(supplied.provenance["semantic_artifact_id"]),),
         )
-        validation_status, errors = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        validation_status, errors = row
         assert validation_status == "invalid"
         assert errors[-1]["code"] == "stale_after_mode_change"
 
@@ -1186,12 +1213,16 @@ def test_firecrawl_result_versioning_and_transactional_index_jobs(service):
             "SELECT parent_snapshot_id FROM asset_snapshots WHERE id=%s",
             (changed.snapshot_id,),
         )
-        assert cursor.fetchone()[0] == first.snapshot_id
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == first.snapshot_id
         cursor.execute(
             "SELECT count(*) FROM index_jobs WHERE entity_id=ANY(%s)",
             (list(changed.chunk_ids),),
         )
-        assert cursor.fetchone()[0] == len(changed.chunk_ids)
+        row1 = cursor.fetchone()
+        assert row1 is not None
+        assert row1[0] == len(changed.chunk_ids)
 
 
 def test_bounded_targeted_passage_retrieval(service):
@@ -1282,7 +1313,9 @@ def test_batch_records_acquisition_failure_without_losing_success(service):
         cursor.execute(
             "SELECT count(*) FROM sources WHERE canonical_url=%s", (good_url,)
         )
-        assert cursor.fetchone()[0] == 1
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] == 1
 
     replacement = service.ingest_batch(
         invocation_id,
@@ -1417,7 +1450,9 @@ def test_sealed_batches_reject_new_assets(service):
         cursor.execute(
             "SELECT sealed_at FROM ingestion_batches WHERE id=%s", (batch_id,)
         )
-        assert cursor.fetchone()[0] is not None, "terminal batches should be sealed"
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] is not None, "terminal batches should be sealed"
 
     # Direct asset recording on a sealed batch must be rejected.
     with service.uow_factory() as uow, pytest.raises(ValueError, match="is sealed"):
@@ -1452,6 +1487,7 @@ def test_batch_completed_at_follows_constituent_terminal_time(service):
             (batch_id,),
         )
         row = cursor.fetchone()
+        assert row is not None
         assert row[0] is not None
         assert row[1] is not None
         assert row[1] >= row[0], "completed_at must not precede started_at"
@@ -1483,7 +1519,9 @@ def test_partial_batch_exposes_outcome_summary(service):
             "SELECT outcome_summary FROM ingestion_batches WHERE id=%s",
             (manifest["batch_id"],),
         )
-        summary = cursor.fetchone()[0]
+        summary = cursor.fetchone()
+        assert summary is not None
+        summary = summary[0]
         assert isinstance(summary, dict)
         assert summary.get("succeeded") == 1
         assert summary.get("failed") == 1
@@ -1511,6 +1549,7 @@ def test_batch_completed_at_equals_latest_constituent_terminal(service):
             (batch_id,),
         )
         row = cursor.fetchone()
+        assert row is not None
         assert row[0] is not None
         assert row[1] is not None
         # completed_at must be >= started_at (constituent start <= terminal).
@@ -1541,7 +1580,9 @@ def test_outcome_summary_includes_cancelled_and_failure_classes(service):
             "SELECT outcome_summary FROM ingestion_batches WHERE id=%s",
             (manifest["batch_id"],),
         )
-        summary = cursor.fetchone()[0]
+        summary = cursor.fetchone()
+        assert summary is not None
+        summary = summary[0]
         assert isinstance(summary, dict)
         assert summary.get("succeeded") == 1
         assert summary.get("failed") == 1
@@ -1571,6 +1612,7 @@ def test_sealed_at_exposed_through_export_invocation(service):
             (invocation_id,),
         )
         row = cursor.fetchone()
+        assert row is not None
         assert row[0] is not None, "sealed_at must be set for terminal batches"
         assert isinstance(row[1], dict), "outcome_summary must be a dict"
         assert row[1].get("succeeded") == 1
@@ -1596,7 +1638,9 @@ def test_sequential_sealed_batch_rejection(service):
         cursor.execute(
             "SELECT sealed_at FROM ingestion_batches WHERE id=%s", (batch_id,)
         )
-        assert cursor.fetchone()[0] is not None
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] is not None
 
     with service.uow_factory() as uow, pytest.raises(ValueError, match="is sealed"):
         uow.record_batch_asset(
@@ -1661,7 +1705,9 @@ def test_concurrent_seal_vs_insert_serialization(service):
         cursor.execute(
             "SELECT sealed_at FROM ingestion_batches WHERE id=%s", (batch_id,)
         )
-        assert cursor.fetchone()[0] is not None
+        row0 = cursor.fetchone()
+        assert row0 is not None
+        assert row0[0] is not None
 
 
 def test_retry_reopen_preserves_constituent_timing(service):
@@ -1686,6 +1732,7 @@ def test_retry_reopen_preserves_constituent_timing(service):
             (batch_id,),
         )
         row = cursor.fetchone()
+        assert row is not None
         assert row[0] is not None
         assert row[1] is not None
 
@@ -1709,6 +1756,7 @@ def test_retry_reopen_preserves_constituent_timing(service):
             (retry_batch_id,),
         )
         row = cursor.fetchone()
+        assert row is not None
         assert row[0] == "complete"
         assert row[1] is not None
         assert row[2] is not None
@@ -1734,7 +1782,9 @@ def test_exact_idempotent_outcome_summary_across_retry(service):
             "SELECT outcome_summary FROM ingestion_batches WHERE invocation_id=%s",
             (invocation_id,),
         )
-        summary1 = cursor.fetchone()[0]
+        summary1 = cursor.fetchone()
+        assert summary1 is not None
+        summary1 = summary1[0]
 
     retry = service.ingest_batch(
         invocation_id,
@@ -1753,7 +1803,9 @@ def test_exact_idempotent_outcome_summary_across_retry(service):
             "SELECT outcome_summary FROM ingestion_batches WHERE invocation_id=%s",
             (invocation_id,),
         )
-        summary2 = cursor.fetchone()[0]
+        summary2 = cursor.fetchone()
+        assert summary2 is not None
+        summary2 = summary2[0]
 
     assert summary2.get("succeeded") == summary1.get("succeeded")
     assert summary2.get("failed") == summary1.get("failed")
@@ -1784,6 +1836,7 @@ def test_prior_v42_schema_retry_compatibility(service):
             (batch_id,),
         )
         row = cursor.fetchone()
+        assert row is not None
         assert row[0] == "complete"
         assert row[1] is not None
 
@@ -1817,7 +1870,9 @@ def test_successful_path_accepts_valid_ingestion(service):
             "SELECT outcome_summary FROM ingestion_batches WHERE id=%s",
             (manifest["batch_id"],),
         )
-        summary = cursor.fetchone()[0]
+        summary = cursor.fetchone()
+        assert summary is not None
+        summary = summary[0]
         assert summary.get("succeeded") == 2
         assert summary.get("failed") == 0
 
@@ -1980,6 +2035,7 @@ def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
             (run_id,),
         )
         row = cursor.fetchone()
+        assert row is not None
         assert row[0] == "sufficient"
         assert row[3] == "completed"
         assert row[4] == second_terminal_revision + 1
@@ -2000,7 +2056,9 @@ def test_expired_final_attempt_becomes_dead_and_manifest_failed(service):
             WHERE entity_id=%s RETURNING id,manifest_id""",
             (result.chunk_ids[0],),
         )
-        job_id, manifest_id = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        job_id, manifest_id = row
     with service.uow_factory() as uow:
         uow.claim_jobs(1, max_attempts=5)
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
@@ -2010,7 +2068,9 @@ def test_expired_final_attempt_becomes_dead_and_manifest_failed(service):
             WHERE j.id=%s AND m.id=%s""",
             (job_id, manifest_id),
         )
-        status, error, manifest_status, manifest_error = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        status, error, manifest_status, manifest_error = row
     assert (status, manifest_status) == ("dead", "failed")
     assert error == manifest_error == "lease expired after final allowed attempt"
 
@@ -2030,7 +2090,9 @@ def test_job_completion_requires_exact_lease_token(service):
             WHERE entity_id=%s RETURNING id""",
             (lease_token, result.chunk_ids[0]),
         )
-        job_id = cursor.fetchone()[0]
+        job_id = cursor.fetchone()
+        assert job_id is not None
+        job_id = job_id[0]
     with service.uow_factory() as uow:
         with pytest.raises(TypeError):
             uow.finish_job(job_id, None)
@@ -2055,13 +2117,17 @@ def test_job_manifest_definition_mismatch_is_rejected(service):
             ORDER BY m.id LIMIT 1""",
             (first.chunk_ids[0],),
         )
-        manifest_id, original_definition = cursor.fetchone()
+        row = cursor.fetchone()
+        assert row is not None
+        manifest_id, original_definition = row
         cursor.execute(
             """SELECT index_definition_id FROM embedding_manifests
             WHERE chunk_id=%s AND index_definition_id<>%s LIMIT 1""",
             (first.chunk_ids[0], original_definition),
         )
-        other_definition = cursor.fetchone()[0]
+        other_definition = cursor.fetchone()
+        assert other_definition is not None
+        other_definition = other_definition[0]
         with pytest.raises(Exception) as error:
             cursor.execute(
                 """UPDATE index_jobs SET index_definition_id=%s
@@ -2435,7 +2501,9 @@ class TestCoverageWorkflowObservationEvents:
                 "SELECT id FROM research_events WHERE run_id=%s LIMIT 1",
                 (status.id,),
             )
-            source_event = cur.fetchone()[0]
+            source_event = cur.fetchone()
+            assert source_event is not None
+            source_event = source_event[0]
 
         event = coverage.apply_asset_acquired(
             status.id,
@@ -2540,7 +2608,9 @@ class TestResearchOrchestratorIntegration:
                 "SELECT COUNT(*) FROM research_run_transitions WHERE run_id=%s",
                 (run_id,),
             )
-            transition_count = cur.fetchone()[0]
+            transition_count = cur.fetchone()
+            assert transition_count is not None
+            transition_count = transition_count[0]
         assert transition_count > 0
 
         # Verify revision tracking: the lifecycle_revision should have
@@ -2575,13 +2645,17 @@ class TestMigration0015TerminalDecisions:
             cursor.execute(
                 "SELECT to_regclass('terminal_decisions')",
             )
-            assert cursor.fetchone()[0] is not None
+            row0 = cursor.fetchone()
+            assert row0 is not None
+            assert row0[0] is not None
 
             # Verify enum exists
             cursor.execute(
                 "SELECT to_regtype('terminal_decision_outcome')",
             )
-            assert cursor.fetchone()[0] is not None
+            row1 = cursor.fetchone()
+            assert row1 is not None
+            assert row1[0] is not None
 
             # Verify columns exist
             cursor.execute(
@@ -2676,7 +2750,9 @@ class TestMigration0015TerminalDecisions:
                 WHERE run_id=%s AND idempotency_key=%s""",
                 (status.id, key),
             )
-            row_id = cursor.fetchone()[0]
+            row_id = cursor.fetchone()
+            assert row_id is not None
+            row_id = row_id[0]
             cursor.execute("SAVEPOINT update_sp")
             with pytest.raises(Exception, match="terminal_decisions is append-only"):
                 cursor.execute(
@@ -2730,6 +2806,7 @@ class TestMigration0015TerminalDecisions:
                 to_regclass('search_responses'),to_regclass('search_candidates')"""
             )
             results = cursor.fetchone()
+            assert results is not None
             assert all(results), "Existing Phase 1/2/3 tables should still exist"
 
             # Verify terminal_decisions table coexists
@@ -2738,6 +2815,7 @@ class TestMigration0015TerminalDecisions:
                 to_regclass('research_runs'),to_regclass('coverage_events')"""
             )
             results = cursor.fetchone()
+            assert results is not None
             assert all(results), (
                 "terminal_decisions should coexist with existing tables"
             )
@@ -3705,14 +3783,18 @@ def test_hierarchical_chunk_derivation_key_constraint():
             """INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id""",
             ("https://test-derivation-key.example/",),
         )
-        source_id = cursor.fetchone()[0]
+        source_id = cursor.fetchone()
+        assert source_id is not None
+        source_id = source_id[0]
         cursor.execute(
             """INSERT INTO asset_snapshots(
                 source_id,requested_url,retrieved_at,content_sha256
             ) VALUES (%s,%s,now(),%s) RETURNING id""",
             (source_id, "https://test-derivation-key.example/", "d" * 64),
         )
-        snapshot_id = cursor.fetchone()[0]
+        snapshot_id = cursor.fetchone()
+        assert snapshot_id is not None
+        snapshot_id = snapshot_id[0]
         cursor.execute(
             """INSERT INTO documents(
                 snapshot_id,normalized_text,parser_name,parser_version,
@@ -3720,14 +3802,18 @@ def test_hierarchical_chunk_derivation_key_constraint():
             ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
             (snapshot_id, "test", "markdown", "v1", "v1", "e" * 64),
         )
-        document_id = cursor.fetchone()[0]
+        document_id = cursor.fetchone()
+        assert document_id is not None
+        document_id = document_id[0]
         cursor.execute(
             """INSERT INTO document_blocks(
                 document_id,block_type,ordinal,text
             ) VALUES (%s,%s,%s,%s) RETURNING id""",
             (document_id, "paragraph", 0, "block text"),
         )
-        block_id = cursor.fetchone()[0]
+        block_id = cursor.fetchone()
+        assert block_id is not None
+        block_id = block_id[0]
 
         # Insert first chunk
         cursor.execute(
@@ -3779,14 +3865,18 @@ def test_hierarchical_chunk_parent_block_fk():
             """INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id""",
             ("https://test-parent-fk.example/",),
         )
-        source_id = cursor.fetchone()[0]
+        source_id = cursor.fetchone()
+        assert source_id is not None
+        source_id = source_id[0]
         cursor.execute(
             """INSERT INTO asset_snapshots(
                 source_id,requested_url,retrieved_at,content_sha256
             ) VALUES (%s,%s,now(),%s) RETURNING id""",
             (source_id, "https://test-parent-fk.example/", "g" * 64),
         )
-        snapshot_id = cursor.fetchone()[0]
+        snapshot_id = cursor.fetchone()
+        assert snapshot_id is not None
+        snapshot_id = snapshot_id[0]
         cursor.execute(
             """INSERT INTO documents(
                 snapshot_id,normalized_text,parser_name,parser_version,
@@ -3794,7 +3884,9 @@ def test_hierarchical_chunk_parent_block_fk():
             ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
             (snapshot_id, "test", "markdown", "v1", "v1", "h" * 64),
         )
-        document_id = cursor.fetchone()[0]
+        document_id = cursor.fetchone()
+        assert document_id is not None
+        document_id = document_id[0]
         # Create a block
         cursor.execute(
             """INSERT INTO document_blocks(
@@ -3802,7 +3894,9 @@ def test_hierarchical_chunk_parent_block_fk():
             ) VALUES (%s,%s,%s,%s) RETURNING id""",
             (document_id, "paragraph", 0, "parent block"),
         )
-        valid_block_id = cursor.fetchone()[0]
+        valid_block_id = cursor.fetchone()
+        assert valid_block_id is not None
+        valid_block_id = valid_block_id[0]
         connection.commit()
 
         # Insert chunk with valid parent_block_id — should succeed
@@ -3882,10 +3976,10 @@ def test_hierarchical_chunk_persist_ingest_sets_parent_block_id():
 
     # Verify parent_block_id is non-NULL for all chunks
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        placeholders = ",".join(["%s"] * len(result.chunk_ids))
         cursor.execute(
-            f"""SELECT id, parent_block_id FROM chunks
-                WHERE id IN ({placeholders})""",
+            sql.SQL("SELECT id, parent_block_id FROM chunks WHERE id IN ({}").format(
+                sql.SQL(",").join(sql.SQL("%s") for _ in result.chunk_ids)
+            ),
             list(result.chunk_ids),
         )
         rows = cursor.fetchall()
@@ -3904,14 +3998,18 @@ def test_hierarchical_chunk_migration_preserves_legacy_data():
             """INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id""",
             ("https://test-legacy.example/",),
         )
-        source_id = cursor.fetchone()[0]
+        source_id = cursor.fetchone()
+        assert source_id is not None
+        source_id = source_id[0]
         cursor.execute(
             """INSERT INTO asset_snapshots(
                 source_id,requested_url,retrieved_at,content_sha256
             ) VALUES (%s,%s,now(),%s) RETURNING id""",
             (source_id, "https://test-legacy.example/", "k" * 64),
         )
-        snapshot_id = cursor.fetchone()[0]
+        snapshot_id = cursor.fetchone()
+        assert snapshot_id is not None
+        snapshot_id = snapshot_id[0]
         cursor.execute(
             """INSERT INTO documents(
                 snapshot_id,normalized_text,parser_name,parser_version,
@@ -3919,14 +4017,18 @@ def test_hierarchical_chunk_migration_preserves_legacy_data():
             ) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
             (snapshot_id, "legacy content", "markdown", "v1", "v1", "l" * 64),
         )
-        document_id = cursor.fetchone()[0]
+        document_id = cursor.fetchone()
+        assert document_id is not None
+        document_id = document_id[0]
         cursor.execute(
             """INSERT INTO document_blocks(
                 document_id,block_type,ordinal,text
             ) VALUES (%s,%s,%s,%s) RETURNING id""",
             (document_id, "paragraph", 0, "legacy block"),
         )
-        block_id = cursor.fetchone()[0]
+        block_id = cursor.fetchone()
+        assert block_id is not None
+        block_id = block_id[0]
 
         # Insert legacy chunk (no tokenizer_name, no parent_block_id)
         cursor.execute(
@@ -3945,7 +4047,9 @@ def test_hierarchical_chunk_migration_preserves_legacy_data():
                 "structural-v1",
             ),
         )
-        legacy_chunk_id = cursor.fetchone()[0]
+        legacy_chunk_id = cursor.fetchone()
+        assert legacy_chunk_id is not None
+        legacy_chunk_id = legacy_chunk_id[0]
         cursor.connection.commit()
 
     # Migrate to head (applies 0025)
@@ -4019,7 +4123,7 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     )
 
     corpus_service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         service.uow_factory,
         blob_store=None,
         index=IntegrationTestIndex(),
@@ -4238,14 +4342,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 (source_url,),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, source_url, "x" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -4260,14 +4368,18 @@ class TestIndexRebuildRecovery:
                     "y" * 64,
                 ),
             )
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()
+            assert doc_id is not None
+            doc_id = doc_id[0]
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
                 ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
                 (doc_id, chunk_text, "z" * 64, "structural", "structural-v1"),
             )
-            chunk_id = cur.fetchone()[0]
+            chunk_id = cur.fetchone()
+            assert chunk_id is not None
+            chunk_id = chunk_id[0]
 
         build = _index_build(config)
         definition_id = str(build["index_definition"]["id"])
@@ -4323,14 +4435,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://recovery.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://recovery.example/test", "a" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -4345,7 +4461,9 @@ class TestIndexRebuildRecovery:
                     "b" * 64,
                 ),
             )
-            document_id = cur.fetchone()[0]
+            document_id = cur.fetchone()
+            assert document_id is not None
+            document_id = document_id[0]
             chunk_ids = []
             for i in range(3):
                 cur.execute(
@@ -4361,7 +4479,9 @@ class TestIndexRebuildRecovery:
                         "structural-v1",
                     ),
                 )
-                chunk_ids.append(cur.fetchone()[0])
+                row0 = cur.fetchone()
+                assert row0 is not None
+                chunk_ids.append(row0[0])
 
         config = replace(
             StoreConfig.from_env(),
@@ -4380,13 +4500,17 @@ class TestIndexRebuildRecovery:
                 "SELECT count(*) FROM embedding_manifests WHERE index_definition_id=%s",
                 (result["index_definition"]["id"],),
             )
-            assert cur.fetchone()[0] == 3
+            row1 = cur.fetchone()
+            assert row1 is not None
+            assert row1[0] == 3
             cur.execute(
                 """SELECT count(*) FROM index_jobs
                 WHERE index_definition_id=%s AND status='pending'""",
                 (result["index_definition"]["id"],),
             )
-            assert cur.fetchone()[0] == 3
+            row2 = cur.fetchone()
+            assert row2 is not None
+            assert row2[0] == 3
             cur.execute(
                 """SELECT count(*) FROM index_jobs
                 WHERE index_definition_id=%s AND status='pending'
@@ -4399,7 +4523,9 @@ class TestIndexRebuildRecovery:
                     result["index_definition"]["id"],
                 ),
             )
-            assert cur.fetchone()[0] == 3
+            row3 = cur.fetchone()
+            assert row3 is not None
+            assert row3[0] == 3
 
     def test_index_build_idempotent_resume_no_duplicates(self, service):
         """Running index-build twice does not create duplicate jobs."""
@@ -4414,14 +4540,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://idempotent.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://idempotent.example/test", "d" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -4436,7 +4566,9 @@ class TestIndexRebuildRecovery:
                     "e" * 64,
                 ),
             )
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()
+            assert doc_id is not None
+            doc_id = doc_id[0]
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
@@ -4480,7 +4612,9 @@ class TestIndexRebuildRecovery:
                 WHERE index_definition_id=%s""",
                 (result1["index_definition"]["id"],),
             )
-            count, status, attempt_count = cur.fetchone()
+            row = cur.fetchone()
+            assert row is not None
+            count, status, attempt_count = row
             assert count == 1
             assert status == "pending"
             assert attempt_count == 0
@@ -4498,14 +4632,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://interrupted.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://interrupted.example/test", "1" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -4520,7 +4658,9 @@ class TestIndexRebuildRecovery:
                     "2" * 64,
                 ),
             )
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()
+            assert doc_id is not None
+            doc_id = doc_id[0]
             for i in range(2):
                 cur.execute(
                     """INSERT INTO chunks(
@@ -4554,7 +4694,9 @@ class TestIndexRebuildRecovery:
                 WHERE index_definition_id=%s ORDER BY id LIMIT 1""",
                 (result1["index_definition"]["id"],),
             )
-            complete_manifest_id = cur.fetchone()[0]
+            complete_manifest_id = cur.fetchone()
+            assert complete_manifest_id is not None
+            complete_manifest_id = complete_manifest_id[0]
             cur.execute(
                 """UPDATE embedding_manifests SET index_status='complete',indexed_at=now()
                 WHERE id=%s""",
@@ -4577,7 +4719,9 @@ class TestIndexRebuildRecovery:
                 WHERE index_definition_id=%s""",
                 (result1["index_definition"]["id"],),
             )
-            assert cur.fetchone()[0] == 2
+            row4 = cur.fetchone()
+            assert row4 is not None
+            assert row4[0] == 2
             cur.execute(
                 """SELECT m.index_status,j.status
                 FROM embedding_manifests m
@@ -4600,14 +4744,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://recon.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://recon.example/test", "7" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -4622,7 +4770,9 @@ class TestIndexRebuildRecovery:
                     "8" * 64,
                 ),
             )
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()
+            assert doc_id is not None
+            doc_id = doc_id[0]
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
@@ -4659,7 +4809,9 @@ class TestIndexRebuildRecovery:
                 WHERE index_definition_id=%s AND status='pending'""",
                 (result["index_definition"]["id"],),
             )
-            assert cur.fetchone()[0] == 1
+            row5 = cur.fetchone()
+            assert row5 is not None
+            assert row5[0] == 1
 
     def test_index_reconcile_reports_discrepancies(self, service):
         """Report discrepancies between manifests, jobs, and Qdrant points."""
@@ -4673,14 +4825,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://reconcile.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://reconcile.example/test", "a" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -4695,7 +4851,9 @@ class TestIndexRebuildRecovery:
                     "b" * 64,
                 ),
             )
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()
+            assert doc_id is not None
+            doc_id = doc_id[0]
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
@@ -4788,14 +4946,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://physical-drift.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://physical-drift.example/test", "3" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -4810,7 +4972,9 @@ class TestIndexRebuildRecovery:
                     "4" * 64,
                 ),
             )
-            document_id = cur.fetchone()[0]
+            document_id = cur.fetchone()
+            assert document_id is not None
+            document_id = document_id[0]
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
@@ -4823,7 +4987,9 @@ class TestIndexRebuildRecovery:
                     "structural-v1",
                 ),
             )
-            chunk_id = cur.fetchone()[0]
+            chunk_id = cur.fetchone()
+            assert chunk_id is not None
+            chunk_id = chunk_id[0]
 
         config = replace(
             StoreConfig.from_env(),
@@ -4907,14 +5073,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://cache.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://cache.example/test", "6" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -4929,7 +5099,9 @@ class TestIndexRebuildRecovery:
                     "7" * 64,
                 ),
             )
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()
+            assert doc_id is not None
+            doc_id = doc_id[0]
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
@@ -5003,14 +5175,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://missing.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://missing.example/test", "f" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -5025,7 +5201,9 @@ class TestIndexRebuildRecovery:
                     "g" * 64,
                 ),
             )
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()
+            assert doc_id is not None
+            doc_id = doc_id[0]
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
@@ -5091,14 +5269,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://orphan.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://orphan.example/test", "i" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -5113,7 +5295,9 @@ class TestIndexRebuildRecovery:
                     "j" * 64,
                 ),
             )
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()
+            assert doc_id is not None
+            doc_id = doc_id[0]
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
@@ -5194,14 +5378,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://payload-mismatch.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://payload-mismatch.example/test", "l" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -5216,7 +5404,9 @@ class TestIndexRebuildRecovery:
                     "m" * 64,
                 ),
             )
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()
+            assert doc_id is not None
+            doc_id = doc_id[0]
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
@@ -5353,14 +5543,18 @@ class TestIndexRebuildRecovery:
                 "INSERT INTO sources(canonical_url) VALUES (%s) RETURNING id",
                 ("https://activation-lifecycle.example/test",),
             )
-            source_id = cur.fetchone()[0]
+            source_id = cur.fetchone()
+            assert source_id is not None
+            source_id = source_id[0]
             cur.execute(
                 """INSERT INTO asset_snapshots(
                     source_id,requested_url,retrieved_at,content_sha256
                 ) VALUES (%s,%s,now(),%s) RETURNING id""",
                 (source_id, "https://activation-lifecycle.example/test", "u" * 64),
             )
-            snapshot_id = cur.fetchone()[0]
+            snapshot_id = cur.fetchone()
+            assert snapshot_id is not None
+            snapshot_id = snapshot_id[0]
             cur.execute(
                 """INSERT INTO documents(
                     snapshot_id,normalized_text,parser_name,parser_version,
@@ -5375,14 +5569,18 @@ class TestIndexRebuildRecovery:
                     "v" * 64,
                 ),
             )
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()
+            assert doc_id is not None
+            doc_id = doc_id[0]
             cur.execute(
                 """INSERT INTO chunks(
                     document_id,ordinal,text,content_sha256,chunker_name,chunker_version
                 ) VALUES (%s,0,%s,%s,%s,%s) RETURNING id""",
                 (doc_id, "activation chunk", "w" * 64, "structural", "structural-v1"),
             )
-            chunk_id = cur.fetchone()[0]
+            chunk_id = cur.fetchone()
+            assert chunk_id is not None
+            chunk_id = chunk_id[0]
 
         config_a = replace(
             StoreConfig.from_env(),
@@ -5488,17 +5686,23 @@ class TestIndexRebuildRecovery:
             cur.execute(
                 "SELECT physical_collection FROM index_definitions WHERE lifecycle_status='active'"
             )
-            assert cur.fetchone()[0] == collection_a
+            row6 = cur.fetchone()
+            assert row6 is not None
+            assert row6[0] == collection_a
             cur.execute(
                 "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
                 (definition_a_id,),
             )
-            assert cur.fetchone()[0] == "active"
+            row7 = cur.fetchone()
+            assert row7 is not None
+            assert row7[0] == "active"
             cur.execute(
                 "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
                 (definition_b_id,),
             )
-            assert cur.fetchone()[0] == "building"
+            row8 = cur.fetchone()
+            assert row8 is not None
+            assert row8[0] == "building"
 
         # Activate B
         result_activate = _activate_index(config_a, definition_b_id, "activate")
@@ -5517,18 +5721,23 @@ class TestIndexRebuildRecovery:
                 "SELECT physical_collection FROM index_definitions WHERE lifecycle_status='active'"
             )
             active_row = cur.fetchone()
+            assert active_row is not None
             assert active_row[0] == collection_b
             # A is inactive, B is active
             cur.execute(
                 "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
                 (definition_a_id,),
             )
-            assert cur.fetchone()[0] == "inactive"
+            row9 = cur.fetchone()
+            assert row9 is not None
+            assert row9[0] == "inactive"
             cur.execute(
                 "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
                 (definition_b_id,),
             )
-            assert cur.fetchone()[0] == "active"
+            row10 = cur.fetchone()
+            assert row10 is not None
+            assert row10[0] == "active"
             # Journal: previous=A, target=B, action=activate, status=complete
             cur.execute(
                 """SELECT previous_definition_id, target_definition_id, action, status
@@ -5538,6 +5747,7 @@ class TestIndexRebuildRecovery:
                 (definition_b_id,),
             )
             journal = cur.fetchone()
+            assert journal is not None
             assert str(journal[0]) == definition_a_id
             assert str(journal[1]) == definition_b_id
             assert journal[2] == "activate"
@@ -5560,18 +5770,23 @@ class TestIndexRebuildRecovery:
                 "SELECT physical_collection FROM index_definitions WHERE lifecycle_status='active'"
             )
             active_row = cur.fetchone()
+            assert active_row is not None
             assert active_row[0] == collection_a
             # A is active, B is inactive
             cur.execute(
                 "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
                 (definition_a_id,),
             )
-            assert cur.fetchone()[0] == "active"
+            row11 = cur.fetchone()
+            assert row11 is not None
+            assert row11[0] == "active"
             cur.execute(
                 "SELECT lifecycle_status FROM index_definitions WHERE id=%s",
                 (definition_b_id,),
             )
-            assert cur.fetchone()[0] == "inactive"
+            row12 = cur.fetchone()
+            assert row12 is not None
+            assert row12[0] == "inactive"
             # Rollback journal entry
             cur.execute(
                 """SELECT previous_definition_id, target_definition_id, action, status
@@ -5581,6 +5796,7 @@ class TestIndexRebuildRecovery:
                 (definition_a_id,),
             )
             journal = cur.fetchone()
+            assert journal is not None
             assert str(journal[0]) == definition_b_id
             assert str(journal[1]) == definition_a_id
             assert journal[2] == "rollback"

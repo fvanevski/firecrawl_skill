@@ -23,7 +23,7 @@ from research_store.index_checkpoint_service import IndexCheckpointService
 from research_store.postgres import connect, migrate, require_disposable_database_reset
 from research_store.run_integrity_export import SECTION_ITEM_LIMIT
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 requires_postgres = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -226,8 +226,10 @@ def test_export_invocation_is_byte_reproducible_and_read_only(
                 GROUP BY b.status,b.completed_at,r.lifecycle_revision""",
             (invocation_id,),
         )
-        assert cursor.fetchone() == before
-    assert run.lifecycle_revision == before[3]
+        row = cursor.fetchone()
+        assert row == before
+        assert row is not None
+        assert run.lifecycle_revision == row[3]
 
 
 @requires_postgres
@@ -420,7 +422,9 @@ def test_integrity_reports_running_live_at_terminal_then_later_completion(
             "SELECT created_at FROM terminal_decisions WHERE run_id=%s ORDER BY created_at DESC LIMIT 1",
             (run.id,),
         )
-        decision_at = cursor.fetchone()[0]
+        decision_at = cursor.fetchone()
+        assert decision_at is not None
+        decision_at = decision_at[0]
         finished_at = decision_at + timedelta(seconds=5)
         cursor.execute(
             """UPDATE index_jobs SET status='complete',lease_token=NULL,lease_owner=NULL,

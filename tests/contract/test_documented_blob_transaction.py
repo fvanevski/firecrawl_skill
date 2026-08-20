@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 
 def test_blob_install_precedes_metadata_and_commit_failure_returns_no_result() -> None:
+    from research_store.config import StoreConfig
     from research_store.domain import IngestRequest
     from research_store.service import CorpusService
 
@@ -48,7 +50,7 @@ def test_blob_install_precedes_metadata_and_commit_failure_returns_no_result() -
         normalization_version="test-normalizer",
     )
     service = CorpusService(
-        config,
+        cast(StoreConfig, config),
         UnitOfWork,
         BlobStore(),
         queue=SimpleNamespace(notify=notifications.append),
