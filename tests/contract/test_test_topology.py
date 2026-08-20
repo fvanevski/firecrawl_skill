@@ -20,8 +20,6 @@ ACTIVE_CONSUMERS = (
     ROOT / ".github/workflows/authoritative-fsearch.yml",
     ROOT / "references/audit-remediation-release-gates.json",
     ROOT / "references/migration-guide.md",
-    ROOT / "tests/contract/test_asset_promotion_contract.py",
-    ROOT / "tests/unit/test_curated_run_lifecycle.py",
 )
 
 
@@ -32,11 +30,11 @@ def _is_active_test(path: Path) -> bool:
 def test_behavior_boundary_distribution_is_exact() -> None:
     active = [path for path in TESTS.rglob("test_*.py") if _is_active_test(path)]
     counts = Counter(path.relative_to(TESTS).parts[0] for path in active)
-    assert len(active) == 135
+    assert len(active) == 136
     assert counts == {
         "unit": 50,
         "integration": 53,
-        "contract": 27,
+        "contract": 28,
         "acceptance": 5,
     }
 

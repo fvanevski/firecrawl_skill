@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from audit_release_gate_matrix import REQUIRED_GATE_IDS, validate_matrix
+import pytest
+from audit_release_gate_matrix import (
+    REQUIRED_GATE_IDS,
+    _service_versions,
+    validate_matrix,
+)
 
 from firecrawl_skill.research_store.stages import ContextKeys
 
@@ -34,6 +42,43 @@ def test_matrix_has_exact_commands_evidence_and_artifact_for_every_gate():
         assert gate["expected_evidence"].strip()
         assert gate["artifact"].strip()
         assert gate["execution_phase"] in {"ci", "disposable", "credentialed"}
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected_error"),
+    (
+        ([None], "SHOW server_version returned no row"),
+        ([("16.4",), None], "to_regclass query returned no row"),
+    ),
+)
+def test_service_versions_fails_closed_on_missing_database_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[tuple[str] | None],
+    expected_error: str,
+) -> None:
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = rows
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    connect_context = MagicMock()
+    connect_context.__enter__.return_value = connection
+    psycopg = SimpleNamespace(connect=MagicMock(return_value=connect_context))
+
+    monkeypatch.setitem(sys.modules, "psycopg", psycopg)
+    monkeypatch.setenv(
+        "RESEARCH_STORE_TEST_DATABASE_URL",
+        "postgresql://unused.invalid/release_gate_test",
+    )
+    monkeypatch.delenv("QDRANT_URL", raising=False)
+
+    versions = _service_versions()
+
+    assert versions["postgresql_error"] == f"RuntimeError: {expected_error}"
+    if rows[0] is None:
+        assert "postgresql" not in versions
+    else:
+        assert versions["postgresql"] == "16.4"
+    assert "alembic_revision" not in versions
 
 
 def test_gate_documentation_is_fail_closed_and_keeps_issue_open_until_release():

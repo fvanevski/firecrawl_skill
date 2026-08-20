@@ -656,6 +656,10 @@ class LocalSynthesisService:
 
         # Fetch and validate the EvidencePacket.
         packet = self._get_packet(run_id, packet_revision)
+        if packet is None:
+            raise ReportServiceError(
+                f"EvidencePacket revision {packet_revision} not found for run {run_id}"
+            )
         self._validate_packet(packet)
 
         # ------------------------------------------------------------------

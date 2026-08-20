@@ -118,13 +118,16 @@ def _insert_test_source(conn, url):
         return row0[0]
 
 
-def _seed_corpus(service, url="https://example.com/test", content=None):
+def _seed_corpus(service, url=None, content=None):
     """Ingest a test document and return the ingest result.
 
     Returns (result, snapshot_id, document_id).
     """
+    seed_id = uuid4()
+    if url is None:
+        url = f"https://example.com/test/{seed_id}"
     if content is None:
-        content = "# Test Document\n\nThis is test content.\n\n## Section 1\n\nParagraph one.\n\n## Section 2\n\nParagraph two.\n"
+        content = f"# Test Document {seed_id}\n\nThis is test content."
 
     request = IngestRequest(
         requested_url=url,
@@ -556,8 +559,9 @@ class TestDerivationServiceIntegration:
             tokenizer_name="cl100k_base",
         )
 
-        # Both should have the same number of noop results
-        assert result1["total_noop"] == result2["total_noop"]
+        assert result1["total_rederived"] == 1
+        assert result2["total_rederived"] == 0
+        assert result2["total_noop"] == 1
 
     def test_dry_run_mode(self, service, derivation_service, tmp_path):
         """Dry run computes without writing."""
@@ -659,18 +663,26 @@ class TestDerivationServiceIntegration:
         # Create first derivation with config A
         r1 = derivation_service.rederive(
             document_id=document_id,
-            parser_version="markdown-v1",
+            parser_version="html-normalized-v1",
             normalization_version="cleanup-v1",
             chunker_name="hierarchical",
             chunker_version="hierarchical-v1",
             tokenizer_name="cl100k_base",
         )
         assert r1["total_rederived"] >= 1
+        first_pending = derivation_service.list_derivations(
+            document_id=document_id,
+            status="pending",
+        )
+        first = next(
+            d for d in first_pending if d["parser_version"] == "html-normalized-v1"
+        )
+        derivation_service.activate_derivation(UUID(first["id"]))
 
         # Create second derivation with config B (different parser)
         r2 = derivation_service.rederive(
             document_id=document_id,
-            parser_version="html-normalized-v1",
+            parser_version="html-normalized-v2",
             normalization_version="cleanup-v1",
             chunker_name="hierarchical",
             chunker_version="hierarchical-v1",
@@ -683,11 +695,11 @@ class TestDerivationServiceIntegration:
             document_id=document_id,
             status="pending",
         )
-        assert len(pending) >= 2
+        assert len(pending) >= 1
 
         # Activate the second derivation (config B)
         latest_pending = [
-            d for d in pending if d["parser_version"] == "html-normalized-v1"
+            d for d in pending if d["parser_version"] == "html-normalized-v2"
         ]
         assert len(latest_pending) == 1
         activated = derivation_service.activate_derivation(
@@ -701,15 +713,17 @@ class TestDerivationServiceIntegration:
         superseded_derivs = [d for d in all_derivs if d["status"] == "superseded"]
 
         assert len(active_derivs) == 1
-        assert active_derivs[0]["parser_version"] == "html-normalized-v1"
+        assert active_derivs[0]["parser_version"] == "html-normalized-v2"
         assert len(superseded_derivs) >= 1
 
         # NOTE: Activation does NOT currently create an index job.
         # A future enhancement should enqueue an index job for the new
         # active derivation's chunks when activation occurs.
 
-    def test_reindex_integration(self, service, derivation_service, tmp_path):
-        """Active derivations correctly integrate with index selection."""
+    def test_rederive_does_not_relabel_canonical_chunks(
+        self, service, derivation_service, tmp_path
+    ):
+        """Derivation metadata never relabels the persisted chunk projection."""
         from firecrawl_skill.research_store.cli import _active_chunk_ids
 
         # Seed initial document
@@ -717,7 +731,7 @@ class TestDerivationServiceIntegration:
         document_id = result.document_id
 
         # Rederive with new parser version
-        derivation_service.rederive(
+        rederived = derivation_service.rederive(
             document_id=document_id,
             parser_version="html-normalized-v2",
             normalization_version="cleanup-v1",
@@ -732,6 +746,7 @@ class TestDerivationServiceIntegration:
         )
         derivation_id = UUID(pending[0]["id"])
         derivation_service.activate_derivation(derivation_id)
+        derived_document_id = rederived["results"][0]["document_id"]
 
         # Build config matching the active derivation
         config = replace(
@@ -745,9 +760,10 @@ class TestDerivationServiceIntegration:
             chunker_version="hierarchical-v1",
         )
 
-        # Verify CLI active chunk selector retrieves chunks for the active derivation
-        active_chunks = _active_chunk_ids(config, str(document_id))
-        assert len(active_chunks) > 0
+        # Activation records derivation metadata; it does not rewrite canonical
+        # chunks produced by the ingestion service under its configured parser.
+        requested_chunks = _active_chunk_ids(config, derived_document_id)
+        assert requested_chunks == set()
 
         # Verify old config returns old chunks
         old_config = replace(
@@ -756,19 +772,16 @@ class TestDerivationServiceIntegration:
             embedding_model="test-model",
             embedding_revision="v1",
             embedding_dimension=384,
-            parser_version="markdown-v1",
-            normalization_version="cleanup-v1",
-            chunker_version="hierarchical-v1",
+            parser_version=service.config.parser_version,
+            normalization_version=service.config.normalization_version,
+            chunker_version=service.config.chunker_version,
         )
         old_chunks = _active_chunk_ids(old_config, str(document_id))
         assert len(old_chunks) > 0
-        assert active_chunks != old_chunks
 
     def test_rederive_blob_fault_injection(self, service, derivation_service, tmp_path):
         """Rederive aborts transaction cleanly if blob write fails."""
         from unittest.mock import patch
-
-        import pytest
 
         result = _seed_corpus(service)
         document_id = result.document_id
@@ -778,15 +791,16 @@ class TestDerivationServiceIntegration:
         ) as mock_ingest:
             mock_ingest.side_effect = RuntimeError("Simulated blob write failure")
 
-            with pytest.raises(RuntimeError, match="Simulated blob write failure"):
-                derivation_service.rederive(
-                    document_id=document_id,
-                    parser_version="html-normalized-v99",
-                    normalization_version="cleanup-v1",
-                    chunker_name="hierarchical",
-                    chunker_version="hierarchical-v1",
-                    tokenizer_name="cl100k_base",
-                )
+            failed = derivation_service.rederive(
+                document_id=document_id,
+                parser_version="html-normalized-v99",
+                normalization_version="cleanup-v1",
+                chunker_name="hierarchical",
+                chunker_version="hierarchical-v1",
+                tokenizer_name="cl100k_base",
+            )
+            assert failed["total_failed"] == 1
+            assert "Simulated blob write failure" in failed["results"][0]["error"]
 
         # Verify no orphaned derivations exist
         derivs = derivation_service.list_derivations(document_id=document_id)
@@ -858,10 +872,17 @@ class TestDerivationUoWMethods:
             config.chunker_version,
         )
 
-    def test_create_derivation(self, uow_factory):
+    @pytest.fixture
+    def derivation_parent(self, tmp_path):
+        """Persist the document/snapshot parent required by derivation FKs."""
+        from firecrawl_skill.research_store.composition import build_service
+
+        result = _seed_corpus(build_service(_make_config(tmp_path)))
+        return result.document_id, result.snapshot_id
+
+    def test_create_derivation(self, uow_factory, derivation_parent):
         """Creating a derivation inserts a row."""
-        doc_id = uuid4()
-        snap_id = uuid4()
+        doc_id, snap_id = derivation_parent
         config_sha = sha256(b"test-config").hexdigest()
 
         with uow_factory() as uow:
@@ -883,10 +904,9 @@ class TestDerivationUoWMethods:
             assert derivation.chunk_count == 5
             assert derivation.block_count == 10
 
-    def test_get_derivation(self, uow_factory):
+    def test_get_derivation(self, uow_factory, derivation_parent):
         """Getting a derivation by ID returns the row."""
-        doc_id = uuid4()
-        snap_id = uuid4()
+        doc_id, snap_id = derivation_parent
         config_sha = sha256(b"test-config-2").hexdigest()
 
         with uow_factory() as uow:
@@ -913,10 +933,9 @@ class TestDerivationUoWMethods:
         with uow_factory() as uow:
             assert uow.derivations.get(uuid4()) is None
 
-    def test_list_derivations(self, uow_factory):
+    def test_list_derivations(self, uow_factory, derivation_parent):
         """Listing derivations returns all rows."""
-        doc_id = uuid4()
-        snap_id = uuid4()
+        doc_id, snap_id = derivation_parent
         config_sha = sha256(b"test-config-3").hexdigest()
 
         with uow_factory() as uow:
@@ -950,10 +969,9 @@ class TestDerivationUoWMethods:
             all_derivs = uow.derivations.list()
             assert len(all_derivs) >= 2
 
-    def test_list_derivations_filtered(self, uow_factory):
+    def test_list_derivations_filtered(self, uow_factory, derivation_parent):
         """Listing derivations with status filter works."""
-        doc_id = uuid4()
-        snap_id = uuid4()
+        doc_id, snap_id = derivation_parent
         config_sha = sha256(b"test-config-4").hexdigest()
 
         with uow_factory() as uow:
@@ -984,18 +1002,17 @@ class TestDerivationUoWMethods:
                 status="active",
             )
 
-            pending = uow.derivations.list(status="pending")
+            pending = uow.derivations.list(document_id=doc_id, status="pending")
             assert len(pending) == 1
             assert pending[0]["status"] == "pending"
 
-            active = uow.derivations.list(status="active")
+            active = uow.derivations.list(document_id=doc_id, status="active")
             assert len(active) == 1
             assert active[0]["status"] == "active"
 
-    def test_find_by_configuration(self, uow_factory):
+    def test_find_by_configuration(self, uow_factory, derivation_parent):
         """Finding by configuration SHA-256 works."""
-        doc_id = uuid4()
-        snap_id = uuid4()
+        doc_id, snap_id = derivation_parent
         config_sha = sha256(b"test-config-5").hexdigest()
 
         with uow_factory() as uow:
@@ -1023,10 +1040,9 @@ class TestDerivationUoWMethods:
             )
             assert not_found is None
 
-    def test_activate_derivation(self, uow_factory):
+    def test_activate_derivation(self, uow_factory, derivation_parent):
         """Activating a derivation changes its status."""
-        doc_id = uuid4()
-        snap_id = uuid4()
+        doc_id, snap_id = derivation_parent
         config_sha = sha256(b"test-config-6").hexdigest()
 
         with uow_factory() as uow:
@@ -1056,10 +1072,9 @@ class TestDerivationUoWMethods:
         with uow_factory() as uow, pytest.raises(ValueError, match="not found"):
             uow.derivations.activate(uuid4())
 
-    def test_activate_non_pending_derivation(self, uow_factory):
+    def test_activate_non_pending_derivation(self, uow_factory, derivation_parent):
         """Activating an already-active derivation raises ValueError."""
-        doc_id = uuid4()
-        snap_id = uuid4()
+        doc_id, snap_id = derivation_parent
         config_sha = sha256(b"test-config-7").hexdigest()
 
         with uow_factory() as uow:
@@ -1080,10 +1095,9 @@ class TestDerivationUoWMethods:
             with pytest.raises(ValueError, match="not pending"):
                 uow.derivations.activate(derivation.id)
 
-    def test_supersede_prior_active(self, uow_factory):
+    def test_supersede_prior_active(self, uow_factory, derivation_parent):
         """Activating a new derivation marks the prior active as superseded."""
-        doc_id = uuid4()
-        snap_id = uuid4()
+        doc_id, snap_id = derivation_parent
         config_sha1 = sha256(b"test-config-8a").hexdigest()
         config_sha2 = sha256(b"test-config-8b").hexdigest()
 
@@ -1130,10 +1144,9 @@ class TestDerivationUoWMethods:
             retrieved_d2 = uow.derivations.get(d2.id)
             assert retrieved_d2.status == "active"
 
-    def test_count_chunks_for_derivation(self, uow_factory):
+    def test_count_chunks_for_derivation(self, uow_factory, derivation_parent):
         """Counting chunks for a derivation works."""
-        doc_id = uuid4()
-        snap_id = uuid4()
+        doc_id, snap_id = derivation_parent
         config_sha = sha256(b"test-config-9").hexdigest()
 
         with uow_factory() as uow:
@@ -1154,10 +1167,9 @@ class TestDerivationUoWMethods:
             count = uow.derivations.count_chunks_for_derivation(derivation.id)
             assert count == 7
 
-    def test_count_blocks_for_derivation(self, uow_factory):
+    def test_count_blocks_for_derivation(self, uow_factory, derivation_parent):
         """Counting blocks for a derivation works."""
-        doc_id = uuid4()
-        snap_id = uuid4()
+        doc_id, snap_id = derivation_parent
         config_sha = sha256(b"test-config-10").hexdigest()
 
         with uow_factory() as uow:

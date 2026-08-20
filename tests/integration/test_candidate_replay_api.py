@@ -41,29 +41,15 @@ def prepared_database():
 
 
 def test_list_candidates_paginated_invalid_parameters():
-    class DummyUOW:
-        def __enter__(self):
-            return self
+    from firecrawl_skill.research_store.postgres_acquisition import (
+        PostgresCandidateRepository,
+        PostgresSearchAcquisitionRepository,
+    )
 
-        def __exit__(self, *args):
-            pass
-
-    # We test parameter validation directly in Postgres or Service layer where applicable
-
-    # Verify limit validation in helper logic
+    search_repository = PostgresSearchAcquisitionRepository(object())
+    repository = PostgresCandidateRepository(object(), search_repository)
     with pytest.raises(ValueError):
-        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
-
-        # Calling with invalid limit raises error
-        uow = PostgresUnitOfWork.__new__(PostgresUnitOfWork)
-
-        # Mock connection cursor
-        class MockConn:
-            def cursor(self):
-                pass
-
-        uow.connection = MockConn()
-        uow.list_candidates_paginated(uuid4(), limit=0)
+        repository.list_candidates_paginated(uuid4(), limit=0)
 
 
 # --- Integration Tests (requires PostgreSQL) ---

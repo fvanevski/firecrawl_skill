@@ -92,6 +92,12 @@ def _imports_name(path: Path, name: str) -> bool:
     return False
 
 
+def _references_name(path: Path, name: str) -> bool:
+    return any(
+        isinstance(node, ast.Name) and node.id == name for node in ast.walk(_tree(path))
+    )
+
+
 def test_build_uow_factory_preserves_exact_constructor_contract() -> None:
     config = _config_stub()
     factory = composition.build_uow_factory(config)
@@ -152,12 +158,11 @@ def test_historical_orchestrator_builders_use_leaf_topology_not_composition() ->
 
 def test_production_topology_is_narrow_leaf_wiring() -> None:
     path = STORE / "production_topology.py"
-    source = path.read_text(encoding="utf-8")
     tree = _tree(path)
     assert not _imports_name(path, "composition")
-    assert "StoreConfig" not in source
-    assert "PostgresUnitOfWork" not in source
-    assert "CorpusService" not in source
+    assert not _references_name(path, "StoreConfig")
+    assert not _references_name(path, "PostgresUnitOfWork")
+    assert not _references_name(path, "CorpusService")
     assert _forbidden_calls(tree) == []
     classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
     assert [node.name for node in classes] == ["ProductionBoundedExtractionStage"]

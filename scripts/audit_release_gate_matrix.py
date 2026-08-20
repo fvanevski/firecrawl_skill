@@ -113,9 +113,15 @@ def _service_versions() -> dict[str, Any]:
 
             with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
                 cursor.execute("SHOW server_version")
-                result["postgresql"] = cursor.fetchone()[0]
+                version_row = cursor.fetchone()
+                if version_row is None:
+                    raise RuntimeError("SHOW server_version returned no row")
+                result["postgresql"] = version_row[0]
                 cursor.execute("SELECT to_regclass('public.alembic_version')")
-                if cursor.fetchone()[0]:
+                relation_row = cursor.fetchone()
+                if relation_row is None:
+                    raise RuntimeError("to_regclass query returned no row")
+                if relation_row[0]:
                     cursor.execute("SELECT version_num FROM alembic_version")
                     row = cursor.fetchone()
                     result["alembic_revision"] = row[0] if row else None

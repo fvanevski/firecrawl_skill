@@ -113,7 +113,7 @@ def test_projection_boundary_declares_non_authoritative_qdrant_contract() -> Non
 
 def test_slice_workflow_tracks_final_projection_owners() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert '"src/firecrawl_skill/research_store/retrieval/projection/**"' in workflow
+    assert '"src/firecrawl_skill/research_store/retrieval/**"' in workflow
     for staged_root in (
         '"src/firecrawl_skill/research_store/indexing.py"',
         '"src/firecrawl_skill/research_store/checkpoint_indexing_stage.py"',

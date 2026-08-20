@@ -413,7 +413,9 @@ class TestFallbackPolicy:
         """CorpusService._parse_content raises ValueError for HTML if no parser is available."""
         import pytest
 
-        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import (
+            CorpusService,
+        )
 
         # Minimal mock config
         config = type(
@@ -469,7 +471,10 @@ class TestFallbackPolicy:
         HtmlNormalizedParser is tried as an intermediate fallback."""
         from unittest.mock import patch
 
-        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import (
+            CorpusService,
+            ParsedContent,
+        )
         from firecrawl_skill.research_store.parsing import build_default_registry
 
         config = type(
@@ -499,8 +504,12 @@ class TestFallbackPolicy:
                 side_effect=ValueError("simulated failure"),
             ),
             patch(
-                "firecrawl_skill.research_store.corpus_service.CorpusService._try_normalized_html",
-                return_value=[{"type": "paragraph", "text": "mocked"}],
+                "firecrawl_skill.research_store.corpus_service.CorpusService._try_normalized_html_with_identity",
+                return_value=ParsedContent(
+                    blocks=({"type": "paragraph", "text": "mocked"},),
+                    parser_name="test.normalized.HtmlParser",
+                    parser_version="test-v1",
+                ),
             ),
         ):
             blocks = service._parse_content(raw, "text/html")
@@ -541,7 +550,7 @@ class TestFallbackPolicy:
                 side_effect=ValueError("simulated failure"),
             ),
             patch(
-                "firecrawl_skill.research_store.corpus_service.CorpusService._try_normalized_html",
+                "firecrawl_skill.research_store.corpus_service.CorpusService._try_normalized_html_with_identity",
                 return_value=None,
             ),
             pytest.raises(ValueError, match="HTML parsing failed"),

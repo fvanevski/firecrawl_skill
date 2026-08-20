@@ -58,10 +58,10 @@ class TestNormalizeCLI:
     """Integration tests for ``research-db normalize``."""
 
     def test_normalize_no_documents(self):
-        """When no documents exist, normalize should return 0 blocks."""
+        """A nonexistent document selection should return 0 blocks."""
         from firecrawl_skill.research_store.cli import parser
 
-        args = parser().parse_args(["normalize", "--all"])
+        args = parser().parse_args(["normalize", "--document", str(uuid4())])
         from firecrawl_skill.research_store.cli import _cmd_normalize
         from firecrawl_skill.research_store.config import StoreConfig
 
@@ -107,7 +107,7 @@ class TestNormalizeCLI:
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT COUNT(*) FROM transformation_records tr
-                   JOIN normalized_blocks nb ON nb.source_block_id = tr.normalized_block_id
+                   JOIN normalized_blocks nb ON nb.id = tr.normalized_block_id
                    WHERE nb.document_id = %s""",
                 (str(doc_uuid),),
             )

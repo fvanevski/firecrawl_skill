@@ -842,7 +842,10 @@ def test_run_synthesis_packet_not_found():
     service, mock_evidence, _, _ = _make_service()
     mock_evidence.export_packet.return_value = None
 
-    with pytest.raises(ReportServiceError, match="EvidencePacket is None"):
+    with pytest.raises(
+        ReportServiceError,
+        match=rf"EvidencePacket revision 1 not found for run {UUID(_VALID_PACKET['run_id'])}",
+    ):
         service.run_synthesis(
             run_id=UUID(_VALID_PACKET["run_id"]),
             packet_revision=1,

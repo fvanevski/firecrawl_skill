@@ -156,7 +156,13 @@ def compare_derivations(config, args, build_service) -> tuple[dict, int]:
 
 def normalize(config, args, *, database_fn=database) -> dict:
     config.require_database()
-    with database_fn(config) as conn, conn.cursor() as cur:
+    with database_fn(config) as conn:
+        return _normalize_with_connection(conn, args)
+
+
+def _normalize_with_connection(conn, args) -> dict:
+    """Normalize and persist documents within one caller-owned transaction."""
+    with conn.cursor() as cur:
         if args.all:
             cur.execute(
                 """SELECT d.id, d.title, snap.requested_url, d.document_sha256,
@@ -221,6 +227,7 @@ def normalize(config, args, *, database_fn=database) -> dict:
             document_type=args.document_type,
         )
 
+        persisted_block_ids: dict[UUID, UUID] = {}
         with conn.cursor() as block_cur:
             for nb in (
                 norm_result.blocks
@@ -239,7 +246,8 @@ def normalize(config, args, *, database_fn=database) -> dict:
                          text = EXCLUDED.text,
                          char_start = EXCLUDED.char_start,
                          char_end = EXCLUDED.char_end,
-                         parser_version = EXCLUDED.parser_version""",
+                         parser_version = EXCLUDED.parser_version
+                       RETURNING id""",
                     (
                         str(nb.id),
                         str(nb.source_block_id),
@@ -256,6 +264,10 @@ def normalize(config, args, *, database_fn=database) -> dict:
                         nb.parser_version,
                     ),
                 )
+                persisted_row = block_cur.fetchone()
+                if persisted_row is None:
+                    raise RuntimeError("normalized block upsert returned no identity")
+                persisted_block_ids[nb.id] = UUID(str(persisted_row[0]))
 
         with conn.cursor() as transform_cur:
             for tr in norm_result.transformations:
@@ -272,7 +284,11 @@ def normalize(config, args, *, database_fn=database) -> dict:
                          confidence = EXCLUDED.confidence""",
                     (
                         str(tr.id),
-                        str(tr.normalized_block_id) if tr.normalized_block_id else None,
+                        (
+                            str(persisted_block_ids[tr.normalized_block_id])
+                            if tr.normalized_block_id
+                            else None
+                        ),
                         tr.rule_id,
                         tr.rule_version,
                         tr.reason,

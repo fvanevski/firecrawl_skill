@@ -22,12 +22,9 @@ class PostgresDerivationRepository:
                        a.id AS snapshot_id,
                        d.parser_version,
                        d.normalization_version,
-                       dd.configuration_sha256
+                       NULL::text AS configuration_sha256
                 FROM documents d
                 JOIN asset_snapshots a ON a.id = d.snapshot_id
-                LEFT JOIN document_derivations dd
-                  ON dd.document_id = d.id
-                  AND dd.status IN ('pending', 'active')
                 ORDER BY d.id, a.id
                 """
             )
@@ -53,12 +50,9 @@ class PostgresDerivationRepository:
                 SELECT d.id AS document_id,
                        d.parser_version,
                        d.normalization_version,
-                       dd.configuration_sha256
+                       NULL::text AS configuration_sha256
                 FROM documents d
                 JOIN asset_snapshots a ON a.id = d.snapshot_id
-                LEFT JOIN document_derivations dd
-                  ON dd.document_id = d.id
-                  AND dd.status IN ('pending', 'active')
                 WHERE a.id = %s
                 ORDER BY d.id
                 """,
@@ -84,12 +78,9 @@ class PostgresDerivationRepository:
                 SELECT a.id AS snapshot_id,
                        d.parser_version,
                        d.normalization_version,
-                       dd.configuration_sha256
+                       NULL::text AS configuration_sha256
                 FROM documents d
                 JOIN asset_snapshots a ON a.id = d.snapshot_id
-                LEFT JOIN document_derivations dd
-                  ON dd.document_id = d.id
-                  AND dd.status IN ('pending', 'active')
                 WHERE d.id = %s
                 ORDER BY a.id
                 """,
@@ -175,7 +166,9 @@ class PostgresDerivationRepository:
                 "chunker_version",
                 "tokenizer_name",
             )
-            return dict(zip(keys, row))
+            item = dict(zip(keys, row))
+            item["id"] = str(item["id"])
+            return item
 
     def activate(self, derivation_id: UUID) -> DerivationAttempt:
         with self.__connection.cursor() as cur:
@@ -344,9 +337,15 @@ class PostgresDerivationRepository:
                 "error_message",
                 "created_at",
             ]
-            return [dict(zip(keys, row)) for row in cur.fetchall()]
+            derivations = []
+            for row in cur.fetchall():
+                values = list(row)
+                for index in (0, 1, 2):
+                    values[index] = str(values[index])
+                derivations.append(dict(zip(keys, values)))
+            return derivations
 
-    def get(self, derivation_id: UUID) -> dict | None:
+    def get(self, derivation_id: UUID) -> DerivationAttempt | None:
         with self.__connection.cursor() as cur:
             cur.execute(
                 """
@@ -379,7 +378,11 @@ class PostgresDerivationRepository:
                 "error_message",
                 "created_at",
             ]
-            return dict(zip(keys, row))
+            item = dict(zip(keys, row))
+            item["id"] = str(item["id"])
+            item["document_id"] = str(item["document_id"])
+            item["snapshot_id"] = str(item["snapshot_id"])
+            return DerivationAttempt.from_mapping(item)
 
     def create(
         self,

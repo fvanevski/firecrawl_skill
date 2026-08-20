@@ -301,7 +301,9 @@ class AuthoritativeInspector:
                 cursor.execute(statement, (run_id,))
                 scalar_row = cursor.fetchone()
                 if scalar_row is None:
-                    raise RuntimeError(f"authoritative scalar query returned no row: {name}")
+                    raise RuntimeError(
+                        f"authoritative scalar query returned no row: {name}"
+                    )
                 scalars[name] = int(scalar_row[0])
 
             cursor.execute(

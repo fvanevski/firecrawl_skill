@@ -455,9 +455,7 @@ def verify(
     raw_objectives = dataset.get("objectives")
     objectives = raw_objectives if isinstance(raw_objectives, list) else []
     objective_ids = [
-        str(item.get("id") or "")
-        for item in objectives
-        if isinstance(item, Mapping)
+        str(item.get("id") or "") for item in objectives if isinstance(item, Mapping)
     ]
     if (
         len(objective_ids) != EXPECTED_OBJECTIVES

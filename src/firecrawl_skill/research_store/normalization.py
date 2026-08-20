@@ -413,7 +413,7 @@ class NormalizationService:
         # 1. Code blocks are always preserved
         if block_type == "code":
             record = TransformationRecord.create(
-                normalized_block_id=source_block_id or UUID(int=0),
+                normalized_block_id=nb_id,
                 rule_id="preserve-code-block",
                 reason="Code blocks are never stripped",
                 before_text=text,
@@ -433,6 +433,7 @@ class NormalizationService:
                 rule_version=NORMALIZATION_VERSION,
                 transformation_reason="preserve-code-block",
                 parser_version=parser_version,
+                id=nb_id,
             )
 
         # 2. Check for boilerplate patterns (aggressive rules)

@@ -295,15 +295,14 @@ class DerivationService:
         with self.uow_factory() as uow:
             old = uow.derivations.get(old_derivation_id)
             new = uow.derivations.get(new_derivation_id)
+            if old is None or new is None:
+                raise ValueError("both derivations must exist")
 
-        if old is None or new is None:
-            raise ValueError("both derivations must exist")
-
-        # Compare chunks and blocks
-        old_chunks = uow.derivations.count_chunks_for_derivation(old_derivation_id)
-        new_chunks = uow.derivations.count_chunks_for_derivation(new_derivation_id)
-        old_blocks = uow.derivations.count_blocks_for_derivation(old_derivation_id)
-        new_blocks = uow.derivations.count_blocks_for_derivation(new_derivation_id)
+            # Counts share the same connection-owned repository boundary.
+            old_chunks = uow.derivations.count_chunks_for_derivation(old_derivation_id)
+            new_chunks = uow.derivations.count_chunks_for_derivation(new_derivation_id)
+            old_blocks = uow.derivations.count_blocks_for_derivation(old_derivation_id)
+            new_blocks = uow.derivations.count_blocks_for_derivation(new_derivation_id)
 
         # For a simple count-based comparison, use chunk/block counts
         # A full content-hash comparison would require iterating chunks

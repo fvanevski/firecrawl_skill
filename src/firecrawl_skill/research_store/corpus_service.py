@@ -347,7 +347,7 @@ class CorpusService(RetrievalService):
     ) -> ParsedContent | None:
         """Try the normalized HTML parser while retaining its identity."""
         try:
-            from .html_parser import HtmlNormalizedParser
+            from .parsing.html_parser import HtmlNormalizedParser
 
             parser = HtmlNormalizedParser()
             parse_result = parser.parse(raw, mime_type=mime_type)
