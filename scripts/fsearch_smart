@@ -21,13 +21,14 @@ sys.path.insert(0, SCRIPT_DIR)
 sys.path.insert(0, os.path.join(os.path.dirname(SCRIPT_DIR), "src"))
 
 import research_workflow as workflow
+from invocation_id import resolve_invocation_id
+
 from firecrawl_skill.research_domain import load_model, serialize_model
 from firecrawl_skill.research_domain.models import ResearchSpec
 from firecrawl_skill.research_store.budget_policy import (
     DEFAULT_POLICY,
     conservative_research_spec,
 )
-from invocation_id import resolve_invocation_id
 
 CHECKPOINT_EXIT = 75
 
