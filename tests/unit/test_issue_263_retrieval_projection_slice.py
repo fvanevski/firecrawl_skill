@@ -6,8 +6,13 @@ import ast
 from pathlib import Path
 
 from firecrawl_skill.research_store.retrieval import ranking, service
-from firecrawl_skill.research_store.retrieval.postgres import PostgresRetrievalRepository
-from firecrawl_skill.research_store.retrieval.projection import authority, reconciliation
+from firecrawl_skill.research_store.retrieval.postgres import (
+    PostgresRetrievalRepository,
+)
+from firecrawl_skill.research_store.retrieval.projection import (
+    authority,
+    reconciliation,
+)
 from firecrawl_skill.research_store.retrieval.projection.checkpoint_indexing_stage import (
     CheckpointIndexingStage,
 )
