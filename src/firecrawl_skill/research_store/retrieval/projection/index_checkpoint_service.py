@@ -1,5 +1,15 @@
-"""Projection namespace facade for the durable checkpoint service."""
+"""Durable PostgreSQL indexing checkpoints and guarded finalization."""
 
-from ...index_checkpoint_service import IndexCheckpointService
+from .index_checkpoint_asset_membership import _IndexCheckpointAssetMembershipMixin
+from .index_checkpoint_core import _IndexCheckpointCoreMixin
+from .index_checkpoint_finalize import _IndexCheckpointFinalizeMixin
+from .index_checkpoint_store import IndexCheckpointStoreMixin
 
-__all__ = ["IndexCheckpointService"]
+
+class IndexCheckpointService(
+    _IndexCheckpointCoreMixin,
+    _IndexCheckpointFinalizeMixin,
+    _IndexCheckpointAssetMembershipMixin,
+    IndexCheckpointStoreMixin,
+):
+    """Seal, observe, resume, and atomically finalize one run's index set."""
