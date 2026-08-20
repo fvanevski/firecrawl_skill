@@ -78,7 +78,9 @@ def test_migration_adds_relational_append_only_policy_without_inferred_history(
                 "corpus_budget_checks",
                 "budget_override_justifications",
             ):
-                cursor.execute("SELECT count(*) FROM " + table)
+                cursor.execute(
+                    sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))
+                )
                 row0 = cursor.fetchone()
                 assert row0 is not None
                 assert row0[0] == 0

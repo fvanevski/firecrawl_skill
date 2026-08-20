@@ -200,6 +200,8 @@ def _ranking_rows(candidate_ids: list[UUID]) -> list[dict]:
 
 @INTEGRATION
 def test_acquisition_repository_writes_share_one_outer_rollback(tmp_path):
+    from psycopg import sql
+
     migrate(TEST_DSN)
     blob_store = ContentAddressedBlobStore(tmp_path / "blobs")
     run_id = response_id = invocation_id = attempt_id = None
@@ -281,7 +283,10 @@ def test_acquisition_repository_writes_share_one_outer_rollback(tmp_path):
             ("extraction_attempts", attempt_id),
         ):
             cursor.execute(
-                "SELECT count(*) FROM " + table + " WHERE id=%s", (identifier,)
+                sql.SQL("SELECT count(*) FROM {} WHERE id=%s").format(
+                    sql.Identifier(table)
+                ),
+                (identifier,),
             )
             row = cursor.fetchone()
             assert row is not None

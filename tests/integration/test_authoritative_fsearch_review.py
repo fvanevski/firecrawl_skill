@@ -592,7 +592,7 @@ raise SystemExit(2)
         }
         for table, minimum in expected.items():
             cursor.execute(
-                sql.SQL("SELECT count(*) FROM ").format(sql.Identifier(table))
+                sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))
             )
             row = cursor.fetchone()
             assert row is not None

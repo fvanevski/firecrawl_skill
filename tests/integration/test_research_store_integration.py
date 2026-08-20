@@ -3977,7 +3977,7 @@ def test_hierarchical_chunk_persist_ingest_sets_parent_block_id():
     # Verify parent_block_id is non-NULL for all chunks
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            sql.SQL("SELECT id, parent_block_id FROM chunks WHERE id IN ({}").format(
+            sql.SQL("SELECT id, parent_block_id FROM chunks WHERE id IN ({})").format(
                 sql.SQL(",").join(sql.SQL("%s") for _ in result.chunk_ids)
             ),
             list(result.chunk_ids),

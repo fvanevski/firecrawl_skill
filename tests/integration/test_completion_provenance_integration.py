@@ -148,9 +148,9 @@ def test_completed_run_derives_and_persists_exact_authoritative_provenance(
                 WHERE run_id=%s AND next_state='completed'""",
             (status.id,),
         )
-        completion = cursor.fetchone()
-        assert completion is not None
-        completion = completion[0]
+        completion_row = cursor.fetchone()
+        assert completion_row is not None
+        completion = completion_row[0]["completion"]
         audit = completion["completion_provenance"]
         assert audit["schema_version"] == "completion-provenance-v1"
         assert audit["source_membership_sha256"] == provenance.source_manifest_sha256
