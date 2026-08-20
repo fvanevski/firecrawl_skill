@@ -74,6 +74,13 @@ def _final_topology_forbidden_modules() -> tuple[str, ...]:
     raise AssertionError("final-topology FORBIDDEN_MODULES inventory is missing")
 
 
+def _matches_forbidden_module(name: str, forbidden_modules: tuple[str, ...]) -> bool:
+    return any(
+        name == removed or name.startswith(removed + ".")
+        for removed in forbidden_modules
+    )
+
+
 def test_extensionless_python_entrypoints_are_in_final_reference_audit() -> None:
     entrypoints = _extensionless_python_entrypoints()
     assert FSEARCH_SMART in entrypoints
@@ -81,10 +88,7 @@ def test_extensionless_python_entrypoints_are_in_final_reference_audit() -> None
     violations: list[str] = []
     for path in entrypoints:
         for module in _absolute_imports(path):
-            if any(
-                module == removed or module.startswith(removed + ".")
-                for removed in forbidden_modules
-            ):
+            if _matches_forbidden_module(module, forbidden_modules):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
     assert violations == [], "removed compatibility imports remain:\n" + "\n".join(
         violations
@@ -99,8 +103,12 @@ def test_fsearch_smart_uses_final_phase5_owners() -> None:
     assert "require_authoritative_acquisition" in source
     assert "build_run_service" in source
     assert "build_production_resumable_orchestrator" in source
-    for removed in _final_topology_forbidden_modules():
-        assert removed not in source
+    forbidden_modules = _final_topology_forbidden_modules()
+    assert [
+        module
+        for module in imports
+        if _matches_forbidden_module(module, forbidden_modules)
+    ] == []
 
 
 def test_release_evidence_installs_canonical_package_before_generator() -> None:
